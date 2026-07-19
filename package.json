@@ -1,6 +1,6 @@
 {
   "name": "@sunerpy/kiro-provider",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone AWS Kiro (CodeWhisperer) provider service",
   "homepage": "https://github.com/sunerpy/kiro-provider#readme",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
