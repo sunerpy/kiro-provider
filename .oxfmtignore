@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Tool and agent state
+.omo/
+
+# Documentation is owned by the parallel README/metadata task
+README.md
+docs/
+
+# Bun lockfile
+bun.lock
+package.json
+
+# Existing release automation and example config are owned by parallel tasks
+.release-please-manifest.json
+release-please-config.json
+.github/workflows/release*.yml
+config.example.json
+
+# Tool-owned changelogs — release-please and git-cliff own these
+CHANGELOG*.md
+changelog/
+
+# Minified assets
+*.min.*
