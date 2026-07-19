@@ -1,6 +1,6 @@
 {
   "name": "kiro-provider",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone AWS Kiro (CodeWhisperer) provider service",
   "type": "module",
   "private": true,
