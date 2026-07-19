@@ -1,0 +1,49 @@
+{
+  "name": "@sunerpy/kiro-provider",
+  "version": "0.1.0",
+  "description": "Standalone AWS Kiro (CodeWhisperer) provider service",
+  "homepage": "https://github.com/sunerpy/kiro-provider#readme",
+  "bugs": "https://github.com/sunerpy/kiro-provider/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunerpy/kiro-provider.git"
+  },
+  "bin": {
+    "kiro-provider": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "fmt": "bunx --bun @biomejs/biome format --write ./src ./scripts ./__tests__",
+    "lint": "bunx --bun @biomejs/biome check ./src ./scripts ./__tests__",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun build src/cli/bin.ts --outdir dist --target bun",
+    "build:binary": "bun build --compile --minify src/cli/bin.ts --outfile dist/kiro-provider",
+    "build:npm": "bun build src/cli/bin.ts --outfile dist/cli.js --target=bun --minify --banner \"#!/usr/bin/env bun\" && bun -e 'const path = \"dist/cli.js\"; const source = await Bun.file(path).text(); await Bun.write(path, source.replace(\"#!/usr/bin/env bun\\n// @bun\\n#!/usr/bin/env bun\\n\", \"#!/usr/bin/env bun\\n// @bun\\n\"));' && chmod +x dist/cli.js",
+    "prepublishOnly": "bun run build:npm"
+  },
+  "dependencies": {
+    "@aws/codewhisperer-streaming-client": "^1.0.34",
+    "@smithy/node-http-handler": "4.9.7",
+    "https-proxy-agent": "^9.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.4",
+    "@types/bun": "^1.3.6",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  }
+}

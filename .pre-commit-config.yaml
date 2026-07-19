@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: fmt
+        name: fmt
+        entry: make fmt
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: ci
+        name: ci
+        entry: make ci
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

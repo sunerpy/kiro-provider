@@ -1,0 +1,19 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 93%
+        threshold: 1%
+    patch:
+      default:
+        target: 93%
+        threshold: 1%
+
+ignore:
+  - "__tests__/**"
+  - "**/*.test.ts"
+  - "scripts/**"
+  - "src/index.ts"
+  - "src/cli/bin.ts"
+  - "src/core/pipeline-types.ts"
+  - "src/kiro/types.ts"
