@@ -162,5 +162,3 @@ export async function main(
 		return 1;
 	}
 }
-
-if (import.meta.main) process.exitCode = await main();

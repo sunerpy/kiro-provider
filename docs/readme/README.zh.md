@@ -3,6 +3,7 @@
 > 一个独立的、OpenAI 兼容的 AWS Kiro（CodeWhisperer）HTTP 网关 —— 用任意 OpenAI SDK 或 Agent 直接调用你自己的 Kiro 账号。
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh/)
 
@@ -31,7 +32,44 @@
 
 ## 安装
 
-构建阶段需要 [Bun](https://bun.sh/)；构建产物是自包含的单文件二进制，运行时不再依赖 Bun。
+三种渠道任选其一。
+
+### 1. bunx / bun（最简单，需要 Bun）
+
+kiro-provider 发布的 npm 包用了 Bun 专属 API（`bun:sqlite`、`Bun.serve`），因此只能用 **Bun 或 `bunx` 运行，不支持 `npx` 或纯 `node`**。先安装 [Bun](https://bun.sh/)，然后：
+
+```bash
+bunx @sunerpy/kiro-provider serve --help
+```
+
+或者全局安装：
+
+```bash
+bun add -g @sunerpy/kiro-provider
+kiro-provider --help
+```
+
+### 2. 预编译二进制（无依赖）
+
+每次发布都会为 `linux`（x64、arm64）、`darwin`（x64、arm64）、`windows`（x64）打包独立二进制。从 [Releases](https://github.com/sunerpy/kiro-provider/releases/latest) 下载对应平台的文件，`chmod +x` 后直接运行，运行时不需要 Bun 或 Node.js。
+
+一行安装（Linux/macOS）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | sh
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+```
+
+两个脚本都会从 `releases/latest/download/` 拉取对应资产，默认安装到 `~/.local/bin`（可用 `KIRO_PROVIDER_INSTALL_DIR` 覆盖）。
+
+### 3. 从源码构建（开发者）
+
+需要 [Bun](https://bun.sh/)。
 
 ```bash
 git clone https://github.com/sunerpy/kiro-provider.git
@@ -45,10 +83,10 @@ bun run build:binary
 
 ```bash
 bun install
-bun run src/cli/main.ts --help
+bun run src/cli/bin.ts --help
 ```
 
-本文档后续用 `./dist/kiro-provider` 指代编译后的二进制；若从源码运行，替换为 `bun run src/cli/main.ts` 即可。
+本文档后续用 `./dist/kiro-provider` 泛指以上任一渠道；请根据你使用的渠道替换为 `bunx @sunerpy/kiro-provider`、已安装的二进制路径，或 `bun run src/cli/bin.ts`。
 
 ## 快速开始
 

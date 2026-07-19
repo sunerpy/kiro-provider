@@ -3,6 +3,7 @@
 > A standalone OpenAI-compatible HTTP gateway for AWS Kiro (CodeWhisperer) — point any OpenAI SDK or agent at your own Kiro accounts.
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh/)
 
@@ -31,7 +32,44 @@
 
 ## Install
 
-Requires [Bun](https://bun.sh/) to build; the resulting binary has no further dependencies.
+Pick one of three channels.
+
+### 1. bunx / bun (fastest, requires Bun)
+
+kiro-provider ships an npm package built on Bun-only APIs (`bun:sqlite`, `Bun.serve`), so it runs under **Bun or `bunx`, not `npx` or plain `node`**. Install [Bun](https://bun.sh/) first, then:
+
+```bash
+bunx @sunerpy/kiro-provider serve --help
+```
+
+Or install it globally:
+
+```bash
+bun add -g @sunerpy/kiro-provider
+kiro-provider --help
+```
+
+### 2. Prebuilt binary (no dependencies)
+
+Every release publishes standalone binaries for `linux` (x64, arm64), `darwin` (x64, arm64), and `windows` (x64). Download the one for your platform from [Releases](https://github.com/sunerpy/kiro-provider/releases/latest), `chmod +x` it, and run it directly. No Bun or Node.js needed at runtime.
+
+One-line install (Linux/macOS):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+```
+
+Both scripts pull the matching asset from `releases/latest/download/` and install it to `~/.local/bin` (override with `KIRO_PROVIDER_INSTALL_DIR`).
+
+### 3. From source (developers)
+
+Requires [Bun](https://bun.sh/).
 
 ```bash
 git clone https://github.com/sunerpy/kiro-provider.git
@@ -41,14 +79,14 @@ bun run build:binary
 ./dist/kiro-provider --help
 ```
 
-Alternatively, run directly from source without compiling:
+Or run without compiling:
 
 ```bash
 bun install
-bun run src/cli/main.ts --help
+bun run src/cli/bin.ts --help
 ```
 
-In the rest of this README, `./dist/kiro-provider` refers to the compiled binary; substitute `bun run src/cli/main.ts` if running from source.
+In the rest of this README, `./dist/kiro-provider` refers to any of the above; substitute `bunx @sunerpy/kiro-provider`, your installed binary path, or `bun run src/cli/bin.ts` depending on which channel you used.
 
 ## Quickstart
 

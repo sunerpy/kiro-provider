@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { SUPPORTED_MODELS } from '../src/kiro/constants.js'
-import { resolveKiroModel } from '../src/kiro/models.js'
+import { resolveKiroModel, stripModelSuffix } from '../src/kiro/models.js'
 
 describe('resolveKiroModel', () => {
   test('resolves newly advertised model slugs', () => {
@@ -88,5 +88,16 @@ describe('resolveKiroModel', () => {
     expect(() => resolveKiroModel('this-model-does-not-exist')).toThrow(
       'Unsupported model: this-model-does-not-exist'
     )
+  })
+})
+
+describe('stripModelSuffix', () => {
+  test('strips an allowlisted effort suffix without changing the model family', () => {
+    expect(stripModelSuffix('gpt-5.6-sol-xhigh')).toBe('gpt-5.6-sol')
+  })
+
+  test('strips a mapped thinking suffix and preserves unsupported suffixes', () => {
+    expect(stripModelSuffix('claude-opus-4-8-thinking')).toBe('claude-opus-4-8')
+    expect(stripModelSuffix('unmapped-model-thinking')).toBe('unmapped-model-thinking')
   })
 })

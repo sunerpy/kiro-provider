@@ -1,4 +1,4 @@
-.PHONY: install fmt fmt-check typecheck lint test coverage build build-binary clean ci
+.PHONY: install fmt fmt-check typecheck lint test coverage coverage-gate coverage-parity build build-binary clean ci
 
 install:
 	bun install
@@ -21,7 +21,13 @@ test:
 	bun test
 
 coverage:
-	bun test --coverage
+	bun test --coverage --coverage-reporter=lcov --coverage-reporter=text
+
+coverage-gate: coverage
+	bun run scripts/coverage-gate.ts
+
+coverage-parity:
+	bun run scripts/coverage-parity.ts
 
 build:
 	bun run build
@@ -32,4 +38,5 @@ build-binary:
 clean:
 	rm -rf dist
 
+# Coverage runs separately via coverage-gate and in the GitHub Actions coverage job.
 ci: typecheck lint test

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { DialectGate } from '../src/kiro/transform/streaming/dialect-gate.js'
 import {
+  cleanToolCallsFromText,
   DSML_MARKER,
+  deduplicateToolCalls,
   parseBracketToolCalls,
   parseTextToolCalls
 } from '../src/kiro/transform/tool-call-parser.js'
@@ -61,6 +64,37 @@ describe('parseTextToolCalls — bracket regression', () => {
     const calls = parseBracketToolCalls('[Called foo with args: {"a":1}]')
     expect(calls).toHaveLength(1)
     expect(calls[0]?.name).toBe('foo')
+  })
+
+  test('deduplicates calls by tool-use id while preserving first-seen order', () => {
+    const first = { toolUseId: 'same', name: 'first', input: { value: 1 } }
+    const duplicate = { toolUseId: 'same', name: 'duplicate', input: { value: 2 } }
+    const second = { toolUseId: 'other', name: 'second', input: {} }
+
+    expect(deduplicateToolCalls([first, duplicate, second])).toEqual([first, second])
+  })
+
+  test('removes bracket calls whose names contain regular-expression characters', () => {
+    const text = 'before [Called sum+tax with args: {"amount":10}] after'
+    const calls = [{ toolUseId: 'call-1', name: 'sum+tax', input: { amount: 10 } }]
+
+    expect(cleanToolCallsFromText(text, calls)).toBe('before after')
+  })
+})
+
+describe('DialectGate', () => {
+  test('emits safe prose, then suppresses a split marker until final parsing', () => {
+    const gate = new DialectGate()
+
+    expect(gate.push('answer ')).toBe('answer ')
+    expect(gate.suppressing).toBe(false)
+    expect(gate.push('<inv')).toBe('')
+    expect(gate.push('oke name="read"><parameter name="path">/tmp/x</parameter></invoke>')).toBe('')
+    expect(gate.suppressing).toBe(true)
+    expect(gate.finalize()).toMatchObject({
+      toolCalls: [{ name: 'read', input: { path: '/tmp/x' } }],
+      remainderText: ''
+    })
   })
 })
 

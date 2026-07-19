@@ -110,6 +110,42 @@ describe("ConfigSchema", () => {
 });
 
 describe("loadConfig", () => {
+	test("wraps malformed JSON with the config path and parser failure", () => {
+		const directory = mkdtempSync(join(tmpdir(), "kiro-provider-malformed-config-"));
+		temporaryDirectories.push(directory);
+		const configPath = join(directory, "config.json");
+		writeFileSync(configPath, "{", "utf8");
+
+		expect(() => loadConfig({ configPath, env: {} })).toThrow(
+			new RegExp(
+				`Unable to read configuration file ${configPath.replaceAll("/", "\\/")}: .*JSON.*(?:error|Expected)`,
+				"i",
+			),
+		);
+	});
+
+	test("loads schema defaults from a missing config file when the environment supplies the required key", () => {
+		const missingConfigPath = join(
+			mkdtempSync(join(tmpdir(), "kiro-provider-missing-config-")),
+			"missing.json",
+		);
+		temporaryDirectories.push(join(missingConfigPath, ".."));
+
+		const config = loadConfig({
+			configPath: missingConfigPath,
+			env: { KIRO_PROVIDER_API_KEYS: "sk-env" },
+		});
+
+		expect(config).toMatchObject({
+			host: "127.0.0.1",
+			port: 8787,
+			api_keys: ["sk-env"],
+			proxy_url: null,
+			default_region: "us-east-1",
+			account_selection_strategy: "lowest-usage",
+		});
+	});
+
 	test("lets environment values override file values", () => {
 		const configPath = createConfigFile({
 			api_keys: ["file-key"],
@@ -163,6 +199,73 @@ describe("loadConfig", () => {
 		expect(config.port).toBe(9123);
 		expect(config.rate_limit_max_retries).toBe(7);
 		expect(config.auto_effort_mapping).toBe(false);
+	});
+
+	test("maps every string, number, list, proxy, and boolean environment field", () => {
+		const config = loadConfig({
+			configPath: createConfigFile({}),
+			env: {
+				KIRO_PROVIDER_HOST: "env.example",
+				KIRO_PROVIDER_PORT: "9123",
+				KIRO_PROVIDER_API_KEYS: "sk-a,sk-b",
+				KIRO_PROVIDER_PROXY_URL: " https://proxy.example:8443 ",
+				KIRO_PROVIDER_DEFAULT_REGION: "eu-west-1",
+				KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "round-robin",
+				KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES: "8",
+				KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS: "6000",
+				KIRO_PROVIDER_MAX_REQUEST_ITERATIONS: "30",
+				KIRO_PROVIDER_REQUEST_TIMEOUT_MS: "130000",
+				KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "70000",
+				KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "2097152",
+				KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "240000",
+				KIRO_PROVIDER_EFFORT: "high",
+				KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "0",
+				KIRO_PROVIDER_LOG_LEVEL: "debug",
+				KIRO_PROVIDER_TEST_UPSTREAM: "http://127.0.0.1:43127/mock",
+			},
+		});
+
+		expect(config).toEqual({
+			host: "env.example",
+			port: 9123,
+			api_keys: ["sk-a", "sk-b"],
+			proxy_url: "https://proxy.example:8443",
+			default_region: "eu-west-1",
+			account_selection_strategy: "round-robin",
+			rate_limit_max_retries: 8,
+			rate_limit_retry_delay_ms: 6000,
+			max_request_iterations: 30,
+			request_timeout_ms: 130000,
+			stream_idle_timeout_ms: 70000,
+			max_request_body_bytes: 2097152,
+			token_expiry_buffer_ms: 240000,
+			effort: "high",
+			auto_effort_mapping: false,
+			log_level: "debug",
+			test_upstream_endpoint: "http://127.0.0.1:43127/mock",
+		});
+	});
+
+	test("accepts true boolean environment spellings and rejects unrecognized values", () => {
+		for (const value of ["true", "1"]) {
+			const config = loadConfig({
+				configPath: createConfigFile({}),
+				env: {
+					KIRO_PROVIDER_API_KEYS: "sk-test",
+					KIRO_PROVIDER_AUTO_EFFORT_MAPPING: value,
+				},
+			});
+			expect(config.auto_effort_mapping).toBe(true);
+		}
+		expect(() =>
+			loadConfig({
+				configPath: createConfigFile({}),
+				env: {
+					KIRO_PROVIDER_API_KEYS: "sk-test",
+					KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "sometimes",
+				},
+			}),
+		).toThrow(/auto_effort_mapping/i);
 	});
 
 	test("maps the test upstream environment value to the optional endpoint", () => {
@@ -236,5 +339,31 @@ describe("loadConfig", () => {
 		});
 
 		expect(config.proxy_url).toBe("http://cli-proxy:1080");
+	});
+
+	test("applies overrides after environment and file values for the same field", () => {
+		const config = loadConfig({
+			configPath: createConfigFile({
+				api_keys: ["file-key"],
+				host: "file.example",
+				port: 9000,
+			}),
+			env: {
+				KIRO_PROVIDER_API_KEYS: "env-key",
+				KIRO_PROVIDER_HOST: "env.example",
+				KIRO_PROVIDER_PORT: "9001",
+			},
+			overrides: {
+				api_keys: ["override-key"],
+				host: "override.example",
+				port: 9002,
+				proxy_url: "",
+			},
+		});
+
+		expect(config.api_keys).toEqual(["override-key"]);
+		expect(config.host).toBe("override.example");
+		expect(config.port).toBe(9002);
+		expect(config.proxy_url).toBeNull();
 	});
 });

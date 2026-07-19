@@ -26,7 +26,7 @@ MOCK_MODE_FILE="$WORK/mock-mode"
 if [[ -x ./dist/kiro-provider ]]; then
   PROVIDER_COMMAND=(./dist/kiro-provider)
 else
-  PROVIDER_COMMAND=(bun run src/cli/main.ts)
+  PROVIDER_COMMAND=(bun run src/cli/bin.ts)
 fi
 
 cleanup() {

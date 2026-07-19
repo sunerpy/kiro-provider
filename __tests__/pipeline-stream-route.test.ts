@@ -88,6 +88,29 @@ function failingSdkResponse(): {
 }
 
 describe("pipeline stream route framing", () => {
+	test("cancels the upstream reader and finalizes when the downstream consumer cancels", async () => {
+		let cancellationReason: unknown;
+		let finalized = false;
+		const upstream = new ReadableStream<Uint8Array>({
+			cancel(reason) {
+				cancellationReason = reason;
+			},
+		});
+		const sse = ndjsonToSse(
+			new Response(upstream, {
+				headers: { "Content-Type": "application/x-ndjson" },
+			}),
+			() => {
+				finalized = true;
+			},
+		);
+
+		await sse.body?.cancel("consumer stopped");
+
+		expect(cancellationReason).toBe("consumer stopped");
+		expect(finalized).toBe(true);
+	});
+
 	test("emits an SSE error frame before stalled SDK cleanup completes", async () => {
 		// Given
 		const cleanup = deferred();

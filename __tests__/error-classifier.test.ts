@@ -63,6 +63,50 @@ describe("normalizeSdkError", () => {
 		// Then
 		expect(normalized).toEqual({ message: "socket closed", code: "Error" });
 	});
+
+	test("normalizes primitive failures without inventing SDK metadata", () => {
+		// Given
+		const thrownReason = "connection closed";
+
+		// When
+		const normalized = normalizeSdkError(thrownReason);
+
+		// Then
+		expect(normalized).toEqual({ message: "connection closed" });
+	});
+
+	test("stringifies numeric headers and ignores unsupported header values", () => {
+		// Given
+		const sdkError = {
+			message: "slow down",
+			$response: {
+				headers: {
+					"retry-after": 9,
+					ignored: true,
+				},
+			},
+		};
+
+		// When
+		const normalized = normalizeSdkError(sdkError);
+
+		// Then
+		expect(normalized).toEqual({
+			message: "slow down",
+			headers: { "retry-after": "9" },
+		});
+	});
+
+	test("falls back to object stringification when SDK fields are absent", () => {
+		// Given
+		const sdkError = { $metadata: null, $response: { headers: {} } };
+
+		// When
+		const normalized = normalizeSdkError(sdkError);
+
+		// Then
+		expect(normalized).toEqual({ message: "[object Object]" });
+	});
 });
 
 describe("classifyError HTTP decisions", () => {
@@ -194,7 +238,78 @@ describe("classifyError HTTP decisions", () => {
 				error({ status: 403, reason: "TEMPORARILY_SUSPENDED" }),
 				context({ accountCount: 2 }),
 			),
+			).toEqual({ action: "switch", status: 403 });
+	});
+
+	test("fails an invalid model without a status as a bad request", () => {
+		expect(
+			classifyError(error({ reason: "INVALID_MODEL_ID" }), context()),
+		).toEqual({ action: "fail", status: 400, terminalStatus: 400 });
+	});
+
+	test("fails a suspended account when no alternative exists", () => {
+		expect(
+			classifyError(
+				error({ reason: "TEMPORARILY_SUSPENDED" }),
+				context({ accountCount: 1 }),
+			),
+		).toEqual({ action: "fail", terminalStatus: 403 });
+	});
+
+	test("fails an invalid bearer after its one forced refresh on a single account", () => {
+		// Given
+		const invalidBearer = error({
+			status: 403,
+			message: "The bearer token included in the request is invalid",
+		});
+		const classificationContext = context({
+			forcedRefreshAccountIds: new Set(["account-a"]),
+		});
+
+		// When
+		const classification = classifyError(
+			invalidBearer,
+			classificationContext,
+		);
+
+		// Then
+		expect(classification).toEqual({
+			action: "fail",
+			status: 403,
+			terminalStatus: 403,
+		});
+	});
+
+	test("switches a non-bearer 403 when another account exists", () => {
+		expect(
+			classifyError(
+				error({ status: 403, message: "access denied" }),
+				context({ accountCount: 2 }),
+			),
 		).toEqual({ action: "switch", status: 403 });
+	});
+
+	test("backs off a non-bearer 403 until the retry cap", () => {
+		expect(
+			classifyError(
+				error({ status: 403, message: "access denied" }),
+				context({ retryCount: 2, retryDelayMs: 250 }),
+			),
+		).toEqual({ action: "retry", status: 403, retryAfterMs: 1_000 });
+		expect(
+			classifyError(
+				error({ status: 403, message: "access denied" }),
+				context({ retryCount: 3 }),
+			),
+		).toEqual({ action: "fail", status: 403, terminalStatus: 403 });
+	});
+
+	test("fails unrecognized HTTP statuses without remapping them", () => {
+		expect(classifyError(error({ status: 418 }), context())).toEqual({
+			action: "fail",
+			status: 418,
+			terminalStatus: 418,
+		});
 	});
 });
 
@@ -215,5 +330,14 @@ describe("classifyError network decisions", () => {
 			action: "fail",
 			terminalStatus: 500,
 		});
+	});
+
+	test("fails a network error after the retry cap", () => {
+		expect(
+			classifyError(
+				error({ message: "socket disconnected" }),
+				context({ retryCount: 3 }),
+			),
+		).toEqual({ action: "fail", terminalStatus: 500 });
 	});
 });

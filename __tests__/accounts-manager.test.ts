@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AccountManager, toAuthDetails } from '../src/core/account-manager.js'
+import {
+  AccountConcurrentUpdateError,
+  AccountManager,
+  toAuthDetails
+} from '../src/core/account-manager.js'
 import type { ManagedAccount } from '../src/kiro/types.js'
 import { AccountsDatabase } from '../src/storage/accounts-db.js'
 
@@ -95,6 +99,72 @@ describe('AccountManager health persistence', () => {
     expect(persisted?.failCount).toBe(1)
     expect(persisted?.unhealthyReason).toBe('temporary upstream failure')
   })
+
+  test('keeps transient failures selectable until the tenth failure', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const stored = db.insertAccount(account('A'))
+    const manager = new AccountManager([stored], 'sticky', db)
+
+    // When
+    for (let failure = 1; failure < 10; failure += 1) {
+      manager.markUnhealthy(stored, 'temporary upstream failure')
+    }
+    const ninth = db.getById('A')
+    const tenth = manager.markUnhealthy(stored, 'temporary upstream failure', Date.now() + 5_000)
+
+    // Then
+    expect(ninth).toMatchObject({ failCount: 9, isHealthy: true })
+    expect(tenth).toMatchObject({ failCount: 10, isHealthy: false })
+    expect(tenth?.recoveryTime).toBeGreaterThan(Date.now())
+  })
+
+  test('reports a concurrent update after exhausting compare-and-swap attempts', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const stored = db.insertAccount(account('A'))
+    const manager = new AccountManager([stored], 'sticky', db)
+    db.updateExistingAccounts = () => 0
+
+    // When
+    const mark = (): void => {
+      manager.markRateLimited(stored, Date.now() + 60_000)
+    }
+
+    // Then
+    expect(mark).toThrow(AccountConcurrentUpdateError)
+    expect(mark).toThrow('Account A changed too frequently to update')
+  })
+})
+
+describe('AccountManager selection metrics', () => {
+  test('reports account count and the shortest active rate-limit wait', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const now = Date.now()
+    const first = db.insertAccount(account('A', { rateLimitResetTime: now + 60_000 }))
+    const second = db.insertAccount(account('B', { rateLimitResetTime: now + 30_000 }))
+    const manager = new AccountManager([first, second], 'lowest-usage', db)
+
+    // When
+    const count = manager.getAccountCount()
+    const wait = manager.getMinWaitTime()
+
+    // Then
+    expect(count).toBe(2)
+    expect(wait).toBeGreaterThan(29_000)
+    expect(wait).toBeLessThanOrEqual(30_000)
+  })
+
+  test('reports no wait when every rate limit has expired', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const stored = db.insertAccount(account('A', { rateLimitResetTime: Date.now() - 1 }))
+    const manager = new AccountManager([stored], 'round-robin', db)
+
+    // When / Then
+    expect(manager.getMinWaitTime()).toBe(0)
+  })
 })
 
 describe('AccountManager reconcileFromDb', () => {
@@ -118,6 +188,7 @@ describe('AccountManager reconcileFromDb', () => {
     const first = managerDb.insertAccount(account('A'))
     const second = managerDb.insertAccount(account('B'))
     const manager = new AccountManager([first, second], 'sticky', managerDb)
+    expect(manager.selectHealthyAccount()?.id).toBe('A')
     externalDb.removeAccount('A')
 
     // When

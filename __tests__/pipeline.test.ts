@@ -203,6 +203,39 @@ function trackedStalledResponse(first: SdkStreamEvent): {
 	};
 }
 
+function rejectingCleanupResponse(
+	first: SdkStreamEvent,
+	afterFirst: () => Promise<IteratorResult<SdkStreamEvent>>,
+): {
+	readonly sdkResponse: SdkStreamResponse;
+	readonly state: { returnCalls: number };
+} {
+	const state = { returnCalls: 0 };
+	return {
+		state,
+		sdkResponse: {
+			generateAssistantResponseResponse: {
+				[Symbol.asyncIterator](): AsyncIterator<SdkStreamEvent> {
+					let emitted = false;
+					return {
+						next(): Promise<IteratorResult<SdkStreamEvent>> {
+							if (!emitted) {
+								emitted = true;
+								return Promise.resolve({ done: false, value: first });
+							}
+							return afterFirst();
+						},
+						return(): Promise<IteratorResult<SdkStreamEvent>> {
+							state.returnCalls += 1;
+							return Promise.reject(new Error("return failed"));
+						},
+					};
+				},
+			},
+		},
+	};
+}
+
 function sdkError(
 	status: number,
 	message: string,
@@ -831,9 +864,156 @@ describe("runChatCompletion cancellation", () => {
 		expect(finalizeCalls).toBe(1);
 		expect(ingress.signal.aborted).toBe(false);
 	});
+
+	test("cancelling a stream tears down its SDK iterator and finalizes once", async () => {
+		// Given
+		const stalled = trackedStalledResponse({
+			reasoningContentEvent: { text: "partial" },
+		});
+		let finalizeCalls = 0;
+		const response = createPipelineStreamResponse(
+			{
+				sdkResponse: stalled.sdkResponse,
+				model: "claude-opus-4-8",
+				conversationId: "cancelled-conversation",
+			},
+			new AbortController().signal,
+			1_000,
+			() => {
+				finalizeCalls += 1;
+			},
+		);
+		const reader = response.body?.getReader();
+		if (!reader) throw new TypeError("streaming response must have a body");
+		const first = await reader.read();
+
+		// When
+		await reader.cancel("consumer disconnected");
+
+		// Then
+		expect(new TextDecoder().decode(first.value)).toContain("partial");
+		expect(stalled.state.returnCalled).toBe(true);
+		expect(finalizeCalls).toBe(1);
+	});
+
+	test("finalizes once when SDK cleanup rejects on the stream error path", async () => {
+		// Given
+		const secondReadStarted = deferred();
+		const stalled = rejectingCleanupResponse({
+			reasoningContentEvent: { text: "partial" },
+		}, () => {
+			secondReadStarted.resolve();
+			return new Promise<IteratorResult<SdkStreamEvent>>(() => undefined);
+		});
+		let finalizeCalls = 0;
+		const response = createPipelineStreamResponse(
+			{
+				sdkResponse: stalled.sdkResponse,
+				model: "claude-opus-4-8",
+				conversationId: "rejecting-error-cleanup",
+			},
+			new AbortController().signal,
+			15,
+			() => {
+				finalizeCalls += 1;
+			},
+		);
+		// When
+		const failedRead = response.text();
+		await secondReadStarted.promise;
+
+		// Then
+		await expect(failedRead).rejects.toThrow(/idle timeout/i);
+		expect(stalled.state.returnCalls).toBeGreaterThan(0);
+		expect(finalizeCalls).toBe(1);
+	});
+
+	test("resolves cancellation and finalizes once when SDK cleanup rejects", async () => {
+		// Given
+		const stalled = rejectingCleanupResponse({
+			reasoningContentEvent: { text: "partial" },
+		}, () => new Promise<IteratorResult<SdkStreamEvent>>(() => undefined));
+		let finalizeCalls = 0;
+		const response = createPipelineStreamResponse(
+			{
+				sdkResponse: stalled.sdkResponse,
+				model: "claude-opus-4-8",
+				conversationId: "rejecting-cancel-cleanup",
+			},
+			new AbortController().signal,
+			1_000,
+			() => {
+				finalizeCalls += 1;
+			},
+		);
+		const reader = response.body?.getReader();
+		if (!reader) throw new TypeError("streaming response must have a body");
+		await reader.read();
+
+		// When / Then
+		await expect(reader.cancel("consumer disconnected")).resolves.toBeUndefined();
+		expect(stalled.state.returnCalls).toBeGreaterThan(0);
+		expect(finalizeCalls).toBe(1);
+	});
 });
 
 describe("runChatCompletion terminal errors", () => {
+	test("marks a suspended single account unhealthy before returning its failure", async () => {
+		// Given
+		const suspended = account("account-a");
+		const manager = new FakeAccountManager([suspended]);
+
+		// When
+		const response = await runChatCompletion({
+			body: REQUEST_BODY,
+			model: "auto",
+			stream: false,
+			config: config(),
+			accountManager: manager,
+			tokenRefresher: new FakeTokenRefresher(),
+			makeClient: () =>
+				clientWith(async () => {
+					throw sdkError(403, "Account is suspended", {
+						reason: "TEMPORARILY_SUSPENDED",
+					});
+				}),
+		});
+
+		// Then
+		expect(response.status).toBe(403);
+		expect(manager.unhealthy).toEqual(["account-a"]);
+		expect(suspended.unhealthyReason).toContain("Account Suspended");
+	});
+
+	test("maps an unexpected token refresh error to an internal OpenAI error", async () => {
+		// Given
+		const refresher = new FakeTokenRefresher();
+		refresher.refreshHandler = async () => {
+			throw new RangeError("refresh state is corrupt");
+		};
+
+		// When
+		const response = await runChatCompletion({
+			body: REQUEST_BODY,
+			model: "auto",
+			stream: false,
+			config: config(),
+			accountManager: new FakeAccountManager([account("account-a")]),
+			tokenRefresher: refresher,
+			makeClient: () => clientWith(async () => responseFrom([])),
+		});
+
+		// Then
+		expect(response.status).toBe(500);
+		expect(await errorBody(response)).toEqual({
+			error: {
+				message: "refresh state is corrupt",
+				type: "internal_error",
+				code: "RangeError",
+			},
+		});
+	});
+
 	test("returns the exact status in a standard OpenAI error envelope", async () => {
 		const response = await runChatCompletion({
 			body: REQUEST_BODY,

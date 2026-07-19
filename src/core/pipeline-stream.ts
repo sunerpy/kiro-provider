@@ -32,6 +32,12 @@ export function createPipelineStreamResponse(
 	)[Symbol.asyncIterator]();
 	const encoder = new TextEncoder();
 	let finalized = false;
+	let activeIdleTimer: ReturnType<typeof setTimeout> | undefined;
+	const clearIdleTimer = (): void => {
+		if (activeIdleTimer === undefined) return;
+		clearTimeout(activeIdleTimer);
+		activeIdleTimer = undefined;
+	};
 	const finish = (): void => {
 		if (finalized) return;
 		finalized = true;
@@ -44,18 +50,25 @@ export function createPipelineStreamResponse(
 	return new Response(
 		new ReadableStream<Uint8Array>({
 			async pull(controller) {
-				let timer: ReturnType<typeof setTimeout> | undefined;
+				let removeAbortListener: (() => void) | undefined;
 				try {
 					const next = await Promise.race([
 						iterator.next(),
 						new Promise<never>((_resolve, reject) => {
-							timer = setTimeout(
-								() => reject(new StreamIdleTimeoutError(idleTimeoutMs)),
-								idleTimeoutMs,
-							);
+							const onAbort = (): void => {
+								clearIdleTimer();
+								reject(abortReason(composedSignal));
+							};
+							removeAbortListener = () =>
+								composedSignal.removeEventListener("abort", onAbort);
+							composedSignal.addEventListener("abort", onAbort, { once: true });
+							activeIdleTimer = setTimeout(() => {
+								activeIdleTimer = undefined;
+								reject(new StreamIdleTimeoutError(idleTimeoutMs));
+							}, idleTimeoutMs);
+							if (composedSignal.aborted) onAbort();
 						}),
 					]);
-					if (timer) clearTimeout(timer);
 					if (composedSignal.aborted) throw abortReason(composedSignal);
 					if (next.done) {
 						controller.close();
@@ -64,7 +77,9 @@ export function createPipelineStreamResponse(
 					}
 					controller.enqueue(encoder.encode(`${JSON.stringify(next.value)}\n`));
 				} catch (error) {
-					if (timer) clearTimeout(timer);
+					clearIdleTimer();
+					removeAbortListener?.();
+					if (streamAbort.signal.aborted) return;
 					const streamError =
 						error instanceof Error
 							? error
@@ -73,15 +88,27 @@ export function createPipelineStreamResponse(
 							});
 					streamAbort.abort(streamError);
 					controller.error(streamError);
-					await cleanup();
-					finish();
+					try {
+						await cleanup();
+					} finally {
+						finish();
+					}
+				} finally {
+					clearIdleTimer();
+					removeAbortListener?.();
 				}
 			},
-			async cancel() {
-				streamAbort.abort();
-				await cleanup();
-				finish();
-			},
+				async cancel() {
+					clearIdleTimer();
+					streamAbort.abort();
+					try {
+						await cleanup();
+					} catch {
+						return;
+					} finally {
+						finish();
+					}
+				},
 		}),
 		{ headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } },
 	);

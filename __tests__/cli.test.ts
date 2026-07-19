@@ -183,6 +183,40 @@ describe("parseCliArgs", () => {
 			configPath: "/tmp/config.json",
 		});
 	});
+
+	test.each([
+		{ argv: ["serve", "--port", "0"], message: "Invalid port: 0" },
+		{ argv: ["serve", "--port", "65536"], message: "Invalid port: 65536" },
+		{ argv: ["serve", "--port", "1.5"], message: "Invalid port: 1.5" },
+	])("rejects invalid serve port $argv", ({ argv, message }) => {
+		expect(() => parseCliArgs(argv)).toThrow(message);
+	});
+
+	test.each([
+		{
+			argv: ["serve", "--host"],
+			message: "Option '--host <value>' argument missing",
+		},
+		{ argv: ["serve", "--unknown"], message: "Unknown option '--unknown'" },
+		{
+			argv: ["accounts", "remove"],
+			message: "accounts remove requires exactly one <id|email>",
+		},
+		{
+			argv: ["accounts", "remove", "one", "two"],
+			message: "accounts remove requires exactly one <id|email>",
+		},
+		{
+			argv: ["accounts"],
+			message: "accounts requires list, import, or remove",
+		},
+		{
+			argv: ["accounts", "rename"],
+			message: "Unknown accounts command: rename",
+		},
+	])("rejects malformed command arguments: $message", ({ argv, message }) => {
+		expect(() => parseCliArgs(argv)).toThrow(message);
+	});
 });
 
 describe("main", () => {
@@ -523,6 +557,20 @@ describe("main", () => {
 		expect(exitCode).toBe(0);
 		expect(harness.removed).toEqual(["account-1"]);
 		expect(harness.stdout).toEqual(["Removed account dev@example.com"]);
+	});
+
+	test("returns a failure without removing anything when an account is not found", async () => {
+		const harness = createHarness([account()]);
+
+		const exitCode = await main(
+			["accounts", "remove", "missing@example.com"],
+			harness.deps,
+		);
+
+		expect(exitCode).toBe(1);
+		expect(harness.removed).toEqual([]);
+		expect(harness.stdout).toEqual([]);
+		expect(harness.stderr).toEqual(["Account not found: missing@example.com"]);
 	});
 });
 
