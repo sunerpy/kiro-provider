@@ -338,9 +338,15 @@ jobs:
       - name: Build bunx package
         run: bun run build:npm
 
-      # OIDC-first, token-fallback publish: npm automatically uses the short-lived
-      # GitHub OIDC credential when this workflow is configured as a trusted
-      # publisher, otherwise NODE_AUTH_TOKEN supplies the NPM_TOKEN fallback.
+      # OIDC Trusted Publishing requires npm CLI >= 11.5.1. Node 24 ships an
+      # older npm, so upgrade before publishing to enable OIDC auto-detection.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      # OIDC-first, token-fallback publish: with a configured trusted publisher
+      # (id-token: write is set), npm auto-detects the short-lived GitHub OIDC
+      # credential and auto-generates provenance; otherwise NODE_AUTH_TOKEN
+      # supplies the NPM_TOKEN fallback for the pre-OIDC path.
       - name: Publish package
         run: npm publish --access public
         env:
