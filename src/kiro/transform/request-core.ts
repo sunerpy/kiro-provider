@@ -118,9 +118,10 @@ function appendCurrentAssistant(history: CodeWhispererMessage[], message: Source
     })
   }
   if (thinking) {
+    const escapedThinking = thinking.replaceAll('</thinking>', '<\\/thinking>')
     assistant.content = assistant.content
-      ? `<thinking>${thinking}</thinking>\n\n${assistant.content}`
-      : `<thinking>${thinking}</thinking>`
+      ? `<thinking>${escapedThinking}</thinking>\n\n${assistant.content}`
+      : `<thinking>${escapedThinking}</thinking>`
   }
   if (toolUses.length > 0) assistant.toolUses = toolUses
   if (assistant.content || assistant.toolUses) history.push({ assistantResponseMessage: assistant })

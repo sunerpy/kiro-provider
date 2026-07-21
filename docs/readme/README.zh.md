@@ -18,12 +18,13 @@
 - [代理](#代理)
 - [安全](#安全)
 - [配合 LLM 使用](#配合-llm-使用)
+- [配合 Codex CLI 使用](#配合-codex-cli-使用)
 - [开发](#开发)
 - [许可证](#许可证)
 
 ## 特性
 
-- OpenAI 兼容的 `POST /v1/chat/completions`（流式 SSE 与非流式 JSON）、`GET /v1/models`、`GET /health`。
+- OpenAI 兼容的 `POST /v1/chat/completions`（流式 SSE 与非流式 JSON）、`POST /v1/responses`（OpenAI Responses API，支持流式类型化 SSE 与非流式 JSON）、`GET /v1/models`、`GET /health`。
 - Bearer API Key 校验，且默认拒绝启动：未配置任何 Key 时服务不会启动，默认绑定地址为 `127.0.0.1`。
 - 多账号轮询、自动令牌刷新与故障切换，账号数据落在本地 `bun:sqlite`，删除采用墓碑标记，防止被同步逻辑复活。
 - `accounts import` 可复用 [OpenCode 的 Kiro 认证](https://opencode.ai/) 已登录的账号，无需再走一次设备码登录。
@@ -202,6 +203,27 @@ bun run src/cli/bin.ts --help
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models` 与 `GET /health` 返回结构化 JSON。
 
 </details>
+
+## 配合 Codex CLI 使用
+
+kiro-provider 的 `POST /v1/responses` 端点使用 OpenAI Responses 协议格式，因此 [Codex CLI](https://github.com/openai/codex)（已在 0.144.6 上验证）可以把它当作自定义 `model_provider`（`wire_api = "responses"`）来用。用一个隔离的 `CODEX_HOME` 测试，绝不会碰到你真实的 `~/.codex` 配置：
+
+```bash
+export CODEX_HOME="$(mktemp -d)"        # 隔离环境；不会动到真实 ~/.codex
+export LOCALGW_KEY="sk-...你的网关 api key..."
+cat > "$CODEX_HOME/config.toml" <<'EOF'
+model = "gpt-5.6-sol"
+model_provider = "localgw"
+[model_providers.localgw]
+name = "Local Gateway"
+base_url = "http://127.0.0.1:8787/v1"
+env_key = "LOCALGW_KEY"
+wire_api = "responses"
+EOF
+codex exec --skip-git-repo-check "say hi"
+```
+
+需要网关先跑起来（`kiro-provider serve`），且已导入或登录过至少一个账号。推理模型在 Codex 下的表现与 `/v1/chat/completions` 一致（Claude 走你配置的代理，GPT 直连）。完整说明及现成的隔离冒烟测试脚本（`scripts/codex-smoke.sh`）见 [`docs/readme/CODEX.zh.md`](CODEX.zh.md)。
 
 ## 开发
 

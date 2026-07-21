@@ -18,12 +18,13 @@
 - [Proxy](#proxy)
 - [Security](#security)
 - [Using with an LLM](#using-with-an-llm)
+- [Use with Codex CLI](#use-with-codex-cli)
 - [Development](#development)
 - [License](#license)
 
 ## Features
 
-- OpenAI-compatible `POST /v1/chat/completions` (streaming SSE and non-streaming JSON), `GET /v1/models`, and `GET /health`.
+- OpenAI-compatible `POST /v1/chat/completions` (streaming SSE and non-streaming JSON), `POST /v1/responses` (OpenAI Responses API, streaming typed SSE and non-streaming JSON), `GET /v1/models`, and `GET /health`.
 - Bearer API-key gate that fails closed: the server refuses to start with no configured keys, and defaults to binding `127.0.0.1`.
 - Multi-account rotation with automatic token refresh and failover, backed by a local `bun:sqlite` account store with tombstone-based removal.
 - `accounts import` to reuse accounts already authenticated by [OpenCode's Kiro auth](https://opencode.ai/) instead of repeating device-code login.
@@ -202,6 +203,27 @@ Point any OpenAI-compatible client (`openai`, `@ai-sdk/openai-compatible`, LangC
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models` and `GET /health` return structured JSON.
 
 </details>
+
+## Use with Codex CLI
+
+kiro-provider's `POST /v1/responses` endpoint speaks the OpenAI Responses wire format, so [Codex CLI](https://github.com/openai/codex) (verified against 0.144.6) can use it as a custom `model_provider` with `wire_api = "responses"`. Test it with an isolated `CODEX_HOME` so your real `~/.codex` config is never touched:
+
+```bash
+export CODEX_HOME="$(mktemp -d)"        # isolated; your real ~/.codex is untouched
+export LOCALGW_KEY="sk-...your gateway api key..."
+cat > "$CODEX_HOME/config.toml" <<'EOF'
+model = "gpt-5.6-sol"
+model_provider = "localgw"
+[model_providers.localgw]
+name = "Local Gateway"
+base_url = "http://127.0.0.1:8787/v1"
+env_key = "LOCALGW_KEY"
+wire_api = "responses"
+EOF
+codex exec --skip-git-repo-check "say hi"
+```
+
+Requires the gateway running (`kiro-provider serve`) with an account already imported or logged in. Reasoning models work through Codex the same way they do for `/v1/chat/completions` (Claude via your configured proxy, GPT direct). Full details, plus a ready-made isolated smoke test (`scripts/codex-smoke.sh`), live in [`docs/CODEX.md`](docs/CODEX.md).
 
 ## Development
 

@@ -58,9 +58,14 @@ export function collapseAgenticLoops(history: CodeWhispererMessage[]): CodeWhisp
         const user = history[pairIndex + 1]
         if (!assistant || !user) continue
         if (pairCount > 1 && pairIndex !== sequenceStart) {
+          const thinkingPrefix = assistant.assistantResponseMessage?.content.match(
+            /^<thinking>[\s\S]*?<\/thinking>/
+          )?.[0]
           result.push({
             assistantResponseMessage: {
-              content: '[system: tool calling continues]',
+              content: thinkingPrefix
+                ? `${thinkingPrefix}\n\n[system: tool calling continues]`
+                : '[system: tool calling continues]',
               toolUses: assistant.assistantResponseMessage?.toolUses
             }
           })
@@ -184,9 +189,10 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
       for (const toolCall of message.tool_calls) toolUses.push(parseToolCall(toolCall))
     }
     if (thinking) {
+      const escapedThinking = thinking.replaceAll('</thinking>', '<\\/thinking>')
       assistant.content = assistant.content
-        ? `<thinking>${thinking}</thinking>\n\n${assistant.content}`
-        : `<thinking>${thinking}</thinking>`
+        ? `<thinking>${escapedThinking}</thinking>\n\n${assistant.content}`
+        : `<thinking>${escapedThinking}</thinking>`
     }
     if (toolUses.length > 0) assistant.toolUses = toolUses
     if (!assistant.content && !assistant.toolUses) continue

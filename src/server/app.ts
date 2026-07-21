@@ -13,6 +13,7 @@ import { openAiError } from "./errors.js";
 import { handleChatCompletions } from "./routes/chat-completions.js";
 import { handleHealth } from "./routes/health.js";
 import { handleModels } from "./routes/models.js";
+import { handleResponses } from "./routes/responses.js";
 
 export type AppDependencies = {
 	readonly accountManager: PipelineAccountManager;
@@ -41,9 +42,12 @@ export function createApp(
 
 		const url = new URL(request.url);
 		try {
-			if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
-				return await handleChatCompletions(request, config, dependencies);
-			}
+				if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
+					return await handleChatCompletions(request, config, dependencies);
+				}
+				if (request.method === "POST" && url.pathname === "/v1/responses") {
+					return await handleResponses(request, config, dependencies);
+				}
 			if (request.method === "GET" && url.pathname === "/v1/models") {
 				return handleModels();
 			}
