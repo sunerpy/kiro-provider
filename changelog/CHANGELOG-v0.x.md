@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/sunerpy/kiro-provider/compare/v0.2.0...v0.3.0) (2026-07-21)
+
+
+### Features
+
+* **responses:** 新增 /v1/responses 支持 Codex CLI 接入 ([66ecd31](https://github.com/sunerpy/kiro-provider/commit/66ecd31511d8ef97971c73059cdc450e5acf06dd))
+
 ## [0.2.0](https://github.com/sunerpy/kiro-provider/compare/v0.1.0...v0.2.0) (2026-07-19)
 
 
