@@ -313,10 +313,10 @@ describe('Responses request parsing and adaptation', () => {
       { model: MODEL, input: [{ type: 'message', role: 'user' }] }
     ],
     [
-      'unmappable known message role',
+      'invalid known message role',
       {
         model: MODEL,
-        input: [{ type: 'message', role: 'developer', content: [] }]
+        input: [{ type: 'message', role: 'tool', content: [] }]
       }
     ],
     [

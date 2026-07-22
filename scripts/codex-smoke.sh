@@ -87,8 +87,9 @@ classify_turn_outcome() {
 	fi
 
 	if [ "$codex_status" -eq 0 ] && has_expected_model_content "$codex_stdout"; then
-		echo "codex-smoke: FULL PASS: codex observed response.completed and produced expected assistant content"
-		echo "codex-smoke: summary: health=PASS turn=PASS wiring=PASS response.completed=OBSERVED content=PASS exit=0"
+		echo "codex-smoke: CONNECTIVITY/REASONING PASS: codex observed response.completed and produced expected assistant content"
+		echo "codex-smoke: note: this turn does not test tools; standard function tools are supported, but custom exec/apply_patch and namespace collaboration are unsupported"
+		echo "codex-smoke: summary: health=PASS turn=PASS wiring=PASS response.completed=OBSERVED content=PASS tool_capability=NOT_TESTED exit=0"
 		return 0
 	fi
 
@@ -234,6 +235,8 @@ if [ "$RUNNING_CODEX_VERSION" != "$EXPECTED_CODEX_VERSION" ]; then
 	exit 1
 fi
 echo "codex-smoke: codex version accepted: $CODEX_VERSION"
+echo "codex-smoke: scope: this smoke proves connectivity/reasoning only; it does not test tool capability"
+echo "codex-smoke: scope: custom exec/apply_patch and namespace collaboration tools are unsupported"
 
 PORT="${KIRO_PROVIDER_PORT:-8899}"
 APIKEY="${KIRO_PROVIDER_SMOKE_KEY:-sk-smoke-$(openssl rand -hex 6)}"

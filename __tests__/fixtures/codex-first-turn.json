@@ -1,0 +1,248 @@
+{
+  "model": "gpt-5.6-sol",
+  "input": [
+    {
+      "type": "additional_tools",
+      "role": "developer",
+      "tools": [
+        {
+          "type": "custom",
+          "name": "exec",
+          "description": "CUSTOM_TOOL_DESCRIPTION_REDACTED",
+          "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "CUSTOM_TOOL_GRAMMAR_REDACTED"
+          }
+        },
+        {
+          "type": "function",
+          "name": "wait",
+          "description": "WAIT_TOOL_DESCRIPTION_REDACTED",
+          "strict": false,
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "cell_id": { "type": "string", "description": "CELL_ID_DESCRIPTION_REDACTED" },
+              "max_tokens": { "type": "number", "description": "MAX_TOKENS_DESCRIPTION_REDACTED" },
+              "terminate": { "type": "boolean", "description": "TERMINATE_DESCRIPTION_REDACTED" },
+              "yield_time_ms": {
+                "type": "number",
+                "description": "YIELD_TIME_DESCRIPTION_REDACTED"
+              }
+            },
+            "required": ["cell_id"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "request_user_input",
+          "description": "REQUEST_USER_INPUT_DESCRIPTION_REDACTED",
+          "strict": false,
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "autoResolutionMs": {
+                "type": "number",
+                "description": "AUTO_RESOLUTION_DESCRIPTION_REDACTED"
+              },
+              "questions": {
+                "type": "array",
+                "description": "QUESTIONS_DESCRIPTION_REDACTED",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "header": { "type": "string", "description": "HEADER_DESCRIPTION_REDACTED" },
+                    "id": { "type": "string", "description": "QUESTION_ID_DESCRIPTION_REDACTED" },
+                    "options": {
+                      "type": "array",
+                      "description": "OPTIONS_DESCRIPTION_REDACTED",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "description": {
+                            "type": "string",
+                            "description": "OPTION_DESCRIPTION_REDACTED"
+                          },
+                          "label": { "type": "string", "description": "LABEL_DESCRIPTION_REDACTED" }
+                        },
+                        "required": ["label", "description"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "question": { "type": "string", "description": "QUESTION_DESCRIPTION_REDACTED" }
+                  },
+                  "required": ["id", "header", "question", "options"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["questions"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "namespace",
+          "name": "collaboration",
+          "description": "COLLABORATION_DESCRIPTION_REDACTED",
+          "tools": [
+            {
+              "type": "function",
+              "name": "followup_task",
+              "description": "FOLLOWUP_TASK_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "description": "MESSAGE_DESCRIPTION_REDACTED",
+                    "encrypted": true
+                  },
+                  "target": { "type": "string", "description": "TARGET_DESCRIPTION_REDACTED" }
+                },
+                "required": ["target", "message"],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "function",
+              "name": "interrupt_agent",
+              "description": "INTERRUPT_AGENT_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "target": { "type": "string", "description": "TARGET_DESCRIPTION_REDACTED" }
+                },
+                "required": ["target"],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "function",
+              "name": "list_agents",
+              "description": "LIST_AGENTS_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path_prefix": {
+                    "type": "string",
+                    "description": "PATH_PREFIX_DESCRIPTION_REDACTED"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "function",
+              "name": "send_message",
+              "description": "SEND_MESSAGE_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "message": {
+                    "type": "string",
+                    "description": "MESSAGE_DESCRIPTION_REDACTED",
+                    "encrypted": true
+                  },
+                  "target": { "type": "string", "description": "TARGET_DESCRIPTION_REDACTED" }
+                },
+                "required": ["target", "message"],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "function",
+              "name": "spawn_agent",
+              "description": "SPAWN_AGENT_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "fork_turns": {
+                    "type": "string",
+                    "description": "FORK_TURNS_DESCRIPTION_REDACTED"
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "MESSAGE_DESCRIPTION_REDACTED",
+                    "encrypted": true
+                  },
+                  "task_name": { "type": "string", "description": "TASK_NAME_DESCRIPTION_REDACTED" }
+                },
+                "required": ["task_name", "message"],
+                "additionalProperties": false
+              }
+            },
+            {
+              "type": "function",
+              "name": "wait_agent",
+              "description": "WAIT_AGENT_DESCRIPTION_REDACTED",
+              "strict": false,
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "timeout_ms": { "type": "number", "description": "TIMEOUT_DESCRIPTION_REDACTED" }
+                },
+                "additionalProperties": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "developer",
+      "content": [{ "type": "input_text", "text": "DEVELOPER_SENTINEL_PERSONA" }]
+    },
+    {
+      "type": "message",
+      "role": "developer",
+      "content": [
+        { "type": "input_text", "text": "DEVELOPER_SENTINEL_PERMISSIONS" },
+        { "type": "input_text", "text": "" }
+      ]
+    },
+    {
+      "type": "message",
+      "role": "developer",
+      "content": [{ "type": "input_text", "text": "DEVELOPER_SENTINEL_SKILLS" }]
+    },
+    {
+      "type": "message",
+      "role": "developer",
+      "content": [{ "type": "input_text", "text": "DEVELOPER_SENTINEL_COLLABORATION" }]
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "ENVIRONMENT_CONTEXT_REDACTED" }]
+    },
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "USER_PROMPT_REDACTED" }]
+    }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": false,
+  "reasoning": { "effort": "low", "context": "all_turns" },
+  "store": false,
+  "stream": true,
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "CACHE_KEY_REDACTED",
+  "text": { "verbosity": "low" },
+  "client_metadata": {
+    "x-codex-turn-metadata": "{\"installation_id\":\"INSTALLATION_ID_REDACTED\",\"session_id\":\"SESSION_ID_REDACTED\",\"thread_id\":\"THREAD_ID_REDACTED\",\"turn_id\":\"TURN_ID_REDACTED\",\"window_id\":\"WINDOW_ID_REDACTED\",\"request_kind\":\"turn\",\"thread_source\":\"user\",\"sandbox\":\"seccomp\",\"workspaces\":{\"WORKSPACE_PATH_REDACTED\":{\"associated_remote_urls\":{\"origin\":\"REMOTE_URL_REDACTED\"},\"latest_git_commit_hash\":\"COMMIT_HASH_REDACTED\",\"has_changes\":false}},\"turn_started_at_unix_ms\":0}",
+    "thread_id": "THREAD_ID_REDACTED",
+    "x-codex-window-id": "WINDOW_ID_REDACTED",
+    "x-codex-installation-id": "INSTALLATION_ID_REDACTED",
+    "session_id": "SESSION_ID_REDACTED",
+    "turn_id": "TURN_ID_REDACTED"
+  }
+}

@@ -4,6 +4,13 @@ kiro-provider exposes `POST /v1/responses`, the OpenAI Responses API wire format
 
 Verified against **codex-cli 0.144.6**.
 
+## Supported scope
+
+- ✅ Chat, reasoning, and standard `function` tools are supported.
+- ❌ Codex's built-in `exec` / `apply_patch` tools (`custom`) and multi-agent `collaboration` tools (`namespace`) are not supported. Upstream Kiro models do not emit the `custom_tool_call` or namespace-call protocol that those tools require.
+
+This is an explicit capability boundary: the gateway accepts Codex's declarations for these unsupported tool types but does not claim or simulate their execution.
+
 ## Isolated test config (never touches your real `~/.codex`)
 
 If you already run Codex with real projects, do not edit `~/.codex/config.toml` to try this out. Use a throwaway `CODEX_HOME` instead: Codex reads `CODEX_HOME` to relocate its entire config/auth/log/state directory, so a temp dir gives you full isolation with zero risk to your normal setup.
@@ -33,7 +40,7 @@ Notes:
 
 ## Ready-made smoke test
 
-`scripts/codex-smoke.sh` wraps the recipe above in a fail-closed script: it creates its own `mktemp -d` `CODEX_HOME`, verifies that directory is not `~/.codex` or a subdirectory of it before exporting anything, writes a temporary `config.toml`, and runs `codex exec` non-interactively. Run it yourself once the gateway is up and an account is imported:
+`scripts/codex-smoke.sh` wraps the recipe above in a fail-closed script: it creates its own `mktemp -d` `CODEX_HOME`, verifies that directory is not `~/.codex` or a subdirectory of it before exporting anything, writes a temporary `config.toml`, and runs `codex exec` non-interactively. Its `Reply with exactly: OK` turn proves connectivity and reasoning only; it does not test tool capability. Run it yourself once the gateway is up and an account is imported:
 
 ```bash
 bash scripts/codex-smoke.sh

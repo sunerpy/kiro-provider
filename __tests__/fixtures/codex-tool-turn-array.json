@@ -1,0 +1,22 @@
+{
+  "model": "gpt-5.6-sol",
+  "input": [
+    {
+      "type": "function_call",
+      "call_id": "CALL_ID_REDACTED",
+      "name": "wait",
+      "arguments": "{\"cell_id\":\"CELL_ID_REDACTED\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "CALL_ID_REDACTED",
+      "output": [
+        { "type": "input_text", "text": "ARRAY_TOOL_OUTPUT_FIRST" },
+        { "type": "input_image", "image_url": "IMAGE_URL_REDACTED" },
+        { "type": "output_text", "text": "ARRAY_TOOL_OUTPUT_SECOND" }
+      ]
+    }
+  ],
+  "stream": true,
+  "store": false
+}

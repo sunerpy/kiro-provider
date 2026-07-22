@@ -1,4 +1,5 @@
 import type {
+  ResponsesAdditionalToolsItem,
   ResponsesContentPart,
   ResponsesFunctionCallItem,
   ResponsesFunctionCallOutputItem,
@@ -26,18 +27,20 @@ type InternalMessage =
     }
   | { readonly role: 'tool'; readonly tool_call_id: string; readonly content: string }
 
+type InternalTool = {
+  readonly type: 'function'
+  readonly function: {
+    readonly name: string
+    readonly description?: string
+    readonly parameters?: Record<string, unknown>
+  }
+}
+
 export interface InternalChatBody {
   readonly model: string
   readonly stream: boolean
   readonly messages: InternalMessage[]
-  readonly tools?: Array<{
-    readonly type: 'function'
-    readonly function: {
-      readonly name: string
-      readonly description?: string
-      readonly parameters?: Record<string, unknown>
-    }
-  }>
+  readonly tools?: InternalTool[]
   readonly tool_choice?: 'auto'
   readonly reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh'
 }
@@ -58,6 +61,12 @@ function isFunctionCallOutputItem(
   item: ResponsesInputItem
 ): item is ResponsesFunctionCallOutputItem {
   return item.type === 'function_call_output'
+}
+
+function isAdditionalToolsItem(
+  item: ResponsesInputItem
+): item is ResponsesAdditionalToolsItem {
+  return item.type === 'additional_tools'
 }
 
 function isReasoningItem(item: ResponsesInputItem): item is ResponsesReasoningItem {
@@ -114,10 +123,29 @@ function thinkingPart(text: string): InternalContentPart {
   return { type: 'thinking', thinking: text }
 }
 
+function normalizeFunctionOutput(output: ResponsesFunctionCallOutputItem['output']): string {
+  if (typeof output === 'string') return output
+  return output.flatMap((part) => (part.text === undefined ? [] : [part.text])).join('\n')
+}
+
+function topLevelTool(tool: NonNullable<ResponsesRequest['tools']>[number]): InternalTool {
+  return {
+    type: 'function',
+    function: {
+      name: tool.name,
+      ...(tool.description !== undefined ? { description: tool.description } : {}),
+      ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {})
+    }
+  }
+}
+
 export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInternalChatResult {
   const messages: InternalMessage[] = []
+  const tools = (req.tools ?? []).map(topLevelTool)
+  const toolNames = new Set(tools.map((tool) => tool.function.name))
   const skippedUnknownParts = { count: 0 }
   let skippedUnknownItems = 0
+  let skippedAdditionalTools = 0
   let executableInputSeen = false
   let pendingReasoning = ''
 
@@ -171,7 +199,7 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
           pendingReasoning = ''
           executableInputSeen = true
         } else {
-          messages.push({ role: item.role, content })
+          messages.push({ role: item.role === 'developer' ? 'system' : item.role, content })
           if (item.role === 'user') executableInputSeen = true
         }
         continue
@@ -179,8 +207,41 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
 
       if (isFunctionCallOutputItem(item)) {
         flushPendingReasoning()
-        messages.push({ role: 'tool', tool_call_id: item.call_id, content: item.output })
+        messages.push({
+          role: 'tool',
+          tool_call_id: item.call_id,
+          content: normalizeFunctionOutput(item.output)
+        })
         executableInputSeen = true
+        continue
+      }
+
+      if (isAdditionalToolsItem(item)) {
+        for (const tool of item.tools) {
+          if (
+            tool.type !== 'function' ||
+            typeof tool.name !== 'string' ||
+            tool.name.length === 0 ||
+            typeof tool.parameters !== 'object' ||
+            tool.parameters === null ||
+            Array.isArray(tool.parameters) ||
+            toolNames.has(tool.name)
+          ) {
+            skippedAdditionalTools++
+            continue
+          }
+          tools.push({
+            type: 'function',
+            function: {
+              name: tool.name,
+              ...(typeof tool.description === 'string'
+                ? { description: tool.description }
+                : {}),
+              parameters: Object.fromEntries(Object.entries(tool.parameters))
+            }
+          })
+          toolNames.add(tool.name)
+        }
         continue
       }
 
@@ -192,6 +253,7 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
 
   void skippedUnknownItems
   void skippedUnknownParts.count
+  void skippedAdditionalTools
 
   if (!executableInputSeen) return { ok: false, code: 'empty_input' }
 
@@ -200,18 +262,7 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
     model: req.model,
     stream: req.stream,
     messages,
-    ...(req.tools
-      ? {
-          tools: req.tools.map((tool) => ({
-            type: 'function' as const,
-            function: {
-              name: tool.name,
-              ...(tool.description !== undefined ? { description: tool.description } : {}),
-              ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {})
-            }
-          }))
-        }
-      : {}),
+    ...(tools.length > 0 || req.tools !== undefined ? { tools } : {}),
     ...(req.tool_choice !== undefined ? { tool_choice: req.tool_choice } : {}),
     ...(effort !== undefined ? { reasoning_effort: effort } : {})
   }

@@ -213,7 +213,7 @@ export const ResponsesContentPartSchema = z.union([
 const ResponsesMessageItemSchema = z
 	.object({
 		type: z.literal("message"),
-		role: z.enum(["system", "user", "assistant"]),
+		role: z.enum(["system", "developer", "user", "assistant"]),
 		content: z.array(ResponsesContentPartSchema),
 	})
 	.passthrough();
@@ -233,7 +233,22 @@ const ResponsesFunctionCallOutputItemSchema = z
 	.object({
 		type: z.literal("function_call_output"),
 		call_id: z.string().min(1),
-		output: z.string(),
+		output: z.union([
+			z.string(),
+			z.array(
+				z
+					.object({ type: z.string(), text: z.string().optional() })
+					.passthrough(),
+			),
+		]),
+	})
+	.passthrough();
+
+const ResponsesAdditionalToolsItemSchema = z
+	.object({
+		type: z.literal("additional_tools"),
+		role: z.string().optional(),
+		tools: z.array(z.object({ type: z.string() }).passthrough()),
 	})
 	.passthrough();
 
@@ -261,6 +276,7 @@ const KNOWN_RESPONSES_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
 	"message",
 	"function_call",
 	"function_call_output",
+	"additional_tools",
 	"reasoning",
 ]);
 
@@ -275,6 +291,7 @@ export const ResponsesInputItemSchema = z.union([
 	ResponsesMessageItemSchema,
 	ResponsesFunctionCallItemSchema,
 	ResponsesFunctionCallOutputItemSchema,
+	ResponsesAdditionalToolsItemSchema,
 	ResponsesReasoningItemSchema,
 	UnknownResponsesInputItemSchema,
 ]);
@@ -325,6 +342,9 @@ export type ResponsesFunctionCallItem = z.infer<
 >;
 export type ResponsesFunctionCallOutputItem = z.infer<
 	typeof ResponsesFunctionCallOutputItemSchema
+>;
+export type ResponsesAdditionalToolsItem = z.infer<
+	typeof ResponsesAdditionalToolsItemSchema
 >;
 export type ResponsesReasoningItem = z.infer<typeof ResponsesReasoningItemSchema>;
 export type ResponsesInputItem = z.infer<typeof ResponsesInputItemSchema>;
