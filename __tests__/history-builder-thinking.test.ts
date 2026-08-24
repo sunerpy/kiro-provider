@@ -51,38 +51,26 @@ function assistantContents(secondContent: unknown): string[] {
   )
 }
 
-describe('history builder thinking preservation', () => {
-  test('preserves the thinking prefix on collapsed second-and-later tool pairs', () => {
+describe('history builder unsigned thinking handling', () => {
+  test('does not replay thinking text as assistant content', () => {
     expect(
       assistantContents([
         { type: 'thinking', thinking: 'second thought' },
         { type: 'text', text: 'working' }
       ])
-    ).toEqual([
-      '<thinking>first thought</thinking>',
-      '<thinking>second thought</thinking>\n\n[system: tool calling continues]',
-      '[system: conversation continues]'
-    ])
+    ).toEqual(['', 'working', ''])
   })
 
-  test('preserves the full thinking prefix when reasoning contains a literal closing tag', () => {
+  test('does not interpret closing-tag text inside ignored thinking blocks', () => {
     expect(
       assistantContents([
         { type: 'thinking', thinking: 'before </thinking> after' },
         { type: 'text', text: 'working' }
       ])
-    ).toEqual([
-      '<thinking>first thought</thinking>',
-      '<thinking>before <\\/thinking> after</thinking>\n\n[system: tool calling continues]',
-      '[system: conversation continues]'
-    ])
+    ).toEqual(['', 'working', ''])
   })
 
-  test('keeps the existing non-thinking collapse placeholder unchanged', () => {
-    expect(assistantContents('working')).toEqual([
-      '<thinking>first thought</thinking>',
-      '[system: tool calling continues]',
-      '[system: conversation continues]'
-    ])
+  test('uses empty structural turns instead of textual placeholders', () => {
+    expect(assistantContents('working')).toEqual(['', 'working', ''])
   })
 })

@@ -88,14 +88,16 @@ export class AccountManager {
     return this.getAccounts()
   }
 
-  selectHealthyAccount(): StoredAccount | null {
+  selectHealthyAccount(preferredAccountId?: string): StoredAccount | null {
     const now = Date.now()
     const candidates = this.accounts
       .filter((account) => this.isSelectable(account, now))
       .sort((left, right) => left.id.localeCompare(right.id))
     if (candidates.length === 0) return null
 
-    const selected = this.selectCandidate(candidates)
+    const selected =
+      candidates.find(({ id }) => id === preferredAccountId) ??
+      this.selectCandidate(candidates)
     return (
       this.patchAccount(selected.id, (latest) => ({
         ...latest,

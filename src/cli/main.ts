@@ -1,3 +1,4 @@
+import { defaultOpenCodeAuthDbPath } from "../auth/opencode-auth-store.js";
 import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
 import { startServer } from "../server/app.js";
@@ -90,6 +91,12 @@ async function dispatch(
 			const config = dependencies.loadConfig({
 				...(command.configPath ? { configPath: command.configPath } : {}),
 			});
+			if (config.auth_source === "opencode-shared") {
+				dependencies.stderr(
+					`auth_source=opencode-shared uses ${config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath()} as the authentication authority. Run "opencode auth login" and select Kiro, or set auth_source to "local" before using kiro-provider login.`,
+				);
+				return 1;
+			}
 			await dependencies.runLogin(config, {
 				...(command.startUrl ? { startUrl: command.startUrl } : {}),
 				...(command.region ? { region: command.region } : {}),
@@ -113,6 +120,9 @@ async function dispatch(
 				dependencies.runImportAccounts(
 					{ ...(command.from ? { from: command.from } : {}) },
 					{ database, stdout: dependencies.stdout },
+				);
+				dependencies.stderr(
+					"WARNING: accounts import creates a snapshot; it does not share refresh-token state with opencode-kiro-auth.",
 				);
 			} finally {
 				database.close();

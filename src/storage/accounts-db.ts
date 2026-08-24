@@ -25,6 +25,39 @@ interface TableColumnRow {
 	name: string;
 }
 
+interface SessionAffinityRow {
+	key_hash: string;
+	account_id: string;
+	conversation_id: string;
+	created_at: number;
+	last_seen: number;
+	expires_at: number;
+}
+
+interface CountRow {
+	count: number;
+}
+
+export interface SessionAffinityBinding {
+	readonly keyHash: string;
+	readonly accountId: string;
+	readonly conversationId: string;
+	readonly createdAt: number;
+	readonly lastSeen: number;
+	readonly expiresAt: number;
+}
+
+function rowToSessionAffinity(row: SessionAffinityRow): SessionAffinityBinding {
+	return {
+		keyHash: row.key_hash,
+		accountId: row.account_id,
+		conversationId: row.conversation_id,
+		createdAt: row.created_at,
+		lastSeen: row.last_seen,
+		expiresAt: row.expires_at,
+	};
+}
+
 function defaultDatabasePath(): string {
 	const configRoot =
 		process.platform === "win32"
@@ -69,14 +102,32 @@ export class AccountsDatabase {
 					"ALTER TABLE accounts ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
 				);
 			}
-			this.db.run(`
-        CREATE TABLE IF NOT EXISTS removed_accounts (
-          id TEXT PRIMARY KEY,
-          removed_at INTEGER NOT NULL,
-          last_generation INTEGER NOT NULL
-        )
-      `);
-		});
+				this.db.run(`
+	        CREATE TABLE IF NOT EXISTS removed_accounts (
+	          id TEXT PRIMARY KEY,
+	          removed_at INTEGER NOT NULL,
+	          last_generation INTEGER NOT NULL
+	        )
+	      `);
+				this.db.run(`
+	        CREATE TABLE IF NOT EXISTS session_affinity (
+	          key_hash TEXT PRIMARY KEY,
+	          account_id TEXT NOT NULL,
+	          conversation_id TEXT NOT NULL,
+	          created_at INTEGER NOT NULL,
+	          last_seen INTEGER NOT NULL,
+	          expires_at INTEGER NOT NULL
+	        )
+	      `);
+				this.db.run(`
+	        CREATE INDEX IF NOT EXISTS session_affinity_expires_at_idx
+	        ON session_affinity (expires_at)
+	      `);
+				this.db.run(`
+	        CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
+	        ON session_affinity (last_seen)
+	      `);
+			});
 	}
 
 	getAccounts(): StoredAccount[] {
@@ -179,6 +230,9 @@ export class AccountsDatabase {
 				existing?.generation ?? tombstone?.last_generation ?? 0;
 			this.db.query("DELETE FROM accounts WHERE id = ?").run(id);
 			this.db
+				.query("DELETE FROM session_affinity WHERE account_id = ?")
+				.run(id);
+			this.db
 				.query(`
           INSERT OR REPLACE INTO removed_accounts (id, removed_at, last_generation)
           VALUES (?, ?, ?)
@@ -191,12 +245,147 @@ export class AccountsDatabase {
 		this.withImmediateTransaction(() => this.clearRemovedAccountInternal(id));
 	}
 
+	getSessionAffinity(
+		keyHash: string,
+		now: number = Date.now(),
+	): SessionAffinityBinding | undefined {
+		const row = this.db
+			.query<SessionAffinityRow, [string, number]>(`
+	      SELECT * FROM session_affinity
+	      WHERE key_hash = ? AND expires_at > ?
+	    `)
+			.get(keyHash, now);
+		return row === null ? undefined : rowToSessionAffinity(row);
+	}
+
+	claimSessionAffinity(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): SessionAffinityBinding {
+		return this.withImmediateTransaction(() => {
+			this.db
+				.query("DELETE FROM session_affinity WHERE key_hash = ? AND expires_at <= ?")
+				.run(keyHash, now);
+			this.db
+				.query(`
+	        INSERT OR IGNORE INTO session_affinity (
+	          key_hash, account_id, conversation_id, created_at, last_seen, expires_at
+	        ) VALUES (?, ?, ?, ?, ?, ?)
+	      `)
+				.run(keyHash, accountId, conversationId, now, now, now + ttlMs);
+			this.db
+				.query(`
+	        UPDATE session_affinity
+	        SET last_seen = ?, expires_at = ?
+	        WHERE key_hash = ?
+	      `)
+				.run(now, now + ttlMs, keyHash);
+			this.pruneSessionAffinitiesInternal(now, maxEntries, keyHash);
+			const row = this.selectSessionAffinity(keyHash);
+			if (row === undefined) {
+				throw new TypeError("Session affinity claim did not persist");
+			}
+			return rowToSessionAffinity(row);
+		});
+	}
+
+	rebindSessionAffinity(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): SessionAffinityBinding {
+		return this.withImmediateTransaction(() => {
+			this.db
+				.query(`
+	        INSERT INTO session_affinity (
+	          key_hash, account_id, conversation_id, created_at, last_seen, expires_at
+	        ) VALUES (?, ?, ?, ?, ?, ?)
+	        ON CONFLICT(key_hash) DO UPDATE SET
+	          account_id = excluded.account_id,
+	          conversation_id = excluded.conversation_id,
+	          created_at = excluded.created_at,
+	          last_seen = excluded.last_seen,
+	          expires_at = excluded.expires_at
+	      `)
+				.run(keyHash, accountId, conversationId, now, now, now + ttlMs);
+			this.pruneSessionAffinitiesInternal(now, maxEntries, keyHash);
+			const row = this.selectSessionAffinity(keyHash);
+			if (row === undefined) {
+				throw new TypeError("Session affinity rebind did not persist");
+			}
+			return rowToSessionAffinity(row);
+		});
+	}
+
+	pruneSessionAffinities(
+		now: number = Date.now(),
+		maxEntries = 10_000,
+	): number {
+		return this.withImmediateTransaction(() =>
+			this.pruneSessionAffinitiesInternal(now, maxEntries),
+		);
+	}
+
 	close(): void {
 		this.db.close();
 	}
 
 	private clearRemovedAccountInternal(id: string): void {
 		this.db.query("DELETE FROM removed_accounts WHERE id = ?").run(id);
+	}
+
+	private selectSessionAffinity(keyHash: string): SessionAffinityRow | undefined {
+		const row = this.db
+			.query<SessionAffinityRow, [string]>(
+				"SELECT * FROM session_affinity WHERE key_hash = ?",
+			)
+			.get(keyHash);
+		return row === null ? undefined : row;
+	}
+
+	private pruneSessionAffinitiesInternal(
+		now: number,
+		maxEntries: number,
+		preserveKey?: string,
+	): number {
+		let changes = this.db
+			.query("DELETE FROM session_affinity WHERE expires_at <= ?")
+			.run(now).changes;
+		const row = this.db
+			.query<CountRow, []>("SELECT COUNT(*) AS count FROM session_affinity")
+			.get();
+		const overflow = Math.max(0, (row?.count ?? 0) - maxEntries);
+		if (overflow > 0) {
+			const prune = preserveKey
+				? this.db.query(`
+	        DELETE FROM session_affinity
+	        WHERE key_hash IN (
+	          SELECT key_hash FROM session_affinity
+	          WHERE key_hash != ?
+	          ORDER BY last_seen ASC, key_hash ASC
+	          LIMIT ?
+	        )
+	      `)
+				: this.db.query(`
+	        DELETE FROM session_affinity
+	        WHERE key_hash IN (
+	          SELECT key_hash FROM session_affinity
+	          ORDER BY last_seen ASC, key_hash ASC
+	          LIMIT ?
+	        )
+	      `);
+			changes += (
+				preserveKey ? prune.run(preserveKey, overflow) : prune.run(overflow)
+			).changes;
+		}
+		return changes;
 	}
 
 	private withImmediateTransaction<T>(operation: () => T): T {

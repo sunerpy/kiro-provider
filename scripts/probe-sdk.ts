@@ -23,7 +23,9 @@ import { join } from "node:path";
 import {
 	type ChatResponseStream,
 	GenerateAssistantResponseCommand,
+	type GenerateAssistantResponseCommandInput,
 	type GenerateAssistantResponseCommandOutput,
+	type Tool,
 } from "@aws/codewhisperer-streaming-client";
 import { z } from "zod";
 import { createSdkClient } from "../src/core/sdk-client.js";
@@ -37,6 +39,8 @@ import type { KiroAuthDetails } from "../src/kiro/types.js";
 const TOKEN_EXPIRY_BUFFER_MS = 120_000;
 const COMPILED_PROBE_PATH = "/tmp/probe-bin";
 const PROMPT = "Say hi in 3 words.";
+const WEB_SEARCH_PROMPT =
+	"Use web search to find the current published version of @aws/codewhisperer-streaming-client on npm. Return the version and cite the source URL.";
 const EFFORT = "medium";
 
 const AccountRowSchema = z.object({
@@ -89,6 +93,11 @@ type ProbeSpec = {
 	readonly label: string;
 	readonly modelId: string;
 	readonly effort?: typeof EFFORT;
+	readonly prompt?: string;
+	readonly additionalModelRequestFields?: GenerateAssistantResponseCommandInput["additionalModelRequestFields"];
+	readonly requestTools?: Tool[];
+	readonly expectWebSearch?: boolean;
+	readonly expectToolUse?: boolean;
 };
 
 type ProbeResult = {
@@ -99,6 +108,11 @@ type ProbeResult = {
 	readonly reasoningSeen: boolean;
 	readonly toolUseSeen: boolean;
 	readonly completionEventSeen: boolean;
+	readonly eventTypes: readonly string[];
+	readonly citationCount: number;
+	readonly documentCitationCount: number;
+	readonly supplementaryWebLinkCount: number;
+	readonly webSearchEvidenceSeen: boolean;
 	readonly cleanEof: boolean;
 	readonly conclusiveFailure: boolean;
 	readonly error?: string;
@@ -109,6 +123,10 @@ type EventSummary = {
 	reasoningSeen: boolean;
 	toolUseSeen: boolean;
 	completionEventSeen: boolean;
+	eventTypes: Set<string>;
+	citationCount: number;
+	documentCitationCount: number;
+	supplementaryWebLinkCount: number;
 	cleanEof: boolean;
 	streamError?: string;
 };
@@ -334,15 +352,22 @@ function persistRefreshedAccount(
 	}
 }
 
-function conversationState(modelId: string) {
+function conversationState(
+	modelId: string,
+	prompt: string = PROMPT,
+	tools?: Tool[],
+) {
 	return {
 		chatTriggerType: "MANUAL" as const,
 		conversationId: crypto.randomUUID(),
 		currentMessage: {
 			userInputMessage: {
-				content: PROMPT,
+				content: prompt,
 				modelId,
 				origin: "AI_EDITOR" as const,
+				...(tools === undefined
+					? {}
+					: { userInputMessageContext: { tools } }),
 			},
 		},
 	};
@@ -355,12 +380,16 @@ async function consumeEvents(
 	if (stream === undefined) {
 		return {
 			content: "",
-			reasoningSeen: false,
-			toolUseSeen: false,
-			completionEventSeen: false,
-			cleanEof: false,
-			streamError: "SDK response did not contain an event stream",
-		};
+				reasoningSeen: false,
+				toolUseSeen: false,
+				completionEventSeen: false,
+				eventTypes: new Set<string>(),
+				citationCount: 0,
+				documentCitationCount: 0,
+				supplementaryWebLinkCount: 0,
+				cleanEof: false,
+				streamError: "SDK response did not contain an event stream",
+			};
 	}
 
 	const summary: EventSummary = {
@@ -368,6 +397,10 @@ async function consumeEvents(
 		reasoningSeen: false,
 		toolUseSeen: false,
 		completionEventSeen: false,
+		eventTypes: new Set<string>(),
+		citationCount: 0,
+		documentCitationCount: 0,
+		supplementaryWebLinkCount: 0,
 		cleanEof: false,
 	};
 
@@ -380,6 +413,7 @@ async function consumeEvents(
 }
 
 function collectEvent(summary: EventSummary, event: ChatResponseStream): void {
+	for (const key of Object.keys(event)) summary.eventTypes.add(key);
 	if (event.assistantResponseEvent?.content !== undefined) {
 		summary.content += event.assistantResponseEvent.content;
 	}
@@ -388,6 +422,12 @@ function collectEvent(summary: EventSummary, event: ChatResponseStream): void {
 	}
 	if (event.reasoningContentEvent !== undefined) summary.reasoningSeen = true;
 	if (event.toolUseEvent !== undefined) summary.toolUseSeen = true;
+	if (event.citationEvent !== undefined) summary.citationCount += 1;
+	if (event.documentCitationEvent !== undefined) {
+		summary.documentCitationCount += 1;
+	}
+	summary.supplementaryWebLinkCount +=
+		event.supplementaryWebLinksEvent?.supplementaryWebLinks?.length ?? 0;
 	if (
 		Object.keys(event).some((key) => key.toLowerCase().includes("completion"))
 	) {
@@ -453,32 +493,64 @@ async function runRequest(
 		createSdkClient,
 	);
 	try {
-		const response = await client.send(
-			new GenerateAssistantResponseCommand({
-				conversationState: conversationState(spec.modelId),
+			const response = await client.send(
+				new GenerateAssistantResponseCommand({
+					conversationState: conversationState(
+						spec.modelId,
+						spec.prompt ?? PROMPT,
+						spec.requestTools,
+					),
 					profileArn: auth.profileArn,
-			}),
-		);
-		const summary = await consumeEvents(response);
-		const status = response.$metadata.httpStatusCode;
-		const statusOk = status !== undefined && status >= 200 && status < 300;
-		const pass =
-			statusOk && summary.cleanEof && summary.content.trim().length > 0;
-		return {
-			label: spec.label,
-			pass,
+					...(spec.additionalModelRequestFields === undefined
+						? {}
+						: {
+								additionalModelRequestFields:
+									spec.additionalModelRequestFields,
+							}),
+				}),
+			);
+			const summary = await consumeEvents(response);
+			const status = response.$metadata.httpStatusCode;
+			const statusOk = status !== undefined && status >= 200 && status < 300;
+			const webSearchEvidenceSeen =
+				summary.citationCount > 0 ||
+				summary.documentCitationCount > 0 ||
+				summary.supplementaryWebLinkCount > 0;
+			const pass =
+				statusOk &&
+				summary.cleanEof &&
+				(spec.expectWebSearch === true
+					? webSearchEvidenceSeen
+					: spec.expectToolUse === true
+						? summary.toolUseSeen
+					: summary.content.trim().length > 0);
+			return {
+				label: spec.label,
+				pass,
 			httpStatus: status,
 			content: summary.content,
-			reasoningSeen: summary.reasoningSeen,
-			toolUseSeen: summary.toolUseSeen,
-			completionEventSeen: summary.completionEventSeen,
-			cleanEof: summary.cleanEof,
-			conclusiveFailure: !pass && isConclusiveSdkFailure(status),
-			error:
-				summary.streamError ??
-				(summary.content.trim().length === 0
-					? "clean response contained no content events"
-					: undefined),
+				reasoningSeen: summary.reasoningSeen,
+				toolUseSeen: summary.toolUseSeen,
+				completionEventSeen: summary.completionEventSeen,
+				eventTypes: [...summary.eventTypes].sort(),
+				citationCount: summary.citationCount,
+				documentCitationCount: summary.documentCitationCount,
+				supplementaryWebLinkCount: summary.supplementaryWebLinkCount,
+				webSearchEvidenceSeen,
+				cleanEof: summary.cleanEof,
+				conclusiveFailure: !pass && isConclusiveSdkFailure(status),
+				error:
+					summary.streamError ??
+					(spec.expectWebSearch === true && !webSearchEvidenceSeen
+						? "response contained no citation or supplementary web-link events"
+						: undefined) ??
+					(spec.expectToolUse === true && !summary.toolUseSeen
+						? "response contained no tool-use event"
+						: undefined) ??
+					(spec.expectToolUse !== true &&
+					summary.content.trim().length === 0
+						? "clean response contained no content events"
+						: undefined),
 		};
 	} catch (error) {
 		if (!(error instanceof Error)) throw error;
@@ -488,12 +560,17 @@ async function runRequest(
 			pass: false,
 			httpStatus: details.status,
 			content: "",
-			reasoningSeen: false,
-			toolUseSeen: false,
-			completionEventSeen: false,
-			cleanEof: false,
-			conclusiveFailure: isConclusiveSdkFailure(details.status),
-			error: details.message,
+				reasoningSeen: false,
+				toolUseSeen: false,
+				completionEventSeen: false,
+				eventTypes: [],
+				citationCount: 0,
+				documentCitationCount: 0,
+				supplementaryWebLinkCount: 0,
+				webSearchEvidenceSeen: false,
+				cleanEof: false,
+				conclusiveFailure: isConclusiveSdkFailure(details.status),
+				error: details.message,
 		};
 	} finally {
 		client.destroy();
@@ -509,13 +586,27 @@ function printRequestResult(result: ProbeResult): void {
 	console.log(`Reasoning event: ${result.reasoningSeen ? "yes" : "no"}`);
 	console.log(`Tool-use event: ${result.toolUseSeen ? "yes" : "no"}`);
 	console.log(`Completion event: ${result.completionEventSeen ? "yes" : "no"}`);
+	console.log(
+		`Raw event types: ${result.eventTypes.length > 0 ? result.eventTypes.join(", ") : "(none)"}`,
+	);
+	console.log(`Citation events: ${result.citationCount}`);
+	console.log(`Document citation events: ${result.documentCitationCount}`);
+	console.log(`Supplementary web links: ${result.supplementaryWebLinkCount}`);
+	console.log(
+		`Web-search evidence: ${result.webSearchEvidenceSeen ? "yes" : "no"}`,
+	);
 	console.log(`Clean EOF: ${result.cleanEof ? "yes" : "no"}`);
 	if (result.error !== undefined) console.log(`Error: ${result.error}`);
 	console.log(`Result: ${result.pass ? "PASS" : "FAIL"}`);
 }
 
 function printVerdict(
-	verdict: "SDK-OK" | "SDK-FAIL" | "INCONCLUSIVE",
+	verdict:
+		| "SDK-OK"
+		| "SDK-FAIL"
+		| "WEB-SEARCH-SUPPORTED"
+		| "WEB-SEARCH-UNSUPPORTED"
+		| "INCONCLUSIVE",
 	guidance: string,
 ): void {
 	console.log("\n================ FINAL VERDICT ================");
@@ -525,7 +616,10 @@ function printVerdict(
 	console.log("================================================");
 }
 
-async function runLiveProbe(proxyUrl: string | undefined): Promise<number> {
+async function runLiveProbe(
+	proxyUrl: string | undefined,
+	webSearchMode = false,
+): Promise<number> {
 	const path = databasePath();
 	if (!existsSync(path)) {
 		printVerdict(
@@ -535,7 +629,7 @@ async function runLiveProbe(proxyUrl: string | undefined): Promise<number> {
 		return 2;
 	}
 
-	const db = new Database(path, { readonly: false, create: false });
+	const db = new Database(path, { readwrite: true, create: false });
 	try {
 		const selected = readAccount(db);
 		if (selected === undefined) {
@@ -603,17 +697,75 @@ async function runLiveProbe(proxyUrl: string | undefined): Promise<number> {
 			);
 		}
 
-		const specs: readonly ProbeSpec[] = [
-			{ label: "Plain Claude", modelId: claudeModel },
-			{
-				label: "Claude output_config.effort",
-				modelId: claudeModel,
-				effort: EFFORT,
-			},
-			{ label: "GPT reasoning.effort", modelId: gptModel, effort: EFFORT },
-		];
-		const results: ProbeResult[] = [];
-		for (const spec of specs) {
+			const specs: readonly ProbeSpec[] = webSearchMode
+				? [
+						{
+							label: "GPT control without Web Search",
+							modelId: gptModel,
+							prompt: WEB_SEARCH_PROMPT,
+						},
+						{
+							label: "GPT native Web Search",
+							modelId: gptModel,
+							prompt: WEB_SEARCH_PROMPT,
+							additionalModelRequestFields: {
+								tools: [{ type: "web_search" }],
+							},
+							expectWebSearch: true,
+						},
+						{
+							label: "GPT native Web Search without external fetch",
+							modelId: gptModel,
+							prompt: WEB_SEARCH_PROMPT,
+							additionalModelRequestFields: {
+								tools: [
+									{
+										type: "web_search",
+										external_web_access: false,
+									},
+								],
+							},
+							expectWebSearch: true,
+						},
+						{
+							label: "Kiro harness-style web_search tool",
+							modelId: gptModel,
+							prompt: WEB_SEARCH_PROMPT,
+							requestTools: [
+								{
+									toolSpecification: {
+										name: "web_search",
+										description: "Search the public web for current information.",
+										inputSchema: {
+											json: {
+												type: "object",
+												properties: {
+													query: { type: "string" },
+												},
+												required: ["query"],
+											},
+										},
+									},
+								},
+							],
+							expectToolUse: true,
+						},
+					]
+				: [
+						{ label: "Plain Claude", modelId: claudeModel },
+						{
+							label: "Claude output_config.effort",
+							modelId: claudeModel,
+							effort: EFFORT,
+						},
+						{
+							label: "GPT reasoning.effort",
+							modelId: gptModel,
+							effort: EFFORT,
+						},
+					];
+			const results: ProbeResult[] = [];
+			for (const spec of specs) {
 				const result = await runRequest(
 					auth,
 					generationRegion,
@@ -621,10 +773,41 @@ async function runLiveProbe(proxyUrl: string | undefined): Promise<number> {
 					proxyUrl,
 				);
 			results.push(result);
-			printRequestResult(result);
-		}
+				printRequestResult(result);
+			}
 
-		if (results.every((result) => result.pass)) {
+			if (webSearchMode) {
+				const control = results[0];
+				const experiments = results.slice(1, 3);
+				if (experiments.some((result) => result.webSearchEvidenceSeen)) {
+					printVerdict(
+						"WEB-SEARCH-SUPPORTED",
+						"Kiro returned citation or supplementary web-link events for a native Web Search request.",
+					);
+					return 0;
+				}
+				if (
+					control?.pass === true &&
+					experiments.every(
+						(result) =>
+							result.conclusiveFailure ||
+							(result.cleanEof && !result.webSearchEvidenceSeen),
+					)
+				) {
+					printVerdict(
+						"WEB-SEARCH-UNSUPPORTED",
+						"The control request succeeded, but native Web Search was rejected or completed without search evidence.",
+					);
+					return 1;
+				}
+				printVerdict(
+					"INCONCLUSIVE",
+					"The credentials or control request did not establish a valid comparison.",
+				);
+				return 2;
+			}
+
+			if (results.every((result) => result.pass)) {
 			printVerdict(
 				"SDK-OK",
 				"All three SDK requests reached clean EOF with content events.",
@@ -687,6 +870,7 @@ async function main(): Promise<void> {
 
 Options:
   --compile-check  Compile the probe and execute the compiled binary once
+  --web-search    Compare a GPT control request with native Web Search fields
   --proxy <url>   Route token refresh and SDK requests through an HTTP(S) proxy
   --help          Show this help
 
@@ -702,7 +886,10 @@ Environment:
 	}
 
 	try {
-		process.exitCode = await runLiveProbe(proxyUrl);
+		process.exitCode = await runLiveProbe(
+			proxyUrl,
+			process.argv.includes("--web-search"),
+		);
 	} catch (error) {
 		if (!(error instanceof Error)) throw error;
 		const details = errorDetails(error);

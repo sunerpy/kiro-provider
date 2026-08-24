@@ -73,6 +73,8 @@ write_config() {
 {
   "port": $PORT,
   "api_keys": ["$APIKEY"],
+  "enable_legacy_chat_completions": true,
+  "auth_source": "local",
   "default_region": "us-east-1",
   "request_timeout_ms": $request_timeout_ms,
   "stream_idle_timeout_ms": $stream_idle_timeout_ms,

@@ -14,7 +14,10 @@ import {
 	type StoredAccount,
 } from "../src/storage/accounts-db.js";
 
-const config = ConfigSchema.parse({ api_keys: ["sk-test"] });
+const config = ConfigSchema.parse({
+	api_keys: ["sk-test"],
+	auth_source: "local",
+});
 
 function account(overrides: Partial<StoredAccount> = {}): StoredAccount {
 	return {
@@ -441,6 +444,26 @@ describe("main", () => {
 		]);
 	});
 
+	test("rejects local login when OpenCode owns shared authentication", async () => {
+		const harness = createHarness();
+		const dependencies: CliDependencies = {
+			...harness.deps,
+			loadConfig: () =>
+				ConfigSchema.parse({
+					api_keys: ["sk-test"],
+					auth_source: "opencode-shared",
+					opencode_auth_db_path: "/tmp/opencode/kiro.db",
+				}),
+		};
+
+		const exitCode = await main(["login"], dependencies);
+
+		expect(exitCode).toBe(1);
+		expect(harness.logins).toHaveLength(0);
+		expect(harness.stderr.join("\n")).toContain("opencode auth login");
+		expect(harness.stderr.join("\n")).toContain("/tmp/opencode/kiro.db");
+	});
+
 	test("lists accounts without exposing credentials", async () => {
 		const harness = createHarness([account()]);
 
@@ -473,6 +496,9 @@ describe("main", () => {
 		expect(exitCode).toBe(0);
 		expect(harness.loaded).toHaveLength(0);
 		expect(harness.imports).toEqual([{ from: "/tmp/opencode.db" }]);
+		expect(harness.stderr).toEqual([
+			"WARNING: accounts import creates a snapshot; it does not share refresh-token state with opencode-kiro-auth.",
+		]);
 	});
 
 	test("imports accounts when api_keys validation would fail", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   CODEX_RECOGNIZED_TYPES,
+  customToolCallInputDelta,
   formatSseEvent,
   functionCallArgumentsDelta,
   OPTIONAL_IGNORED_TYPES,
@@ -41,10 +42,12 @@ const reasoningDoneItem = {
 } as const
 
 const functionCallDoneItem = {
+  id: 'fc_1',
   type: 'function_call',
   call_id: 'call_1',
   name: 'shell',
-  arguments: '{"command":["ls"]}'
+  arguments: '{"command":["ls"]}',
+  status: 'completed'
 } as const
 
 describe('Responses event constructors', () => {
@@ -63,6 +66,7 @@ describe('Responses event constructors', () => {
         object: 'response',
         status: 'in_progress',
         model: 'auto',
+        created_at: expect.any(Number),
         output: []
       }
     })
@@ -254,6 +258,26 @@ describe('Responses event constructors', () => {
     })
   })
 
+  test('customToolCallInputDelta is optional, codex-ignored, and not recognized', () => {
+    const event = customToolCallInputDelta({
+      itemId: 'ctc_1',
+      outputIndex: 3,
+      delta: 'raw input',
+      sequenceNumber: 9
+    })
+
+    expect(event.type).toBe('response.custom_tool_call_input.delta')
+    expect(OPTIONAL_IGNORED_TYPES).toContain('response.custom_tool_call_input.delta')
+    expect(CODEX_RECOGNIZED_TYPES).not.toContain('response.custom_tool_call_input.delta')
+    expect(event).toEqual({
+      type: 'response.custom_tool_call_input.delta',
+      sequence_number: 9,
+      item_id: 'ctc_1',
+      output_index: 3,
+      delta: 'raw input'
+    })
+  })
+
   test('type groups contain only the contract literals emitted or intentionally ignored', () => {
     expect(CODEX_RECOGNIZED_TYPES).toEqual([
       'response.created',
@@ -267,6 +291,7 @@ describe('Responses event constructors', () => {
     ])
     expect(OPTIONAL_IGNORED_TYPES).toEqual([
       'response.function_call_arguments.delta',
+      'response.custom_tool_call_input.delta',
       'response.output_text.done'
     ])
   })

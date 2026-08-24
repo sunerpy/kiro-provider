@@ -1,6 +1,9 @@
 import type {
   ResponsesAdditionalToolsItem,
+  ResponsesAgentMessageItem,
   ResponsesContentPart,
+  ResponsesCustomToolCallItem,
+  ResponsesCustomToolCallOutputItem,
   ResponsesFunctionCallItem,
   ResponsesFunctionCallOutputItem,
   ResponsesInputItem,
@@ -8,11 +11,16 @@ import type {
   ResponsesReasoningItem,
   ResponsesRequest
 } from '../request-schema.js'
+import {
+  createResponsesToolBridge,
+  type InternalTool,
+  type ResponsesToolBridge
+} from './tool-bridge.js'
 
 type InternalContentPart =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image_url'; readonly image_url: { readonly url: string } }
-  | { readonly type: 'thinking'; readonly thinking: string }
+  | { readonly type: 'tool_result'; readonly tool_use_id: string; readonly content: string }
 
 type InternalMessage =
   | { readonly role: 'system' | 'user'; readonly content: string | InternalContentPart[] }
@@ -27,40 +35,52 @@ type InternalMessage =
     }
   | { readonly role: 'tool'; readonly tool_call_id: string; readonly content: string }
 
-type InternalTool = {
-  readonly type: 'function'
-  readonly function: {
-    readonly name: string
-    readonly description?: string
-    readonly parameters?: Record<string, unknown>
-  }
-}
-
 export interface InternalChatBody {
   readonly model: string
   readonly stream: boolean
   readonly messages: InternalMessage[]
   readonly tools?: InternalTool[]
   readonly tool_choice?: 'auto'
-  readonly reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh'
+  readonly reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
 export type ResponsesToInternalChatResult =
-  | { readonly ok: true; readonly body: InternalChatBody }
-  | { readonly ok: false; readonly code: 'empty_input' }
+  | { readonly ok: true; readonly body: InternalChatBody; readonly bridge: ResponsesToolBridge }
+  | {
+      readonly ok: false
+      readonly code: 'empty_input' | 'invalid_tool_declaration' | 'invalid_tool_history'
+      readonly message?: string
+    }
 
 function isMessageItem(item: ResponsesInputItem): item is ResponsesMessageItem {
-  return item.type === 'message'
+  return (
+    item.type === 'message' ||
+    (item.type === undefined && 'role' in item && 'content' in item)
+  )
+}
+
+function isAgentMessageItem(item: ResponsesInputItem): item is ResponsesAgentMessageItem {
+  return item.type === 'agent_message'
 }
 
 function isFunctionCallItem(item: ResponsesInputItem): item is ResponsesFunctionCallItem {
   return item.type === 'function_call'
 }
 
+function isCustomToolCallItem(item: ResponsesInputItem): item is ResponsesCustomToolCallItem {
+  return item.type === 'custom_tool_call'
+}
+
 function isFunctionCallOutputItem(
   item: ResponsesInputItem
 ): item is ResponsesFunctionCallOutputItem {
   return item.type === 'function_call_output'
+}
+
+function isCustomToolCallOutputItem(
+  item: ResponsesInputItem
+): item is ResponsesCustomToolCallOutputItem {
+  return item.type === 'custom_tool_call_output'
 }
 
 function isAdditionalToolsItem(
@@ -100,54 +120,63 @@ function mapContentParts(
   return mapped
 }
 
-function visibleReasoning(item: ResponsesReasoningItem): string {
-  return [
-    ...(item.summary ?? []).map((part) => part.text),
-    ...(item.content ?? []).map((part) => part.reasoning_text)
-  ]
-    .filter((text) => text.length > 0)
-    .join('\n')
+function mapMessageContent(
+  content: ResponsesMessageItem['content'],
+  skippedUnknownParts: { count: number }
+): string | InternalContentPart[] {
+  return typeof content === 'string'
+    ? content
+    : mapContentParts(content, skippedUnknownParts)
+}
+
+function assistantContent(
+  content: string | InternalContentPart[]
+): InternalContentPart[] {
+  return typeof content === 'string' ? [{ type: 'text', text: content }] : content
 }
 
 function normalizedEffort(
-  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined
 ): InternalChatBody['reasoning_effort'] | undefined {
   if (effort === 'minimal') return 'low'
-  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh') {
+  if (
+    effort === 'low' ||
+    effort === 'medium' ||
+    effort === 'high' ||
+    effort === 'xhigh' ||
+    effort === 'max'
+  ) {
     return effort
   }
   return undefined
 }
 
-function thinkingPart(text: string): InternalContentPart {
-  return { type: 'thinking', thinking: text }
-}
-
-function normalizeFunctionOutput(output: ResponsesFunctionCallOutputItem['output']): string {
+function normalizeFunctionOutput(
+  output: ResponsesFunctionCallOutputItem['output'] | ResponsesCustomToolCallOutputItem['output']
+): string {
   if (typeof output === 'string') return output
   return output.flatMap((part) => (part.text === undefined ? [] : [part.text])).join('\n')
 }
 
-function topLevelTool(tool: NonNullable<ResponsesRequest['tools']>[number]): InternalTool {
-  return {
-    type: 'function',
-    function: {
-      name: tool.name,
-      ...(tool.description !== undefined ? { description: tool.description } : {}),
-      ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {})
+export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInternalChatResult {
+  const bridgeResult = createResponsesToolBridge(req)
+  if (!bridgeResult.ok) {
+    return {
+      ok: false,
+      code: bridgeResult.code,
+      message: bridgeResult.message
     }
   }
-}
-
-export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInternalChatResult {
+  const bridge = bridgeResult.bridge
   const messages: InternalMessage[] = []
-  const tools = (req.tools ?? []).map(topLevelTool)
-  const toolNames = new Set(tools.map((tool) => tool.function.name))
+  const tools = [...bridge.internalTools]
+  const declarationsPresent =
+    req.tools !== undefined ||
+    (typeof req.input !== 'string' && req.input.some((item) => isAdditionalToolsItem(item)))
   const skippedUnknownParts = { count: 0 }
   let skippedUnknownItems = 0
   let skippedAdditionalTools = 0
   let executableInputSeen = false
-  let pendingReasoning = ''
 
   if (req.instructions && req.instructions.length > 0) {
     messages.push({ role: 'system', content: req.instructions })
@@ -157,46 +186,24 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
     messages.push({ role: 'user', content: req.input })
     executableInputSeen = true
   } else {
-    const flushPendingReasoning = (): void => {
-      if (!pendingReasoning) return
-      messages.push({ role: 'assistant', content: [thinkingPart(pendingReasoning)] })
-      pendingReasoning = ''
-      executableInputSeen = true
-    }
-
     for (const item of req.input) {
       if (isReasoningItem(item)) {
-        const text = visibleReasoning(item)
-        if (text) pendingReasoning = pendingReasoning ? `${pendingReasoning}\n${text}` : text
         continue
       }
 
-      if (isFunctionCallItem(item)) {
+      if (isFunctionCallItem(item) || isCustomToolCallItem(item)) {
         messages.push({
           role: 'assistant',
-          ...(pendingReasoning ? { content: [thinkingPart(pendingReasoning)] } : {}),
-          tool_calls: [
-            {
-              id: item.call_id,
-              type: 'function',
-              function: { name: item.name, arguments: item.arguments }
-            }
-          ]
+          tool_calls: [bridge.lowerCall(item)]
         })
-        pendingReasoning = ''
         executableInputSeen = true
         continue
       }
 
       if (isMessageItem(item)) {
-        if (item.role !== 'assistant') flushPendingReasoning()
-        const content = mapContentParts(item.content, skippedUnknownParts)
+        const content = mapMessageContent(item.content, skippedUnknownParts)
         if (item.role === 'assistant') {
-          messages.push({
-            role: 'assistant',
-            content: pendingReasoning ? [thinkingPart(pendingReasoning), ...content] : content
-          })
-          pendingReasoning = ''
+          messages.push({ role: 'assistant', content: assistantContent(content) })
           executableInputSeen = true
         } else {
           messages.push({ role: item.role === 'developer' ? 'system' : item.role, content })
@@ -205,50 +212,37 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
         continue
       }
 
-      if (isFunctionCallOutputItem(item)) {
-        flushPendingReasoning()
+      if (isAgentMessageItem(item)) {
+        const content = mapContentParts(item.content, skippedUnknownParts)
+        messages.push({ role: 'user', content })
+        executableInputSeen = true
+        continue
+      }
+
+      if (isFunctionCallOutputItem(item) || isCustomToolCallOutputItem(item)) {
         messages.push({
-          role: 'tool',
-          tool_call_id: item.call_id,
-          content: normalizeFunctionOutput(item.output)
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: item.call_id,
+              content: normalizeFunctionOutput(item.output)
+            }
+          ]
         })
         executableInputSeen = true
         continue
       }
 
       if (isAdditionalToolsItem(item)) {
-        for (const tool of item.tools) {
-          if (
-            tool.type !== 'function' ||
-            typeof tool.name !== 'string' ||
-            tool.name.length === 0 ||
-            typeof tool.parameters !== 'object' ||
-            tool.parameters === null ||
-            Array.isArray(tool.parameters) ||
-            toolNames.has(tool.name)
-          ) {
-            skippedAdditionalTools++
-            continue
-          }
-          tools.push({
-            type: 'function',
-            function: {
-              name: tool.name,
-              ...(typeof tool.description === 'string'
-                ? { description: tool.description }
-                : {}),
-              parameters: Object.fromEntries(Object.entries(tool.parameters))
-            }
-          })
-          toolNames.add(tool.name)
-        }
+        skippedAdditionalTools += item.tools.filter(
+          (tool) => tool.type !== 'function' && tool.type !== 'custom' && tool.type !== 'namespace'
+        ).length
         continue
       }
 
-      flushPendingReasoning()
       skippedUnknownItems++
     }
-    flushPendingReasoning()
   }
 
   void skippedUnknownItems
@@ -262,9 +256,9 @@ export function responsesToInternalChat(req: ResponsesRequest): ResponsesToInter
     model: req.model,
     stream: req.stream,
     messages,
-    ...(tools.length > 0 || req.tools !== undefined ? { tools } : {}),
+    ...(tools.length > 0 || declarationsPresent ? { tools } : {}),
     ...(req.tool_choice !== undefined ? { tool_choice: req.tool_choice } : {}),
     ...(effort !== undefined ? { reasoning_effort: effort } : {})
   }
-  return { ok: true, body }
+  return { ok: true, body, bridge }
 }

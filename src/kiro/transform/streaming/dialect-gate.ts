@@ -35,7 +35,7 @@ export class DialectGate {
   private emitted = 0
   private markerSeen = false
 
-  push(text: string): string {
+  ingest(text: string): string {
     if (!text) return ''
     this.accumulated += text
 

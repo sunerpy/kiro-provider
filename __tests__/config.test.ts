@@ -7,6 +7,53 @@ import { ConfigSchema } from "../src/config/schema.js";
 
 const temporaryDirectories: string[] = [];
 
+const timeoutFields = [
+	"request_timeout_ms",
+	"stream_idle_timeout_ms",
+] as const;
+
+const validBaseConfig = {
+	host: "127.0.0.1",
+	port: 8787,
+	api_keys: ["sk-test"],
+	enable_legacy_chat_completions: false,
+	proxy_url: null,
+	auth_source: "opencode-shared",
+	opencode_auth_db_path: null,
+	default_region: "us-east-1",
+	account_selection_strategy: "lowest-usage",
+	rate_limit_max_retries: 3,
+	rate_limit_retry_delay_ms: 5000,
+	max_request_iterations: 20,
+	request_timeout_ms: 120000,
+	stream_idle_timeout_ms: 60000,
+	max_request_body_bytes: 10485760,
+	token_expiry_buffer_ms: 300000,
+	effort: null,
+	auto_effort_mapping: true,
+	log_level: "info",
+	test_upstream_endpoint: "http://127.0.0.1:43127/mock",
+} as const;
+
+const acceptedTimeoutCases = [
+	{ label: "the minimum 1", value: 1 },
+	{ label: "500", value: 500 },
+	{ label: "600000", value: 600000 },
+	{ label: "the maximum 2147483647", value: 2_147_483_647 },
+] as const;
+
+const rejectedTimeoutCases = [
+	{ label: "zero", value: 0 },
+	{ label: "a negative integer", value: -1 },
+	{ label: "the fraction 1.5", value: 1.5 },
+	{ label: "the fraction 500.25", value: 500.25 },
+	{ label: "the fraction 2147483647.5", value: 2_147_483_647.5 },
+	{ label: "the overflow value 2147483648", value: 2_147_483_648 },
+	{ label: "NaN", value: Number.NaN },
+	{ label: "Infinity", value: Number.POSITIVE_INFINITY },
+	{ label: "negative Infinity", value: Number.NEGATIVE_INFINITY },
+] as const;
+
 function createConfigFile(config: unknown): string {
 	const directory = mkdtempSync(join(tmpdir(), "kiro-provider-config-"));
 	temporaryDirectories.push(directory);
@@ -29,7 +76,10 @@ describe("ConfigSchema", () => {
 			host: "127.0.0.1",
 			port: 8787,
 			api_keys: ["sk-test"],
+			enable_legacy_chat_completions: false,
 			proxy_url: null,
+			auth_source: "opencode-shared",
+			opencode_auth_db_path: null,
 			default_region: "us-east-1",
 			account_selection_strategy: "lowest-usage",
 			rate_limit_max_retries: 3,
@@ -39,10 +89,38 @@ describe("ConfigSchema", () => {
 			stream_idle_timeout_ms: 60000,
 			max_request_body_bytes: 10485760,
 			token_expiry_buffer_ms: 300000,
+			session_affinity_ttl_ms: 86400000,
+			session_affinity_max_entries: 10000,
 			effort: null,
 			auto_effort_mapping: true,
 			log_level: "info",
 		});
+	});
+
+	test.each(
+		timeoutFields.flatMap((field) =>
+			acceptedTimeoutCases.map(({ label, value }) => ({ field, label, value })),
+		),
+	)("accepts $label for $field", ({ field, value }) => {
+		const parsed = ConfigSchema.safeParse({
+			...validBaseConfig,
+			[field]: value,
+		});
+
+		expect(parsed.success).toBe(true);
+	});
+
+	test.each(
+		timeoutFields.flatMap((field) =>
+			rejectedTimeoutCases.map(({ label, value }) => ({ field, label, value })),
+		),
+	)("rejects $label for $field", ({ field, value }) => {
+		const parsed = ConfigSchema.safeParse({
+			...validBaseConfig,
+			[field]: value,
+		});
+
+		expect(parsed.success).toBe(false);
 	});
 
 	test.each([
@@ -208,7 +286,10 @@ describe("loadConfig", () => {
 				KIRO_PROVIDER_HOST: "env.example",
 				KIRO_PROVIDER_PORT: "9123",
 				KIRO_PROVIDER_API_KEYS: "sk-a,sk-b",
+				KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS: "true",
 				KIRO_PROVIDER_PROXY_URL: " https://proxy.example:8443 ",
+				KIRO_PROVIDER_AUTH_SOURCE: "local",
+				KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH: " /tmp/opencode-kiro.db ",
 				KIRO_PROVIDER_DEFAULT_REGION: "eu-west-1",
 				KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "round-robin",
 				KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES: "8",
@@ -218,6 +299,8 @@ describe("loadConfig", () => {
 				KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "70000",
 				KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "2097152",
 				KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "240000",
+				KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS: "3600000",
+				KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES: "20000",
 				KIRO_PROVIDER_EFFORT: "high",
 				KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "0",
 				KIRO_PROVIDER_LOG_LEVEL: "debug",
@@ -229,7 +312,10 @@ describe("loadConfig", () => {
 			host: "env.example",
 			port: 9123,
 			api_keys: ["sk-a", "sk-b"],
+			enable_legacy_chat_completions: true,
 			proxy_url: "https://proxy.example:8443",
+			auth_source: "local",
+			opencode_auth_db_path: "/tmp/opencode-kiro.db",
 			default_region: "eu-west-1",
 			account_selection_strategy: "round-robin",
 			rate_limit_max_retries: 8,
@@ -239,6 +325,8 @@ describe("loadConfig", () => {
 			stream_idle_timeout_ms: 70000,
 			max_request_body_bytes: 2097152,
 			token_expiry_buffer_ms: 240000,
+			session_affinity_ttl_ms: 3600000,
+			session_affinity_max_entries: 20000,
 			effort: "high",
 			auto_effort_mapping: false,
 			log_level: "debug",
@@ -266,6 +354,33 @@ describe("loadConfig", () => {
 				},
 			}),
 		).toThrow(/auto_effort_mapping/i);
+	});
+
+	test("maps and validates the legacy Chat Completions environment switch", () => {
+		for (const [value, expected] of [
+			["true", true],
+			["1", true],
+			["false", false],
+			["0", false],
+		] as const) {
+			const config = loadConfig({
+				configPath: createConfigFile({}),
+				env: {
+					KIRO_PROVIDER_API_KEYS: "sk-test",
+					KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS: value,
+				},
+			});
+			expect(config.enable_legacy_chat_completions).toBe(expected);
+		}
+		expect(() =>
+			loadConfig({
+				configPath: createConfigFile({}),
+				env: {
+					KIRO_PROVIDER_API_KEYS: "sk-test",
+					KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS: "sometimes",
+				},
+			}),
+		).toThrow(/enable_legacy_chat_completions/i);
 	});
 
 	test("maps the test upstream environment value to the optional endpoint", () => {

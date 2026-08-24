@@ -138,6 +138,15 @@ describe('AccountManager health persistence', () => {
 })
 
 describe('AccountManager selection metrics', () => {
+  test('honors a selectable session-preferred account before the global strategy', () => {
+    const [db] = createDatabasePair()
+    const first = db.insertAccount(account('A', { usedCount: 0 }))
+    const second = db.insertAccount(account('B', { usedCount: 100 }))
+    const manager = new AccountManager([first, second], 'lowest-usage', db)
+
+    expect(manager.selectHealthyAccount('B')?.id).toBe('B')
+  })
+
   test('reports account count and the shortest active rate-limit wait', () => {
     // Given
     const [db] = createDatabasePair()

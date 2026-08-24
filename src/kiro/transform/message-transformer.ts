@@ -7,6 +7,7 @@ export interface MessageContentPart {
   name?: string
   input?: unknown
   thinking?: unknown
+  is_error?: unknown
   tool_use_id?: string
   content?: unknown
   [key: string]: unknown
@@ -24,6 +25,7 @@ export interface SourceToolCall {
 export interface SourceToolResult {
   content?: unknown
   tool_call_id?: string
+  is_error?: unknown
   [key: string]: unknown
 }
 

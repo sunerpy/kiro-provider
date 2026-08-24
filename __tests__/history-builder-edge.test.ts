@@ -5,36 +5,32 @@ import type { CodeWhispererMessage } from '../src/kiro/types.js'
 const MODEL = 'claude-sonnet-4.5'
 
 describe('buildHistory edge behavior', () => {
-  test('converts user tool-result parts and omits images beyond the Kiro limit', () => {
+  test('rejects images beyond the Kiro limit instead of inserting omission text', () => {
     const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AQID' } }
 
-    const history = buildHistory(
-      [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'inspect' },
-            { type: 'tool_result', tool_use_id: 'call-1', content: 'done' },
-            image,
-            image,
-            image,
-            image,
-            image
-          ]
-        },
-        { role: 'assistant', content: 'current' }
-      ],
-      MODEL
-    )
-
-    expect(history[0]?.userInputMessage?.images).toHaveLength(4)
-    expect(history[0]?.userInputMessage?.content).toContain('[1 image(s) omitted due to API limits]')
-    expect(history[0]?.userInputMessage?.userInputMessageContext?.toolResults).toEqual([
-      { content: [{ text: 'done' }], status: 'success', toolUseId: 'call-1' }
-    ])
+    expect(() =>
+      buildHistory(
+        [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'inspect' },
+              { type: 'tool_result', tool_use_id: 'call-1', content: 'done' },
+              image,
+              image,
+              image,
+              image,
+              image
+            ]
+          },
+          { role: 'assistant', content: 'current' }
+        ],
+        MODEL
+      )
+    ).toThrow('at most 4 images')
   })
 
-  test('converts batched tool-role results and separates them from a preceding user turn', () => {
+  test('converts batched tool-role results and merges them into a preceding user turn', () => {
     const history = buildHistory(
       [
         { role: 'user', content: 'run tools' },
@@ -50,15 +46,14 @@ describe('buildHistory edge behavior', () => {
       MODEL
     )
 
-    expect(history[1]).toEqual({
-      assistantResponseMessage: { content: '[system: conversation continues]' }
-    })
-    expect(history[2]?.userInputMessage?.userInputMessageContext?.toolResults).toEqual([
+    expect(history).toHaveLength(1)
+    expect(history[0]?.userInputMessage?.content).toBe('run tools')
+    expect(history[0]?.userInputMessage?.userInputMessageContext?.toolResults).toEqual([
       { content: [{ text: 'batched result' }], status: 'success', toolUseId: 'call-2' }
     ])
   })
 
-  test('uses thinking text fallback and merges adjacent assistant content and tools', () => {
+  test('ignores unsigned thinking text and merges adjacent assistant content and tools', () => {
     const history = buildHistory(
       [
         {
@@ -81,7 +76,7 @@ describe('buildHistory edge behavior', () => {
     expect(history).toEqual([
       {
         assistantResponseMessage: {
-          content: '<thinking>fallback thought</thinking>\n\nfirst answer\n\nsecond answer',
+          content: 'first answer\n\nsecond answer',
           toolUses: [{ input: { q: 'x' }, name: 'lookup', toolUseId: 'call-3' }]
         }
       }

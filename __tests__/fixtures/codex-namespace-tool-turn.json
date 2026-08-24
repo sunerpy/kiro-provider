@@ -1,0 +1,19 @@
+{
+  "model": "gpt-5.6-sol",
+  "input": [
+    {
+      "type": "function_call",
+      "call_id": "NAMESPACE_CALL_ID_REDACTED",
+      "namespace": "collaboration",
+      "name": "spawn_agent",
+      "arguments": "{\"task_name\":\"TASK_REDACTED\",\"message\":\"MESSAGE_REDACTED\"}"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "NAMESPACE_CALL_ID_REDACTED",
+      "output": "NAMESPACE_TOOL_OUTPUT_REDACTED"
+    }
+  ],
+  "stream": true,
+  "store": false
+}
