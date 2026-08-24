@@ -4,15 +4,15 @@ export const CLI_USAGE = `Usage: kiro-provider <command> [options]
 
 Commands:
 	serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
-      Start the OpenAI-compatible gateway (default bind: 127.0.0.1:8787).
+      Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>]
-      Sign in with AWS Builder ID or an IAM Identity Center start URL.
+      Sign in to the local auth store. Shared mode uses "opencode auth login".
   accounts list
-      List stored accounts.
+      List accounts in the local compatibility store.
   accounts import [--from <path>] [--config <path>]
-      Import authenticated accounts from the OpenCode Kiro database.
+      Snapshot authenticated accounts into the local compatibility store.
   accounts remove <id|email>
-      Remove an account and write a tombstone.
+      Remove an account from the local compatibility store and write a tombstone.
 
 Options:
   -h, --help  Show this help.`;

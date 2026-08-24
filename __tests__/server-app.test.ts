@@ -5,11 +5,23 @@ import type {
 	PipelineTokenRefresher,
 } from "../src/core/pipeline.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
-import { buildServerDeps, createApp } from "../src/server/app.js";
+import {
+	buildServeOptions,
+	buildServerDeps,
+	createApp,
+} from "../src/server/app.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
-function config(proxyUrl: string | null): Config {
-	return ConfigSchema.parse({ api_keys: ["sk-test"], proxy_url: proxyUrl });
+function config(
+	proxyUrl: string | null,
+	overrides: Partial<Config> = {},
+): Config {
+	return ConfigSchema.parse({
+		api_keys: ["sk-test"],
+		proxy_url: proxyUrl,
+		auth_source: "local",
+		...overrides,
+	});
 }
 
 describe("buildServerDeps", () => {
@@ -23,42 +35,47 @@ describe("buildServerDeps", () => {
 	])("passes the $label proxy URL to the production TokenRefresher assembly", ({
 		proxyUrl,
 		expectedProxyUrl,
-	}) => {
-		// Given
-		const database = new AccountsDatabase(":memory:");
-		let capturedProxyUrl: string | undefined;
-		const tokenRefresher: PipelineTokenRefresher = {
-			async refreshIfNeeded(account) {
-				return account;
-			},
-			async forceRefresh(account) {
-				return account;
-			},
-		};
+		}) => {
+			// Given
+			const database = new AccountsDatabase(":memory:");
+			try {
+				let capturedProxyUrl: string | undefined;
+				const tokenRefresher: PipelineTokenRefresher = {
+					async refreshIfNeeded(account) {
+						return account;
+					},
+					async forceRefresh(account) {
+						return account;
+					},
+				};
 
-		// When
-		buildServerDeps(config(proxyUrl), {
-			createDatabase: () => database,
-			createTokenRefresher: (_accountManager, _bufferMs, resolvedProxyUrl) => {
-				capturedProxyUrl = resolvedProxyUrl;
-				return tokenRefresher;
-			},
+				// When
+				buildServerDeps(config(proxyUrl), {
+					createDatabase: () => database,
+					createTokenRefresher: (_accountManager, _bufferMs, resolvedProxyUrl) => {
+						capturedProxyUrl = resolvedProxyUrl;
+						return tokenRefresher;
+					},
+				});
+
+				// Then
+				expect(capturedProxyUrl).toBe(expectedProxyUrl);
+			} finally {
+				database.close();
+			}
 		});
-
-		// Then
-		expect(capturedProxyUrl).toBe(expectedProxyUrl);
-		database.close();
-	});
 
 	test("constructs the production token refresher when no refresher factory is supplied", () => {
 		const database = new AccountsDatabase(":memory:");
+		try {
+			const dependencies = buildServerDeps(config(null), {
+				createDatabase: () => database,
+			});
 
-		const dependencies = buildServerDeps(config(null), {
-			createDatabase: () => database,
-		});
-
-		expect(dependencies.tokenRefresher.constructor.name).toBe("TokenRefresher");
-		database.close();
+			expect(dependencies.tokenRefresher.constructor.name).toBe("TokenRefresher");
+		} finally {
+			database.close();
+		}
 	});
 });
 
@@ -97,12 +114,43 @@ const passThroughRefresher: PipelineTokenRefresher = {
 	},
 };
 
+describe("buildServeOptions", () => {
+	test("omits Bun's global idleTimeout while preserving the server wiring", () => {
+		const parsed = ConfigSchema.parse({
+			api_keys: ["sk-test"],
+			host: "127.0.0.2",
+			port: 43210,
+		});
+		const dependencies = {
+			accountManager: new ThrowingAccountManager(),
+			tokenRefresher: passThroughRefresher,
+		};
+
+		const options: Bun.Serve.Options<undefined> = buildServeOptions(
+			parsed,
+			dependencies,
+		);
+
+		expect(Object.hasOwn(options, "idleTimeout")).toBe(false);
+		expect(options.hostname).toBe(parsed.host);
+		expect(options.port).toBe(parsed.port);
+		expect(options.fetch).toBeFunction();
+	});
+});
+
 describe("createApp", () => {
 	const authorization = { Authorization: "Bearer sk-test" };
 	const app = createApp(config(null), {
 		accountManager: new ThrowingAccountManager(),
 		tokenRefresher: passThroughRefresher,
 	});
+	const legacyChatApp = createApp(
+		config(null, { enable_legacy_chat_completions: true }),
+		{
+			accountManager: new ThrowingAccountManager(),
+			tokenRefresher: passThroughRefresher,
+		},
+	);
 
 	test("checks authentication before route dispatch", async () => {
 		const response = await app(new Request("http://x/missing"));
@@ -127,6 +175,16 @@ describe("createApp", () => {
 		expect(await response.json()).toEqual({ status: "ok" });
 	});
 
+	test("reports readiness failures without exposing account details", async () => {
+		const response = await app(new Request("http://x/ready", { headers: authorization }));
+
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			status: "not_ready",
+			reason: "authentication_store_unavailable",
+		});
+	});
+
 	test("returns an OpenAI-shaped 404 for an authenticated unknown route", async () => {
 		const response = await app(new Request("http://x/missing", { headers: authorization }));
 		const body: unknown = await response.json();
@@ -135,8 +193,27 @@ describe("createApp", () => {
 		expect(body).toMatchObject({ error: { code: "not_found", message: "Route not found" } });
 	});
 
-	test("converts unexpected chat-route exceptions into a 500 response", async () => {
+	test("keeps legacy Chat Completions disabled unless explicitly enabled", async () => {
 		const response = await app(
+			new Request("http://x/v1/chat/completions", {
+				method: "POST",
+				headers: { ...authorization, "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: "auto",
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			}),
+		);
+		const body: unknown = await response.json();
+
+		expect(response.status).toBe(404);
+		expect(body).toMatchObject({
+			error: { code: "legacy_chat_completions_disabled" },
+		});
+	});
+
+	test("converts unexpected chat-route exceptions into a 500 response", async () => {
+		const response = await legacyChatApp(
 			new Request("http://x/v1/chat/completions", {
 				method: "POST",
 				headers: { ...authorization, "Content-Type": "application/json" },
@@ -155,7 +232,7 @@ describe("createApp", () => {
 				throw new Error("body stream failed");
 			},
 		});
-		const response = await app(
+		const response = await legacyChatApp(
 			new Request("http://x/v1/chat/completions", {
 				method: "POST",
 				headers: { ...authorization, "Content-Type": "application/json" },

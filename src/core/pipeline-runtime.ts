@@ -1,4 +1,10 @@
-let requestQueue: Promise<void> = Promise.resolve();
+interface QueueEntry {
+	tail: Promise<void>;
+	waiters: number;
+}
+
+const sessionQueues = new Map<string, QueueEntry>();
+const accountQueues = new Map<string, QueueEntry>();
 
 export interface PipelineDeadline {
 	readonly signal: AbortSignal;
@@ -37,21 +43,40 @@ export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 	return abortable(Bun.sleep(ms), signal);
 }
 
-export async function acquirePipelineQueue(
+async function acquireKeyedQueue(
+	queues: Map<string, QueueEntry>,
+	key: string,
 	signal: AbortSignal,
 ): Promise<() => void> {
-	const previous = requestQueue;
+	let entry = queues.get(key);
+	if (!entry) {
+		entry = { tail: Promise.resolve(), waiters: 0 };
+		queues.set(key, entry);
+	}
+	const queueEntry = entry;
+	const previous = queueEntry.tail;
 	let releaseGate: (() => void) | undefined;
 	const gate = new Promise<void>((resolve) => {
 		releaseGate = resolve;
 	});
 	if (!releaseGate) throw new TypeError("Queue release was not initialized");
 	const release = releaseGate;
-	requestQueue = previous.catch(() => undefined).then(() => gate);
+	queueEntry.waiters += 1;
+	queueEntry.tail = previous.catch(() => undefined).then(() => gate);
+	const cleanup = (): void => {
+		queueEntry.waiters -= 1;
+		if (queueEntry.waiters !== 0) return;
+		void queueEntry.tail.finally(() => {
+			if (queueEntry.waiters === 0 && queues.get(key) === queueEntry) {
+				queues.delete(key);
+			}
+		});
+	};
 	try {
 		await abortable(previous, signal);
 	} catch (error) {
 		release();
+		cleanup();
 		throw error;
 	}
 	let released = false;
@@ -59,7 +84,22 @@ export async function acquirePipelineQueue(
 		if (released) return;
 		released = true;
 		release();
+		cleanup();
 	};
+}
+
+export function acquireSessionQueue(
+	key: string,
+	signal: AbortSignal,
+): Promise<() => void> {
+	return acquireKeyedQueue(sessionQueues, key, signal);
+}
+
+export function acquireAccountQueue(
+	accountId: string,
+	signal: AbortSignal,
+): Promise<() => void> {
+	return acquireKeyedQueue(accountQueues, accountId, signal);
 }
 
 export function createPipelineDeadline(

@@ -2,10 +2,11 @@ import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-stream
 import type { Config } from "../config/schema.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
+import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 
 export interface PipelineAccountManager {
 	reconcileFromDb(): readonly ManagedAccount[];
-	selectHealthyAccount(): ManagedAccount | null;
+	selectHealthyAccount(preferredAccountId?: string): ManagedAccount | null;
 	getAccountCount(): number;
 	toAuthDetails(account: ManagedAccount): KiroAuthDetails;
 	markRateLimited(account: ManagedAccount, resetTime: number): unknown;
@@ -41,7 +42,45 @@ export type PipelineClientFactory = (
 	effort?: Effort,
 	endpoint?: string,
 	proxyUrl?: string,
+	accountId?: string,
 ) => PipelineSdkClient;
+
+export interface PipelineAffinityBinding {
+	readonly keyHash: string;
+	readonly accountId: string;
+	readonly conversationId: string;
+	readonly createdAt: number;
+	readonly lastSeen: number;
+	readonly expiresAt: number;
+}
+
+export interface PipelineAffinityStore {
+	getSessionAffinity(
+		keyHash: string,
+		now?: number,
+	): PipelineAffinityBinding | undefined;
+	claimSessionAffinity(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): PipelineAffinityBinding;
+	rebindSessionAffinity(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): PipelineAffinityBinding;
+}
+
+export interface PipelineSessionAffinity {
+	readonly keyHash: string;
+	readonly source: string;
+}
 
 export interface RunChatCompletionOptions {
 	readonly body: unknown;
@@ -50,6 +89,9 @@ export interface RunChatCompletionOptions {
 	readonly config: Config;
 	readonly accountManager: PipelineAccountManager;
 	readonly tokenRefresher: PipelineTokenRefresher;
+	readonly affinity?: PipelineSessionAffinity;
+	readonly affinityStore?: PipelineAffinityStore;
 	readonly makeClient?: PipelineClientFactory;
 	readonly deadlineSignal?: AbortSignal;
+	readonly createStreamResponse?: typeof createPipelineStreamResponse;
 }

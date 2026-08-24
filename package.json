@@ -1,7 +1,7 @@
 {
   "name": "@sunerpy/kiro-provider",
   "version": "0.3.1",
-  "description": "Standalone AWS Kiro (CodeWhisperer) provider service",
+  "description": "AWS Kiro gateway for OpenAI Responses and Anthropic Messages clients",
   "homepage": "https://github.com/sunerpy/kiro-provider#readme",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
   "license": "MIT",
@@ -22,7 +22,7 @@
     "access": "public"
   },
   "scripts": {
-    "fmt": "bunx --bun @biomejs/biome format --write ./src ./scripts ./__tests__",
+    "fmt": "bunx --bun @biomejs/biome check --write ./src ./scripts ./__tests__",
     "lint": "bunx --bun @biomejs/biome check ./src ./scripts ./__tests__",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -35,12 +35,14 @@
     "@aws/codewhisperer-streaming-client": "^1.0.34",
     "@smithy/node-http-handler": "4.9.7",
     "https-proxy-agent": "^9.1.0",
+    "proper-lockfile": "^4.1.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
     "@types/bun": "^1.3.6",
     "@types/node": "^20.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "typescript": "^5.7.3"
   },
   "engines": {

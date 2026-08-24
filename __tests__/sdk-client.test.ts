@@ -5,7 +5,6 @@ import {
 } from '@aws/codewhisperer-streaming-client'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
-import { createProxyAgent } from '../src/core/proxy.js'
 import { buildClientConfig, clearSdkClientCache, createSdkClient } from '../src/core/sdk-client.js'
 import type { KiroAuthDetails } from '../src/kiro/types.js'
 
@@ -164,21 +163,23 @@ describe('createSdkClient', () => {
     )
 
     const handlerConfig = await resolveHandlerConfig(client)
-    const proxyAgent = createProxyAgent(proxyUrl)
 
-    expect(handlerConfig.httpAgent).toBe(proxyAgent)
-    expect(handlerConfig.httpsAgent).toBe(proxyAgent)
+    expect(handlerConfig.httpAgent).toBe(handlerConfig.httpsAgent)
+    expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
     clearSdkClientCache()
   })
 
-  test('keeps the default request handler when no proxy is configured', async () => {
+  test('uses explicit reusable direct HTTP and HTTPS pools', async () => {
     clearSdkClientCache()
     const auth = makeAuth()
     const directConfig = buildClientConfig(auth, 'us-east-1', 'https://q.us-east-1.amazonaws.com')
     const client = createSdkClient(makeAuth(), 'us-east-1')
+    const handlerConfig = await resolveHandlerConfig(client)
 
-    expect('requestHandler' in directConfig).toBe(false)
+    expect(directConfig.requestHandler).toBeInstanceOf(NodeHttpHandler)
     expect(client.config.requestHandler).toBeInstanceOf(NodeHttpHandler)
+    expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
+    expect(handlerConfig.httpsAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
     clearSdkClientCache()
   })
 
@@ -194,6 +195,48 @@ describe('createSdkClient', () => {
 
     expect(cachedProxiedClient).toBe(proxiedClient)
     expect(directClient).not.toBe(proxiedClient)
+    clearSdkClientCache()
+  })
+
+  test('reuses one client and observes a refreshed token for the same account', async () => {
+    clearSdkClientCache()
+    const firstAuth = makeAuth()
+    const first = createSdkClient(firstAuth, 'us-east-1', 'high', undefined, undefined, 'account-a')
+    const refreshed = createSdkClient(
+      { ...firstAuth, access: 'refreshed-access-token' },
+      'us-east-1',
+      'high',
+      undefined,
+      undefined,
+      'account-a'
+    )
+
+    expect(refreshed).toBe(first)
+    const token = first.config.token
+    if (!token) throw new TypeError('SDK client token provider is required')
+    expect(await token()).toEqual({ token: 'refreshed-access-token' })
+    clearSdkClientCache()
+  })
+
+  test('separates accounts even when their email and endpoint are identical', () => {
+    clearSdkClientCache()
+    const auth = makeAuth()
+    const first = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-a')
+    const second = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-b')
+
+    expect(second).not.toBe(first)
+    expect(second.config.requestHandler).not.toBe(first.config.requestHandler)
+    clearSdkClientCache()
+  })
+
+  test('shares one account transport pool across effort-specific clients', () => {
+    clearSdkClientCache()
+    const auth = makeAuth()
+    const low = createSdkClient(auth, 'us-east-1', 'low', undefined, undefined, 'account-a')
+    const high = createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a')
+
+    expect(high).not.toBe(low)
+    expect(high.config.requestHandler).toBe(low.config.requestHandler)
     clearSdkClientCache()
   })
 })

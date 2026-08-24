@@ -115,6 +115,12 @@ describe('effort capability', () => {
     expect(resolveEffort('claude-sonnet-4.6', 'xhigh')).toBe('max')
   })
 
+  test('claude-sonnet-4.5 omits effort because Kiro rejects additional model fields', () => {
+    expect(supportsEffort('claude-sonnet-4.5')).toBe(false)
+    expect(supportsEffort('claude-sonnet-4.5-1m')).toBe(false)
+    expect(resolveEffort('claude-sonnet-4.5', 'high')).toBeUndefined()
+  })
+
   test('opus 4.7 and 4.8 keep xhigh (no clamp)', () => {
     expect(resolveEffort('claude-opus-4.7', 'xhigh')).toBe('xhigh')
     expect(resolveEffort('claude-opus-4.8', 'xhigh')).toBe('xhigh')

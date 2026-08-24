@@ -6,6 +6,7 @@ import { buildCodeWhispererRequest } from './request-core.js'
 export interface EffortConfig {
   readonly effort?: Effort
   readonly autoEffortMapping?: boolean
+  readonly conversationId?: string
 }
 
 interface RequestEffortBody {
@@ -27,7 +28,14 @@ export function transformToSdkRequest(
   budget = 20_000,
   effortConfig?: EffortConfig
 ): SdkPreparedRequest {
-  const { request, resolved, convId } = buildCodeWhispererRequest(body, model, auth, think, budget)
+  const { request, resolved, convId } = buildCodeWhispererRequest(
+    body,
+    model,
+    auth,
+    think,
+    budget,
+    { conversationId: effortConfig?.conversationId }
+  )
   const effort = resolveEffectiveEffort({
     model,
     think,

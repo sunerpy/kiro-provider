@@ -1,20 +1,28 @@
+import { createHash } from 'node:crypto'
+import { Agent as HttpAgent } from 'node:http'
+import { Agent as HttpsAgent } from 'node:https'
 import {
   CodeWhispererStreamingClient,
   type CodeWhispererStreamingClientConfig
 } from '@aws/codewhisperer-streaming-client'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 import { KIRO_CONSTANTS } from '../kiro/constants.js'
 import { buildEffortRequestFields } from '../kiro/effort.js'
 import type { Effort, KiroAuthDetails } from '../kiro/types.js'
-import { createProxyAgent } from './proxy.js'
 
 interface ClientCacheEntry {
   readonly client: CodeWhispererStreamingClient
-  readonly token: string
+  readonly tokenState: { value: string }
+}
+
+interface TransportCacheEntry {
+  readonly handler: NodeHttpHandler
 }
 
 const clientCache = new Map<string, ClientCacheEntry>()
+const transportCache = new Map<string, TransportCacheEntry>()
 const KIRO_CLI_MAX_ATTEMPTS = 3
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,24 +44,43 @@ export function buildClientConfig(
   auth: KiroAuthDetails,
   region: string,
   resolvedEndpoint: string,
-  proxyUrl?: string
+  proxyUrl?: string,
+  requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl),
+  tokenState: { value: string } = { value: auth.access }
 ): CodeWhispererStreamingClientConfig {
-  const requestHandler = proxyUrl
-    ? (() => {
-        const proxyAgent = createProxyAgent(proxyUrl)
-        return new NodeHttpHandler({ httpAgent: proxyAgent, httpsAgent: proxyAgent })
-      })()
-    : undefined
-
   return {
     region,
     endpoint: resolvedEndpoint,
-    token: () => Promise.resolve({ token: auth.access }),
+    token: () => Promise.resolve({ token: tokenState.value }),
     maxAttempts: KIRO_CLI_MAX_ATTEMPTS,
     retryMode: 'standard',
     customUserAgent: [[KIRO_CONSTANTS.USER_AGENT]],
-    ...(requestHandler ? { requestHandler } : {})
+    requestHandler
   }
+}
+
+function createRequestHandler(proxyUrl?: string): NodeHttpHandler {
+  if (proxyUrl) {
+    const proxyAgent = new HttpsProxyAgent(proxyUrl, {
+      keepAlive: true,
+      maxSockets: 50
+    })
+    return new NodeHttpHandler({
+      httpAgent: proxyAgent,
+      httpsAgent: proxyAgent
+    })
+  }
+  return new NodeHttpHandler({
+    httpAgent: new HttpAgent({ keepAlive: true, maxSockets: 50 }),
+    httpsAgent: new HttpsAgent({ keepAlive: true, maxSockets: 50 })
+  })
+}
+
+function fallbackAccountKey(auth: KiroAuthDetails): string {
+  return createHash('sha256')
+    .update('kiro-provider-sdk-account-v1\0')
+    .update(auth.email ?? auth.refresh)
+    .digest('hex')
 }
 
 export function createSdkClient(
@@ -61,21 +88,38 @@ export function createSdkClient(
   region: string,
   effort?: Effort,
   endpoint?: string,
-  proxyUrl?: string
+  proxyUrl?: string,
+  accountId?: string
 ): CodeWhispererStreamingClient {
   const resolvedEndpoint = endpoint ?? `https://q.${region}.amazonaws.com`
-  const cacheKey = JSON.stringify([
+  const transportKey = JSON.stringify([
+    accountId ?? fallbackAccountKey(auth),
     region,
-    auth.email ?? null,
-    effort ?? null,
     resolvedEndpoint,
     proxyUrl ?? null
   ])
+  let transport = transportCache.get(transportKey)
+  if (!transport) {
+    transport = { handler: createRequestHandler(proxyUrl) }
+    transportCache.set(transportKey, transport)
+  }
+  const cacheKey = JSON.stringify([transportKey, effort ?? null])
   const cached = clientCache.get(cacheKey)
-  if (cached?.token === auth.access) return cached.client
+  if (cached) {
+    cached.tokenState.value = auth.access
+    return cached.client
+  }
 
+  const tokenState = { value: auth.access }
   const client = new CodeWhispererStreamingClient(
-    buildClientConfig(auth, region, resolvedEndpoint, proxyUrl)
+    buildClientConfig(
+      auth,
+      region,
+      resolvedEndpoint,
+      proxyUrl,
+      transport.handler,
+      tokenState
+    )
   )
 
   client.middlewareStack.add(
@@ -111,11 +155,12 @@ export function createSdkClient(
     )
   }
 
-  clientCache.set(cacheKey, { client, token: auth.access })
+  clientCache.set(cacheKey, { client, tokenState })
   return client
 }
 
 export function clearSdkClientCache(): void {
-  for (const entry of clientCache.values()) entry.client.destroy()
+  for (const entry of transportCache.values()) entry.handler.destroy()
   clientCache.clear()
+  transportCache.clear()
 }

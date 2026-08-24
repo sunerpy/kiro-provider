@@ -86,10 +86,10 @@ describe('DialectGate', () => {
   test('emits safe prose, then suppresses a split marker until final parsing', () => {
     const gate = new DialectGate()
 
-    expect(gate.push('answer ')).toBe('answer ')
+    expect(gate.ingest('answer ')).toBe('answer ')
     expect(gate.suppressing).toBe(false)
-    expect(gate.push('<inv')).toBe('')
-    expect(gate.push('oke name="read"><parameter name="path">/tmp/x</parameter></invoke>')).toBe('')
+    expect(gate.ingest('<inv')).toBe('')
+    expect(gate.ingest('oke name="read"><parameter name="path">/tmp/x</parameter></invoke>')).toBe('')
     expect(gate.suppressing).toBe(true)
     expect(gate.finalize()).toMatchObject({
       toolCalls: [{ name: 'read', input: { path: '/tmp/x' } }],

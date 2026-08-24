@@ -74,7 +74,7 @@ describe('buildHistory', () => {
     const assistant = history.find((entry) => entry.assistantResponseMessage)?.assistantResponseMessage
     expect(assistant?.toolUses).toEqual([{ input: { a: 1 }, name: 'f', toolUseId: 'c1' }])
   })
-  test('assistant thinking part is wrapped in <thinking> tags before content', () => {
+  test('assistant thinking parts are not converted into model-visible text', () => {
     const history = buildHistory(
       [
         { role: 'user', content: 'q' },
@@ -89,11 +89,9 @@ describe('buildHistory', () => {
       ],
       MODEL
     )
-    expect(history.find((entry) => entry.assistantResponseMessage)?.assistantResponseMessage?.content).toBe(
-      '<thinking>hmm</thinking>\n\nanswer'
-    )
+    expect(history.find((entry) => entry.assistantResponseMessage)?.assistantResponseMessage?.content).toBe('answer')
   })
-  test('tool role message builds a synthetic user turn with toolResults', () => {
+  test('tool role message builds an empty structural user turn with toolResults', () => {
     const history = buildHistory(
       [
         { role: 'assistant', content: 'call', tool_calls: [{ id: 't1', function: { name: 'f' } }] },
@@ -105,7 +103,7 @@ describe('buildHistory', () => {
     const toolTurn = history.find(
       (entry) => entry.userInputMessage?.userInputMessageContext?.toolResults
     )?.userInputMessage
-    expect(toolTurn?.content).toBe('Tool results provided.')
+    expect(toolTurn?.content).toBe('')
     expect(toolTurn?.userInputMessageContext?.toolResults).toEqual([
       { content: [{ text: 'result-text' }], status: 'success', toolUseId: 't1' }
     ])
@@ -121,7 +119,7 @@ describe('buildHistory', () => {
     )
     expect(history.some((entry) => entry.assistantResponseMessage)).toBe(false)
   })
-  test('consecutive user turns get a synthetic assistant separator injected', () => {
+  test('consecutive user turns are merged without a synthetic assistant separator', () => {
     expect(
       buildHistory(
         [
@@ -132,9 +130,7 @@ describe('buildHistory', () => {
         MODEL
       )
     ).toEqual([
-      { userInputMessage: { content: 'u1', modelId: MODEL, origin: 'AI_EDITOR' } },
-      { assistantResponseMessage: { content: '[system: conversation continues]' } },
-      { userInputMessage: { content: 'u2', modelId: MODEL, origin: 'AI_EDITOR' } }
+      { userInputMessage: { content: 'u1\n\nu2', modelId: MODEL, origin: 'AI_EDITOR' } }
     ])
   })
 })
@@ -147,7 +143,7 @@ describe('collapseAgenticLoops', () => {
     ]
     expect(collapseAgenticLoops(history)).toBe(history)
   })
-  test('collapses intermediate assistant text across a multi-pair tool loop', () => {
+  test('preserves unique assistant text across a multi-pair tool loop', () => {
     const makePair = (number: number): CodeWhispererMessage[] => [
       {
         assistantResponseMessage: {
@@ -168,7 +164,7 @@ describe('collapseAgenticLoops', () => {
     ]
     const result = collapseAgenticLoops([...makePair(1), ...makePair(2)])
     expect(result[0]?.assistantResponseMessage?.content).toBe('preamble 1')
-    expect(result[2]?.assistantResponseMessage?.content).toBe('[system: tool calling continues]')
+    expect(result[2]?.assistantResponseMessage?.content).toBe('preamble 2')
     expect(result[2]?.assistantResponseMessage?.toolUses?.[0]?.toolUseId).toBe('u2')
   })
 })

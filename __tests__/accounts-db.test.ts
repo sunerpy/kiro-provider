@@ -226,6 +226,85 @@ describe('AccountsDatabase', () => {
     expect(database.getAccounts()).toEqual([])
   })
 
+  test('atomically claims and reuses one session binding across database connections', () => {
+    const [first, second] = createDatabasePair()
+    first.insertAccount(account({ id: 'account-a' }))
+    first.insertAccount(account({ id: 'account-b' }))
+
+    const initial = first.claimSessionAffinity(
+      'session-key',
+      'account-a',
+      'conversation-a',
+      1_000,
+      10_000,
+      100
+    )
+    const collided = second.claimSessionAffinity(
+      'session-key',
+      'account-b',
+      'conversation-b',
+      2_000,
+      10_000,
+      100
+    )
+
+    expect(initial).toMatchObject({
+      accountId: 'account-a',
+      conversationId: 'conversation-a',
+      createdAt: 1_000
+    })
+    expect(collided).toMatchObject({
+      accountId: 'account-a',
+      conversationId: 'conversation-a',
+      createdAt: 1_000,
+      lastSeen: 2_000,
+      expiresAt: 12_000
+    })
+  })
+
+  test('rebinds failed sessions, expires old bindings, and prunes least-recent entries', () => {
+    const [database] = createDatabasePair()
+    database.insertAccount(account({ id: 'account-a' }))
+    database.insertAccount(account({ id: 'account-b' }))
+    database.claimSessionAffinity('oldest', 'account-a', 'conversation-1', 1_000, 10_000, 2)
+    database.claimSessionAffinity('middle', 'account-a', 'conversation-2', 2_000, 10_000, 2)
+    database.claimSessionAffinity('newest', 'account-a', 'conversation-3', 3_000, 10_000, 2)
+
+    const rebound = database.rebindSessionAffinity(
+      'middle',
+      'account-b',
+      'conversation-rebound',
+      4_000,
+      2_000,
+      2
+    )
+
+    expect(database.getSessionAffinity('oldest', 4_000)).toBeUndefined()
+    expect(rebound).toMatchObject({
+      accountId: 'account-b',
+      conversationId: 'conversation-rebound'
+    })
+    expect(database.getSessionAffinity('middle', 6_000)).toBeUndefined()
+    expect(database.getSessionAffinity('newest', 4_000)).toBeDefined()
+  })
+
+  test('removing an account removes its persisted session affinities', () => {
+    const [database] = createDatabasePair()
+    database.insertAccount(account({ id: 'account-a' }))
+    database.claimSessionAffinity(
+      'session-key',
+      'account-a',
+      'conversation-a',
+      1_000,
+      10_000,
+      100
+    )
+
+    database.removeAccount('account-a')
+
+    expect(database.getSessionAffinity('session-key', 2_000)).toBeUndefined()
+  })
+
   test('restricts the database and existing WAL sidecars to mode 0600', () => {
     const [database, , path] = createDatabasePair()
     database.insertAccount(account())

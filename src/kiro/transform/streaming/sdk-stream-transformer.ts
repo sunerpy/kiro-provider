@@ -71,7 +71,7 @@ export async function* transformSdkStream(
 			event.type === "content_block_delta" &&
 			event.delta?.type === "text_delta"
 		) {
-			const safeText = dialectGate.push(event.delta.text ?? "");
+			const safeText = dialectGate.ingest(event.delta.text ?? "");
 			if (!safeText) return null;
 			return convertToOpenAI(
 				{ ...event, delta: { ...event.delta, text: safeText } },

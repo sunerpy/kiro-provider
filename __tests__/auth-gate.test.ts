@@ -6,9 +6,15 @@ const API_KEYS = ["sk-valid-key", "sk-another-key"]
 function requestWithAuth(header: string | undefined): Request {
   const headers: Record<string, string> = {}
   if (header !== undefined) {
-    headers["Authorization"] = header
+    headers.Authorization = header
   }
   return new Request("http://localhost/v1/chat/completions", { headers })
+}
+
+function requestWithApiKey(apiKey: string): Request {
+  return new Request("http://localhost/v1/messages", {
+    headers: { "x-api-key": apiKey },
+  })
 }
 
 async function expectEnvelope(response: Response, status: number, type: string): Promise<void> {
@@ -29,6 +35,22 @@ describe("checkApiKey", () => {
   test("passes with any configured key", () => {
     const result = checkApiKey(requestWithAuth("Bearer sk-another-key"), API_KEYS)
     expect(result.ok).toBe(true)
+  })
+
+  test("passes with a valid x-api-key when Authorization is absent", () => {
+    const result = checkApiKey(requestWithApiKey("sk-valid-key"), API_KEYS)
+    expect(result.ok).toBe(true)
+  })
+
+  test("does not let x-api-key bypass a malformed explicit Authorization header", () => {
+    const request = new Request("http://localhost/v1/messages", {
+      headers: {
+        Authorization: "Basic wrong",
+        "x-api-key": "sk-valid-key",
+      },
+    })
+    const result = checkApiKey(request, API_KEYS)
+    expect(result.ok).toBe(false)
   })
 
   test("rejects with 401 envelope when Authorization header is missing", async () => {

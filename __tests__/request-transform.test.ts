@@ -59,7 +59,7 @@ describe('transformToSdkRequest — currentMessage structure', () => {
   })
 })
 
-describe('transformToSdkRequest — system and thinking injection', () => {
+describe('transformToSdkRequest — system and structured thinking configuration', () => {
   test('injects top-level and role system messages into leading history', () => {
     const request = transformToSdkRequest(
       {
@@ -78,7 +78,7 @@ describe('transformToSdkRequest — system and thinking injection', () => {
     expect(currentUserInput(request).content).toBe('hi')
   })
 
-  test('prepends a thinking prefix once', () => {
+  test('does not turn thinking configuration into model-visible text', () => {
     const request = transformToSdkRequest(
       { system: 'SYS', messages: [{ role: 'user', content: 'q' }] },
       'claude-sonnet-4-5',
@@ -87,9 +87,7 @@ describe('transformToSdkRequest — system and thinking injection', () => {
       15_000
     )
 
-    expect(firstHistoryUserContent(request)).toBe(
-      '<thinking_mode>enabled</thinking_mode><max_thinking_length>15000</max_thinking_length>\nSYS'
-    )
+    expect(firstHistoryUserContent(request)).toBe('SYS')
   })
 
   test('does not duplicate an existing thinking marker', () => {
@@ -201,22 +199,20 @@ describe('transformToSdkRequest — tools and history', () => {
     expect(currentUserInput(request).userInputMessageContext?.toolResults?.[0]?.toolUseId).toBe('orphan')
   })
 
-  test('inlines a tool result whose call cannot be found', () => {
-    const request = transformToSdkRequest(
-      {
-        messages: [
-          { role: 'user', content: 'lead' },
-          { role: 'assistant', content: 'no tool use here' },
-          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ghost', content: 'stray-output' }] }
-        ]
-      },
-      'claude-sonnet-4-5',
-      auth
-    )
-
-    expect(currentUserInput(request).content).toContain('[Output for tool call ghost]')
-    expect(currentUserInput(request).content).toContain('stray-output')
-    expect(currentUserInput(request).userInputMessageContext?.toolResults).toBeUndefined()
+  test('rejects a tool result whose call cannot be found', () => {
+    expect(() =>
+      transformToSdkRequest(
+        {
+          messages: [
+            { role: 'user', content: 'lead' },
+            { role: 'assistant', content: 'no tool use here' },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ghost', content: 'stray-output' }] }
+          ]
+        },
+        'claude-sonnet-4-5',
+        auth
+      )
+    ).toThrow('Tool result ghost has no matching tool call')
   })
 
   test('infers placeholder tool definitions from historical tool uses', () => {
@@ -239,7 +235,7 @@ describe('transformToSdkRequest — tools and history', () => {
       {
         toolSpecification: {
           name: 'historical_tool',
-          description: 'Tool historical_tool',
+          description: '',
           inputSchema: {
             json: {
               type: 'object',
@@ -271,9 +267,9 @@ describe('transformToSdkRequest — tools and history', () => {
     )
 
     const assistant = request.conversationState.history?.at(-1)?.assistantResponseMessage
-    expect(assistant?.content).toBe('<thinking>deliberating</thinking>\n\nfinal')
+    expect(assistant?.content).toBe('final')
     expect(assistant?.toolUses).toEqual([{ input: { k: 2 }, name: 'g', toolUseId: 'x1' }])
-    expect(currentUserInput(request).content).toBe('[system: conversation continues]')
+    expect(currentUserInput(request).content).toBe('')
   })
 
   test('merges adjacent user messages before building history', () => {

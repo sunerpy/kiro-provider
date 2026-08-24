@@ -71,6 +71,7 @@ function getEnvOverrides(
 
 	const stringFields = {
 		KIRO_PROVIDER_HOST: "host",
+		KIRO_PROVIDER_AUTH_SOURCE: "auth_source",
 		KIRO_PROVIDER_DEFAULT_REGION: "default_region",
 		KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "account_selection_strategy",
 		KIRO_PROVIDER_EFFORT: "effort",
@@ -91,8 +92,11 @@ function getEnvOverrides(
 		KIRO_PROVIDER_MAX_REQUEST_ITERATIONS: "max_request_iterations",
 		KIRO_PROVIDER_REQUEST_TIMEOUT_MS: "request_timeout_ms",
 		KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "stream_idle_timeout_ms",
-		KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "max_request_body_bytes",
-		KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "token_expiry_buffer_ms",
+			KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "max_request_body_bytes",
+			KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "token_expiry_buffer_ms",
+			KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS: "session_affinity_ttl_ms",
+			KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES:
+				"session_affinity_max_entries",
 	} as const;
 	for (const [envName, field] of Object.entries(numberFields)) {
 		const value = env[envName];
@@ -111,9 +115,21 @@ function getEnvOverrides(
 		overrides.proxy_url = proxyUrl.trim();
 	}
 
-	const autoEffortMapping = env.KIRO_PROVIDER_AUTO_EFFORT_MAPPING;
-	if (autoEffortMapping !== undefined) {
-		overrides.auto_effort_mapping = parseBoolean(autoEffortMapping);
+	const openCodeAuthDbPath = env.KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH;
+	if (openCodeAuthDbPath !== undefined) {
+		overrides.opencode_auth_db_path = openCodeAuthDbPath.trim();
+	}
+
+	const booleanFields = {
+		KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS:
+			"enable_legacy_chat_completions",
+		KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "auto_effort_mapping",
+	} as const;
+	for (const [envName, field] of Object.entries(booleanFields)) {
+		const value = env[envName];
+		if (value !== undefined) {
+			overrides[field] = parseBoolean(value);
+		}
 	}
 
 	return overrides;

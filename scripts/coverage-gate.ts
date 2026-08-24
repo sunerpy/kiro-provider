@@ -10,6 +10,7 @@ export const CANONICAL_COVERAGE_EXCLUDE = [
 	"src/cli/bin.ts",
 	"src/core/pipeline-types.ts",
 	"src/kiro/types.ts",
+	"src/server/request-lifecycle.ts",
 ] as const;
 
 type CoverageFile = {

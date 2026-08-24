@@ -1,4 +1,4 @@
-.PHONY: install fmt fmt-check typecheck lint test coverage coverage-gate coverage-parity build build-binary clean ci
+.PHONY: install fmt fmt-check typecheck lint test coverage coverage-gate coverage-parity build build-binary clean ci security codex-smoke-security
 
 install:
 	bun install
@@ -37,6 +37,13 @@ build-binary:
 
 clean:
 	rm -rf dist
+
+security:
+	bash scripts/security-check.sh
+
+codex-smoke-security:
+	bash -n scripts/codex-smoke.sh
+	KIRO_PROVIDER_SMOKE_SECURITY_SELF_TEST=1 bash scripts/codex-smoke.sh
 
 # Coverage runs separately via coverage-gate and in the GitHub Actions coverage job.
 ci: typecheck lint test

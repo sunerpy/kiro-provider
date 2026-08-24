@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { KIRO_CONSTANTS } from '../constants.js'
 import { resolveModelVariant } from '../models.js'
 import type { CodeWhispererMessage, CodeWhispererRequest, Effort, KiroAuthDetails } from '../types.js'
+import { RequestTransformError } from './errors.js'
 import {
   buildHistory,
   extractToolNamesFromHistory,
@@ -27,6 +28,10 @@ export interface RequestTransformResult {
   readonly resolved: string
   readonly convId: string
   readonly variantEffort?: Effort
+}
+
+export interface RequestTransformIdentity {
+  readonly conversationId?: string
 }
 
 type ToolUse = NonNullable<
@@ -81,27 +86,26 @@ function inferToolSpecFromHistory(
       : never
     : never
   : never {
-  const sample = toolUses?.find((toolUse) => toolUse.name === name && isRecord(toolUse.input))
+  const sample = toolUses.find((toolUse) => toolUse.name === name && isRecord(toolUse.input))
   const properties: Record<string, unknown> = {}
   if (sample && isRecord(sample.input)) {
-    for (const [key, value] of Object.entries(sample.input)) properties[key] = { type: jsonSchemaTypeOf(value) }
+    for (const [key, value] of Object.entries(sample.input)) {
+      properties[key] = { type: jsonSchemaTypeOf(value) }
+    }
   }
   const json: Record<string, unknown> =
     Object.keys(properties).length > 0 ? { type: 'object', properties } : { type: 'object' }
-  return { toolSpecification: { name, description: `Tool ${name}`, inputSchema: { json } } }
+  return { toolSpecification: { name, description: '', inputSchema: { json } } }
 }
 
 function appendCurrentAssistant(history: CodeWhispererMessage[], message: SourceMessage): void {
   const assistant: NonNullable<CodeWhispererMessage['assistantResponseMessage']> = { content: '' }
   const toolUses: NonNullable<typeof assistant.toolUses> = []
-  let thinking = ''
   if (Array.isArray(message.content)) {
     for (const part of message.content) {
       if (!isRecord(part)) continue
       if (part.type === 'text' && typeof part.text === 'string') assistant.content += part.text
-      else if (part.type === 'thinking') {
-        thinking += typeof part.thinking === 'string' ? part.thinking : typeof part.text === 'string' ? part.text : ''
-      } else if (part.type === 'tool_use' && typeof part.id === 'string' && typeof part.name === 'string') {
+      else if (part.type === 'tool_use' && typeof part.id === 'string' && typeof part.name === 'string') {
         toolUses.push({ input: part.input, name: part.name, toolUseId: part.id })
       }
     }
@@ -111,17 +115,21 @@ function appendCurrentAssistant(history: CodeWhispererMessage[], message: Source
   for (const toolCall of message.tool_calls ?? []) {
     if (typeof toolCall.id !== 'string' || typeof toolCall.function?.name !== 'string') continue
     const args = toolCall.function.arguments
-    toolUses.push({
-      input: typeof args === 'string' ? JSON.parse(args) : args,
-      name: toolCall.function.name,
-      toolUseId: toolCall.id
-    })
-  }
-  if (thinking) {
-    const escapedThinking = thinking.replaceAll('</thinking>', '<\\/thinking>')
-    assistant.content = assistant.content
-      ? `<thinking>${escapedThinking}</thinking>\n\n${assistant.content}`
-      : `<thinking>${escapedThinking}</thinking>`
+    try {
+      toolUses.push({
+        input: typeof args === 'string' ? JSON.parse(args) : args,
+        name: toolCall.function.name,
+        toolUseId: toolCall.id
+      })
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new RequestTransformError(
+          `Tool call ${toolCall.id} contains invalid JSON arguments`,
+          'invalid_tool_history'
+        )
+      }
+      throw error
+    }
   }
   if (toolUses.length > 0) assistant.toolUses = toolUses
   if (assistant.content || assistant.toolUses) history.push({ assistantResponseMessage: assistant })
@@ -139,7 +147,11 @@ function collectCurrentUserContent(message: SourceMessage): {
     const results = message.tool_results ?? [{ content: message.content, tool_call_id: message.tool_call_id }]
     for (const result of results) {
       if (typeof result.tool_call_id !== 'string') continue
-      toolResults.push({ content: [{ text: getContentText(result) }], status: 'success', toolUseId: result.tool_call_id })
+      toolResults.push({
+        content: [{ text: getContentText(result) }],
+        status: result.is_error === true ? 'error' : 'success',
+        toolUseId: result.tool_call_id
+      })
     }
   } else if (Array.isArray(message.content)) {
     content = extractTextFromParts(message.content)
@@ -147,17 +159,21 @@ function collectCurrentUserContent(message: SourceMessage): {
       if (!isRecord(part) || part.type !== 'tool_result' || typeof part.tool_use_id !== 'string') continue
       toolResults.push({
         content: [{ text: getContentText(part.content ?? part) }],
-        status: 'success',
+        status: part.is_error === true ? 'error' : 'success',
         toolUseId: part.tool_use_id
       })
     }
     const converted = convertImagesToKiroFormat(extractAllImages(message.content))
     images.push(...converted.images)
-    if (converted.omitted > 0) content += `\n\n[${converted.omitted} image(s) omitted due to API limits]`
+    if (converted.omitted > 0) {
+      throw new RequestTransformError(
+        'A Kiro request supports at most 4 images and 3.75 MB of base64 image data per user turn',
+        'too_many_images'
+      )
+    }
   } else {
     content = getContentText(message)
   }
-  if (!content) content = toolResults.length > 0 ? 'Tool results provided.' : '[system: conversation continues]'
   return { content, toolResults, images }
 }
 
@@ -165,12 +181,32 @@ function originalToolUse(messages: SourceMessage[], result: ToolResult): ToolUse
   const original = findOriginalToolCall(messages, result.toolUseId)
   if (!isRecord(original)) return undefined
   const fn = isRecord(original.function) ? original.function : undefined
-  const name = typeof original.name === 'string' ? original.name : typeof fn?.name === 'string' ? fn.name : 'tool'
+  const name = typeof original.name === 'string' ? original.name : typeof fn?.name === 'string' ? fn.name : undefined
+  if (!name) {
+    throw new RequestTransformError(
+      `Tool result ${result.toolUseId} references a call without a valid name`,
+      'invalid_tool_history'
+    )
+  }
   const rawInput = original.input ?? fn?.arguments
+  let input: unknown = rawInput ?? {}
+  if (typeof rawInput === 'string') {
+    try {
+      input = JSON.parse(rawInput)
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new RequestTransformError(
+          `Tool call ${result.toolUseId} contains invalid JSON arguments`,
+          'invalid_tool_history'
+        )
+      }
+      throw error
+    }
+  }
   return {
     name,
     toolUseId: result.toolUseId,
-    input: typeof rawInput === 'string' ? JSON.parse(rawInput) : (rawInput ?? {})
+    input
   }
 }
 
@@ -178,8 +214,9 @@ export function buildCodeWhispererRequest(
   body: unknown,
   model: string,
   auth: KiroAuthDetails,
-  think = false,
-  budget = 20_000
+  _think = false,
+  _budget = 20_000,
+  identity: RequestTransformIdentity = {}
 ): RequestTransformResult {
   const requestBody = parseBody(body)
   if (requestBody.messages.length === 0) throw new Error('No messages')
@@ -189,10 +226,6 @@ export function buildCodeWhispererRequest(
   let system = requestBody.system
   const extractedSystem = systemMessages.map(getContentText).join('\n\n')
   if (extractedSystem) system = system ? `${system}\n\n${extractedSystem}` : extractedSystem
-  if (think && !system.includes('<thinking_mode>')) {
-    const prefix = `<thinking_mode>enabled</thinking_mode><max_thinking_length>${budget}</max_thinking_length>`
-    system = system ? `${prefix}\n${system}` : prefix
-  }
   const trailing = messages.at(-1)
   if (trailing?.role === 'assistant' && getContentText(trailing) === '{') messages.pop()
   const currentMessage = messages.at(-1)
@@ -209,14 +242,14 @@ export function buildCodeWhispererRequest(
   }
   history = injectSystemPrompt(history, system, resolved)
 
-  let content = '[system: conversation continues]'
+  let content = ''
   let toolResults: ToolResult[] = []
   let images: KiroImages = []
   if (currentMessage.role === 'assistant') {
     appendCurrentAssistant(history, currentMessage)
   } else {
     if (history.at(-1) && !history.at(-1)?.assistantResponseMessage) {
-      history.push({ assistantResponseMessage: { content: '[system: conversation continues]' } })
+      history.push({ assistantResponseMessage: { content: '' } })
     }
     const current = collectCurrentUserContent(currentMessage)
     content = current.content
@@ -233,15 +266,20 @@ export function buildCodeWhispererRequest(
     else {
       const call = originalToolUse(requestBody.messages, result)
       if (call) orphaned.push({ call, result })
-      else content += `\n\n[Output for tool call ${result.toolUseId}]:\n${result.content[0]?.text ?? ''}`
+      else {
+        throw new RequestTransformError(
+          `Tool result ${result.toolUseId} has no matching tool call`,
+          'invalid_tool_history'
+        )
+      }
     }
   }
   if (orphaned.length > 0) {
     if (!history.at(-1) || history.at(-1)?.assistantResponseMessage) {
-      history.push({ userInputMessage: { content: 'Running tools...', modelId: resolved, origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR } })
+      history.push({ userInputMessage: { content: '', modelId: resolved, origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR } })
     }
     history.push({
-      assistantResponseMessage: { content: 'I will execute the following tools.', toolUses: orphaned.map(({ call }) => call) }
+      assistantResponseMessage: { content: '', toolUses: orphaned.map(({ call }) => call) }
     })
     matchedResults.push(...orphaned.map(({ result }) => result))
   }
@@ -275,7 +313,7 @@ export function buildCodeWhispererRequest(
     }
   }
 
-  const convId = randomUUID()
+  const convId = identity.conversationId ?? randomUUID()
   const request: CodeWhispererRequest = {
     conversationState: {
       chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL,

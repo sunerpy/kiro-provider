@@ -17,7 +17,7 @@ function currentUserInput(request: SdkPreparedRequest): NonNullable<CodeWhispere
 }
 
 describe('request transform edge behavior', () => {
-  test('appends current assistant content-part tool calls and thinking text fallback', () => {
+  test('appends current assistant tool calls without replaying unsigned thinking text', () => {
     const request = transformToSdkRequest(
       {
         messages: [
@@ -36,7 +36,7 @@ describe('request transform edge behavior', () => {
     )
 
     expect(request.conversationState.history?.at(-1)?.assistantResponseMessage).toEqual({
-      content: '<thinking>fallback thought</thinking>',
+      content: '',
       toolUses: [{ input: { q: 'x' }, name: 'lookup', toolUseId: 'current-call' }]
     })
   })
@@ -75,27 +75,22 @@ describe('request transform edge behavior', () => {
     ])
   })
 
-  test('reconstructs a tool result when the original call lacks a history-safe name', () => {
-    const request = transformToSdkRequest(
-      {
-        messages: [
-          {
-            role: 'assistant',
-            content: [{ type: 'tool_use', id: 'nameless-call', input: { value: 7 } }]
-          },
-          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'nameless-call', content: 'seven' }] }
-        ]
-      },
-      'claude-sonnet-4-5',
-      AUTH
-    )
-
-    expect(request.conversationState.history?.at(-1)?.assistantResponseMessage?.toolUses).toEqual([
-      { input: { value: 7 }, name: 'tool', toolUseId: 'nameless-call' }
-    ])
-    expect(currentUserInput(request).userInputMessageContext?.toolResults).toEqual([
-      { content: [{ text: 'seven' }], status: 'success', toolUseId: 'nameless-call' }
-    ])
+  test('rejects a tool result when the original call has no name', () => {
+    expect(() =>
+      transformToSdkRequest(
+        {
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'tool_use', id: 'nameless-call', input: { value: 7 } }]
+            },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'nameless-call', content: 'seven' }] }
+          ]
+        },
+        'claude-sonnet-4-5',
+        AUTH
+      )
+    ).toThrow('references a call without a valid name')
   })
 
   test('infers array, null, and unsupported input schema types from history', () => {

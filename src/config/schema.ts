@@ -34,11 +34,22 @@ const ProxyUrlSchema = z
 	)
 	.default(null);
 
+const OptionalPathSchema = z
+	.preprocess(
+		(value) =>
+			typeof value === "string" && value.trim().length === 0 ? null : value,
+		z.string().trim().min(1).nullable(),
+	)
+	.default(null);
+
 export const ConfigSchema = z.object({
 	host: z.string().default("127.0.0.1"),
 	port: z.number().default(8787),
 	api_keys: ApiKeysSchema,
+	enable_legacy_chat_completions: z.boolean().default(false),
 	proxy_url: ProxyUrlSchema,
+	auth_source: z.enum(["opencode-shared", "local"]).default("opencode-shared"),
+	opencode_auth_db_path: OptionalPathSchema,
 	default_region: z.string().default("us-east-1"),
 	account_selection_strategy: z
 		.enum(["sticky", "round-robin", "lowest-usage"])
@@ -46,11 +57,18 @@ export const ConfigSchema = z.object({
 	rate_limit_max_retries: z.number().default(3),
 	rate_limit_retry_delay_ms: z.number().default(5000),
 	max_request_iterations: z.number().default(20),
-	request_timeout_ms: z.number().default(120000),
-	stream_idle_timeout_ms: z.number().default(60000),
-	max_request_body_bytes: z.number().default(10485760),
-	token_expiry_buffer_ms: z.number().default(300000),
-	effort: EffortSchema.nullable().default(null),
+		request_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(120000),
+		stream_idle_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(60000),
+		max_request_body_bytes: z.number().default(10485760),
+		token_expiry_buffer_ms: z.number().default(300000),
+		session_affinity_ttl_ms: z
+			.number()
+			.int()
+			.min(1)
+			.max(2_147_483_647)
+			.default(86_400_000),
+		session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
+		effort: EffortSchema.nullable().default(null),
 	auto_effort_mapping: z.boolean().default(true),
 	log_level: z.string().default("info"),
 	test_upstream_endpoint: z.string().url().optional(),

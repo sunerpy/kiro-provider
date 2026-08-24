@@ -172,4 +172,15 @@ describe('resolveEffectiveEffort', () => {
       })
     ).toBeUndefined()
   })
+
+  test('does not derive effort from Claude Code adaptive thinking for Sonnet 4.5', () => {
+    expect(
+      resolveEffectiveEffort({
+        model: 'claude-sonnet-4-5',
+        think: true,
+        budget: 20_000,
+        autoEffortMapping: true
+      })
+    ).toBeUndefined()
+  })
 })

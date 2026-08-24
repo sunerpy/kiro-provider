@@ -1,0 +1,18 @@
+{
+  "model": "gpt-5.6-sol",
+  "input": [
+    {
+      "type": "custom_tool_call",
+      "call_id": "CUSTOM_CALL_ID_REDACTED",
+      "name": "exec",
+      "input": "printf 'CUSTOM_RAW_INPUT_REDACTED\\n'"
+    },
+    {
+      "type": "custom_tool_call_output",
+      "call_id": "CUSTOM_CALL_ID_REDACTED",
+      "output": "CUSTOM_TOOL_OUTPUT_REDACTED"
+    }
+  ],
+  "stream": true,
+  "store": false
+}

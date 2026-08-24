@@ -1,5 +1,6 @@
 import { KIRO_CONSTANTS } from '../constants.js'
 import type { CodeWhispererMessage } from '../types.js'
+import { RequestTransformError } from './errors.js'
 import { convertImagesToKiroFormat, extractAllImages, extractTextFromParts } from './image-handler.js'
 import {
   getContentText,
@@ -19,11 +20,33 @@ function isContentPart(value: unknown): value is MessageContentPart {
 }
 
 function parseToolCall(toolCall: SourceToolCall): NonNullable<AssistantResponse['toolUses']>[number] {
+  if (
+    typeof toolCall.id !== 'string' ||
+    toolCall.id.length === 0 ||
+    typeof toolCall.function?.name !== 'string' ||
+    toolCall.function.name.length === 0
+  ) {
+    throw new RequestTransformError('Assistant tool calls require non-empty id and name', 'invalid_tool_history')
+  }
   const argumentsValue = toolCall.function?.arguments
+  let input: unknown = argumentsValue
+  if (typeof argumentsValue === 'string') {
+    try {
+      input = JSON.parse(argumentsValue)
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new RequestTransformError(
+          `Tool call ${toolCall.id} contains invalid JSON arguments`,
+          'invalid_tool_history'
+        )
+      }
+      throw error
+    }
+  }
   return {
-    input: typeof argumentsValue === 'string' ? JSON.parse(argumentsValue) : argumentsValue,
-    name: toolCall.function?.name ?? '',
-    toolUseId: toolCall.id ?? ''
+    input,
+    name: toolCall.function.name,
+    toolUseId: toolCall.id
   }
 }
 
@@ -53,20 +76,24 @@ export function collapseAgenticLoops(history: CodeWhispererMessage[]): CodeWhisp
       }
 
       const pairCount = (sequenceEnd - sequenceStart) / 2
+      let previousContent: string | undefined
       for (let pairIndex = sequenceStart; pairIndex < sequenceEnd; pairIndex += 2) {
         const assistant = history[pairIndex]
         const user = history[pairIndex + 1]
         if (!assistant || !user) continue
-        if (pairCount > 1 && pairIndex !== sequenceStart) {
-          const thinkingPrefix = assistant.assistantResponseMessage?.content.match(
-            /^<thinking>[\s\S]*?<\/thinking>/
-          )?.[0]
+        const assistantResponse = assistant.assistantResponseMessage
+        const duplicateConsecutivePreamble =
+          pairCount > 1 &&
+          pairIndex !== sequenceStart &&
+          assistantResponse !== undefined &&
+          assistantResponse.content.length > 0 &&
+          assistantResponse.content === previousContent
+        previousContent = assistantResponse?.content
+        if (duplicateConsecutivePreamble && assistantResponse?.toolUses) {
           result.push({
             assistantResponseMessage: {
-              content: thinkingPrefix
-                ? `${thinkingPrefix}\n\n[system: tool calling continues]`
-                : '[system: tool calling continues]',
-              toolUses: assistant.assistantResponseMessage?.toolUses
+              content: '',
+              toolUses: assistantResponse.toolUses
             }
           })
         } else {
@@ -81,6 +108,41 @@ export function collapseAgenticLoops(history: CodeWhispererMessage[]): CodeWhisp
     }
   }
   return result
+}
+
+type KiroUserTurn = NonNullable<CodeWhispererMessage['userInputMessage']>
+
+function mergeIntoPreviousUserTurn(
+  history: CodeWhispererMessage[],
+  incoming: KiroUserTurn
+): boolean {
+  const previous = history.at(-1)?.userInputMessage
+  if (!previous) return false
+
+  if (incoming.content) {
+    previous.content = previous.content ? `${previous.content}\n\n${incoming.content}` : incoming.content
+  }
+
+  const incomingResults = incoming.userInputMessageContext?.toolResults
+  if (incomingResults && incomingResults.length > 0) {
+    previous.userInputMessageContext ??= {}
+    const context = previous.userInputMessageContext
+    context.toolResults = deduplicateToolResults([
+      ...(context.toolResults ?? []),
+      ...incomingResults
+    ])
+  }
+
+  if (incoming.images && incoming.images.length > 0) {
+    if ((previous.images?.length ?? 0) + incoming.images.length > 4) {
+      throw new RequestTransformError(
+        'A Kiro request supports at most 4 images in one user turn',
+        'too_many_images'
+      )
+    }
+    previous.images = [...(previous.images ?? []), ...incoming.images]
+  }
+  return true
 }
 
 export function buildHistory(messages: SourceMessage[], resolved: string): CodeWhispererMessage[] {
@@ -102,7 +164,7 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
           if (!isContentPart(part) || part.type !== 'tool_result' || typeof part.tool_use_id !== 'string') continue
           toolResults.push({
             content: [{ text: getContentText(part.content ?? part) }],
-            status: 'success',
+            status: part.is_error === true ? 'error' : 'success',
             toolUseId: part.tool_use_id
           })
         }
@@ -111,7 +173,10 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
           const converted = convertImagesToKiroFormat(unifiedImages)
           userInput.images = converted.images
           if (converted.omitted > 0) {
-            userInput.content += `\n\n[${converted.omitted} image(s) omitted due to API limits]`
+            throw new RequestTransformError(
+              'A Kiro request supports at most 4 images and 3.75 MB of base64 image data per user turn',
+              'too_many_images'
+            )
           }
         }
       } else {
@@ -120,10 +185,7 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
       if (toolResults.length > 0) {
         userInput.userInputMessageContext = { toolResults: deduplicateToolResults(toolResults) }
       }
-      if (history[history.length - 1]?.userInputMessage) {
-        history.push({ assistantResponseMessage: { content: '[system: conversation continues]' } })
-      }
-      history.push({ userInputMessage: userInput })
+      if (!mergeIntoPreviousUserTurn(history, userInput)) history.push({ userInputMessage: userInput })
       continue
     }
 
@@ -134,47 +196,35 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
           if (!toolResult.tool_call_id) continue
           toolResults.push({
             content: [{ text: getContentText(toolResult) }],
-            status: 'success',
+            status: toolResult.is_error === true ? 'error' : 'success',
             toolUseId: toolResult.tool_call_id
           })
         }
       } else if (message.tool_call_id) {
         toolResults.push({
           content: [{ text: getContentText(message) }],
-          status: 'success',
+          status: message.is_error === true ? 'error' : 'success',
           toolUseId: message.tool_call_id
         })
       }
-      if (history[history.length - 1]?.userInputMessage) {
-        history.push({ assistantResponseMessage: { content: '[system: conversation continues]' } })
+      const toolTurn: KiroUserTurn = {
+        content: '',
+        modelId: resolved,
+        origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
+        userInputMessageContext: { toolResults: deduplicateToolResults(toolResults) }
       }
-      history.push({
-        userInputMessage: {
-          content: 'Tool results provided.',
-          modelId: resolved,
-          origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
-          userInputMessageContext: { toolResults: deduplicateToolResults(toolResults) }
-        }
-      })
+      if (!mergeIntoPreviousUserTurn(history, toolTurn)) history.push({ userInputMessage: toolTurn })
       continue
     }
 
     if (message.role !== 'assistant') continue
     const assistant: AssistantResponse = { content: '' }
     const toolUses: NonNullable<AssistantResponse['toolUses']> = []
-    let thinking = ''
     if (Array.isArray(message.content)) {
       for (const part of message.content) {
         if (!isContentPart(part)) continue
         if (part.type === 'text') assistant.content += typeof part.text === 'string' ? part.text : ''
-        else if (part.type === 'thinking') {
-          thinking +=
-            typeof part.thinking === 'string'
-              ? part.thinking
-              : typeof part.text === 'string'
-                ? part.text
-                : ''
-        } else if (
+        else if (
           part.type === 'tool_use' &&
           typeof part.id === 'string' &&
           typeof part.name === 'string'
@@ -187,12 +237,6 @@ export function buildHistory(messages: SourceMessage[], resolved: string): CodeW
     }
     if (message.tool_calls) {
       for (const toolCall of message.tool_calls) toolUses.push(parseToolCall(toolCall))
-    }
-    if (thinking) {
-      const escapedThinking = thinking.replaceAll('</thinking>', '<\\/thinking>')
-      assistant.content = assistant.content
-        ? `<thinking>${escapedThinking}</thinking>\n\n${assistant.content}`
-        : `<thinking>${escapedThinking}</thinking>`
     }
     if (toolUses.length > 0) assistant.toolUses = toolUses
     if (!assistant.content && !assistant.toolUses) continue
