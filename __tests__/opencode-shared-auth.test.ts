@@ -4,10 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	defaultOpenCodeAuthDbPath,
 	OpenCodeAuthStore,
 	OpenCodeAuthStoreError,
 	openCodePluginDirForDatabase,
 } from "../src/auth/opencode-auth-store.js";
+import { withOpenCodeRefreshLock } from "../src/auth/opencode-refresh-lock.js";
 import {
 	OpenCodeAccountManager,
 	OpenCodeTokenRefresher,
@@ -212,6 +214,94 @@ describe("OpenCode shared authentication runtime", () => {
 			usedCount: 1,
 		});
 		expect(store.getById(removed.id)).toBeUndefined();
+	});
+
+	test("resolves an explicit shared database root", () => {
+		expect(
+			defaultOpenCodeAuthDbPath({ XDG_CONFIG_HOME: "/tmp/opencode-config" }),
+		).toBe(join("/tmp/opencode-config", "opencode", "kiro.db"));
+	});
+
+	test("persists lowest-usage selection, rate limits, and health transitions", () => {
+		const databasePath = createDatabase([
+			account({
+				id: "higher-usage",
+				usedCount: 5,
+				lastUsed: 10,
+				failCount: 9,
+			}),
+			account({ id: "later-low-usage", usedCount: 1, lastUsed: 20 }),
+			account({ id: "earlier-low-usage", usedCount: 1, lastUsed: 5 }),
+		]);
+		const store = openStore(databasePath);
+		const manager = new OpenCodeAccountManager(store, "lowest-usage");
+
+		const first = manager.selectHealthyAccount();
+		expect(first?.id).toBe("earlier-low-usage");
+		if (!first) return;
+
+		const resetTime = Date.now() + 60_000;
+		expect(manager.markRateLimited(first, resetTime)).toMatchObject({
+			id: first.id,
+			rateLimitResetTime: resetTime,
+		});
+
+		const second = manager.selectHealthyAccount();
+		expect(second?.id).toBe("later-low-usage");
+		if (!second) return;
+		expect(
+			manager.markUnhealthy(second, "Invalid refresh token"),
+		).toMatchObject({
+			id: second.id,
+			isHealthy: false,
+			failCount: 10,
+			unhealthyReason: "Invalid refresh token",
+			recoveryTime: undefined,
+		});
+
+		const transient = store.getById("higher-usage");
+		expect(transient).toBeDefined();
+		if (!transient) return;
+		const recoveryTime = Date.now() + 30_000;
+		expect(
+			manager.markUnhealthy(transient, "temporary auth failure", recoveryTime),
+		).toMatchObject({
+			id: transient.id,
+			isHealthy: false,
+			failCount: 10,
+			unhealthyReason: "temporary auth failure",
+			recoveryTime,
+		});
+	});
+
+	test("cancels while waiting for another process refresh lock", async () => {
+		const databasePath = createDatabase();
+		const lockDirectory = openCodePluginDirForDatabase(databasePath);
+		const started = deferred();
+		const release = deferred();
+		const first = withOpenCodeRefreshLock(
+			lockDirectory,
+			"shared/account",
+			async () => {
+				started.resolve();
+				await release.promise;
+			},
+		);
+		await started.promise;
+
+		const controller = new AbortController();
+		const reason = new Error("cancel refresh lock wait");
+		const second = withOpenCodeRefreshLock(
+			lockDirectory,
+			"shared/account",
+			async () => undefined,
+			controller.signal,
+		);
+		setTimeout(() => controller.abort(reason), 5);
+
+		await expect(second).rejects.toBe(reason);
+		release.resolve();
+		await first;
 	});
 
 	test("reuses a fresh token rotated by another process without a network refresh", async () => {
