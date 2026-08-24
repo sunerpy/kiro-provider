@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/sunerpy/kiro-provider/compare/v0.3.1...v0.4.0) (2026-08-24)
+
+
+### Features
+
+* productionize multi-client Kiro provider ([2b5db59](https://github.com/sunerpy/kiro-provider/commit/2b5db59aa84ca96315f20af20f5eb3e43d2903fa))
+
 ## [0.3.1](https://github.com/sunerpy/kiro-provider/compare/v0.3.0...v0.3.1) (2026-07-22)
 
 
