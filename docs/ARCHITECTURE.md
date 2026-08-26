@@ -14,6 +14,12 @@ API-key gate (Bearer; Anthropic routes also accept x-api-key)
 Route dispatch (/v1/responses, /v1/messages, optional /v1/chat/completions)
         │
         ▼
+CanonicalRequest (roles, content blocks, tools, reasoning, source paths)
+        │
+        ▼
+Capability validation + safe/explicit legacy Kiro projection
+        │
+        ▼
 Standard-field session affinity (tenant-isolated hash → persisted account
 and Kiro conversationId)
         │
@@ -78,7 +84,7 @@ facts remain in OpenCode's Kiro database
 - Account additions, re-logins, rotated tokens, tombstones, health, and usage
   are reconciled from the live shared database.
 - Refresh uses the same per-account lock path and bounded wait contract as
-  `opencode-kiro-auth` v0.20.6. The provider re-reads the account after taking
+  `opencode-kiro-auth` v0.20.7. The provider re-reads the account after taking
   the lock, persists before publishing, and uses a complete token/login
   snapshot as a compare-and-swap guard.
 - This is a protocol-compatible implementation, not an import or copy of the

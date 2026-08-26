@@ -74,6 +74,9 @@ export interface CodeWhispererMessage {
   }
   assistantResponseMessage?: {
     content: string
+    reasoningContent?:
+      | { reasoningText: { text: string; signature: string } }
+      | { redactedContent: Uint8Array }
     toolUses?: Array<{
       input: unknown
       name: string
@@ -117,6 +120,7 @@ export interface PreparedRequest {
 export interface SdkPreparedRequest {
   conversationState: CodeWhispererRequest['conversationState']
   profileArn?: string
+  additionalModelRequestFields?: Readonly<Record<string, unknown>>
   streaming: boolean
   effectiveModel: string
   conversationId: string

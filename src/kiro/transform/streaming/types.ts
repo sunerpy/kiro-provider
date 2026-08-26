@@ -49,6 +49,3 @@ export interface ToolCallState {
   readonly name: string
   input: string
 }
-
-export const THINKING_START_TAG = '<thinking>' as const
-export const THINKING_END_TAG = '</thinking>' as const

@@ -7,13 +7,18 @@ import {
 } from "../chat-wire.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import {
+  contentPartAdded,
+  contentPartDone,
   customToolCallInputDelta,
+  customToolCallInputDone,
   formatSseEvent,
   functionCallArgumentsDelta,
+  functionCallArgumentsDone,
   type MessageOutputItem,
   outputItemAdded,
   outputItemDone,
   outputTextDelta,
+  outputTextDone,
   type ReasoningOutputItem,
   type ResponseOutputItem,
   type ResponsesEvent,
@@ -23,7 +28,9 @@ import {
   responseCompleted,
   responseCreated,
   responseFailed,
+  responseInProgress,
 } from "./events.js";
+import type { ResponseRequestConfiguration } from "./state.js";
 import type { ResponsesToolBridge } from "./tool-bridge.js";
 
 type AdapterOptions = {
@@ -31,6 +38,7 @@ type AdapterOptions = {
   readonly signals: IngressSignals;
   readonly finalize: () => void;
   readonly bridge?: ResponsesToolBridge;
+  readonly configuration: ResponseRequestConfiguration;
 };
 
 type AdapterOutcome =
@@ -74,6 +82,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   const encoder = new TextEncoder();
   const responseId = `resp_${randomUUID()}`;
   const messageId = `msg_${randomUUID()}`;
+  const createdAt = Math.floor(Date.now() / 1000);
   const tools = new Map<number, ToolCallAccumulator>();
   const completedOutput = new Map<number, ResponseOutputItem>();
   let buffer = "";
@@ -81,6 +90,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let messageIndex: number | undefined;
   let activeReasoning: ReasoningRun | undefined;
   let deferredReasoningText = "";
+  let reasoningEncryptedContent: string | undefined;
   let nextOutputIndex = 0;
   let sequenceNumber = 0;
   let terminalOutcome: AdapterOutcome | undefined;
@@ -133,6 +143,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 total_tokens: 0,
               },
               sequenceNumber: sequence,
+              createdAt,
+              completedAt: Math.floor(Date.now() / 1000),
+              configuration: options.configuration,
             }),
           );
         } else if (
@@ -150,6 +163,8 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               model: options.model,
               error: details,
               sequenceNumber: sequence,
+              createdAt,
+              configuration: options.configuration,
             }),
           );
         }
@@ -187,6 +202,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       id: activeReasoning.id,
       type: "reasoning",
       summary: [{ type: "summary_text", text: activeReasoning.text }],
+      ...(reasoningEncryptedContent !== undefined
+        ? { encrypted_content: reasoningEncryptedContent }
+        : {}),
     };
     emit(controller, (sequence) =>
       reasoningSummaryTextDone({
@@ -247,6 +265,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       id: run.id,
       type: "reasoning",
       summary: [{ type: "summary_text", text: run.text }],
+      ...(reasoningEncryptedContent !== undefined
+        ? { encrypted_content: reasoningEncryptedContent }
+        : {}),
     };
     emit(controller, (sequence) =>
       outputItemDone({ item, outputIndex: run.outputIndex, sequenceNumber: sequence }),
@@ -295,6 +316,12 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         );
         return;
       }
+      case "reasoning_encrypted":
+        reasoningEncryptedContent = delta.encryptedContent;
+        return;
+      case "reasoning_signature":
+      case "reasoning_redacted":
+        return;
       case "text": {
         closeReasoning(controller);
         if (messageIndex === undefined) {
@@ -302,8 +329,23 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           nextOutputIndex += 1;
           emit(controller, (sequence) =>
             outputItemAdded({
-              item: { id: messageId, type: "message", role: "assistant", content: [] },
+              item: {
+                id: messageId,
+                type: "message",
+                role: "assistant",
+                status: "in_progress",
+                content: [],
+              },
               outputIndex: messageIndex ?? 0,
+              sequenceNumber: sequence,
+            }),
+          );
+          emit(controller, (sequence) =>
+            contentPartAdded({
+              itemId: messageId,
+              outputIndex: messageIndex ?? 0,
+              contentIndex: 0,
+              part: { type: "output_text", text: "", annotations: [] },
               sequenceNumber: sequence,
             }),
           );
@@ -377,14 +419,65 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         id: messageId,
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text }],
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
       };
+      emit(controller, (sequence) =>
+        outputTextDone({
+          itemId: messageId,
+          outputIndex: messageIndex ?? 0,
+          contentIndex: 0,
+          text,
+          sequenceNumber: sequence,
+        }),
+      );
+      emit(controller, (sequence) =>
+        contentPartDone({
+          itemId: messageId,
+          outputIndex: messageIndex ?? 0,
+          contentIndex: 0,
+          part: { type: "output_text", text, annotations: [] },
+          sequenceNumber: sequence,
+        }),
+      );
       emit(controller, (sequence) =>
         outputItemDone({ item, outputIndex: messageIndex ?? 0, sequenceNumber: sequence }),
       );
       completedOutput.set(messageIndex, item);
     }
     flushDeferredReasoning(controller);
+    if (reasoningEncryptedContent !== undefined) {
+      let attached = false;
+      for (const [index, item] of completedOutput) {
+        if (item.type !== "reasoning") continue;
+        completedOutput.set(index, {
+          ...item,
+          encrypted_content: reasoningEncryptedContent,
+        });
+        attached = true;
+      }
+      if (!attached) {
+        const outputIndex = nextOutputIndex;
+        nextOutputIndex += 1;
+        const item: ReasoningOutputItem = {
+          id: `rs_${randomUUID()}`,
+          type: "reasoning",
+          summary: [],
+          encrypted_content: reasoningEncryptedContent,
+        };
+        emit(controller, (sequence) =>
+          outputItemAdded({
+            item: { id: item.id, type: "reasoning", summary: [] },
+            outputIndex,
+            sequenceNumber: sequence,
+          }),
+        );
+        emit(controller, (sequence) =>
+          outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
+        );
+        completedOutput.set(outputIndex, item);
+      }
+    }
     for (const item of restored.items) {
       const outputIndex = nextOutputIndex;
       nextOutputIndex += 1;
@@ -404,12 +497,28 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             sequenceNumber: sequence,
           }),
         );
+        emit(controller, (sequence) =>
+          functionCallArgumentsDone({
+            itemId: item.id,
+            outputIndex,
+            arguments: item.arguments,
+            sequenceNumber: sequence,
+          }),
+        );
       } else {
         emit(controller, (sequence) =>
           customToolCallInputDelta({
             itemId: item.id,
             outputIndex,
             delta: item.input,
+            sequenceNumber: sequence,
+          }),
+        );
+        emit(controller, (sequence) =>
+          customToolCallInputDone({
+            itemId: item.id,
+            outputIndex,
+            input: item.input,
             sequenceNumber: sequence,
           }),
         );
@@ -439,7 +548,22 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       start(controller) {
         streamController = controller;
         emit(controller, (sequence) =>
-          responseCreated({ responseId, model: options.model, sequenceNumber: sequence }),
+          responseCreated({
+            responseId,
+            model: options.model,
+            sequenceNumber: sequence,
+            createdAt,
+            configuration: options.configuration,
+          }),
+        );
+        emit(controller, (sequence) =>
+          responseInProgress({
+            responseId,
+            model: options.model,
+            sequenceNumber: sequence,
+            createdAt,
+            configuration: options.configuration,
+          }),
         );
         signals.deadline.addEventListener("abort", onDeadlineAbort, { once: true });
         signals.client.addEventListener("abort", onClientAbort, { once: true });

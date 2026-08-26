@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import {
   type PipelineAccountManager,
+  type PipelineReasoningReplayStore,
   type PipelineSdkClient,
   type PipelineTokenRefresher,
   runChatCompletion,
@@ -12,8 +13,17 @@ import type {
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import {
+  assistantOutputFingerprint,
+  type CanonicalRequest,
+} from "../src/protocol/canonical.js";
+import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
-const REQUEST_BODY = { messages: [{ role: "user", content: "hello" }] };
+function requestBody(model = "auto"): CanonicalRequest {
+  return canonicalRequest([message("user", "hello")], { model });
+}
+
+const REQUEST_BODY = requestBody();
 
 function account(id: string): ManagedAccount {
   return {
@@ -88,6 +98,19 @@ class FakeAccountManager implements PipelineAccountManager {
     selected.isHealthy = selected.failCount < 10 && !reason.includes("InvalidTokenException");
     selected.unhealthyReason = reason;
     this.unhealthy.push(selected.id);
+  }
+}
+
+class PreferredAccountManager extends FakeAccountManager {
+  override selectHealthyAccount(preferredAccountId?: string): ManagedAccount | null {
+    const now = Date.now();
+    const preferred = this.accounts.find(
+      (candidate) =>
+        candidate.id === preferredAccountId &&
+        candidate.isHealthy &&
+        candidate.rateLimitResetTime <= now,
+    );
+    return preferred ?? super.selectHealthyAccount();
   }
 }
 
@@ -240,6 +263,67 @@ function clientWith(send: (signal: AbortSignal) => Promise<SdkStreamResponse>): 
   };
 }
 
+function reasoningReplayRequest(): CanonicalRequest {
+  const outputFingerprint = assistantOutputFingerprint({ text: "prior answer", toolCalls: [] });
+  return {
+    canonicalVersion: 1,
+    protocol: "responses",
+    projectionMode: "safe",
+    model: "gpt-5.6-sol",
+    stream: false,
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "prior answer", path: "input.1.content.0.text" }],
+        toolCalls: [],
+        path: "input.1",
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "continue", path: "input.2.content.0.text" }],
+        toolCalls: [],
+        path: "input.2",
+      },
+    ],
+    tools: [],
+    toolChoice: "auto",
+    reasoningReplays: [
+      {
+        lookup: { kind: "responses-token", encryptedContent: "kr1_test" },
+        outputFingerprint,
+        insertBeforeMessage: 0,
+        path: "input.0",
+      },
+    ],
+    includeEncryptedReasoning: true,
+  };
+}
+
+function reasoningReplayStore(
+  accountId: string,
+  conversationId: string,
+): PipelineReasoningReplayStore {
+  return {
+    readiness: () => ({ writable: true, keyringAvailable: true, missingKeyIds: [] }),
+    store: () => undefined,
+    resolveResponses: (_token, _context, insertBeforeMessage) => ({
+      accountId,
+      conversationId,
+      replay: {
+        insertBeforeMessage,
+        content: {
+          kind: "reasoning_text",
+          text: "signed reasoning",
+          signature: "native signature",
+        },
+      },
+    }),
+    resolveChat: () => {
+      throw new TypeError("Chat replay is not used by this test");
+    },
+  };
+}
+
 function deferred(): {
   readonly promise: Promise<void>;
   readonly resolve: () => void;
@@ -257,6 +341,7 @@ async function errorBody(response: Response): Promise<{
     readonly message: string;
     readonly type: string;
     readonly code?: string;
+    readonly param?: string;
   };
 }> {
   const body: unknown = await response.json();
@@ -274,11 +359,13 @@ async function errorBody(response: Response): Promise<{
     throw new TypeError("Expected an OpenAI error envelope");
   }
   const code = "code" in body.error ? body.error.code : undefined;
+  const param = "param" in body.error ? body.error.param : undefined;
   return {
     error: {
       message: body.error.message,
       type: body.error.type,
       ...(typeof code === "string" ? { code } : {}),
+      ...(typeof param === "string" ? { param } : {}),
     },
   };
 }
@@ -328,7 +415,7 @@ describe("runChatCompletion success paths", () => {
 
     // When
     const response = await runChatCompletion({
-      body: REQUEST_BODY,
+      body: requestBody("claude-opus-4-8"),
       model: "claude-opus-4-8",
       stream: false,
       config: config(),
@@ -370,7 +457,7 @@ describe("runChatCompletion success paths", () => {
 
     // When
     const response = await runChatCompletion({
-      body: REQUEST_BODY,
+      body: requestBody("claude-opus-4-8"),
       model: "claude-opus-4-8",
       stream: true,
       config: config(),
@@ -649,6 +736,120 @@ describe("runChatCompletion retry and switching", () => {
 
     expect(response.status).toBe(500);
     expect((await errorBody(response)).error.message).toContain("Exceeded max iterations (2)");
+  });
+});
+
+describe("runChatCompletion signed reasoning replay lock", () => {
+  test("returns a retryable 503 when the replay-bound account is unavailable", async () => {
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-b")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await errorBody(response)).toMatchObject({
+      error: {
+        type: "service_unavailable",
+        code: "reasoning_replay_account_unavailable",
+      },
+    });
+    expect(clientCalls).toBe(0);
+  });
+
+  test("replays only on the bound account and Kiro conversation", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const commandInputs: unknown[] = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config(),
+      accountManager: new PreferredAccountManager([
+        account("account-b"),
+        account("account-a"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return {
+          async send(command): Promise<SdkStreamResponse> {
+            commandInputs.push(command.input);
+            return responseFrom([
+              { assistantResponseEvent: { content: "continued" } },
+              {
+                metadataEvent: {
+                  tokenUsage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+                },
+              },
+            ]);
+          },
+        };
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-a"]);
+    expect(commandInputs).toHaveLength(1);
+    expect(commandInputs[0]).toMatchObject({
+      conversationState: {
+        conversationId: "conversation-a",
+        history: [
+          {
+            assistantResponseMessage: {
+              content: "prior answer",
+              reasoningContent: {
+                reasoningText: {
+                  text: "signed reasoning",
+                  signature: "native signature",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+  });
+
+  test("does not switch accounts after a replay-locked 429", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config(),
+      accountManager: new PreferredAccountManager([
+        account("account-b"),
+        account("account-a"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () => {
+          throw sdkError(429, "rate limited");
+        });
+      },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_unavailable" },
+    });
+    expect(selectedAccountIds).toEqual(["account-a"]);
   });
 });
 
@@ -1063,6 +1264,38 @@ describe("runChatCompletion cancellation", () => {
 });
 
 describe("runChatCompletion terminal errors", () => {
+  test("rejects an unprojectable content boundary with its source path before SDK creation", async () => {
+    let makeClientCalls = 0;
+    const response = await runChatCompletion({
+      body: canonicalRequest([
+        message("user", [
+          { type: "text", text: "first", path: "input.0.content.0" },
+          { type: "text", text: "second", path: "input.0.content.1" },
+        ]),
+      ]),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () => {
+        makeClientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(makeClientCalls).toBe(0);
+    expect(await errorBody(response)).toEqual({
+      error: {
+        message: expect.stringContaining("cannot preserve their boundaries"),
+        type: "invalid_request_error",
+        code: "unsupported_content_block_projection",
+        param: "input.0.content.1",
+      },
+    });
+  });
+
   test("marks a suspended single account unhealthy before returning its failure", async () => {
     // Given
     const suspended = account("account-a");

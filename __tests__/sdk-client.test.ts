@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
   type CodeWhispererStreamingClient,
-  GenerateAssistantResponseCommand
+  GenerateAssistantResponseCommand,
+  type GenerateAssistantResponseCommandInput
 } from '@aws/codewhisperer-streaming-client'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
@@ -29,7 +30,8 @@ function makeAuth(): KiroAuthDetails {
 
 async function captureBuiltRequest(
   client: CodeWhispererStreamingClient,
-  wireModel: string
+  wireModel: string,
+  additionalModelRequestFields?: GenerateAssistantResponseCommandInput['additionalModelRequestFields']
 ): Promise<HttpRequest> {
   let capturedRequest: HttpRequest | undefined
   client.middlewareStack.add(
@@ -54,7 +56,10 @@ async function captureBuiltRequest(
           origin: 'AI_EDITOR'
         }
       }
-    }
+    },
+    ...(additionalModelRequestFields === undefined
+      ? {}
+      : { additionalModelRequestFields })
   })
 
   try {
@@ -151,6 +156,22 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
   })
 
+  test('merges Claude effort with request-scoped max_tokens instead of overwriting it', async () => {
+    clearSdkClientCache()
+    const client = createSdkClient(makeAuth(), 'us-east-1', 'high')
+
+    const request = await captureBuiltRequest(client, 'claude-sonnet-5', {
+      max_tokens: 4096
+    })
+    const body = parseRequestBody(request)
+
+    expect(body.additionalModelRequestFields).toEqual({
+      max_tokens: 4096,
+      output_config: { effort: 'high' }
+    })
+    clearSdkClientCache()
+  })
+
   test('configures the same proxy agent for HTTP and HTTPS endpoints', async () => {
     clearSdkClientCache()
     const proxyUrl = 'http://127.0.0.1:43128'
@@ -216,6 +237,40 @@ describe('createSdkClient', () => {
     if (!token) throw new TypeError('SDK client token provider is required')
     expect(await token()).toEqual({ token: 'refreshed-access-token' })
     clearSdkClientCache()
+  })
+
+  test('emits content-free connection-pool hit and miss evidence', () => {
+    clearSdkClientCache()
+    const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const auth = makeAuth()
+      createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a')
+      createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a')
+
+      const events = consoleError.mock.calls.map(([line]) => JSON.parse(String(line)))
+      expect(events).toHaveLength(2)
+      expect(events[0]).toMatchObject({
+        event: 'sdk_connection_pool_selected',
+        account_hash: expect.any(String),
+        region: 'us-east-1',
+        effort: 'high',
+        transport_pool_hit: false,
+        sdk_client_pool_hit: false
+      })
+      expect(events[1]).toMatchObject({
+        event: 'sdk_connection_pool_selected',
+        account_hash: events[0].account_hash,
+        transport_pool_hit: true,
+        sdk_client_pool_hit: true
+      })
+      const serialized = JSON.stringify(events)
+      expect(serialized).not.toContain('account-a')
+      expect(serialized).not.toContain(auth.access)
+      expect(serialized).not.toContain(auth.refresh)
+    } finally {
+      consoleError.mockRestore()
+      clearSdkClientCache()
+    }
   })
 
   test('separates accounts even when their email and endpoint are identical', () => {

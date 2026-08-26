@@ -60,6 +60,21 @@ export function anthropicMessageResponse(
   model: string,
 ): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
+  if (completion.message.reasoningRedactedContent) {
+    content.push({
+      type: "redacted_thinking",
+      data: completion.message.reasoningRedactedContent,
+    });
+  } else if (
+    completion.message.reasoningContent &&
+    completion.message.reasoningSignature
+  ) {
+    content.push({
+      type: "thinking",
+      thinking: completion.message.reasoningContent,
+      signature: completion.message.reasoningSignature,
+    });
+  }
   if (completion.message.content.length > 0) {
     content.push({ type: "text", text: completion.message.content });
   }
@@ -106,6 +121,10 @@ export function anthropicSseAdapter(
   let buffer = "";
   let nextContentIndex = 0;
   let textIndex: number | undefined;
+  let reasoningIndex: number | undefined;
+  let reasoningStarted = false;
+  let reasoningStopped = false;
+  let deferredReasoningSignature: string | undefined;
   let textStarted = false;
   let textStopped = false;
   let terminalOutcome: AdapterOutcome | undefined;
@@ -174,12 +193,77 @@ export function anthropicSseAdapter(
       index: textIndex,
     });
   };
+  const stopReasoning = (): void => {
+    if (!reasoningStarted || reasoningStopped || reasoningIndex === undefined) return;
+    if (deferredReasoningSignature !== undefined) {
+      emit("content_block_delta", {
+        type: "content_block_delta",
+        index: reasoningIndex,
+        delta: {
+          type: "signature_delta",
+          signature: deferredReasoningSignature,
+        },
+      });
+      deferredReasoningSignature = undefined;
+    }
+    reasoningStopped = true;
+    emit("content_block_stop", {
+      type: "content_block_stop",
+      index: reasoningIndex,
+    });
+  };
   const addDelta = (delta: ChatWireDelta): boolean => {
     switch (delta.kind) {
       case "empty":
-      case "reasoning":
+        return false;
+      case "reasoning": {
+        if (!reasoningStarted) {
+          reasoningIndex = nextContentIndex;
+          nextContentIndex += 1;
+          reasoningStarted = true;
+          emit("content_block_start", {
+            type: "content_block_start",
+            index: reasoningIndex,
+            content_block: { type: "thinking", thinking: "", signature: "" },
+          });
+        }
+        emit("content_block_delta", {
+          type: "content_block_delta",
+          index: reasoningIndex,
+          delta: { type: "thinking_delta", thinking: delta.text },
+        });
+        return true;
+      }
+      case "reasoning_signature":
+        if (reasoningStarted && !reasoningStopped && reasoningIndex !== undefined) {
+          emit("content_block_delta", {
+            type: "content_block_delta",
+            index: reasoningIndex,
+            delta: { type: "signature_delta", signature: delta.signature },
+          });
+        } else {
+          deferredReasoningSignature = delta.signature;
+        }
+        return false;
+      case "reasoning_redacted": {
+        if (reasoningStarted) {
+          failProtocol("Upstream mixed visible and redacted reasoning payloads");
+          return false;
+        }
+        const index = nextContentIndex;
+        nextContentIndex += 1;
+        emit("content_block_start", {
+          type: "content_block_start",
+          index,
+          content_block: { type: "redacted_thinking", data: delta.data },
+        });
+        emit("content_block_stop", { type: "content_block_stop", index });
+        return true;
+      }
+      case "reasoning_encrypted":
         return false;
       case "text": {
+        stopReasoning();
         if (!textStarted) {
           textIndex = nextContentIndex;
           nextContentIndex += 1;
@@ -198,6 +282,7 @@ export function anthropicSseAdapter(
         return true;
       }
       case "tool_calls": {
+        stopReasoning();
         for (const fragment of delta.calls) {
           const tool = tools.get(fragment.index) ?? {
             id: "",
@@ -227,6 +312,7 @@ export function anthropicSseAdapter(
       return;
     }
     stopText();
+    stopReasoning();
     for (const [, tool] of orderedTools) {
       const contentIndex = nextContentIndex;
       nextContentIndex += 1;

@@ -42,10 +42,14 @@ describe("stream cleanup steps", () => {
 			).not.toThrow();
 			expect(calls).toEqual(["first", "second", "third"]);
 			expect(consoleError).toHaveBeenCalledTimes(1);
-			expect(consoleError).toHaveBeenCalledWith(
-				"stream-cleanup: cleanup step failed",
-				failure,
-			);
+			expect(consoleError.mock.calls[0]?.length).toBe(1);
+			const logged = String(consoleError.mock.calls[0]?.[0]);
+			expect(JSON.parse(logged)).toMatchObject({
+				level: "warn",
+				event: "stream_cleanup_failed",
+				error_type: "Error",
+			});
+			expect(logged).not.toContain(failure.message);
 		} finally {
 			consoleError.mockRestore();
 		}
@@ -98,10 +102,14 @@ describe("stream cleanup steps", () => {
 				}),
 			).not.toThrow();
 			expect(consoleError).toHaveBeenCalledTimes(1);
-			expect(consoleError).toHaveBeenCalledWith(
-				"stream-cleanup: cleanup step failed",
-				failure,
-			);
+			expect(consoleError.mock.calls[0]?.length).toBe(1);
+			const logged = String(consoleError.mock.calls[0]?.[0]);
+			expect(JSON.parse(logged)).toMatchObject({
+				level: "warn",
+				event: "stream_cleanup_failed",
+				error_type: "Error",
+			});
+			expect(logged).not.toContain(failure.message);
 		} finally {
 			consoleError.mockRestore();
 		}
@@ -113,10 +121,14 @@ describe("stream cleanup steps", () => {
 		try {
 			expect(() => reportFinalizeError(failure)).not.toThrow();
 			expect(consoleError).toHaveBeenCalledTimes(1);
-			expect(consoleError).toHaveBeenCalledWith(
-				"stream-cleanup: cleanup step failed",
-				failure,
-			);
+			expect(consoleError.mock.calls[0]?.length).toBe(1);
+			const logged = String(consoleError.mock.calls[0]?.[0]);
+			expect(JSON.parse(logged)).toMatchObject({
+				level: "warn",
+				event: "stream_cleanup_failed",
+				error_type: "Error",
+			});
+			expect(logged).not.toContain(failure.message);
 		} finally {
 			consoleError.mockRestore();
 		}

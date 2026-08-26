@@ -15,7 +15,7 @@ import {
 } from "../src/server/routes/messages.js";
 
 const API_KEY = "sk-anthropic-test";
-const MODEL = "gpt-5.6-sol";
+const MODEL = "claude-sonnet-5";
 
 function config(): Config {
   return ConfigSchema.parse({
@@ -179,7 +179,7 @@ describe("Anthropic request adapter", () => {
   test("maps system blocks, structured thinking config, tool use, and tool results", () => {
     const adapted = adaptAnthropicMessagesRequest(
       validRequest({
-        system: [{ type: "text", text: "system policy", cache_control: { type: "ephemeral" } }],
+        system: [{ type: "text", text: "system policy" }],
         thinking: { type: "enabled", budget_tokens: 8_000 },
         output_config: { effort: "high" },
         tools: [
@@ -209,33 +209,55 @@ describe("Anthropic request adapter", () => {
         ],
       }),
       { requireMaxTokens: true },
+      "legacy-user-prefix",
     );
 
     expect(adapted.ok).toBe(true);
     if (!adapted.ok) return;
     expect(adapted.value.body).toMatchObject({
-      system: "system policy",
-      max_tokens: 1_024,
-      thinkingConfig: { budget_tokens: 8_000 },
-      reasoning_effort: "high",
-      tools: [{ name: "read" }, { name: "write" }],
+      canonicalVersion: 1,
+      protocol: "anthropic-messages",
+      projectionMode: "legacy-user-prefix",
+      outputTokenLimit: 1_024,
+      thinking: { enabled: true, budgetTokens: 8_000 },
+      reasoningEffort: "high",
+      requestedReasoningEffort: "high",
+      tools: [
+        { publicType: "function", name: "read", wireName: "read" },
+        { publicType: "function", name: "write", wireName: "write" },
+      ],
       messages: [
         {
+          role: "system",
+          content: [{ type: "text", text: "system policy" }],
+        },
+        {
           role: "assistant",
-          content: [
-            { type: "tool_use", id: "tool-1", name: "read" },
-          ],
+          toolCalls: [{ id: "tool-1", name: "read", input: { path: "a.txt" } }],
         },
         {
           role: "user",
           content: [
             {
               type: "tool_result",
-              tool_use_id: "tool-1",
-              is_error: true,
-              content: "missing",
+              toolCallId: "tool-1",
+              isError: true,
+              content: [{ type: "text", text: "missing" }],
             },
           ],
+        },
+      ],
+      reasoningReplays: [
+        {
+          lookup: {
+            kind: "anthropic-direct",
+            content: {
+              kind: "reasoning_text",
+              text: "inspect first",
+              signature: "not-forwarded",
+            },
+          },
+          insertBeforeMessage: 1,
         },
       ],
     });
@@ -252,6 +274,29 @@ describe("Anthropic request adapter", () => {
       message: expect.stringContaining("max_tokens"),
     });
     expect(adaptAnthropicMessagesRequest(raw)).toMatchObject({ ok: true });
+  });
+
+  test("rejects unproven models and Kiro-invalid max_tokens ranges before the pipeline", () => {
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({ model: "gpt-5.6-sol" }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_output_token_limit",
+      param: "max_tokens",
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({ max_tokens: 1_023 }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "invalid_output_token_limit",
+      param: "max_tokens",
+    });
   });
 
   test("rejects unsupported forced tool choices and duplicate declarations", () => {
@@ -286,6 +331,74 @@ describe("Anthropic request adapter", () => {
     ).toMatchObject({
       ok: false,
       message: expect.stringContaining("duplicate tool name read"),
+    });
+  });
+
+  test("rejects cache controls, unknown nested fields, and reasoning aliases", () => {
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          system: [
+            { type: "text", text: "system policy", cache_control: { type: "ephemeral" } },
+          ],
+        }),
+        {},
+        "legacy-user-prefix",
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_parameter",
+      param: "system.0.cache_control",
+      message: expect.stringContaining("system.0.cache_control"),
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "hello", unknown: true }],
+            },
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_parameter",
+      param: "messages.0.content.0.unknown",
+      message: expect.stringContaining("messages.0.content.0.unknown"),
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "redacted_thinking",
+                  redacted_content: "YWJj",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "invalid_reasoning_replay",
+      param: "messages.0.content.0.redacted_content",
+      message: expect.stringContaining("redacted_content"),
+    });
+
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({ context_management: { edits: [] } }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_parameter",
+      param: "context_management",
     });
   });
 });
@@ -357,6 +470,7 @@ describe("POST /v1/messages", () => {
       dependencies(
         async () =>
           ndjson([
+            chunk({ reasoning_signature: "native-signature" }, null),
             chunk({ reasoning_content: "not exposed" }, null),
             chunk({ content: "hello" }, null),
             chunk(
@@ -404,6 +518,10 @@ describe("POST /v1/messages", () => {
       "message_start",
       "content_block_start",
       "content_block_delta",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
       "content_block_stop",
       "content_block_start",
       "content_block_delta",
@@ -411,6 +529,12 @@ describe("POST /v1/messages", () => {
       "message_delta",
       "message_stop",
     ]);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        type: "content_block_delta",
+        delta: { type: "signature_delta", signature: "native-signature" },
+      }),
+    );
     expect(payloads).toContainEqual(
       expect.objectContaining({
         type: "content_block_delta",

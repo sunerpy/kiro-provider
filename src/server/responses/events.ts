@@ -1,7 +1,33 @@
+import type {
+	OutputTextContent,
+	ResponseError,
+	ResponseOutputItem,
+	ResponseRequestConfiguration,
+	ResponseStateObject,
+	ResponseUsage,
+} from "./state.js";
+import { responseState } from "./state.js";
+
+export type {
+	CustomToolCallOutputItem,
+	FunctionCallOutputItem,
+	MessageOutputItem,
+	OutputTextContent,
+	ReasoningOutputItem,
+	ResponseError,
+	ResponseOutputItem,
+	ResponseToolCallItem,
+	ResponseUsage,
+} from "./state.js";
+
 export const CODEX_RECOGNIZED_TYPES = [
   "response.created",
+  "response.in_progress",
   "response.output_item.added",
+  "response.content_part.added",
   "response.output_text.delta",
+  "response.output_text.done",
+  "response.content_part.done",
   "response.output_item.done",
   "response.reasoning_summary_text.delta",
   "response.reasoning_summary_text.done",
@@ -12,84 +38,29 @@ export const CODEX_RECOGNIZED_TYPES = [
 // Codex ignores these event types; they exist only for stricter Responses clients.
 export const OPTIONAL_IGNORED_TYPES = [
   "response.function_call_arguments.delta",
+  "response.function_call_arguments.done",
   "response.custom_tool_call_input.delta",
-  "response.output_text.done",
+  "response.custom_tool_call_input.done",
 ] as const;
 
 export type CodexRecognizedType = (typeof CODEX_RECOGNIZED_TYPES)[number];
 export type OptionalIgnoredType = (typeof OPTIONAL_IGNORED_TYPES)[number];
 
-export type OutputTextContent = {
-  readonly type: "output_text";
-  readonly text: string;
-};
-
 export type SummaryText = {
-  readonly type: "summary_text";
-  readonly text: string;
-};
-
-export type MessageOutputItem = {
-  readonly id: string;
-  readonly type: "message";
-  readonly role: "assistant";
-  readonly content: readonly OutputTextContent[];
-};
-
-export type ReasoningOutputItem = {
-  readonly id: string;
-  readonly type: "reasoning";
-  readonly summary: readonly SummaryText[];
-};
-
-export type FunctionCallOutputItem = {
-  readonly id: string;
-  readonly type: "function_call";
-  readonly call_id: string;
-  readonly namespace?: string;
-  readonly name: string;
-  readonly arguments: string;
-  readonly status?: "completed";
-};
-
-export type CustomToolCallOutputItem = {
-  readonly id: string;
-  readonly type: "custom_tool_call";
-  readonly call_id: string;
-  readonly namespace?: string;
-  readonly name: string;
-  readonly input: string;
-  readonly status?: "completed";
-};
-
-export type ResponseToolCallItem = FunctionCallOutputItem | CustomToolCallOutputItem;
-
-export type ResponseOutputItem = MessageOutputItem | ReasoningOutputItem | ResponseToolCallItem;
-
-export type ResponseUsage = {
-  readonly input_tokens: number;
-  readonly output_tokens: number;
-  readonly total_tokens: number;
-  readonly input_tokens_details?: Readonly<Record<string, number>>;
-  readonly output_tokens_details?: Readonly<Record<string, number>>;
-};
-
-export type ResponseError = {
-  readonly code: string;
-  readonly message: string;
+	readonly type: "summary_text";
+	readonly text: string;
 };
 
 export type ResponseCreatedEvent = {
   readonly type: "response.created";
   readonly sequence_number: number;
-  readonly response: {
-    readonly id: string;
-    readonly object: "response";
-    readonly status: "in_progress";
-    readonly model: string;
-    readonly created_at: number;
-    readonly output: readonly [];
-  };
+  readonly response: ResponseStateObject;
+};
+
+export type ResponseInProgressEvent = {
+  readonly type: "response.in_progress";
+  readonly sequence_number: number;
+  readonly response: import("./state.js").ResponseStateObject;
 };
 
 export type OutputItemAddedEvent = {
@@ -106,6 +77,33 @@ export type OutputTextDeltaEvent = {
   readonly output_index: number;
   readonly content_index: number;
   readonly delta: string;
+};
+
+export type ContentPartAddedEvent = {
+  readonly type: "response.content_part.added";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly content_index: number;
+  readonly part: OutputTextContent;
+};
+
+export type OutputTextDoneEvent = {
+  readonly type: "response.output_text.done";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly content_index: number;
+  readonly text: string;
+};
+
+export type ContentPartDoneEvent = {
+  readonly type: "response.content_part.done";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly content_index: number;
+  readonly part: OutputTextContent;
 };
 
 export type ReasoningSummaryTextDeltaEvent = {
@@ -136,26 +134,13 @@ export type OutputItemDoneEvent = {
 export type ResponseCompletedEvent = {
   readonly type: "response.completed";
   readonly sequence_number: number;
-  readonly response: {
-    readonly id: string;
-    readonly object: "response";
-    readonly status: "completed";
-    readonly model: string;
-    readonly output: readonly ResponseOutputItem[];
-    readonly usage: ResponseUsage;
-  };
+  readonly response: ResponseStateObject;
 };
 
 export type ResponseFailedEvent = {
   readonly type: "response.failed";
   readonly sequence_number: number;
-  readonly response: {
-    readonly id: string;
-    readonly object: "response";
-    readonly status: "failed";
-    readonly model: string;
-    readonly error: ResponseError;
-  };
+  readonly response: ResponseStateObject;
 };
 
 export type FunctionCallArgumentsDeltaEvent = {
@@ -166,6 +151,14 @@ export type FunctionCallArgumentsDeltaEvent = {
   readonly delta: string;
 };
 
+export type FunctionCallArgumentsDoneEvent = {
+  readonly type: "response.function_call_arguments.done";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly arguments: string;
+};
+
 export type CustomToolCallInputDeltaEvent = {
   readonly type: "response.custom_tool_call_input.delta";
   readonly sequence_number: number;
@@ -174,34 +167,69 @@ export type CustomToolCallInputDeltaEvent = {
   readonly delta: string;
 };
 
+export type CustomToolCallInputDoneEvent = {
+  readonly type: "response.custom_tool_call_input.done";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly input: string;
+};
+
 export type ResponsesEvent =
   | ResponseCreatedEvent
+  | ResponseInProgressEvent
   | OutputItemAddedEvent
+  | ContentPartAddedEvent
   | OutputTextDeltaEvent
+  | OutputTextDoneEvent
+  | ContentPartDoneEvent
   | ReasoningSummaryTextDeltaEvent
   | ReasoningSummaryTextDoneEvent
   | OutputItemDoneEvent
   | ResponseCompletedEvent
   | ResponseFailedEvent
   | FunctionCallArgumentsDeltaEvent
-  | CustomToolCallInputDeltaEvent;
+  | FunctionCallArgumentsDoneEvent
+  | CustomToolCallInputDeltaEvent
+  | CustomToolCallInputDoneEvent;
 
 export function responseCreated(input: {
   readonly responseId: string;
   readonly model: string;
   readonly sequenceNumber: number;
+  readonly createdAt?: number;
+  readonly configuration?: ResponseRequestConfiguration;
 }): ResponseCreatedEvent {
   return {
     type: "response.created",
     sequence_number: input.sequenceNumber,
-    response: {
+    response: responseState({
       id: input.responseId,
-      object: "response",
-      status: "in_progress",
       model: input.model,
-      created_at: Math.floor(Date.now() / 1000),
-      output: [],
-    },
+      status: "in_progress",
+      ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+      ...(input.configuration !== undefined ? { configuration: input.configuration } : {}),
+    }),
+  };
+}
+
+export function responseInProgress(input: {
+  readonly responseId: string;
+  readonly model: string;
+  readonly sequenceNumber: number;
+  readonly createdAt?: number;
+  readonly configuration?: ResponseRequestConfiguration;
+}): ResponseInProgressEvent {
+  return {
+    type: "response.in_progress",
+    sequence_number: input.sequenceNumber,
+    response: responseState({
+      id: input.responseId,
+      model: input.model,
+      status: "in_progress",
+      ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+      ...(input.configuration !== undefined ? { configuration: input.configuration } : {}),
+    }),
   };
 }
 
@@ -232,6 +260,57 @@ export function outputTextDelta(input: {
     output_index: input.outputIndex,
     content_index: input.contentIndex,
     delta: input.delta,
+  };
+}
+
+export function contentPartAdded(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly contentIndex: number;
+  readonly part: OutputTextContent;
+  readonly sequenceNumber: number;
+}): ContentPartAddedEvent {
+  return {
+    type: "response.content_part.added",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    content_index: input.contentIndex,
+    part: input.part,
+  };
+}
+
+export function outputTextDone(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly contentIndex: number;
+  readonly text: string;
+  readonly sequenceNumber: number;
+}): OutputTextDoneEvent {
+  return {
+    type: "response.output_text.done",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    content_index: input.contentIndex,
+    text: input.text,
+  };
+}
+
+export function contentPartDone(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly contentIndex: number;
+  readonly part: OutputTextContent;
+  readonly sequenceNumber: number;
+}): ContentPartDoneEvent {
+  return {
+    type: "response.content_part.done",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    content_index: input.contentIndex,
+    part: input.part,
   };
 }
 
@@ -288,18 +367,23 @@ export function responseCompleted(input: {
   readonly output: readonly ResponseOutputItem[];
   readonly usage: ResponseUsage;
   readonly sequenceNumber: number;
+  readonly createdAt?: number;
+  readonly completedAt?: number;
+  readonly configuration?: ResponseRequestConfiguration;
 }): ResponseCompletedEvent {
   return {
     type: "response.completed",
     sequence_number: input.sequenceNumber,
-    response: {
+    response: responseState({
       id: input.responseId,
-      object: "response",
-      status: "completed",
       model: input.model,
+      status: "completed",
       output: input.output,
       usage: input.usage,
-    },
+      ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+      ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
+      ...(input.configuration !== undefined ? { configuration: input.configuration } : {}),
+    }),
   };
 }
 
@@ -308,17 +392,20 @@ export function responseFailed(input: {
   readonly model: string;
   readonly error: ResponseError;
   readonly sequenceNumber: number;
+  readonly createdAt?: number;
+  readonly configuration?: ResponseRequestConfiguration;
 }): ResponseFailedEvent {
   return {
     type: "response.failed",
     sequence_number: input.sequenceNumber,
-    response: {
+    response: responseState({
       id: input.responseId,
-      object: "response",
-      status: "failed",
       model: input.model,
+      status: "failed",
       error: input.error,
-    },
+      ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+      ...(input.configuration !== undefined ? { configuration: input.configuration } : {}),
+    }),
   };
 }
 
@@ -349,6 +436,36 @@ export function customToolCallInputDelta(input: {
     item_id: input.itemId,
     output_index: input.outputIndex,
     delta: input.delta,
+  };
+}
+
+export function functionCallArgumentsDone(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly arguments: string;
+  readonly sequenceNumber: number;
+}): FunctionCallArgumentsDoneEvent {
+  return {
+    type: "response.function_call_arguments.done",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    arguments: input.arguments,
+  };
+}
+
+export function customToolCallInputDone(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly input: string;
+  readonly sequenceNumber: number;
+}): CustomToolCallInputDoneEvent {
+  return {
+    type: "response.custom_tool_call_input.done",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    input: input.input,
   };
 }
 

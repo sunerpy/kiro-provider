@@ -166,10 +166,24 @@ describe("createApp", () => {
 
 		expect(response.status).toBe(200);
 		expect(body).toMatchObject({ object: "list" });
+		if (
+			typeof body !== "object" ||
+			body === null ||
+			!("models" in body) ||
+			!Array.isArray(body.models) ||
+			body.models.length === 0
+		) {
+			throw new TypeError("Expected a non-empty Codex models catalog");
+		}
+		expect(body.models[0]).toMatchObject({
+			supports_reasoning_summary_parameter: false,
+			supports_search_tool: false,
+			web_search_tool_type: null,
+		});
 	});
 
 	test("dispatches the health route through the fetch handler", async () => {
-		const response = await app(new Request("http://x/health", { headers: authorization }));
+		const response = await app(new Request("http://x/health"));
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ status: "ok" });

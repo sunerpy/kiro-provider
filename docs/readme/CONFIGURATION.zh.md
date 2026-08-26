@@ -23,6 +23,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `port`                       | `number`，默认 `8787`                                                  | `KIRO_PROVIDER_PORT`                       | HTTP 监听端口。                                                                                                                                                                                    |
 | `api_keys`                   | `string[]`，**必填，去空格后不能为空**                                 | `KIRO_PROVIDER_API_KEYS`                   | 接受的 Bearer Key 列表。环境变量以逗号分隔。空列表或仅含空白会被拒绝，服务不会启动（默认拒绝启动）。                                                                                               |
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
+| `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
 | `auth_source`                | `"opencode-shared" \| "local"`，默认 `"opencode-shared"`              | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。共享模式实时使用 OpenCode 的 Kiro 数据库和兼容刷新锁；本地模式使用 provider 自有账号库，并允许 `kiro-provider login`。                                                               |
 | `opencode_auth_db_path`      | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | OpenCode Kiro 共享数据库的可选覆盖路径。`null` 使用 `$XDG_CONFIG_HOME/opencode/kiro.db` 或 `~/.config/opencode/kiro.db`；本地模式忽略此字段。                                                      |
 | `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。           |
@@ -37,6 +38,10 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `token_expiry_buffer_ms`     | `number`，默认 `300000`（5 分钟）                                      | `KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS`     | 在访问令牌实际过期前多久主动触发刷新。                                                                                                                                                             |
 | `session_affinity_ttl_ms`    | 整数，`1`-`2147483647`，默认 `86400000`（24 小时）                    | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS`    | 持久化逻辑会话绑定的滑动有效期；每次命中都会续期。过期后按正常账号策略重新建立绑定。                                                                                                               |
 | `session_affinity_max_entries` | 整数，`1`-`1000000`，默认 `10000`                                   | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` | 最多保留的会话绑定数；超限时优先清理最久未使用的记录。                                                                                                                                           |
+| `reasoning_replay_key_path` | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`  | reasoning 密钥文件覆盖路径。`null` 使用平台配置目录；未配置环境密钥环时会原子生成 `reasoning-replay-keys.json`，POSIX 权限强制为 `0600`。                                                          |
+| `reasoning_replay_keys`     | `string[]`，默认 `[]`                                                  | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`      | AES-256-GCM 密钥环。环境变量使用逗号分隔的 `key-id:base64url-32-byte-key`，key ID 可省略。首个密钥用于新记录加密，其余只解密旧记录。                                                               |
+| `reasoning_replay_ttl_ms`   | 整数，`1`-`2147483647`，默认 `86400000`（24 小时）                    | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`    | 加密 reasoning 回放记录的有效期；过期会明确报错，并在事务中清理。                                                                                                                                |
+| `reasoning_replay_max_entries` | 整数，`1`-`1000000`，默认 `10000`                                  | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` | 加密回放记录上限；清理过期记录后，在同一事务中按 LRU 淘汰。                                                                                                                                     |
 | `effort`                     | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| null`，默认 `null` | `KIRO_PROVIDER_EFFORT`                     | 可选的全局推理强度覆盖，应用于每个请求。`null` 表示不强制覆盖，除非请求自身指定。                                                                                                                  |
 | `auto_effort_mapping`        | `boolean`，默认 `true`                                                 | `KIRO_PROVIDER_AUTO_EFFORT_MAPPING`        | 启用后，网关会自动映射模型变体后缀与请求的 effort。环境变量值接受 `true`、`false`、`1`、`0`。                                                                                                      |
 | `log_level`                  | `string`，默认 `"info"`                                                | `KIRO_PROVIDER_LOG_LEVEL`                  | 传给日志组件的日志级别。                                                                                                                                                                           |
@@ -48,7 +53,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 
 - 打开 `opencode_auth_db_path` 指定的数据库，或 OpenCode 的平台默认 Kiro
   数据库。
-- 要求符合 v0.20.6 的账号/墓碑 schema；缺少必要列时默认拒绝启动，不会迁移
+- 要求符合 v0.20.7 的账号/墓碑 schema；缺少必要列时默认拒绝启动，不会迁移
   或改写上游 schema。
 - 每次进入账号选择流程时同步账号新增、重新登录、token 轮换、墓碑、健康与
   用量状态。
@@ -98,14 +103,29 @@ KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
 
 ## 协议暴露面
 
-- `POST /v1/responses` 始终启用，是 OpenAI/Codex 的首选接口。
+- `POST /v1/responses` 始终为 OpenAI Responses 客户端启用；具体 Codex 版本
+  只有在其标准请求落入文档列出的已验证子集时才算支持。
 - `POST /v1/messages` 与 `POST /v1/messages/count_tokens` 始终启用，供
-  Anthropic 客户端和 Claude Code 使用。
+  Anthropic Messages 客户端使用；具体 Claude Code 版本同样必须落入该子集。
 - `POST /v1/chat/completions` 默认返回
   `legacy_chat_completions_disabled`；只有显式设置
   `enable_legacy_chat_completions: true` 后才开放。
-- 需鉴权的 `GET /ready` 只有在认证事实源可读且至少存在一个活跃账号时才返回
-  HTTP 200。
+- 需鉴权的 `GET /ready` 只有在认证事实源可读、至少存在一个活跃账号、Provider
+  数据库可写、reasoning 密钥环可用，并且所有未过期回放记录引用的 key ID 都已
+  覆盖时才返回 HTTP 200。
+
+`protocol_projection_mode: "safe"` 是生产默认值。实时 Kiro 探针已经证明，
+被测试的空标签 `additionalContext` 会遭到拒绝；因此 safe 模式对 Responses
+`instructions`、OpenAI `system`/`developer` 与 Anthropic `system` 返回
+`unsupported_instruction_projection`，不会自动回退到 user 前缀。
+
+`legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本，并前置到首个 user
+回合。服务启动时输出不含正文的结构化警告；该模式不会恢复消息合并、重复
+内容折叠、尾部字符删除、合成工具说明或其他改写。迁移模式在 v0.5.x、
+v0.6.x 保留，计划在 v0.7.0 删除。
+
+完整接受/拒绝范围见
+[`PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
 
 Kiro 没有提供独立 tokenizer，因此 count-tokens 接口使用 provider
 现有的回退估算器；成功响应会携带
@@ -137,6 +157,33 @@ provider SQLite 共享逻辑账号/会话绑定，OpenCode 数据库和刷新锁
 `conversation` 会返回 `unsupported_stateful_responses`，不会被静默忽略；
 客户端需要重传完整 Responses 输入。
 
+## 加密 reasoning 回放
+
+Kiro 返回完整签名文本或 redacted reasoning envelope 时，Provider 可以为
+Responses `reasoning.encrypted_content` 返回随机 `kr1_...`。只有签名、无签名
+文本、冲突签名或 text/redacted 混合事件都不会生成回放令牌。数据库只保存
+令牌/指纹哈希和 AES-256-GCM 密文。
+
+AAD 将密文绑定到租户、模型、账号、Kiro conversation ID、输出指纹、过期
+时间和 key ID。回放必须全部匹配；回放期间禁止账号故障切换。绑定账号不可用
+时返回可重试的 `reasoning_replay_account_unavailable`。
+
+密钥配置优先级：
+
+1. 非空的 `KIRO_PROVIDER_REASONING_REPLAY_KEYS` / `reasoning_replay_keys`；
+2. `reasoning_replay_key_path`；
+3. 平台默认配置路径。
+
+环境密钥环示例（必须使用密码学安全随机源生成，不要复制占位值）：
+
+```bash
+export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026-07:<old-key>'
+```
+
+首项为活动加密密钥。旧密钥应保留到其加密记录全部过期；若任一未过期数据库
+记录引用了已缺失的 key，服务构造会失败，不会悄悄破坏活动会话。日志不会
+包含密钥、原始回放令牌、签名、reasoning 文本、redacted bytes 或请求提示词。
+
 ## 超时字段的取值范围
 
 `request_timeout_ms` 和 `stream_idle_timeout_ms` 均接受 `1` 到 `2147483647`（2³¹−1）之间的整数毫秒值。小数、`0`、负数、`NaN` 以及超过 `2147483647` 的值都会在配置校验阶段被拒绝。这个上限来自 JS/Bun `setTimeout` 的 32 位安全计时器范围，并不是产品层面随意设定的上限——超出这个范围的值会悄悄提前触发，而不是明确报错。
@@ -153,6 +200,7 @@ provider SQLite 共享逻辑账号/会话绑定，OpenCode 数据库和刷新锁
   "port": 8787,
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
+  "protocol_projection_mode": "safe",
   "auth_source": "opencode-shared",
   "opencode_auth_db_path": null,
   "proxy_url": null,
@@ -167,6 +215,10 @@ provider SQLite 共享逻辑账号/会话绑定，OpenCode 数据库和刷新锁
   "token_expiry_buffer_ms": 300000,
   "session_affinity_ttl_ms": 86400000,
   "session_affinity_max_entries": 10000,
+  "reasoning_replay_key_path": null,
+  "reasoning_replay_keys": [],
+  "reasoning_replay_ttl_ms": 86400000,
+  "reasoning_replay_max_entries": 10000,
   "effort": null,
   "auto_effort_mapping": true,
   "log_level": "info"

@@ -33,12 +33,34 @@ type ResponsesSseAdapterWithSignals = (
     readonly signals: IngressSignals;
     readonly finalize: () => void;
     readonly bridge?: ResponsesToolBridge;
+    readonly configuration: typeof DEFAULT_RESPONSE_CONFIGURATION;
   },
 ) => Response;
 
 const responsesSseAdapterWithSignals = responsesSseAdapter as ResponsesSseAdapterWithSignals;
 
 const encoder = new TextEncoder();
+const DEFAULT_RESPONSE_CONFIGURATION = {
+  instructions: null,
+  maxOutputTokens: null,
+  reasoningEffort: null,
+  toolChoice: "auto",
+  tools: [],
+} as const;
+const RICH_RESPONSE_CONFIGURATION = {
+  instructions: "exact instructions",
+  maxOutputTokens: 4_096,
+  reasoningEffort: "high",
+  toolChoice: "none",
+  tools: [
+    {
+      type: "function",
+      name: "read",
+      parameters: { type: "object" },
+      strict: false,
+    },
+  ],
+} as const;
 
 function deferred(): {
   readonly promise: Promise<void>;
@@ -363,6 +385,7 @@ function adaptControlled(
     model: "gpt-5.6-sol",
     signals,
     finalize: harness.finalize,
+    configuration: DEFAULT_RESPONSE_CONFIGURATION,
   });
 }
 
@@ -403,18 +426,39 @@ function bridgeFor(tools: readonly Record<string, unknown>[]): ResponsesToolBrid
   return adapted.bridge;
 }
 
-async function adapt(
+async function adaptFull(
   harness: ReturnType<typeof makeHarness>,
   bridge?: ResponsesToolBridge,
+  configuration: typeof DEFAULT_RESPONSE_CONFIGURATION | typeof RICH_RESPONSE_CONFIGURATION =
+    DEFAULT_RESPONSE_CONFIGURATION,
 ): Promise<ParsedEvent[]> {
   const response = responsesSseAdapter(harness.response, {
     model: "gpt-5.6-sol",
     signals: activeIngressSignals(),
     finalize: harness.finalize,
+    configuration,
     ...(bridge ? { bridge } : {}),
   });
   expect(response.headers.get("Content-Type")).toStartWith("text/event-stream");
   return parseEvents(await response.text());
+}
+
+const EXTENDED_LIFECYCLE_TYPES = new Set([
+  "response.in_progress",
+  "response.content_part.added",
+  "response.output_text.done",
+  "response.content_part.done",
+  "response.function_call_arguments.done",
+  "response.custom_tool_call_input.done",
+]);
+
+async function adapt(
+  harness: ReturnType<typeof makeHarness>,
+  bridge?: ResponsesToolBridge,
+): Promise<ParsedEvent[]> {
+  return (await adaptFull(harness, bridge))
+    .filter((event) => !EXTENDED_LIFECYCLE_TYPES.has(event.type))
+    .map((event, sequenceNumber) => ({ ...event, sequenceNumber }));
 }
 
 function terminalTypes(events: readonly ParsedEvent[]): string[] {
@@ -438,6 +482,49 @@ function expectSingleFailureWithoutLateOutput(events: readonly ParsedEvent[]): v
 }
 
 describe("responsesSseAdapter", () => {
+  test("emits the complete standard text lifecycle with stable response identity", async () => {
+    const input = `${chunk({ content: "Hello" })}\n${chunk({}, "stop")}\n`;
+    const events = await adaptFull(
+      makeHarness([encoder.encode(input)], "stall"),
+      undefined,
+      RICH_RESPONSE_CONFIGURATION,
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.in_progress",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    expect(events.map((event) => event.sequenceNumber)).toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    const states = events
+      .filter((event) =>
+        ["response.created", "response.in_progress", "response.completed"].includes(
+          event.type,
+        ),
+      )
+      .map((event) => event.body.response)
+      .filter(isRecord);
+    expect(new Set(states.map((state) => state.id))).toHaveLength(1);
+    expect(new Set(states.map((state) => state.created_at))).toHaveLength(1);
+    for (const state of states) {
+      expect(state).toMatchObject({
+        instructions: "exact instructions",
+        max_output_tokens: 4_096,
+        reasoning: { effort: "high", summary: null },
+        tool_choice: "none",
+        tools: RICH_RESPONSE_CONFIGURATION.tools,
+      });
+    }
+  });
+
   test("emits a complete text response with added before delta and terminal usage", async () => {
     const input = `${chunk({ content: "Hel" })}\n${chunk({ content: "lo" })}\n${chunk({}, "stop")}\n`;
     const harness = makeHarness([encoder.encode(input)], "stall");
@@ -579,14 +666,10 @@ describe("responsesSseAdapter", () => {
     });
   });
 
-  test("restores custom and namespaced tool calls before emitting done items", async () => {
+  test("restores custom and ordinary function calls before emitting done items", async () => {
     const bridge = bridgeFor([
       { type: "custom", name: "exec" },
-      {
-        type: "namespace",
-        name: "collaboration",
-        tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object" } }],
-      },
+      { type: "function", name: "spawn_agent", parameters: { type: "object" } },
     ]);
     const lines = [
       chunk({
@@ -601,7 +684,7 @@ describe("responsesSseAdapter", () => {
             index: 1,
             id: "call_spawn",
             type: "function",
-            function: { name: "kiro_ns_0", arguments: '{"task_name":"review"}' },
+            function: { name: "spawn_agent", arguments: '{"task_name":"review"}' },
           },
         ],
       }),
@@ -626,7 +709,6 @@ describe("responsesSseAdapter", () => {
         id: expect.any(String),
         type: "function_call",
         call_id: "call_spawn",
-        namespace: "collaboration",
         name: "spawn_agent",
         arguments: '{"task_name":"review"}',
         status: "completed",
@@ -759,6 +841,7 @@ describe("responsesSseAdapter", () => {
       model: "gpt-5.6-sol",
       signals: activeIngressSignals(),
       finalize: harness.finalize,
+      configuration: DEFAULT_RESPONSE_CONFIGURATION,
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("adapter response has no body");
@@ -989,6 +1072,7 @@ describe("responsesSseAdapter", () => {
       model: "gpt-5.6-sol",
       signals: activeIngressSignals(),
       finalize: harness.finalize,
+      configuration: DEFAULT_RESPONSE_CONFIGURATION,
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("adapter response has no body");
@@ -1073,6 +1157,8 @@ describe("responsesSseAdapter", () => {
       try {
         const first = await within(reader.read(), "created event");
         const events = first.done ? [] : parseEvents(new TextDecoder().decode(first.value));
+        const second = await within(reader.read(), "in-progress event");
+        if (!second.done) events.push(...parseEvents(new TextDecoder().decode(second.value)));
         await within(harness.readStarted, "upstream read start");
         const cancelResult = await within(
           reader.cancel("consumer stopped").then(
@@ -1177,6 +1263,11 @@ describe("responsesSseAdapter", () => {
       try {
         const first = await within(reader.read(), "created event before consumer cancellation");
         const events = first.done ? [] : parseEvents(new TextDecoder().decode(first.value));
+        const second = await within(
+          reader.read(),
+          "in-progress event before consumer cancellation",
+        );
+        if (!second.done) events.push(...parseEvents(new TextDecoder().decode(second.value)));
         await within(harness.readStarted, "consumer cancellation read start");
         await within(reader.cancel("consumer stopped"), "consumer cancellation");
 
@@ -1307,6 +1398,11 @@ describe("responsesSseAdapter", () => {
       try {
         const first = await within(reader.read(), "created event before deadline cancellation");
         const events = first.done ? [] : parseEvents(new TextDecoder().decode(first.value));
+        const second = await within(
+          reader.read(),
+          "in-progress event before deadline cancellation",
+        );
+        if (!second.done) events.push(...parseEvents(new TextDecoder().decode(second.value)));
         await within(harness.readStarted, "deadline cancellation read start");
         deadline.abort(new DOMException("deadline", "TimeoutError"));
         const deadlineFrame = await within(

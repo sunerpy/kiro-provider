@@ -15,9 +15,10 @@ import type {
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
+import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
 const databases: AccountsDatabase[] = [];
-const BODY = { messages: [{ role: "user", content: "hello" }] };
+const BODY = canonicalRequest([message("user", "hello")], { model: "auto" });
 
 function account(id: string): ManagedAccount {
 	return {
@@ -147,13 +148,14 @@ describe("standard-driven scheduler", () => {
 		const first = await runChatCompletion(options);
 		const second = await runChatCompletion({
 			...options,
-			body: {
-				messages: [
-					{ role: "user", content: "hello" },
-					{ role: "assistant", content: "ok" },
-					{ role: "user", content: "follow-up" },
+			body: canonicalRequest(
+				[
+					message("user", "hello", "messages.0"),
+					message("assistant", "ok", "messages.1"),
+					message("user", "follow-up", "messages.2"),
 				],
-			},
+				{ model: "auto" },
+			),
 		});
 
 		expect([first.status, second.status]).toEqual([200, 200]);

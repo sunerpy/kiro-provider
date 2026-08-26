@@ -1,329 +1,282 @@
-import { randomUUID } from 'node:crypto'
-import { KIRO_CONSTANTS } from '../constants.js'
-import { resolveModelVariant } from '../models.js'
-import type { CodeWhispererMessage, CodeWhispererRequest, Effort, KiroAuthDetails } from '../types.js'
-import { RequestTransformError } from './errors.js'
+import { randomUUID } from "node:crypto";
+import {
+  type CanonicalContentPart,
+  type CanonicalMessage,
+  type CanonicalRequest,
+  type CanonicalToolDeclaration,
+  isCanonicalRequest,
+  type ResolvedReasoningReplay,
+} from "../../protocol/canonical.js";
+import { KIRO_CONSTANTS } from "../constants.js";
+import { resolveModelVariant } from "../models.js";
+import type {
+  CodeWhispererMessage,
+  CodeWhispererRequest,
+  Effort,
+  KiroAuthDetails,
+} from "../types.js";
+import { RequestTransformError } from "./errors.js";
 import {
   buildHistory,
+  currentUserInput,
   extractToolNamesFromHistory,
   historyHasToolCalling,
-  injectSystemPrompt
-} from './history-builder.js'
-import { convertImagesToKiroFormat, extractAllImages, extractTextFromParts } from './image-handler.js'
-import {
-  findOriginalToolCall,
-  getContentText,
-  mergeAdjacentMessages,
-  type SourceMessage
-} from './message-transformer.js'
-import {
-  convertToolsToCodeWhisperer,
-  deduplicateToolResults,
-  type ToolInput,
-  type ToolResult
-} from './tool-transformer.js'
+} from "./history-builder.js";
 
 export interface RequestTransformResult {
-  readonly request: CodeWhispererRequest
-  readonly resolved: string
-  readonly convId: string
-  readonly variantEffort?: Effort
+  readonly request: CodeWhispererRequest;
+  readonly resolved: string;
+  readonly convId: string;
+  readonly variantEffort?: Effort;
 }
 
 export interface RequestTransformIdentity {
-  readonly conversationId?: string
+  readonly conversationId?: string;
+  readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
 }
 
-type ToolUse = NonNullable<
-  NonNullable<CodeWhispererMessage['assistantResponseMessage']>['toolUses']
->[number]
-type KiroImages = NonNullable<NonNullable<CodeWhispererMessage['userInputMessage']>['images']>
-
-interface RequestBody {
-  readonly messages: SourceMessage[]
-  readonly tools: ToolInput[]
-  readonly system: string
+function sourceTextPart(text: string, path: string): CanonicalContentPart {
+  return { type: "text", text, path };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function isSourceMessage(value: unknown): value is SourceMessage {
-  return isRecord(value)
-}
-
-function isToolInput(value: unknown): value is ToolInput {
-  return isRecord(value)
-}
-
-function parseBody(body: unknown): RequestBody {
-  const parsed: unknown = typeof body === 'string' ? JSON.parse(body) : body
-  if (!isRecord(parsed)) return { messages: [], tools: [], system: '' }
+function cloneMessage(message: CanonicalMessage): CanonicalMessage {
   return {
-    messages: Array.isArray(parsed.messages) ? parsed.messages.filter(isSourceMessage) : [],
-    tools: Array.isArray(parsed.tools) ? parsed.tools.filter(isToolInput) : [],
-    system: typeof parsed.system === 'string' ? parsed.system : ''
-  }
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "tool_result"
+        ? { ...part, content: part.content.map((content) => ({ ...content })) }
+        : { ...part },
+    ),
+    toolCalls: message.toolCalls.map((call) => ({ ...call })),
+  };
 }
 
-function jsonSchemaTypeOf(value: unknown): string {
-  if (Array.isArray(value)) return 'array'
-  if (value === null) return 'string'
-  const valueType = typeof value
-  return valueType === 'number' || valueType === 'boolean' || valueType === 'string' || valueType === 'object'
-    ? valueType
-    : 'string'
-}
-
-function inferToolSpecFromHistory(
-  name: string,
-  toolUses: readonly ToolUse[]
-): NonNullable<CodeWhispererMessage['userInputMessage']>['userInputMessageContext'] extends infer Context
-  ? Context extends { tools?: infer Tools }
-    ? Tools extends Array<infer Tool>
-      ? Tool
-      : never
-    : never
-  : never {
-  const sample = toolUses.find((toolUse) => toolUse.name === name && isRecord(toolUse.input))
-  const properties: Record<string, unknown> = {}
-  if (sample && isRecord(sample.input)) {
-    for (const [key, value] of Object.entries(sample.input)) {
-      properties[key] = { type: jsonSchemaTypeOf(value) }
-    }
-  }
-  const json: Record<string, unknown> =
-    Object.keys(properties).length > 0 ? { type: 'object', properties } : { type: 'object' }
-  return { toolSpecification: { name, description: '', inputSchema: { json } } }
-}
-
-function appendCurrentAssistant(history: CodeWhispererMessage[], message: SourceMessage): void {
-  const assistant: NonNullable<CodeWhispererMessage['assistantResponseMessage']> = { content: '' }
-  const toolUses: NonNullable<typeof assistant.toolUses> = []
-  if (Array.isArray(message.content)) {
-    for (const part of message.content) {
-      if (!isRecord(part)) continue
-      if (part.type === 'text' && typeof part.text === 'string') assistant.content += part.text
-      else if (part.type === 'tool_use' && typeof part.id === 'string' && typeof part.name === 'string') {
-        toolUses.push({ input: part.input, name: part.name, toolUseId: part.id })
-      }
-    }
-  } else {
-    assistant.content = getContentText(message)
-  }
-  for (const toolCall of message.tool_calls ?? []) {
-    if (typeof toolCall.id !== 'string' || typeof toolCall.function?.name !== 'string') continue
-    const args = toolCall.function.arguments
-    try {
-      toolUses.push({
-        input: typeof args === 'string' ? JSON.parse(args) : args,
-        name: toolCall.function.name,
-        toolUseId: toolCall.id
-      })
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new RequestTransformError(
-          `Tool call ${toolCall.id} contains invalid JSON arguments`,
-          'invalid_tool_history'
-        )
-      }
-      throw error
-    }
-  }
-  if (toolUses.length > 0) assistant.toolUses = toolUses
-  if (assistant.content || assistant.toolUses) history.push({ assistantResponseMessage: assistant })
-}
-
-function collectCurrentUserContent(message: SourceMessage): {
-  content: string
-  toolResults: ToolResult[]
-  images: KiroImages
-} {
-  let content = ''
-  const toolResults: ToolResult[] = []
-  const images: KiroImages = []
-  if (message.role === 'tool') {
-    const results = message.tool_results ?? [{ content: message.content, tool_call_id: message.tool_call_id }]
-    for (const result of results) {
-      if (typeof result.tool_call_id !== 'string') continue
-      toolResults.push({
-        content: [{ text: getContentText(result) }],
-        status: result.is_error === true ? 'error' : 'success',
-        toolUseId: result.tool_call_id
-      })
-    }
-  } else if (Array.isArray(message.content)) {
-    content = extractTextFromParts(message.content)
-    for (const part of message.content) {
-      if (!isRecord(part) || part.type !== 'tool_result' || typeof part.tool_use_id !== 'string') continue
-      toolResults.push({
-        content: [{ text: getContentText(part.content ?? part) }],
-        status: part.is_error === true ? 'error' : 'success',
-        toolUseId: part.tool_use_id
-      })
-    }
-    const converted = convertImagesToKiroFormat(extractAllImages(message.content))
-    images.push(...converted.images)
-    if (converted.omitted > 0) {
-      throw new RequestTransformError(
-        'A Kiro request supports at most 4 images and 3.75 MB of base64 image data per user turn',
-        'too_many_images'
-      )
-    }
-  } else {
-    content = getContentText(message)
-  }
-  return { content, toolResults, images }
-}
-
-function originalToolUse(messages: SourceMessage[], result: ToolResult): ToolUse | undefined {
-  const original = findOriginalToolCall(messages, result.toolUseId)
-  if (!isRecord(original)) return undefined
-  const fn = isRecord(original.function) ? original.function : undefined
-  const name = typeof original.name === 'string' ? original.name : typeof fn?.name === 'string' ? fn.name : undefined
-  if (!name) {
+function validateContentBlockProjection(messages: readonly CanonicalMessage[]): void {
+  for (const message of messages) {
+    if (message.role === "system" || message.role === "developer") continue;
+    const textParts = message.content.filter((part) => part.type === "text");
+    if (textParts.length <= 1) continue;
+    const firstUnprojectable = textParts[1];
     throw new RequestTransformError(
-      `Tool result ${result.toolUseId} references a call without a valid name`,
-      'invalid_tool_history'
-    )
+      `Message ${message.path} contains multiple text content blocks, but Kiro exposes only one text field and cannot preserve their boundaries`,
+      "unsupported_content_block_projection",
+      firstUnprojectable?.path ?? message.path,
+    );
   }
-  const rawInput = original.input ?? fn?.arguments
-  let input: unknown = rawInput ?? {}
-  if (typeof rawInput === 'string') {
-    try {
-      input = JSON.parse(rawInput)
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new RequestTransformError(
-          `Tool call ${result.toolUseId} contains invalid JSON arguments`,
-          'invalid_tool_history'
-        )
-      }
-      throw error
+}
+
+function projectMessages(request: CanonicalRequest): {
+  readonly messages: CanonicalMessage[];
+  readonly projectedIndexByOriginal: ReadonlyMap<number, number>;
+} {
+  const instructions = request.messages.filter(
+    (message) => message.role === "system" || message.role === "developer",
+  );
+  if (instructions.length > 0 && request.projectionMode === "safe") {
+    throw new RequestTransformError(
+      "Kiro rejected the tested structured instruction channel; safe mode cannot project system/developer/instructions",
+      "unsupported_instruction_projection",
+    );
+  }
+  for (const instruction of instructions) {
+    if (instruction.content.some((part) => part.type !== "text") || instruction.toolCalls.length > 0) {
+      throw new RequestTransformError(
+        `Instruction ${instruction.path} contains non-text content that legacy projection cannot represent`,
+        "unsupported_instruction_projection",
+      );
     }
   }
-  return {
-    name,
-    toolUseId: result.toolUseId,
-    input
+
+  const messages: CanonicalMessage[] = [];
+  const projectedIndexByOriginal = new Map<number, number>();
+  for (const [index, message] of request.messages.entries()) {
+    if (message.role === "system" || message.role === "developer") continue;
+    projectedIndexByOriginal.set(index, messages.length);
+    messages.push(cloneMessage(message));
   }
+  if (instructions.length === 0) return { messages, projectedIndexByOriginal };
+
+  const prefix = instructions
+    .flatMap((message) =>
+      message.content.map((part) => (part.type === "text" ? part.text : "")),
+    )
+    .join("\n\n");
+  const firstUserIndex = messages.findIndex((message) => message.role === "user");
+  if (firstUserIndex < 0) {
+    messages.unshift({
+      role: "user",
+      content: [sourceTextPart(prefix, "legacy-user-prefix")],
+      toolCalls: [],
+      path: "legacy-user-prefix",
+    });
+    for (const [key, value] of projectedIndexByOriginal) {
+      projectedIndexByOriginal.set(key, value + 1);
+    }
+    return { messages, projectedIndexByOriginal };
+  }
+  const firstUser = messages[firstUserIndex];
+  if (!firstUser) return { messages, projectedIndexByOriginal };
+  messages[firstUserIndex] = {
+    ...firstUser,
+    content: [
+      sourceTextPart(`${prefix}\n\n`, "legacy-user-prefix"),
+      ...firstUser.content,
+    ],
+  };
+  return { messages, projectedIndexByOriginal };
+}
+
+function validateToolHistory(
+  messages: readonly CanonicalMessage[],
+  tools: readonly CanonicalToolDeclaration[],
+): void {
+  const declarations = new Set(tools.map((tool) => tool.wireName));
+  const calls = new Map<string, { readonly name: string; readonly index: number }>();
+  const results = new Set<string>();
+  for (const [index, message] of messages.entries()) {
+    const messageCalls = [
+      ...message.toolCalls,
+      ...message.content.flatMap((part) =>
+        part.type === "tool_use"
+          ? [{ id: part.id, name: part.name, input: part.input, path: part.path }]
+          : [],
+      ),
+    ];
+    for (const call of messageCalls) {
+      if (!declarations.has(call.name)) {
+        throw new RequestTransformError(
+          `Tool call ${call.id} references ${call.name} without an exact declaration`,
+          "missing_tool_declaration",
+        );
+      }
+      if (calls.has(call.id)) {
+        throw new RequestTransformError(
+          `Duplicate tool call id ${call.id}`,
+          "invalid_tool_history",
+        );
+      }
+      calls.set(call.id, { name: call.name, index });
+    }
+    for (const part of message.content) {
+      if (part.type !== "tool_result") continue;
+      const call = calls.get(part.toolCallId);
+      if (!call || call.index >= index || results.has(part.toolCallId)) {
+        throw new RequestTransformError(
+          `Tool result ${part.toolCallId} has no earlier unique matching call`,
+          "invalid_tool_history",
+        );
+      }
+      results.add(part.toolCallId);
+    }
+  }
+}
+
+function toolsForKiro(
+  tools: readonly CanonicalToolDeclaration[],
+): NonNullable<
+  NonNullable<
+    NonNullable<CodeWhispererMessage["userInputMessage"]>["userInputMessageContext"]
+  >["tools"]
+> {
+  return tools.map((tool) => ({
+    toolSpecification: {
+      name: tool.wireName,
+      description: tool.description ?? "",
+      inputSchema: { json: { ...tool.inputSchema } },
+    },
+  }));
 }
 
 export function buildCodeWhispererRequest(
-  body: unknown,
+  body: CanonicalRequest,
   model: string,
   auth: KiroAuthDetails,
   _think = false,
   _budget = 20_000,
-  identity: RequestTransformIdentity = {}
+  identity: RequestTransformIdentity = {},
 ): RequestTransformResult {
-  const requestBody = parseBody(body)
-  if (requestBody.messages.length === 0) throw new Error('No messages')
-  const { wireId: resolved, effort: variantEffort } = resolveModelVariant(model)
-  const systemMessages = requestBody.messages.filter((message) => message.role === 'system')
-  const messages = mergeAdjacentMessages(requestBody.messages.filter((message) => message.role !== 'system'))
-  let system = requestBody.system
-  const extractedSystem = systemMessages.map(getContentText).join('\n\n')
-  if (extractedSystem) system = system ? `${system}\n\n${extractedSystem}` : extractedSystem
-  const trailing = messages.at(-1)
-  if (trailing?.role === 'assistant' && getContentText(trailing) === '{') messages.pop()
-  const currentMessage = messages.at(-1)
-  if (!currentMessage) throw new Error('Empty')
-
-  let history = buildHistory(messages, resolved)
-  const isRealUserMessage =
-    currentMessage.role === 'user' &&
-    !(Array.isArray(currentMessage.content) && currentMessage.content.some((part) => isRecord(part) && part.type === 'tool_result'))
-  const previousMessage = messages.at(-2)
-  if (isRealUserMessage && previousMessage?.role === 'assistant' && history.at(-1)?.userInputMessage) {
-    const previousText = getContentText(previousMessage)
-    if (previousText) history.push({ assistantResponseMessage: { content: previousText } })
+  if (!isCanonicalRequest(body)) {
+    throw new RequestTransformError(
+      "CanonicalRequest is required before Kiro projection",
+      "canonical_request_required",
+    );
   }
-  history = injectSystemPrompt(history, system, resolved)
+  const canonical = body;
+  if (canonical.model !== model) {
+    throw new RequestTransformError(
+      `CanonicalRequest model ${canonical.model} does not match pipeline model ${model}`,
+      "canonical_model_mismatch",
+    );
+  }
+  if (canonical.messages.length === 0) {
+    throw new RequestTransformError("No messages", "empty_input");
+  }
+  validateContentBlockProjection(canonical.messages);
+  const { wireId: resolved, effort: variantEffort } = resolveModelVariant(model);
+  const projection = projectMessages(canonical);
+  if (projection.messages.length === 0) {
+    throw new RequestTransformError("No executable messages", "empty_input");
+  }
+  validateToolHistory(projection.messages, canonical.tools);
 
-  let content = ''
-  let toolResults: ToolResult[] = []
-  let images: KiroImages = []
-  if (currentMessage.role === 'assistant') {
-    appendCurrentAssistant(history, currentMessage)
-  } else {
-    if (history.at(-1) && !history.at(-1)?.assistantResponseMessage) {
-      history.push({ assistantResponseMessage: { content: '' } })
+  const projectedReplays = (identity.resolvedReasoningReplays ?? []).map((replay) => {
+    const insertBeforeMessage = projection.projectedIndexByOriginal.get(
+      replay.insertBeforeMessage,
+    );
+    if (insertBeforeMessage === undefined) {
+      throw new RequestTransformError(
+        "Reasoning replay does not reference an assistant output message",
+        "invalid_reasoning_replay",
+      );
     }
-    const current = collectCurrentUserContent(currentMessage)
-    content = current.content
-    toolResults = current.toolResults
-    images = current.images
-  }
+    return { ...replay, insertBeforeMessage };
+  });
 
-  const historicalToolUses = history.flatMap((entry) => entry.assistantResponseMessage?.toolUses ?? [])
-  const historicalIds = new Set(historicalToolUses.map((toolUse) => toolUse.toolUseId))
-  const matchedResults: ToolResult[] = []
-  const orphaned: Array<{ call: ToolUse; result: ToolResult }> = []
-  for (const result of toolResults) {
-    if (historicalIds.has(result.toolUseId)) matchedResults.push(result)
-    else {
-      const call = originalToolUse(requestBody.messages, result)
-      if (call) orphaned.push({ call, result })
-      else {
-        throw new RequestTransformError(
-          `Tool result ${result.toolUseId} has no matching tool call`,
-          'invalid_tool_history'
-        )
+  const current = projection.messages.at(-1);
+  if (!current) throw new RequestTransformError("No executable messages", "empty_input");
+  const currentIsAssistant = current.role === "assistant";
+  const historyMessages = currentIsAssistant
+    ? projection.messages
+    : projection.messages.slice(0, -1);
+  const historyReplays = projectedReplays.filter(
+    (replay) => replay.insertBeforeMessage < historyMessages.length,
+  );
+  const history = buildHistory(historyMessages, resolved, historyReplays);
+
+  const currentInput = currentIsAssistant
+    ? {
+        content: "",
+        modelId: resolved,
+        origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
       }
-    }
+    : currentUserInput(current, resolved);
+  const suppliedTools = canonical.toolChoice === "auto" ? toolsForKiro(canonical.tools) : [];
+  if (suppliedTools.length > 0) {
+    currentInput.userInputMessageContext ??= {};
+    currentInput.userInputMessageContext.tools = suppliedTools;
   }
-  if (orphaned.length > 0) {
-    if (!history.at(-1) || history.at(-1)?.assistantResponseMessage) {
-      history.push({ userInputMessage: { content: '', modelId: resolved, origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR } })
-    }
-    history.push({
-      assistantResponseMessage: { content: '', toolUses: orphaned.map(({ call }) => call) }
-    })
-    matchedResults.push(...orphaned.map(({ result }) => result))
-  }
-
-  const currentInput: NonNullable<CodeWhispererMessage['userInputMessage']> = {
-    content,
-    modelId: resolved,
-    origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR
-  }
-  if (images.length > 0) currentInput.images = images
-  const suppliedTools = convertToolsToCodeWhisperer(requestBody.tools)
-    .filter((tool) => typeof tool.toolSpecification.name === 'string')
-    .map((tool) => ({
-      toolSpecification: { ...tool.toolSpecification, name: tool.toolSpecification.name ?? '' }
-    }))
-  if (matchedResults.length > 0 || suppliedTools.length > 0) {
-    currentInput.userInputMessageContext = {}
-    if (matchedResults.length > 0) currentInput.userInputMessageContext.toolResults = deduplicateToolResults(matchedResults)
-    if (suppliedTools.length > 0) currentInput.userInputMessageContext.tools = suppliedTools
-  }
-  if (historyHasToolCalling(history)) {
-    const existingTools = currentInput.userInputMessageContext?.tools ?? []
-    const existingNames = new Set(existingTools.map((tool) => tool.toolSpecification.name))
-    const missingNames = [...extractToolNamesFromHistory(history)].filter((name) => !existingNames.has(name))
-    if (missingNames.length > 0) {
-      currentInput.userInputMessageContext ??= {}
-      currentInput.userInputMessageContext.tools = [
-        ...existingTools,
-        ...missingNames.map((name) => inferToolSpecFromHistory(name, historicalToolUses))
-      ]
+  if (historyHasToolCalling(history) && canonical.toolChoice === "auto") {
+    const names = new Set(suppliedTools.map((tool) => tool.toolSpecification.name));
+    const missing = [...extractToolNamesFromHistory(history)].filter((name) => !names.has(name));
+    if (missing.length > 0) {
+      throw new RequestTransformError(
+        `Tool history is missing exact declarations for: ${missing.join(", ")}`,
+        "missing_tool_declaration",
+      );
     }
   }
 
-  const convId = identity.conversationId ?? randomUUID()
+  const convId = identity.conversationId ?? randomUUID();
   const request: CodeWhispererRequest = {
     conversationState: {
       chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL,
       conversationId: convId,
       currentMessage: { userInputMessage: currentInput },
-      ...(history.length > 0 ? { history } : {})
+      ...(history.length > 0 ? { history } : {}),
     },
-    ...(auth.profileArn ? { profileArn: auth.profileArn } : {})
-  }
+    ...(auth.profileArn ? { profileArn: auth.profileArn } : {}),
+  };
   return variantEffort === undefined
     ? { request, resolved, convId }
-    : { request, resolved, convId, variantEffort }
+    : { request, resolved, convId, variantEffort };
 }

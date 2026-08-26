@@ -1,764 +1,585 @@
 import { describe, expect, test } from "bun:test";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
-import type { KiroAuthDetails } from "../src/kiro/types.js";
-import {
-  type ChatCompletionRequest,
-  parseChatCompletionRequest,
-  parseResponsesRequest,
-  type ResponsesRequest,
-} from "../src/server/request-schema.js";
+import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
 import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import {
+	parsedResponses,
+	TEST_AUTH,
+	TEST_MODEL,
+} from "./canonical-test-helpers.js";
 
-const MODEL = "gpt-5.6-sol";
-const AUTH: KiroAuthDetails = {
-  refresh: "refresh-token",
-  access: "access-token",
-  expires: Date.now() + 60_000,
-  authMethod: "desktop",
-  region: "us-east-1",
-};
-const EFFORT_CASES: Array<
-  [
-    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max",
-    ChatCompletionRequest["reasoning_effort"],
-  ]
-> = [
-  ["none", undefined],
-  ["minimal", "low"],
-  ["low", "low"],
-  ["medium", "medium"],
-  ["high", "high"],
-  ["xhigh", "xhigh"],
-  ["max", "max"],
-];
-
-function parsedResponses(raw: unknown): ResponsesRequest {
-  const parsed = parseResponsesRequest(raw);
-  if (!parsed.ok) throw new TypeError("Expected a valid Responses request");
-  return parsed.value;
+function adapt(
+	raw: unknown,
+	mode: "safe" | "legacy-user-prefix" = "safe",
+) {
+	return responsesToInternalChat(parsedResponses(raw), mode);
 }
 
-function adaptedBody(raw: unknown): ChatCompletionRequest {
-  const adapted = responsesToInternalChat(parsedResponses(raw));
-  if (!adapted.ok) throw new TypeError(`Expected an adapted body, received ${adapted.code}`);
-
-  const internal = parseChatCompletionRequest(adapted.body);
-  expect(internal.ok).toBe(true);
-  if (!internal.ok) throw new TypeError("Adapted body did not pass internal chat validation");
-  return internal.value;
+function expectFailure(
+	raw: unknown,
+	code: string,
+	param?: string,
+): void {
+	const result = adapt(raw);
+	expect(result.ok).toBe(false);
+	if (result.ok) return;
+	expect(result.code).toBe(code);
+	if (param !== undefined) expect(result.param).toBe(param);
 }
 
-async function expectInvalid(raw: unknown): Promise<void> {
-  const parsed = parseResponsesRequest(raw);
-  expect(parsed.ok).toBe(false);
-  if (parsed.ok) throw new TypeError("Expected an invalid Responses request");
-  expect(parsed.response.status).toBe(400);
-  expect(await parsed.response.json()).toMatchObject({
-    error: {
-      type: "invalid_request_error",
-      code: "invalid_request",
-    },
-  });
-}
+describe("Responses canonical adaptation", () => {
+	test("preserves role, message boundary, content block, order, source path, and bytes", () => {
+		const result = adapt({
+			model: TEST_MODEL,
+			input: [
+				{ role: "user", content: "first\r\n{" },
+				{
+					type: "message",
+					role: "user",
+					content: [
+						{ type: "input_text", text: "second-a" },
+						{ type: "input_text", text: "second-b" },
+					],
+				},
+				{ role: "assistant", content: "same" },
+				{ role: "assistant", content: "same" },
+			],
+			stream: true,
+			store: false,
+			tool_choice: "auto",
+			prompt_cache_key: "session-1",
+		});
 
-describe("Responses request parsing and adaptation", () => {
-  test("maps string input, instructions, tools, tool choice, model, and stream", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      instructions: "Follow the repository rules.",
-      input: "Inspect the project.",
-      stream: true,
-      tools: [
-        {
-          type: "function",
-          name: "read_file",
-          description: "Read one file",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-          },
-          strict: true,
-        },
-      ],
-      tool_choice: "auto",
-    });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.body.messages).toEqual([
+			{
+				role: "user",
+				content: [{ type: "text", text: "first\r\n{", path: "input.0.content" }],
+				toolCalls: [],
+				path: "input.0",
+			},
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "second-a", path: "input.1.content.0.text" },
+					{ type: "text", text: "second-b", path: "input.1.content.1.text" },
+				],
+				toolCalls: [],
+				path: "input.1",
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "same", path: "input.2.content" }],
+				toolCalls: [],
+				path: "input.2",
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "same", path: "input.3.content" }],
+				toolCalls: [],
+				path: "input.3",
+			},
+		]);
+		expect(result.body.stream).toBe(true);
+		expect(result.body.promptCacheKey).toBe("session-1");
+	});
 
-    expect(body).toEqual({
-      model: MODEL,
-      stream: true,
-      messages: [
-        { role: "system", content: "Follow the repository rules." },
-        { role: "user", content: "Inspect the project." },
-      ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "read_file",
-            description: "Read one file",
-            parameters: {
-              type: "object",
-              properties: { path: { type: "string" } },
-              required: ["path"],
-            },
-          },
-        },
-      ],
-      tool_choice: "auto",
-    });
-  });
+	test("maps string input directly without a Responses-to-Chat conversion", () => {
+		const result = adapt({ model: TEST_MODEL, input: "exact input {" });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.body.protocol).toBe("responses");
+		expect(result.body.messages[0]?.content[0]).toEqual({
+			type: "text",
+			text: "exact input {",
+			path: "input",
+		});
+	});
 
-  test("accepts Codex server-side tools while exposing only executable tools to Kiro", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: "Inspect the project.",
-      tools: [
-        {
-          type: "function",
-          name: "exec_command",
-          description: "Run a command",
-          parameters: { type: "object" },
-        },
-        {
-          type: "web_search",
-          external_web_access: true,
-        },
-      ],
-    });
+	test("maps supported reasoning effort explicitly", () => {
+		for (const [input, expected] of [
+			["minimal", "low"],
+			["low", "low"],
+			["medium", "medium"],
+			["high", "high"],
+			["xhigh", "xhigh"],
+			["max", "max"],
+		] as const) {
+			const result = adapt({
+				model: TEST_MODEL,
+				input: "q",
+				reasoning: { effort: input },
+			});
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.body.reasoningEffort).toBe(expected);
+				expect(result.body.requestedReasoningEffort).toBe(input);
+			}
+		}
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", reasoning: { summary: "auto" } },
+			"unsupported_reasoning_summary",
+			"reasoning.summary",
+		);
+	});
+});
 
-    expect(body.tools).toEqual([
-      {
-        type: "function",
-        function: {
-          name: "exec_command",
-          description: "Run a command",
-          parameters: { type: "object" },
-        },
-      },
-    ]);
-  });
+describe("Responses instruction projection", () => {
+	test("safe mode rejects top-level instructions and instruction roles", () => {
+		expectFailure(
+			{ model: TEST_MODEL, instructions: "SYS", input: "q" },
+			"unsupported_instruction_projection",
+			"instructions",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [{ role: "developer", content: "DEV" }, { role: "user", content: "q" }],
+			},
+			"unsupported_instruction_projection",
+			"input.0",
+		);
+	});
 
-  test("maps text and image parts while skipping genuinely unknown content parts", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            { type: "input_text", text: "first" },
-            { type: "output_text", text: "second" },
-            { type: "input_image", image_url: "data:image/png;base64,AA==" },
-            { type: "input_image", image_url: "https://example.test/image.png" },
-            { type: "future_content_part", payload: { accepted: true } },
-          ],
-        },
-      ],
-    });
+	test("legacy mode retains only the exact explicit double-newline prefix behavior", () => {
+		const result = adapt(
+			{
+				model: TEST_MODEL,
+				instructions: "TOP",
+				input: [
+					{ role: "developer", content: "DEV" },
+					{ role: "user", content: "  q{" },
+				],
+			},
+			"legacy-user-prefix",
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const transformed = buildCodeWhispererRequest(
+			result.body,
+			TEST_MODEL,
+			TEST_AUTH,
+		);
+		expect(
+			transformed.request.conversationState.currentMessage.userInputMessage?.content,
+		).toBe("TOP\n\nDEV\n\n  q{");
+	});
+});
 
-    expect(body.messages).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "first" },
-          { type: "text", text: "second" },
-          { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } },
-          { type: "image_url", image_url: { url: "https://example.test/image.png" } },
-        ],
-      },
-    ]);
-  });
+describe("Responses exact function/custom tools", () => {
+	test("maps function call/result with its original declaration and arguments", () => {
+		const result = adapt({
+			model: TEST_MODEL,
+			tools: [
+				{
+					type: "function",
+					name: "read_file",
+					description: "Read one file",
+					parameters: {
+						type: "object",
+						properties: { path: { type: "string" } },
+						required: ["path"],
+					},
+				},
+			],
+			input: [
+				{
+					type: "function_call",
+					call_id: "call_1",
+					name: "read_file",
+					arguments: '{"path":"a"}',
+				},
+				{
+					type: "function_call_output",
+					call_id: "call_1",
+					output: [
+						{ type: "input_text", text: "A" },
+						{ type: "output_text", text: "B" },
+					],
+				},
+				{ role: "user", content: "continue" },
+			],
+		});
 
-  test("preserves Codex collaboration agent plaintext without provider-owned task prefixes", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Spawn another agent." }],
-        },
-        {
-          type: "agent_message",
-          author: "/root",
-          recipient: "/root/namespace_check",
-          content: [
-            {
-              type: "input_text",
-              text: "Message Type: NEW_TASK\nTask name: /root/namespace_check\nSender: /root\nPayload:\n",
-            },
-            {
-              type: "encrypted_content",
-              encrypted_content: "Return exactly NAMESPACE_CHILD_OK and nothing else.",
-            },
-          ],
-        },
-      ],
-    });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.body.tools[0]).toEqual({
+			publicType: "function",
+			name: "read_file",
+			wireName: "read_file",
+			description: "Read one file",
+			inputSchema: {
+				type: "object",
+				properties: { path: { type: "string" } },
+				required: ["path"],
+			},
+			path: "tools.0",
+			origin: "request",
+			strict: false,
+		});
+		expect(result.body.messages[0]?.toolCalls[0]).toMatchObject({
+			id: "call_1",
+			name: "read_file",
+			input: { path: "a" },
+		});
+		expect(result.body.messages[1]?.content[0]).toMatchObject({
+			type: "tool_result",
+			toolCallId: "call_1",
+			content: [
+				{ type: "text", text: "A" },
+				{ type: "text", text: "B" },
+			],
+		});
+	});
 
-    expect(body.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "Spawn another agent." }],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Message Type: NEW_TASK\nTask name: /root/namespace_check\nSender: /root\nPayload:\n",
-          },
-        ],
-      },
-    ]);
+	test("round-trips custom raw input byte-for-byte through a private wire alias", () => {
+		const rawInput = "printf 'a\\r\\n{Ω}'\r\n";
+		const result = adapt({
+			model: TEST_MODEL,
+			tools: [{ type: "custom", name: "shell", description: "Run raw input" }],
+			input: [
+				{
+					type: "custom_tool_call",
+					call_id: "custom_1",
+					name: "shell",
+					input: rawInput,
+				},
+				{
+					type: "custom_tool_call_output",
+					call_id: "custom_1",
+					output: "ok",
+				},
+				{ role: "user", content: "next" },
+			],
+		});
 
-    const transformed = buildCodeWhispererRequest(body, MODEL, AUTH);
-    const currentContent =
-      transformed.request.conversationState.currentMessage.userInputMessage?.content;
-    expect(currentContent).toBe(
-      "Spawn another agent.Message Type: NEW_TASK\nTask name: /root/namespace_check\nSender: /root\nPayload:\n",
-    );
-    expect(currentContent).not.toContain("NAMESPACE_CHILD_OK");
-    expect(transformed.request.conversationState.history).toBeUndefined();
-  });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const declaration = result.body.tools[0];
+		expect(declaration?.publicType).toBe("custom");
+		expect(declaration?.name).toBe("shell");
+		expect(declaration?.wireName).toBe("kiro_custom_0");
+		expect(result.body.messages[0]?.toolCalls[0]).toMatchObject({
+			id: "custom_1",
+			name: "kiro_custom_0",
+			input: { input: rawInput },
+		});
 
-  test("maps non-NEW_TASK agent messages without a delegated-task boundary or priority prefix", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "agent_message",
-          author: "/root/namespace_check",
-          recipient: "/root",
-          content: [
-            { type: "input_text", text: "Message Type: FINAL_ANSWER\n" },
-            { type: "encrypted_content", encrypted_content: "NAMESPACE_CHILD_OK" },
-          ],
-        },
-      ],
-    });
+		const restored = result.bridge.restoreCalls([
+			{
+				itemId: "item_1",
+				id: "new_call",
+				name: "kiro_custom_0",
+				arguments: JSON.stringify({ input: rawInput }),
+			},
+		]);
+		expect(restored).toEqual({
+			ok: true,
+			items: [
+				{
+					id: "item_1",
+					type: "custom_tool_call",
+					call_id: "new_call",
+					name: "shell",
+					input: rawInput,
+				},
+			],
+		});
+	});
 
-    expect(body.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "Message Type: FINAL_ANSWER\n" }],
-      },
-    ]);
-  });
+	test("requires exact historical declarations instead of inferring schema", () => {
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{
+						type: "function_call",
+						call_id: "call_1",
+						name: "read_file",
+						arguments: '{"path":"x"}',
+					},
+					{
+						type: "function_call_output",
+						call_id: "call_1",
+						output: "x",
+					},
+				],
+			},
+			"missing_tool_declaration",
+		);
+	});
+});
 
-  test("maps function calls and function outputs to assistant and tool messages", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "function_call",
-          call_id: "call_1",
-          name: "read_file",
-          arguments: '{"path":"README.md"}',
-        },
-        { type: "function_call_output", call_id: "call_1", output: "contents" },
-      ],
-    });
+describe("Responses reasoning replay input", () => {
+	test("accepts only an opaque kr1 token paired to exact assistant output", () => {
+		const outputFingerprint = assistantOutputFingerprint({
+			text: "answer",
+			toolCalls: [],
+		});
+		const result = adapt({
+			model: TEST_MODEL,
+			include: ["reasoning.encrypted_content"],
+			input: [
+				{ type: "reasoning", encrypted_content: "kr1_test-token" },
+				{ role: "assistant", content: "answer" },
+				{ role: "user", content: "next" },
+			],
+		});
 
-    expect(body.messages).toEqual([
-      {
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "call_1",
-            type: "function",
-            function: { name: "read_file", arguments: '{"path":"README.md"}' },
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "call_1", content: "contents" }],
-      },
-    ]);
-  });
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.body.includeEncryptedReasoning).toBe(true);
+		expect(result.body.reasoningReplays).toEqual([
+			{
+				lookup: {
+					kind: "responses-token",
+					encryptedContent: "kr1_test-token",
+				},
+				outputFingerprint,
+				insertBeforeMessage: 0,
+				path: "input.0",
+			},
+		]);
+	});
 
-  test("keeps two call outputs independently paired through the real Kiro request transformer", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        { type: "function_call", call_id: "call_a", name: "alpha", arguments: "{}" },
-        { type: "function_call", call_id: "call_b", name: "beta", arguments: "{}" },
-        { type: "function_call_output", call_id: "call_a", output: "OUTPUT_A" },
-        { type: "function_call_output", call_id: "call_b", output: "OUTPUT_B" },
-      ],
-    });
+	test("rejects plaintext, malformed, and unpaired reasoning replay", () => {
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{
+						type: "reasoning",
+						summary: [{ type: "summary_text", text: "plain" }],
+						encrypted_content: "kr1_token",
+					},
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "next" },
+				],
+			},
+			"unsupported_reasoning_plaintext_replay",
+			"input.0",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{ type: "reasoning", encrypted_content: "foreign-token" },
+					{ role: "assistant", content: "answer" },
+					{ role: "user", content: "next" },
+				],
+			},
+			"invalid_reasoning_replay",
+			"input.0.encrypted_content",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{ type: "reasoning", encrypted_content: "kr1_token" },
+					{ role: "user", content: "next" },
+				],
+			},
+			"invalid_reasoning_replay",
+			"input.0",
+		);
+	});
+});
 
-    const transformed = buildCodeWhispererRequest(body, MODEL, AUTH);
-    expect(
-      transformed.request.conversationState.currentMessage.userInputMessage?.userInputMessageContext
-        ?.toolResults,
-    ).toEqual([
-      { toolUseId: "call_a", content: [{ text: "OUTPUT_A" }], status: "success" },
-      { toolUseId: "call_b", content: [{ text: "OUTPUT_B" }], status: "success" },
-    ]);
-  });
+describe("Responses fail-closed capability validation", () => {
+	test.each([
+		["temperature", 0.2],
+		["top_p", 0.9],
+		["truncation", "auto"],
+		["background", true],
+		["max_tool_calls", 2],
+		["service_tier", "default"],
+	] as const)("rejects unsupported field %s before Kiro", (field, value) => {
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", [field]: value },
+			"unsupported_parameter",
+			field,
+		);
+	});
 
-  test("preserves only client-declared custom and namespace guidance through a continuation", () => {
-    const customParameters = {
-      type: "object",
-      properties: {
-        input: { type: "string" },
-      },
-      required: ["input"],
-      additionalProperties: false,
-    };
-    const namespaceParameters = {
-      type: "object",
-      properties: { task_name: { type: "string", minLength: 1 } },
-      required: ["task_name"],
-      additionalProperties: false,
-    };
-    const body = adaptedBody({
-      model: MODEL,
-      tools: [
-        {
-          type: "custom",
-          name: "apply_patch",
-          description: "Apply an exact repository patch",
-          format: { type: "grammar", syntax: "lark", definition: "start: PATCH_BODY" },
-        },
-        {
-          type: "namespace",
-          name: "collaboration",
-          description: "Coordinate delegated work",
-          tools: [
-            {
-              type: "function",
-              name: "spawn_agent",
-              description: "Start one delegated task",
-              parameters: namespaceParameters,
-            },
-          ],
-        },
-      ],
-      input: [
-        {
-          type: "custom_tool_call",
-          call_id: "call_patch_declared",
-          name: "apply_patch",
-          input: "*** Begin Patch\n*** End Patch",
-        },
-        {
-          type: "function_call",
-          call_id: "call_namespace_declared",
-          namespace: "collaboration",
-          name: "spawn_agent",
-          arguments: '{"task_name":"review"}',
-        },
-        {
-          type: "custom_tool_call_output",
-          call_id: "call_patch_declared",
-          output: "PATCH_APPLIED_EXACTLY",
-        },
-        {
-          type: "function_call_output",
-          call_id: "call_namespace_declared",
-          output: "AGENT_STARTED_EXACTLY",
-        },
-      ],
-    });
+	test("maps only the probe-confirmed Claude output-token range", () => {
+		const supported = adapt({
+			model: "claude-sonnet-5",
+			input: "q",
+			max_output_tokens: 4_096,
+		});
+		expect(supported).toMatchObject({
+			ok: true,
+			body: { outputTokenLimit: 4_096 },
+		});
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", max_output_tokens: 4_096 },
+			"unsupported_output_token_limit",
+			"max_output_tokens",
+		);
+		expectFailure(
+			{ model: "claude-sonnet-5", input: "q", max_output_tokens: 1_023 },
+			"invalid_output_token_limit",
+			"max_output_tokens",
+		);
+	});
 
-    expect(body.tools).toEqual([
-      {
-        type: "function",
-        function: {
-          name: "kiro_custom_0",
-          description: "Apply an exact repository patch",
-          parameters: customParameters,
-        },
-      },
-      {
-        type: "function",
-        function: {
-          name: "kiro_ns_0",
-          description: "Coordinate delegated work\n\nStart one delegated task",
-          parameters: namespaceParameters,
-        },
-      },
-    ]);
-    expect(body.messages[0]).toEqual({
-      role: "assistant",
-      tool_calls: [
-        {
-          id: "call_patch_declared",
-          type: "function",
-          function: {
-            name: "kiro_custom_0",
-            arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
-          },
-        },
-      ],
-    });
-    expect(body.messages[1]).toEqual({
-      role: "assistant",
-      tool_calls: [
-        {
-          id: "call_namespace_declared",
-          type: "function",
-          function: { name: "kiro_ns_0", arguments: '{"task_name":"review"}' },
-        },
-      ],
-    });
+	test("rejects unknown items/content, author-recipient semantics, and built-in tools", () => {
+		expectFailure(
+			{ model: TEST_MODEL, input: [{ type: "file_search_call", id: "x" }] },
+			"unsupported_input_item",
+			"input.0",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{
+						type: "message",
+						role: "user",
+						content: [{ type: "input_file", file_id: "f" }],
+					},
+				],
+			},
+			"unsupported_content_part",
+			"input.0.content.0",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{
+						type: "agent_message",
+						author: "root",
+						recipient: "worker",
+						content: [{ type: "input_text", text: "task" }],
+					},
+				],
+			},
+			"unsupported_input_item",
+			"input.0",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: "search",
+				tools: [{ type: "web_search_preview" }],
+			},
+			"unsupported_web_search",
+			"tools.0",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: "q",
+				tools: [{ type: "namespace", name: "ns", tools: [] }],
+			},
+			"unsupported_tool_type",
+			"tools.0",
+		);
+	});
 
-    const transformed = buildCodeWhispererRequest(body, MODEL, AUTH);
-    expect(
-      transformed.request.conversationState.currentMessage.userInputMessage?.userInputMessageContext
-        ?.tools,
-    ).toEqual([
-      {
-        toolSpecification: {
-          name: "kiro_custom_0",
-          description: "Apply an exact repository patch",
-          inputSchema: { json: customParameters },
-        },
-      },
-      {
-        toolSpecification: {
-          name: "kiro_ns_0",
-          description: "Coordinate delegated work\n\nStart one delegated task",
-          inputSchema: { json: namespaceParameters },
-        },
-      },
-    ]);
-    expect(
-      transformed.request.conversationState.history?.flatMap(
-        (entry) => entry.assistantResponseMessage?.toolUses ?? [],
-      ),
-    ).toEqual([
-      {
-        input: { input: "*** Begin Patch\n*** End Patch" },
-        name: "kiro_custom_0",
-        toolUseId: "call_patch_declared",
-      },
-      {
-        input: { task_name: "review" },
-        name: "kiro_ns_0",
-        toolUseId: "call_namespace_declared",
-      },
-    ]);
-    expect(
-      transformed.request.conversationState.currentMessage.userInputMessage?.userInputMessageContext
-        ?.toolResults,
-    ).toEqual([
-      {
-        toolUseId: "call_patch_declared",
-        content: [{ text: "PATCH_APPLIED_EXACTLY" }],
-        status: "success",
-      },
-      {
-        toolUseId: "call_namespace_declared",
-        content: [{ text: "AGENT_STARTED_EXACTLY" }],
-        status: "success",
-      },
-    ]);
-  });
+	test("rejects strict tools, custom grammar, unknown nested fields, and ambiguous schemas", () => {
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: "q",
+				tools: [{ type: "function", name: "f", strict: true }],
+			},
+			"unsupported_strict_tools",
+			"tools.0.strict",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: "q",
+				tools: [
+					{
+						type: "custom",
+						name: "shell",
+						format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+					},
+				],
+			},
+			"unsupported_custom_tool_format",
+			"tools.0.format",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [{ role: "user", content: "q", unexpected: true }],
+			},
+			"unsupported_parameter",
+			"input.0.unexpected",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: [
+					{
+						type: "additional_tools",
+						role: "developer",
+						tools: [
+							{
+								type: "function",
+								name: "f",
+								parameters: { type: "object" },
+								inputSchema: { type: "object" },
+							},
+						],
+					},
+					{ role: "user", content: "q" },
+				],
+			},
+			"invalid_tool_declaration",
+			"input.0.tools.0",
+		);
+	});
 
-  test.each([
-    [
-      "duplicate call ids",
-      [
-        { type: "function_call", call_id: "same", name: "one", arguments: "{}" },
-        { type: "function_call", call_id: "same", name: "two", arguments: "{}" },
-      ],
-    ],
-    [
-      "duplicate outputs",
-      [
-        { type: "function_call", call_id: "same", name: "one", arguments: "{}" },
-        { type: "function_call_output", call_id: "same", output: "first" },
-        { type: "function_call_output", call_id: "same", output: "second" },
-      ],
-    ],
-    [
-      "output before a later call",
-      [
-        { type: "function_call_output", call_id: "late", output: "too soon" },
-        { type: "function_call", call_id: "late", name: "one", arguments: "{}" },
-      ],
-    ],
-    [
-      "custom output without a call",
-      [{ type: "custom_tool_call_output", call_id: "missing", output: "orphan" }],
-    ],
-    [
-      "custom output paired with a function call",
-      [
-        { type: "function_call", call_id: "wrong", name: "one", arguments: "{}" },
-        { type: "custom_tool_call_output", call_id: "wrong", output: "mismatch" },
-      ],
-    ],
-    [
-      "function output paired with a custom call",
-      [
-        { type: "custom_tool_call", call_id: "wrong", name: "exec", input: "pwd" },
-        { type: "function_call_output", call_id: "wrong", output: "mismatch" },
-      ],
-    ],
-  ])("rejects invalid tool history: %s", (_label, input) => {
-    const adapted = responsesToInternalChat(parsedResponses({ model: MODEL, input }));
-    expect(adapted).toMatchObject({ ok: false, code: "invalid_tool_history" });
-  });
+	test("rejects stateful continuation and non-equivalent tool controls", () => {
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", previous_response_id: "resp_1" },
+			"unsupported_stateful_responses",
+			"previous_response_id",
+		);
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", tool_choice: "required" },
+			"unsupported_tool_choice",
+			"tool_choice",
+		);
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", parallel_tool_calls: false },
+			"unsupported_parallel_tool_calls",
+			"parallel_tool_calls",
+		);
+	});
 
-  test.each([
-    ["summary-only", { summary: [{ type: "summary_text", text: "summary" }] }],
-    ["content-only", { content: [{ type: "reasoning_text", reasoning_text: "details" }] }],
-    [
-      "summary before content",
-      {
-        summary: [
-          { type: "summary_text", text: "summary one" },
-          { type: "summary_text", text: "" },
-        ],
-        content: [
-          { type: "reasoning_text", reasoning_text: "detail one" },
-          { type: "reasoning_text", reasoning_text: "detail two" },
-        ],
-      },
-    ],
-  ])("does not replay Responses reasoning (%s) as model-visible text", (_name, reasoning) => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        { type: "reasoning", ...reasoning },
-        {
-          type: "function_call",
-          call_id: "call_reasoned",
-          name: "search",
-          arguments: "{}",
-        },
-      ],
-    });
+	test("supports tool_choice=none only without an unfinished tool state", () => {
+		const supported = adapt({
+			model: TEST_MODEL,
+			input: "q",
+			tools: [{ type: "function", name: "f", parameters: { type: "object" } }],
+			tool_choice: "none",
+		});
+		expect(supported.ok).toBe(true);
+		if (supported.ok) expect(supported.body.toolChoice).toBe("none");
 
-    expect(body.messages).toEqual([
-      {
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "call_reasoned",
-            type: "function",
-            function: { name: "search", arguments: "{}" },
-          },
-        ],
-      },
-    ]);
-  });
-
-  test("drops standalone replayed reasoning when no following assistant item exists", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "standalone thought" }],
-        },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
-      ],
-    });
-
-    expect(body.messages).toEqual([
-      { role: "user", content: [{ type: "text", text: "continue" }] },
-    ]);
-  });
-
-  test("accepts nullable fields in Codex reasoning replay items", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: "replayed thought" }],
-          content: null,
-          encrypted_content: null,
-        },
-        { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
-      ],
-    });
-
-    expect(body.messages).toEqual([
-      { role: "user", content: [{ type: "text", text: "continue" }] },
-    ]);
-  });
-
-  test.each(EFFORT_CASES)("normalizes reasoning effort %s", (effort, expected) => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: "hello",
-      reasoning: { effort },
-    });
-
-    expect(body.reasoning_effort).toBe(expected);
-  });
-
-  test("accepts the canonical Codex request surface and ignores non-adapted fields", () => {
-    const parsed = parsedResponses({
-      model: MODEL,
-      input: "hello",
-      tools: [],
-      tool_choice: "auto",
-      parallel_tool_calls: true,
-      reasoning: null,
-      include: ["reasoning.encrypted_content"],
-      store: false,
-      text: { format: { type: "text" } },
-      service_tier: "default",
-      prompt_cache_key: "cache-key",
-      client_metadata: { source: "codex" },
-      previous_response_id: "resp_previous",
-    });
-    const adapted = responsesToInternalChat(parsed);
-
-    expect(adapted).toMatchObject({
-      ok: true,
-      body: {
-        model: MODEL,
-        messages: [{ role: "user", content: "hello" }],
-      },
-    });
-  });
-
-  test.each([
-    ["all unknown items", [{ type: "future_item", payload: true }]],
-    ["encrypted-only reasoning", [{ type: "reasoning", encrypted_content: "opaque-ciphertext" }]],
-    [
-      "system-only input",
-      [{ type: "message", role: "system", content: [{ type: "input_text", text: "policy" }] }],
-    ],
-  ])("returns empty_input for instructions plus %s", (_name, input) => {
-    const adapted = responsesToInternalChat(
-      parsedResponses({ model: MODEL, instructions: "instructions", input }),
-    );
-    expect(adapted).toEqual({ ok: false, code: "empty_input" });
-  });
-
-  test("keeps known non-system messages executable when all unknown parts are skipped", () => {
-    const body = adaptedBody({
-      model: MODEL,
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "future_content_part", payload: true }],
-        },
-      ],
-    });
-
-    expect(body.messages).toEqual([{ role: "user", content: [] }]);
-  });
-
-  test.each([
-    ["missing model", { input: "hello" }],
-    ["missing input", { model: MODEL }],
-    ["invalid input", { model: MODEL, input: 42 }],
-    ["invalid effort", { model: MODEL, input: "hello", reasoning: { effort: "extreme" } }],
-    ["malformed message", { model: MODEL, input: [{ type: "message", role: "user" }] }],
-    [
-      "invalid known message role",
-      {
-        model: MODEL,
-        input: [{ type: "message", role: "tool", content: [] }],
-      },
-    ],
-    [
-      "malformed known text part",
-      {
-        model: MODEL,
-        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: 42 }] }],
-      },
-    ],
-    [
-      "malformed known image part",
-      {
-        model: MODEL,
-        input: [{ type: "message", role: "user", content: [{ type: "input_image" }] }],
-      },
-    ],
-    [
-      "malformed function call",
-      {
-        model: MODEL,
-        input: [{ type: "function_call", call_id: "call_1", name: "search" }],
-      },
-    ],
-    [
-      "malformed reasoning summary",
-      {
-        model: MODEL,
-        input: [{ type: "reasoning", summary: [{ type: "summary_text", text: 42 }] }],
-      },
-    ],
-    [
-      "malformed top-level custom declaration",
-      { model: MODEL, input: "hello", tools: [{ type: "custom", description: "missing name" }] },
-    ],
-    [
-      "malformed top-level namespace declaration",
-      { model: MODEL, input: "hello", tools: [{ type: "namespace", name: "workers" }] },
-    ],
-    [
-      "malformed additional custom declaration",
-      {
-        model: MODEL,
-        input: [
-          { type: "additional_tools", tools: [{ type: "custom", name: "" }] },
-          { type: "message", role: "user", content: [] },
-        ],
-      },
-    ],
-    [
-      "malformed additional namespace declaration",
-      {
-        model: MODEL,
-        input: [
-          {
-            type: "additional_tools",
-            tools: [{ type: "namespace", name: "workers", tools: [{ type: "custom", name: "" }] }],
-          },
-          { type: "message", role: "user", content: [] },
-        ],
-      },
-    ],
-    [
-      "malformed custom tool call",
-      {
-        model: MODEL,
-        input: [{ type: "custom_tool_call", call_id: "call_custom", name: "exec", input: 42 }],
-      },
-    ],
-    [
-      "malformed custom tool call output",
-      {
-        model: MODEL,
-        input: [{ type: "custom_tool_call_output", call_id: "call_custom", output: 42 }],
-      },
-    ],
-    [
-      "malformed agent message",
-      {
-        model: MODEL,
-        input: [{ type: "agent_message", author: "/root", recipient: "", content: [] }],
-      },
-    ],
-    [
-      "malformed encrypted content",
-      {
-        model: MODEL,
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "encrypted_content", encrypted_content: 42 }],
-          },
-        ],
-      },
-    ],
-  ])("rejects %s as a Responses-style 400", async (_name, raw) => {
-    await expectInvalid(raw);
-  });
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				tools: [{ type: "function", name: "f", parameters: { type: "object" } }],
+				input: [
+					{
+						type: "function_call",
+						call_id: "call_1",
+						name: "f",
+						arguments: "{}",
+					},
+				],
+				tool_choice: "none",
+			},
+			"unsupported_tool_choice",
+			"tool_choice",
+		);
+	});
 });

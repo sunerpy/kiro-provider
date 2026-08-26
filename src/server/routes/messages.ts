@@ -1,8 +1,10 @@
 import type { Config } from "../../config/schema.js";
+import { auditLog } from "../../core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
   runChatCompletion,
@@ -20,7 +22,6 @@ import type {
   IngressSignals,
   RequestIdleTimeoutLease,
 } from "../request-lifecycle.js";
-import { ChatCompletionRequestSchema } from "../request-schema.js";
 import { anthropicSessionAffinity } from "../session-affinity.js";
 
 export type MessagesDependencies = {
@@ -28,6 +29,7 @@ export type MessagesDependencies = {
   readonly tokenRefresher: PipelineTokenRefresher;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
+  readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly makeClient?: PipelineClientFactory;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
@@ -53,17 +55,6 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new DOMException("Request deadline exceeded", "TimeoutError");
-}
-
-function formatIssues(
-  issues: readonly { readonly path: PropertyKey[]; readonly message: string }[],
-): string {
-  return issues
-    .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "request";
-      return `${path}: ${issue.message}`;
-    })
-    .join(", ");
 }
 
 async function readRequestBody(
@@ -221,19 +212,16 @@ export async function handleMessages(
   }
   const adapted = adaptAnthropicMessagesRequest(bodyResult.value, {
     requireMaxTokens: true,
-  });
+  }, config.protocol_projection_mode);
   if (!adapted.ok) {
+    auditLog("warn", "protocol_projection_rejected", {
+      protocol: "anthropic-messages",
+      projection_mode: config.protocol_projection_mode,
+      code: adapted.code,
+      param: adapted.param,
+    });
     ingress.finalize();
     return anthropicError(400, adapted.message, "invalid_request_error");
-  }
-  const internal = ChatCompletionRequestSchema.safeParse(adapted.value.body);
-  if (!internal.success) {
-    ingress.finalize();
-    return anthropicError(
-      400,
-      `Invalid request: ${formatIssues(internal.error.issues)}`,
-      "invalid_request_error",
-    );
   }
   const affinity = anthropicSessionAffinity(
     adapted.value.source,
@@ -253,8 +241,8 @@ export async function handleMessages(
     lease = dependencies.createRequestIdleTimeoutLease?.();
     lease?.disable();
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
-      body: internal.data,
-      model: internal.data.model,
+      body: adapted.value.body,
+      model: adapted.value.body.model,
       stream: adapted.value.source.stream,
       config,
       accountManager: dependencies.accountManager,
@@ -262,6 +250,10 @@ export async function handleMessages(
       ...(affinity ? { affinity } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
+        : {}),
+      tenantId: dependencies.tenantId,
+      ...(dependencies.reasoningReplayStore
+        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
         : {}),
       deadlineSignal: ingress.signals.combined,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
@@ -278,8 +270,8 @@ export async function handleMessages(
       contentType.includes("application/x-ndjson")
     ) {
       const streaming = anthropicSseAdapter(pipelineResponse, {
-        model: internal.data.model,
-        inputTokens: estimateInputTokens(internal.data),
+        model: adapted.value.body.model,
+        inputTokens: estimateInputTokens(adapted.value.body),
         signals: ingress.signals,
         finalize: routeFinalize,
       });
@@ -296,7 +288,7 @@ export async function handleMessages(
       }
       const completion = parseChatWireCompletion(await pipelineResponse.json());
       if (completion) {
-        return anthropicMessageResponse(completion, internal.data.model);
+        return anthropicMessageResponse(completion, adapted.value.body.model);
       }
       return anthropicError(
         502,
@@ -319,19 +311,15 @@ export async function handleMessageTokenCount(
   try {
     const bodyResult = await readJsonBody(request, config, ingress.signals);
     if (!bodyResult.ok) return bodyResult.response;
-    const adapted = adaptAnthropicMessagesRequest(bodyResult.value);
+    const adapted = adaptAnthropicMessagesRequest(
+      bodyResult.value,
+      {},
+      config.protocol_projection_mode,
+    );
     if (!adapted.ok) {
       return anthropicError(400, adapted.message, "invalid_request_error");
     }
-    const internal = ChatCompletionRequestSchema.safeParse(adapted.value.body);
-    if (!internal.success) {
-      return anthropicError(
-        400,
-        `Invalid request: ${formatIssues(internal.error.issues)}`,
-        "invalid_request_error",
-      );
-    }
-    const inputTokens = estimateInputTokens(internal.data);
+    const inputTokens = estimateInputTokens(adapted.value.body);
     return Response.json(
       { input_tokens: inputTokens },
       { headers: { "x-kiro-token-count-mode": "estimate" } },

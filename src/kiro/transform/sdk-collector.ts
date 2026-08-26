@@ -1,7 +1,13 @@
+import { assistantOutputFingerprint } from '../../protocol/canonical.js'
 import {
+  appendReasoningCapture,
   appendToolFragment,
+  createReasoningCaptureState,
   nextSdkEvent,
+  resolveReasoningCapture,
   resolveUsage,
+  type SdkOutputFingerprint,
+  type SdkReasoningCaptureHandler,
   type SdkStreamResponse,
   type UsageState,
   updateUsageState
@@ -21,7 +27,17 @@ export interface OpenAICompletionMessage {
   readonly role: 'assistant'
   readonly content: string
   readonly reasoning_content?: string
+  readonly reasoning_signature?: string
+  readonly reasoning_redacted_content?: string
+  readonly reasoning_encrypted_content?: string
   readonly tool_calls?: readonly OpenAIToolCall[]
+}
+
+export interface CollectSdkResponseOptions {
+  readonly captureReasoning?: SdkReasoningCaptureHandler
+  readonly emitEncryptedReasoning?: boolean
+  readonly emitAnthropicReasoningMetadata?: boolean
+  readonly fingerprintOutput?: SdkOutputFingerprint
 }
 
 export interface OpenAIChatCompletion {
@@ -55,7 +71,8 @@ export async function collectSdkResponse(
   sdkResponse: SdkStreamResponse,
   model: string,
   conversationId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: CollectSdkResponseOptions = {}
 ): Promise<OpenAIChatCompletion> {
   const eventStream = sdkResponse.generateAssistantResponseResponse
   if (!eventStream) throw new MissingSdkEventStreamError()
@@ -64,7 +81,7 @@ export async function collectSdkResponse(
   const toolCalls = new Map<string, ToolCallState>()
   const usage: UsageState = {}
   let content = ''
-  let reasoningContent = ''
+  const reasoning = createReasoningCaptureState()
   let iteratorFinished = false
   let iteratorClosed = false
 
@@ -83,7 +100,7 @@ export async function collectSdkResponse(
 
       const event = next.result.value
       updateUsageState(usage, event)
-      reasoningContent += event.reasoningContentEvent?.text ?? ''
+      appendReasoningCapture(reasoning, event.reasoningContentEvent)
       content += event.assistantResponseEvent?.content ?? ''
       appendToolFragment(toolCalls, event.toolUseEvent)
     }
@@ -92,10 +109,30 @@ export async function collectSdkResponse(
   }
 
   const resolvedUsage = resolveUsage(usage, content, model)
+  const captured = resolveReasoningCapture(reasoning)
+  const output = {
+    text: content,
+    toolCalls: Array.from(toolCalls.values(), (toolCall) => ({
+      id: toolCall.toolUseId,
+      name: toolCall.name,
+      input: toolCall.input
+    }))
+  }
+  const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output)
+  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint)
   const message: OpenAICompletionMessage = {
     role: 'assistant',
     content,
-    ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+    ...(captured.text ? { reasoning_content: captured.text } : {}),
+    ...(options.emitAnthropicReasoningMetadata && captured.signature !== undefined
+      ? { reasoning_signature: captured.signature }
+      : {}),
+    ...(options.emitAnthropicReasoningMetadata && captured.redactedContent !== undefined
+      ? { reasoning_redacted_content: Buffer.from(captured.redactedContent).toString('base64') }
+      : {}),
+    ...(options.emitEncryptedReasoning && encryptedContent !== undefined
+      ? { reasoning_encrypted_content: encryptedContent }
+      : {}),
     ...(toolCalls.size > 0
       ? {
           tool_calls: Array.from(toolCalls.values(), (toolCall) => ({

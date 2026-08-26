@@ -11,6 +11,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { KIRO_CONSTANTS } from '../kiro/constants.js'
 import { buildEffortRequestFields } from '../kiro/effort.js'
 import type { Effort, KiroAuthDetails } from '../kiro/types.js'
+import { auditHash, auditLog } from './audit-log.js'
 
 interface ClientCacheEntry {
   readonly client: CodeWhispererStreamingClient
@@ -38,6 +39,21 @@ function wireModelFromBody(body: Record<string, unknown>): string | undefined {
   if (!isRecord(userInputMessage)) return undefined
   const modelId = userInputMessage.modelId
   return typeof modelId === 'string' ? modelId : undefined
+}
+
+function mergeModelRequestFields(
+  existing: unknown,
+  additions: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const merged = isRecord(existing) ? { ...existing } : {};
+  for (const [key, value] of Object.entries(additions)) {
+    const current = merged[key];
+    merged[key] =
+      isRecord(current) && isRecord(value)
+        ? mergeModelRequestFields(current, value)
+        : value;
+  }
+  return merged;
 }
 
 export function buildClientConfig(
@@ -99,12 +115,22 @@ export function createSdkClient(
     proxyUrl ?? null
   ])
   let transport = transportCache.get(transportKey)
+  const transportPoolHit = transport !== undefined
   if (!transport) {
     transport = { handler: createRequestHandler(proxyUrl) }
     transportCache.set(transportKey, transport)
   }
   const cacheKey = JSON.stringify([transportKey, effort ?? null])
   const cached = clientCache.get(cacheKey)
+  if (accountId !== undefined) {
+    auditLog('info', 'sdk_connection_pool_selected', {
+      account_hash: auditHash(accountId),
+      region,
+      effort: effort ?? null,
+      transport_pool_hit: transportPoolHit,
+      sdk_client_pool_hit: cached !== undefined
+    })
+  }
   if (cached) {
     cached.tokenState.value = auth.access
     return cached.client
@@ -141,7 +167,10 @@ export function createSdkClient(
             if (isRecord(parsed)) {
               const wireModel = wireModelFromBody(parsed)
               if (wireModel) {
-                parsed.additionalModelRequestFields = buildEffortRequestFields(wireModel, effort)
+                parsed.additionalModelRequestFields = mergeModelRequestFields(
+                  parsed.additionalModelRequestFields,
+                  buildEffortRequestFields(wireModel, effort)
+                )
                 args.request.body = JSON.stringify(parsed)
               }
             }

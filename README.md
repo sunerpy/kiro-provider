@@ -1,6 +1,6 @@
 # kiro-provider
 
-> A standalone OpenAI Responses and Anthropic Messages gateway for AWS Kiro (CodeWhisperer).
+> A protocol-fidelity gateway exposing a verified OpenAI Responses and Anthropic Messages subset over AWS Kiro (CodeWhisperer).
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
@@ -12,6 +12,7 @@
 ## Table of Contents
 
 - [Features](#features)
+- [Protocol compatibility](#protocol-compatibility)
 - [Install](#install)
 - [Quickstart](#quickstart)
 - [Run as a background service](#run-as-a-background-service)
@@ -29,14 +30,57 @@
 - OpenAI Responses `POST /v1/responses` and Anthropic Messages `POST /v1/messages` (both streaming and non-streaming), plus `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /health`, and authenticated `GET /ready`.
 - Legacy OpenAI Chat Completions is available at `POST /v1/chat/completions`, but is disabled by default and must be explicitly enabled with `enable_legacy_chat_completions`.
 - Bearer API-key gate that fails closed: the server refuses to start with no configured keys, and defaults to binding `127.0.0.1`.
-- Live OpenCode authentication reuse by default: `auth_source: "opencode-shared"` reads the same `~/.config/opencode/kiro.db`, honors tombstones, updates shared health/usage, and uses a refresh lock compatible with `opencode-kiro-auth` v0.20.6.
-- Standard-field session affinity: Codex/OpenAI, OpenCode, and Claude Code requests reuse a persisted account binding and Kiro conversation ID without private headers, cookies, or client patches.
+- Live OpenCode authentication reuse by default: `auth_source: "opencode-shared"` reads the same `~/.config/opencode/kiro.db`, honors tombstones, updates shared health/usage, and uses the account schema and refresh-lock behavior of `opencode-kiro-auth` v0.20.7.
+- Standard-field session affinity for accepted requests: official OpenAI SDK, OpenCode, Codex, Claude Code, and other clients can reuse a persisted account binding and Kiro conversation ID without private headers, cookies, or client patches when their request stays inside the verified subset.
 - Account-scoped scheduling and keep-alive transport pools: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams; access-token refresh updates the cached client instead of rebuilding its connection pool.
-- Zero provider-owned prompt injection: request adapters preserve client text and structured protocol fields, and reject unsupported guarantees instead of emulating them with hidden instructions.
+- Zero provider-owned prompt injection in the default `safe` mode: a canonical IR preserves client text, roles, content-block boundaries, tool identity, ordering, and source paths; unsupported guarantees are rejected before Kiro instead of being emulated with hidden instructions.
+- Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
 - Multi-account rotation with automatic token refresh and failover. Shared mode treats OpenCode's database as the authentication authority; the provider database stores session affinity only.
 - An explicit `auth_source: "local"` compatibility mode retains `kiro-provider login` and `accounts import`; imported accounts are snapshots and must not be confused with live shared authentication.
 - A single global `proxy_url` that, when set, routes all upstream egress (model requests, token refresh, device-code login) through one HTTP(S) proxy.
 - Ships as a self-contained compiled binary via `bun build --compile` — no runtime install required on the target machine.
+
+## Protocol compatibility
+
+v0.5 is intentionally a **verified compatibility subset**. It does not accept
+fields and silently discard them. The default `protocol_projection_mode:
+"safe"` never prepends or rewrites client instructions, merges adjacent
+messages, clears repeated assistant output, removes trailing text such as `{`,
+or creates model-visible compensation prose.
+
+Key boundaries:
+
+- plain text, consecutive same-role turns, function/custom tool declarations,
+  calls, and results retain their original structure and order;
+- a message containing multiple top-level text blocks returns
+  `unsupported_content_block_projection`, because Kiro exposes only one text
+  field and concatenation would erase block boundaries;
+- `instructions`, `system`, and `developer` return
+  `unsupported_instruction_projection` in safe mode because the tested Kiro
+  `additionalContext` channel was rejected;
+- `tool_choice: auto` is supported; required/named choice,
+  `parallel_tool_calls: false`, strict schemas, custom grammars, and namespace
+  tools are rejected rather than weakened;
+- base64/data-URL images are supported, while remote image URLs and detail
+  controls are rejected;
+- an output-token limit is probe-confirmed only for `claude-sonnet-5` variants
+  in the range 1,024–128,000;
+- stateful Responses fields and native Web Search remain unsupported, and the
+  provider never fabricates search/citation events.
+
+Current compiled-binary acceptance on 2026-08-26: OpenAI JavaScript SDK 7.5.0
+passes Responses, explicit Chat, function/custom tool loops, and encrypted
+reasoning replay across restart. OpenCode Responses passes only in explicit
+`legacy-user-prefix` mode with Claude Sonnet 5; OpenCode Chat is blocked by
+its nonstandard `cache_control`. Codex 0.149.0-alpha.4.1 is blocked by
+`parallel_tool_calls: false`, and Claude Code 2.1.209 is blocked by
+`output_config.format`, `context_management`, and its retry that places
+`system` in `messages.1.role`. These are RC findings; stable v0.5.0 remains
+gated rather than silently discarding or relocating those fields.
+
+For the complete capability matrix, error codes, reasoning replay contract,
+and v0.4 migration steps, see
+[`docs/PROTOCOL_COMPATIBILITY.md`](docs/PROTOCOL_COMPATIBILITY.md).
 
 ## Install
 
@@ -176,7 +220,8 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
 ## Run as a background service
 
 For an agent host, run **one long-lived provider per OS user** and point
-Codex, OpenCode, Claude Code, Zuno, and other clients at that local endpoint.
+compatible OpenAI/Anthropic clients, OpenCode, Zuno, and compatibility probes
+for Codex or Claude Code at that local endpoint.
 Do not start a new provider for every agent or conversation. Keeping one
 process alive lets those standard clients share the provider's persisted
 session/account affinity and its process-local, account-scoped keep-alive
@@ -384,8 +429,9 @@ For an AI agent or installer, treat setup as successful only when:
 1. the binary and explicit config path exist;
 2. the service/task runs as the credential-owning user;
 3. `/health` succeeds;
-4. authenticated `/ready` succeeds, proving a readable auth source and at
-   least one active account.
+4. authenticated `/ready` succeeds, proving a readable auth source, at least
+   one active account, writable provider state, an available reasoning keyring,
+   and coverage for every key ID referenced by an unexpired replay record.
 
 Use the fixed service/task name above so repeated setup is idempotent. Restart
 it after changing the config or replacing the binary. Do not make the client
@@ -402,6 +448,7 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `port` | `8787` | `KIRO_PROVIDER_PORT` |
 | `api_keys` | required, non-empty | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
+| `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null` (uses the OpenCode default) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
@@ -409,6 +456,10 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
+| `reasoning_replay_key_path` | auto-generated config path | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
+| `reasoning_replay_keys` | `[]` | `KIRO_PROVIDER_REASONING_REPLAY_KEYS` |
+| `reasoning_replay_ttl_ms` | `86400000` | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS` |
+| `reasoning_replay_max_entries` | `10000` | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` |
 | `log_level` | `info` | `KIRO_PROVIDER_LOG_LEVEL` |
 
 The full field reference, including retry/timeout tuning and the test-only `test_upstream_endpoint`, lives in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
@@ -423,17 +474,25 @@ Some networks reach one model family directly while another needs a proxy (for e
 - **Local bind by default.** `host` defaults to `127.0.0.1`; only bind `0.0.0.0` behind a firewall or authenticated reverse proxy.
 - **Single authentication authority.** Shared mode reads and updates OpenCode's existing Kiro database and fails closed on an incompatible schema; it never runs provider-owned migrations against that database.
 - **Locked-down provider state.** `accounts.db` (and its WAL/SHM files) are created with mode `0600`; in shared mode this database contains affinity/state, not the authoritative credentials.
-- **No secrets in logs.** Proxy URLs and account tokens are never printed; don't commit a real config file, account database, or gateway key.
+- **Authenticated reasoning replay.** The database stores token/fingerprint hashes and AES-256-GCM ciphertext, not raw `kr1_...` tokens. Missing active decryption keys fail startup.
+- **No sensitive content in logs.** Gateway/account secrets, replay tokens, signatures, reasoning, and request prompt text are not logged; structured audit fields contain hashes and field names only. Don't commit a real config file, account database, keyring, or gateway key.
 
 > **Responsible use.** kiro-provider reuses AWS Kiro accounts you already control and consumes your own account quota. Supply your own accounts — this project is not a way to share or resell someone else's Kiro access, and it should not be used to circumvent per-account usage limits.
 
 ## Using with an LLM
 
-Use `POST /v1/responses` for new OpenAI clients and Codex. Use
-`POST /v1/messages` for Anthropic clients and Claude Code. Only point a
+Use `POST /v1/responses` for OpenAI Responses clients. Use
+`POST /v1/messages` for Anthropic Messages clients. Only point a
 Chat-Completions-only client (`@ai-sdk/openai-compatible`, older LangChain
 adapters, or an OpenCode custom provider using that package) at
 `POST /v1/chat/completions` after explicitly enabling the legacy endpoint.
+
+Standard clients must also stay within the verified subset. In safe mode a
+client that always sends system/developer instructions, custom grammars,
+namespace tools, or Anthropic `cache_control` receives a field-level 400; the
+gateway does not modify that request to force it through Kiro. The optional
+`legacy-user-prefix` projection is a temporary instruction-only migration aid
+for v0.5.x/v0.6.x and is scheduled for removal in v0.7.0.
 
 No client-specific session extension is required. The gateway derives
 affinity from standard/native request fields when present and otherwise from
@@ -459,7 +518,12 @@ Contract: human-readable status lines go to stdout, errors to stderr, non-zero e
 
 ## Use with Codex CLI
 
-kiro-provider's `POST /v1/responses` endpoint speaks the OpenAI Responses wire format, so [Codex CLI](https://github.com/openai/codex) (verified end-to-end against 0.149.0-alpha.4.1 on 2026-08-22) can use it as a custom `model_provider` with `wire_api = "responses"`. Test it with an isolated `CODEX_HOME` so your real `~/.codex` config is never touched:
+Codex uses the correct Responses endpoint, but the current compiled RC gate
+against 0.149.0-alpha.4.1 does not pass: Codex sends
+`parallel_tool_calls: false`, and Kiro cannot guarantee that constraint. The
+provider returns `unsupported_parallel_tool_calls` before Kiro instead of
+ignoring the field. The following isolated configuration reproduces the
+compatibility check without touching the real `~/.codex` state:
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -479,16 +543,21 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-Requires the gateway running (`kiro-provider serve`) with at least one active
-OpenCode Kiro account in the default shared mode, or an account in the
-explicit local compatibility store. Full details, plus a ready-made isolated
-smoke test (`scripts/codex-smoke.sh`), live in
+For Codex 0.149.0-alpha.4.1 the expected RC result is a non-zero exit carrying
+that field-level error. A future successful basic request must still pass a
+real shell/custom-tool loop, continuation, and restart reasoning replay before
+Codex is marked supported. Full details live in
 [`docs/CODEX.md`](docs/CODEX.md).
 
 ## Use with Claude Code
 
-Claude Code uses the Anthropic Messages protocol rather than OpenAI Chat
-Completions. Point it at the gateway root:
+Claude Code uses Anthropic Messages, but Claude Code 2.1.209 currently sends
+`output_config.format` and `context_management`; after the first rejection it
+also retries with `system` inside `messages.1.role`, which is not a valid
+Anthropic Messages role and cannot be silently moved. The provider rejects
+these shapes before Kiro in both safe and legacy instruction modes. The
+standard configuration below is therefore a compatibility probe, not a
+current support claim:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
@@ -497,22 +566,25 @@ claude
 ```
 
 The gateway accepts either `Authorization: Bearer <key>` or `x-api-key:
-<key>` for Anthropic routes. Streaming text and tool calls are translated to
-Anthropic SSE. Extended-thinking signatures are not fabricated or exposed,
-and `/v1/messages/count_tokens` is an explicit estimate (the response carries
-`x-kiro-token-count-mode: estimate`). See
+<key>` for Anthropic routes. Direct Messages requests within the verified
+subset support typed JSON/SSE and tools, while `/v1/messages/count_tokens` is
+an explicit estimate. See
 [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 
-The real-client validation record for OpenCode, Codex, Claude Code, shared
-authentication, affinity reuse, and the legacy Chat gate is in
-[`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md).
+The current compiled-service validation record is in
+[`docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md).
+The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
+is retained as historical v0.4 evidence only.
 
 ## Development
 
 ```bash
 bun install
+bun run lint
 bun run typecheck
 bun test
+bun run build
+bun run build:binary
 bash scripts/security-check.sh   # security regression suite (Linux, needs openssl/curl/ss)
 ```
 

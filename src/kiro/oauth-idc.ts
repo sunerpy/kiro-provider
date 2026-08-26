@@ -207,7 +207,7 @@ export async function pollKiroIDCToken(
 				parsedJson = JSON.parse(text);
 			} catch (error) {
 				throw new KiroIDCError(
-					`Token polling failed: invalid JSON response (HTTP ${tokenResponse.status}): ${text.slice(0, 300)}`,
+					`Token polling failed: invalid JSON response (HTTP ${tokenResponse.status})`,
 					{ cause: error },
 				);
 			}
@@ -259,12 +259,10 @@ export async function pollKiroIDCToken(
 		}
 		if (!tokenResponse.ok) {
 			throw new KiroIDCError(
-				`Token request failed with status: ${tokenResponse.status} ${text ? `(${text.slice(0, 200)})` : ""}`,
+				`Token request failed with status: ${tokenResponse.status}`,
 			);
 		}
-		throw new KiroIDCError(
-			`Token polling failed: missing tokens in response: ${text ? text.slice(0, 300) : "[empty]"}`,
-		);
+		throw new KiroIDCError("Token polling failed: response did not contain tokens");
 	}
 
 	throw new KiroIDCError(

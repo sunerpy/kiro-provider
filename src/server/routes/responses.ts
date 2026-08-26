@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../../config/schema.js";
+import { auditLog } from "../../core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
   runChatCompletion,
@@ -18,7 +20,7 @@ import type {
   IngressSignals,
   RequestIdleTimeoutLease,
 } from "../request-lifecycle.js";
-import { parseChatCompletionRequest, parseResponsesRequest } from "../request-schema.js";
+import { parseResponsesRequest } from "../request-schema.js";
 import type {
   MessageOutputItem,
   ReasoningOutputItem,
@@ -27,6 +29,11 @@ import type {
 } from "../responses/events.js";
 import { responsesToInternalChat } from "../responses/request-adapter.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
+import {
+  type ResponseRequestConfiguration,
+  responseConfigurationFromCanonical,
+  responseState,
+} from "../responses/state.js";
 import type { ResponsesToolBridge } from "../responses/tool-bridge.js";
 import { responsesSessionAffinity } from "../session-affinity.js";
 
@@ -35,6 +42,7 @@ export type ResponsesDependencies = {
   readonly tokenRefresher: PipelineTokenRefresher;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
+  readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly makeClient?: PipelineClientFactory;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
@@ -132,6 +140,7 @@ function completedResponse(
   payload: ChatWireCompletion,
   model: string,
   bridge: ResponsesToolBridge,
+  configuration: ResponseRequestConfiguration,
 ): Response {
   const restored = bridge.restoreCalls(
     payload.message.toolCalls.map((call) => ({
@@ -145,11 +154,19 @@ function completedResponse(
     return openAiError(502, restored.message, "upstream_error", "upstream_protocol_error");
   }
   const output: ResponseOutputItem[] = [];
-  if (payload.message.reasoningContent) {
+  if (
+    payload.message.reasoningContent ||
+    payload.message.reasoningEncryptedContent
+  ) {
     const reasoning: ReasoningOutputItem = {
       id: `rs_${randomUUID()}`,
       type: "reasoning",
-      summary: [{ type: "summary_text", text: payload.message.reasoningContent }],
+      summary: payload.message.reasoningContent
+        ? [{ type: "summary_text", text: payload.message.reasoningContent }]
+        : [],
+      ...(payload.message.reasoningEncryptedContent
+        ? { encrypted_content: payload.message.reasoningEncryptedContent }
+        : {}),
     };
     output.push(reasoning);
   }
@@ -158,23 +175,28 @@ function completedResponse(
       id: `msg_${randomUUID()}`,
       type: "message",
       role: "assistant",
-      content: [{ type: "output_text", text: payload.message.content }],
+      status: "completed",
+      content: [
+        { type: "output_text", text: payload.message.content, annotations: [] },
+      ],
     };
     output.push(message);
   }
   output.push(...restored.items);
-  return Response.json({
-    id: `resp_${randomUUID()}`,
-    object: "response",
-    status: "completed",
-    model,
-    output,
-    usage: {
-      input_tokens: payload.usage.inputTokens,
-      output_tokens: payload.usage.outputTokens,
-      total_tokens: payload.usage.totalTokens,
-    } satisfies ResponseUsage,
-  });
+  return Response.json(
+    responseState({
+      id: `resp_${randomUUID()}`,
+      status: "completed",
+      model,
+      output,
+      usage: {
+        input_tokens: payload.usage.inputTokens,
+        output_tokens: payload.usage.outputTokens,
+        total_tokens: payload.usage.totalTokens,
+      } satisfies ResponseUsage,
+      configuration,
+    }),
+  );
 }
 
 // allow: SIZE_OK — mirrors the established ingress boundary and owns one response conversion.
@@ -219,35 +241,28 @@ export async function handleResponses(
     clearTimeout(deadlineTimer);
     return parsed.response;
   }
-  if (
-    parsed.value.previous_response_id !== undefined ||
-    parsed.value.conversation !== undefined
-  ) {
-    clearTimeout(deadlineTimer);
-    return openAiError(
-      400,
-      "Stateful Responses continuation is not supported; resend the complete input without previous_response_id or conversation",
-      "invalid_request_error",
-      "unsupported_stateful_responses",
-    );
-  }
   const affinity = responsesSessionAffinity(parsed.value, dependencies.tenantId);
-  const adapted = responsesToInternalChat(parsed.value);
+  const adapted = responsesToInternalChat(
+    parsed.value,
+    config.protocol_projection_mode,
+  );
   if (!adapted.ok) {
+    auditLog("warn", "protocol_projection_rejected", {
+      protocol: "responses",
+      projection_mode: config.protocol_projection_mode,
+      code: adapted.code,
+      param: adapted.param,
+    });
     clearTimeout(deadlineTimer);
-    const code = adapted.code === "empty_input" ? adapted.code : "invalid_request";
     return openAiError(
       400,
       adapted.message ?? "input produced no messages",
       "invalid_request_error",
-      code,
+      adapted.code,
+      adapted.param,
     );
   }
-  const internal = parseChatCompletionRequest(adapted.body);
-  if (!internal.ok) {
-    clearTimeout(deadlineTimer);
-    return internal.response;
-  }
+  const responseConfiguration = responseConfigurationFromCanonical(adapted.body);
 
   const stream = parsed.value.stream;
   let lease: RequestIdleTimeoutLease | undefined;
@@ -264,8 +279,8 @@ export async function handleResponses(
     lease?.disable();
 
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
-      body: internal.value,
-      model: internal.value.model,
+      body: adapted.body,
+      model: adapted.body.model,
       stream,
       config,
       accountManager: dependencies.accountManager,
@@ -273,6 +288,10 @@ export async function handleResponses(
       ...(affinity ? { affinity } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
+        : {}),
+      tenantId: dependencies.tenantId,
+      ...(dependencies.reasoningReplayStore
+        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
         : {}),
       deadlineSignal: combinedSignal,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
@@ -285,10 +304,11 @@ export async function handleResponses(
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
     if (stream && contentType.includes("application/x-ndjson")) {
       const streaming = responsesSseAdapter(pipelineResponse, {
-        model: internal.value.model,
+        model: adapted.body.model,
         signals: ingressSignals,
         finalize: routeFinalize,
         bridge: adapted.bridge,
+        configuration: responseConfiguration,
       });
       streamOwnsRouteResources = true;
       return streaming;
@@ -298,7 +318,12 @@ export async function handleResponses(
       const completion: unknown = await pipelineResponse.json();
       const payload = parseChatWireCompletion(completion);
       if (payload) {
-        return completedResponse(payload, internal.value.model, adapted.bridge);
+        return completedResponse(
+          payload,
+          adapted.body.model,
+          adapted.bridge,
+          responseConfiguration,
+        );
       }
       return openAiError(
         500,

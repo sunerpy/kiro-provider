@@ -4,6 +4,7 @@ import {
 } from "../auth/opencode-auth-store.js";
 import type { Config } from "../config/schema.js";
 import { AccountManager } from "../core/account-manager.js";
+import { auditLog } from "../core/audit-log.js";
 import {
 	OpenCodeAccountManager,
 	OpenCodeTokenRefresher,
@@ -12,6 +13,7 @@ import type {
   PipelineAccountManager,
   PipelineAffinityStore,
   PipelineClientFactory,
+  PipelineReasoningReplayStore,
   PipelineTokenRefresher,
 } from "../core/pipeline.js";
 import { resolveProxyUrl } from "../core/proxy.js";
@@ -22,6 +24,7 @@ import {
   safeStep,
 } from "../core/stream-cleanup.js";
 import { TokenRefresher } from "../core/token-refresher.js";
+import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
 import { anthropicError } from "./anthropic/errors.js";
 import { checkApiKey } from "./auth-gate.js";
@@ -49,6 +52,7 @@ export type AppDependencies = {
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
   readonly affinityStore?: PipelineAffinityStore;
+  readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: RequestIdleTimeoutLeaseMaker;
 };
@@ -95,11 +99,18 @@ export type ServerDependencyFactories = {
 		tokenExpiryBufferMs: number,
 		proxyUrl?: string,
 	) => PipelineTokenRefresher;
+	readonly createReasoningReplayStore?: (
+		database: AccountsDatabase,
+		config: Config,
+	) => PipelineReasoningReplayStore;
 };
 
 export function createApp(config: Config, dependencies: AppDependencies): AppFetchHandler {
   return async (request: Request, server?: Bun.Server<undefined>): Promise<Response> => {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/health") {
+      return handleHealth();
+    }
     const anthropicRoute =
       url.pathname === "/v1/messages" ||
       url.pathname === "/v1/messages/count_tokens";
@@ -121,6 +132,9 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
       tenantId: auth.tenantId,
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
+        : {}),
+      ...(dependencies.reasoningReplayStore
+        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
         : {}),
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
       ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
@@ -152,11 +166,11 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
       if (request.method === "GET" && url.pathname === "/v1/models") {
         return handleModels();
       }
-      if (request.method === "GET" && url.pathname === "/health") {
-        return handleHealth();
-      }
       if (request.method === "GET" && url.pathname === "/ready") {
-        return handleReadiness(dependencies.accountManager);
+        return handleReadiness(
+          dependencies.accountManager,
+          dependencies.reasoningReplayStore,
+        );
       }
       return openAiError(404, "Route not found", "invalid_request_error", "not_found");
     } catch (error) {
@@ -173,7 +187,16 @@ export function buildServerDeps(
 	config: Config,
 	factories: ServerDependencyFactories = {},
 ): AppDependencies {
+	if (config.protocol_projection_mode === "legacy-user-prefix") {
+		auditLog("warn", "legacy_protocol_projection_enabled", {
+			projection_mode: config.protocol_projection_mode,
+			planned_removal: "v0.7.0",
+		});
+	}
 	const database = factories.createDatabase?.() ?? new AccountsDatabase();
+	const reasoningReplayStore =
+		factories.createReasoningReplayStore?.(database, config) ??
+		new ReasoningReplayStore(database, config);
 	const proxyUrl = resolveProxyUrl(config);
 	if (config.auth_source === "opencode-shared") {
 		const authStorePath =
@@ -198,7 +221,12 @@ export function buildServerDeps(
 					config.token_expiry_buffer_ms,
 					proxyUrl,
 				);
-		return { accountManager, tokenRefresher, affinityStore: database };
+		return {
+			accountManager,
+			tokenRefresher,
+			affinityStore: database,
+			reasoningReplayStore,
+		};
 	}
 
 	const accountManager = new AccountManager(
@@ -209,7 +237,12 @@ export function buildServerDeps(
 	const tokenRefresher = factories.createTokenRefresher
     ? factories.createTokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl)
     : new TokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl);
-  return { accountManager, tokenRefresher, affinityStore: database };
+  return {
+    accountManager,
+    tokenRefresher,
+    affinityStore: database,
+    reasoningReplayStore,
+  };
 }
 
 export function buildServeOptions(

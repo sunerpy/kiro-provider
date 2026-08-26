@@ -2,6 +2,8 @@ import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-stream
 import type { Config } from "../config/schema.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
+import type { CanonicalRequest } from "../protocol/canonical.js";
+import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 
 export interface PipelineAccountManager {
@@ -82,8 +84,13 @@ export interface PipelineSessionAffinity {
 	readonly source: string;
 }
 
+export type PipelineReasoningReplayStore = Pick<
+  ReasoningReplayStore,
+  "readiness" | "store" | "resolveResponses" | "resolveChat"
+>;
+
 export interface RunChatCompletionOptions {
-	readonly body: unknown;
+	readonly body: CanonicalRequest;
 	readonly model: string;
 	readonly stream: boolean;
 	readonly config: Config;
@@ -91,6 +98,8 @@ export interface RunChatCompletionOptions {
 	readonly tokenRefresher: PipelineTokenRefresher;
 	readonly affinity?: PipelineSessionAffinity;
 	readonly affinityStore?: PipelineAffinityStore;
+	readonly tenantId?: string;
+	readonly reasoningReplayStore?: PipelineReasoningReplayStore;
 	readonly makeClient?: PipelineClientFactory;
 	readonly deadlineSignal?: AbortSignal;
 	readonly createStreamResponse?: typeof createPipelineStreamResponse;

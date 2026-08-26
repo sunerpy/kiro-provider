@@ -343,9 +343,15 @@ classify_turn_outcome() {
 		return 2
 	fi
 
+	if grep -Fqi "unsupported_parallel_tool_calls" "$codex_stdout" "$codex_stderr" "$gateway_log"; then
+		echo "codex-smoke: COMPATIBILITY BLOCKED: this Codex version requests parallel_tool_calls=false, which Kiro cannot guarantee" >&2
+		echo "codex-smoke: summary: health=PASS turn=BLOCKED protocol_fidelity=PASS param=parallel_tool_calls exit=3" >&2
+		return 3
+	fi
+
 	if [ "$codex_status" -eq 0 ] && has_expected_model_content "$codex_stdout"; then
 		echo "codex-smoke: CONNECTIVITY/REASONING PASS: codex observed response.completed and produced expected assistant content"
-		echo "codex-smoke: note: this turn does not test tools; use KIRO_PROVIDER_SMOKE_MODE=tools for custom and namespace probes"
+		echo "codex-smoke: note: this turn does not test tools; complete the documented real-client gate before marking Codex supported"
 		echo "codex-smoke: summary: health=PASS turn=PASS wiring=PASS response.completed=OBSERVED content=PASS tool_capability=NOT_TESTED exit=0"
 		return 0
 	fi
@@ -1224,9 +1230,14 @@ fi
 EXPECTED_CODEX_VERSION="${CODEX_SMOKE_EXPECTED_VERSION:-0.149.0}"
 SMOKE_MODE="${KIRO_PROVIDER_SMOKE_MODE:-connectivity}"
 case "$SMOKE_MODE" in
-	connectivity|tools) ;;
+	connectivity) ;;
+	tools)
+		echo "codex-smoke: ERROR: tools mode is disabled in v0.5 because the old custom/namespace alias bridge was intentionally removed" >&2
+		echo "codex-smoke: run connectivity mode as a compatibility probe; do not restore request rewriting" >&2
+		exit 1
+		;;
 	*)
-		echo "codex-smoke: ERROR: KIRO_PROVIDER_SMOKE_MODE must be connectivity or tools" >&2
+		echo "codex-smoke: ERROR: KIRO_PROVIDER_SMOKE_MODE must be connectivity" >&2
 		exit 1
 		;;
 esac
@@ -1250,16 +1261,12 @@ CODEX_VERSION="$(codex --version 2>&1)"
 RUNNING_CODEX_VERSION="$(printf '%s\n' "$CODEX_VERSION" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
 if [ "$RUNNING_CODEX_VERSION" != "$EXPECTED_CODEX_VERSION" ]; then
 	echo "codex-smoke: ERROR: expected exact codex version '$EXPECTED_CODEX_VERSION', got: $CODEX_VERSION" >&2
-	echo "codex-smoke: the Responses wire contract was verified against codex-cli 0.149.0" >&2
+	echo "codex-smoke: the current RC compatibility probe is pinned to codex-cli 0.149.0" >&2
 	exit 1
 fi
 echo "codex-smoke: codex version accepted: $CODEX_VERSION"
 echo "codex-smoke: reasoning=$REASONING_EFFORT sandbox=$CODEX_SANDBOX_MODE"
-if [ "$SMOKE_MODE" = "tools" ]; then
-	echo "codex-smoke: scope: connectivity plus custom exec success/failure and namespace collaboration"
-else
-	echo "codex-smoke: scope: connectivity/reasoning only; set KIRO_PROVIDER_SMOKE_MODE=tools to test tools"
-fi
+echo "codex-smoke: scope: protocol-fidelity compatibility probe; current Codex may exit 3 on unsupported_parallel_tool_calls"
 
 PORT="${KIRO_PROVIDER_PORT:-8899}"
 APIKEY="${KIRO_PROVIDER_SMOKE_KEY:-sk-smoke-$(openssl rand -hex 6)}"

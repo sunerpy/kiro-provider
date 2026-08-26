@@ -47,6 +47,9 @@ export const ConfigSchema = z.object({
 	port: z.number().default(8787),
 	api_keys: ApiKeysSchema,
 	enable_legacy_chat_completions: z.boolean().default(false),
+	protocol_projection_mode: z
+		.enum(["safe", "legacy-user-prefix"])
+		.default("safe"),
 	proxy_url: ProxyUrlSchema,
 	auth_source: z.enum(["opencode-shared", "local"]).default("opencode-shared"),
 	opencode_auth_db_path: OptionalPathSchema,
@@ -67,8 +70,22 @@ export const ConfigSchema = z.object({
 			.min(1)
 			.max(2_147_483_647)
 			.default(86_400_000),
-		session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
-		effort: EffortSchema.nullable().default(null),
+	session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
+	reasoning_replay_key_path: OptionalPathSchema,
+	reasoning_replay_keys: z.array(z.string().trim().min(1)).default([]),
+	reasoning_replay_ttl_ms: z
+		.number()
+		.int()
+		.min(1)
+		.max(2_147_483_647)
+		.default(86_400_000),
+	reasoning_replay_max_entries: z
+		.number()
+		.int()
+		.min(1)
+		.max(1_000_000)
+		.default(10_000),
+	effort: EffortSchema.nullable().default(null),
 	auto_effort_mapping: z.boolean().default(true),
 	log_level: z.string().default("info"),
 	test_upstream_endpoint: z.string().url().optional(),

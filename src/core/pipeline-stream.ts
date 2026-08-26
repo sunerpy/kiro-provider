@@ -1,4 +1,8 @@
-import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
+import type {
+  SdkOutputFingerprint,
+  SdkReasoningCaptureHandler,
+  SdkStreamResponse,
+} from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import { transformSdkStream } from "../kiro/transform/streaming/sdk-stream-transformer.js";
 import { abortReason } from "./pipeline-runtime.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
@@ -7,6 +11,10 @@ export interface PipelineStreamResult {
   readonly sdkResponse: SdkStreamResponse;
   readonly model: string;
   readonly conversationId: string;
+  readonly captureReasoning?: SdkReasoningCaptureHandler;
+  readonly emitEncryptedReasoning?: boolean;
+  readonly emitAnthropicReasoningMetadata?: boolean;
+  readonly fingerprintOutput?: SdkOutputFingerprint;
 }
 
 class StreamIdleTimeoutError extends Error {
@@ -37,6 +45,16 @@ export function createPipelineStreamResponse(
     result.model,
     result.conversationId,
     composedSignal,
+    {
+      ...(result.captureReasoning
+        ? { captureReasoning: result.captureReasoning }
+        : {}),
+      emitEncryptedReasoning: result.emitEncryptedReasoning,
+      emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
+      ...(result.fingerprintOutput
+        ? { fingerprintOutput: result.fingerprintOutput }
+        : {}),
+    },
   )[Symbol.asyncIterator]();
   const encoder = new TextEncoder();
   let terminalOutcome: PipelineOutcome | undefined;

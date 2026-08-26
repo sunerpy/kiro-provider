@@ -1,3 +1,4 @@
+import type { CanonicalAssistantOutput } from '../../../protocol/canonical.js'
 import { getContextWindowSize } from '../../models.js'
 import { estimateTokens } from '../response.js'
 import type { StreamEvent, ToolCallState } from './types.js'
@@ -13,7 +14,11 @@ export interface SdkTokenUsage {
 }
 
 export interface SdkStreamEvent {
-  readonly reasoningContentEvent?: { readonly text?: string }
+  readonly reasoningContentEvent?: {
+    readonly text?: string
+    readonly signature?: string
+    readonly redactedContent?: Uint8Array
+  }
   readonly assistantResponseEvent?: { readonly content?: string }
   readonly toolUseEvent?: {
     readonly name?: string
@@ -26,6 +31,77 @@ export interface SdkStreamEvent {
     readonly contextUsagePercentage?: number
   }
   readonly contextUsageEvent?: { readonly contextUsagePercentage?: number }
+}
+
+export interface SdkReasoningCapture {
+  readonly text: string
+  readonly signature?: string
+  readonly redactedContent?: Uint8Array
+}
+
+export interface SdkReasoningCaptureState {
+  text: string
+  signature: string
+  signatureConflict: boolean
+  redactedChunks: Uint8Array[]
+}
+
+export type SdkReasoningCaptureHandler = (
+  capture: SdkReasoningCapture,
+  outputFingerprint: string
+) => string | undefined
+
+export type SdkOutputFingerprint = (output: CanonicalAssistantOutput) => string
+
+export function createReasoningCaptureState(): SdkReasoningCaptureState {
+  return { text: '', signature: '', signatureConflict: false, redactedChunks: [] }
+}
+
+export function appendReasoningCapture(
+  state: SdkReasoningCaptureState,
+  event: SdkStreamEvent['reasoningContentEvent']
+): void {
+  if (!event) return
+  state.text += event.text ?? ''
+  if (event.signature !== undefined && event.signature.length > 0) {
+    if (state.signature.length > 0 && state.signature !== event.signature) {
+      state.signatureConflict = true
+    }
+    state.signature = event.signature
+  }
+  if (event.redactedContent && event.redactedContent.byteLength > 0) {
+    state.redactedChunks.push(event.redactedContent)
+  }
+}
+
+export function resolveReasoningCapture(
+  state: SdkReasoningCaptureState
+): SdkReasoningCapture {
+  const redactedLength = state.redactedChunks.reduce(
+    (total, chunk) => total + chunk.byteLength,
+    0
+  )
+  let redactedContent: Uint8Array | undefined
+  if (redactedLength > 0) {
+    redactedContent = new Uint8Array(redactedLength)
+    let offset = 0
+    for (const chunk of state.redactedChunks) {
+      redactedContent.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+  }
+  const mixedTextAndRedacted = state.text.length > 0 && redactedContent !== undefined
+  const completeSignedText =
+    state.text.length > 0 &&
+    state.signature.length > 0 &&
+    !state.signatureConflict &&
+    redactedContent === undefined
+  const completeRedacted = state.text.length === 0 && redactedContent !== undefined
+  return {
+    text: state.text,
+    ...(completeSignedText ? { signature: state.signature } : {}),
+    ...(!mixedTextAndRedacted && completeRedacted ? { redactedContent } : {})
+  }
 }
 
 export interface SdkStreamResponse {

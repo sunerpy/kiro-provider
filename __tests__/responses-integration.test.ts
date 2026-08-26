@@ -398,7 +398,8 @@ describe("POST /v1/responses", () => {
       type: "message",
       id: expect.any(String),
       role: "assistant",
-      content: [{ type: "output_text", text: "default JSON" }],
+      status: "completed",
+      content: [{ type: "output_text", text: "default JSON", annotations: [] }],
     });
   });
 
@@ -588,14 +589,29 @@ describe("POST /v1/responses", () => {
         model: MODEL,
         stream: true,
         body: {
+          canonicalVersion: 1,
+          protocol: "responses",
+          projectionMode: "safe",
           model: MODEL,
           stream: true,
           messages: [
             {
               role: "user",
-              content: "exercise every Responses request adapter",
+              content: [
+                {
+                  type: "text",
+                  text: "exercise every Responses request adapter",
+                  path: "input",
+                },
+              ],
+              toolCalls: [],
+              path: "input",
             },
           ],
+          tools: [],
+          toolChoice: "auto",
+          reasoningReplays: [],
+          includeEncryptedReasoning: false,
         },
       });
       expect({ order }).toEqual({
@@ -639,6 +655,87 @@ describe("POST /v1/responses", () => {
     });
   });
 
+  test("echoes accepted request configuration and sends the native Claude output limit", async () => {
+    const server = scriptedServer(
+      [eventsWith({ text: "configured answer" })],
+      testConfig({ protocol_projection_mode: "legacy-user-prefix" }),
+    );
+    const response = await postResponse(server, {
+      model: "claude-sonnet-5",
+      instructions: "exact instructions",
+      input: "hello",
+      stream: false,
+      max_output_tokens: 4_096,
+      reasoning: { effort: "minimal" },
+      tool_choice: "none",
+      tools: [
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object" },
+          strict: false,
+        },
+        { type: "custom", name: "shell" },
+      ],
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      object: "response",
+      status: "completed",
+      instructions: "exact instructions",
+      max_output_tokens: 4_096,
+      max_tool_calls: null,
+      reasoning: { effort: "minimal", summary: null },
+      tool_choice: "none",
+      tools: [
+        {
+          type: "function",
+          name: "read",
+          parameters: { type: "object" },
+          strict: false,
+        },
+        { type: "custom", name: "shell" },
+      ],
+      completed_at: expect.any(Number),
+      service_tier: null,
+      top_logprobs: null,
+      user: null,
+    });
+    expect(server.capturedCommandInputs).toHaveLength(1);
+    expect(server.capturedCommandInputs[0]).toMatchObject({
+      additionalModelRequestFields: { max_tokens: 4_096 },
+      conversationState: {
+        currentMessage: {
+          userInputMessage: {
+            content: "exact instructions\n\nhello",
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(server.capturedCommandInputs[0])).not.toContain("toolSpecification");
+  });
+
+  test("rejects an unproven GPT output limit before invoking the SDK", async () => {
+    const server = scriptedServer([eventsWith({ text: "must not run" })]);
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      max_output_tokens: 4_096,
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      error: {
+        code: "unsupported_output_token_limit",
+        param: "max_output_tokens",
+      },
+    });
+    expect(server.capturedCommandInputs).toHaveLength(0);
+  });
+
   test("returns a tool-only completed response with no empty assistant message", async () => {
     // Given
     const tool = {
@@ -649,7 +746,22 @@ describe("POST /v1/responses", () => {
     const server = scriptedServer([[...eventsWith({ tool })]]);
 
     // When
-    const response = await postResponse(server, { model: MODEL, input: "weather", stream: false });
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "weather",
+      stream: false,
+      tools: [
+        {
+          type: "function",
+          name: tool.name,
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      ],
+    });
     const body: unknown = await response.json();
 
     // Then
@@ -676,7 +788,7 @@ describe("POST /v1/responses", () => {
     );
   });
 
-  test("returns custom and namespace calls with unique ids and no empty message", async () => {
+  test("returns custom and function calls with unique ids and no empty message", async () => {
     const server = scriptedServer([
       [
         {
@@ -689,7 +801,7 @@ describe("POST /v1/responses", () => {
         },
         {
           toolUseEvent: {
-            name: "kiro_ns_0",
+            name: "spawn_agent",
             toolUseId: "call_spawn",
             input: '{"task_name":"review"}',
             stop: true,
@@ -705,9 +817,9 @@ describe("POST /v1/responses", () => {
       tools: [
         { type: "custom", name: "exec" },
         {
-          type: "namespace",
-          name: "collaboration",
-          tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object" } }],
+          type: "function",
+          name: "spawn_agent",
+          parameters: { type: "object" },
         },
       ],
     });
@@ -718,20 +830,20 @@ describe("POST /v1/responses", () => {
       throw new TypeError("Responses body must contain output items");
     }
     expect(body.output).toHaveLength(2);
-    const [custom, namespace] = body.output;
+    const [custom, functionCall] = body.output;
     if (
       !isReadonlyRecord(custom) ||
-      !isReadonlyRecord(namespace) ||
+      !isReadonlyRecord(functionCall) ||
       typeof custom.id !== "string" ||
-      typeof namespace.id !== "string"
+      typeof functionCall.id !== "string"
     ) {
       throw new TypeError("Both tool items must carry independent ids");
     }
     expect(custom.id).toMatch(/^fc_[0-9a-f-]+$/);
-    expect(namespace.id).toMatch(/^fc_[0-9a-f-]+$/);
-    expect(custom.id).not.toBe(namespace.id);
+    expect(functionCall.id).toMatch(/^fc_[0-9a-f-]+$/);
+    expect(custom.id).not.toBe(functionCall.id);
     expect(custom.id).not.toBe("call_exec");
-    expect(namespace.id).not.toBe("call_spawn");
+    expect(functionCall.id).not.toBe("call_spawn");
     expect(custom).toEqual({
       id: custom.id,
       type: "custom_tool_call",
@@ -739,17 +851,39 @@ describe("POST /v1/responses", () => {
       name: "exec",
       input: "printf ok",
     });
-    expect(namespace).toEqual({
-      id: namespace.id,
+    expect(functionCall).toEqual({
+      id: functionCall.id,
       type: "function_call",
       call_id: "call_spawn",
-      namespace: "collaboration",
       name: "spawn_agent",
       arguments: '{"task_name":"review"}',
     });
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,
     );
+  });
+
+  test("rejects namespace tools before invoking the SDK", async () => {
+    const server = scriptedServer([eventsWith({ text: "must not run" })]);
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "run tool",
+      stream: false,
+      tools: [
+        {
+          type: "namespace",
+          name: "collaboration",
+          tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object" } }],
+        },
+      ],
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      error: { code: "unsupported_tool_type", param: "tools.0" },
+    });
+    expect(server.capturedCommandInputs).toHaveLength(0);
   });
 
   test("returns an atomic 502 when a later custom wrapper is malformed", async () => {
@@ -789,7 +923,7 @@ describe("POST /v1/responses", () => {
     expect(body).not.toHaveProperty("output");
   });
 
-  test("preserves reasoning, function call, and tool output in a second-turn SDK request", async () => {
+  test("preserves an exactly declared function call and tool output in a second-turn SDK request", async () => {
     // Given
     const firstTool = {
       id: "call_lookup",
@@ -800,7 +934,23 @@ describe("POST /v1/responses", () => {
       eventsWith({ reasoning: "inspect status", tool: firstTool }),
       eventsWith({ text: "done" }),
     ]);
-    const first = await postResponse(server, { model: MODEL, input: "check status", stream: true });
+    const tools = [
+      {
+        type: "function" as const,
+        name: firstTool.name,
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ];
+    const first = await postResponse(server, {
+      model: MODEL,
+      input: "check status",
+      stream: true,
+      tools,
+    });
     expect(first.status).toBe(200);
     const firstFrames = parseSseFrames(await first.text());
     const completed = firstFrames.find((frame) => frame.type === "response.completed");
@@ -827,7 +977,6 @@ describe("POST /v1/responses", () => {
     const second = await postResponse(server, {
       model: MODEL,
       input: [
-        emittedReasoning,
         emittedFunctionCall,
         {
           type: "function_call_output",
@@ -841,6 +990,7 @@ describe("POST /v1/responses", () => {
         },
       ],
       stream: false,
+      tools,
     });
 
     // Then
@@ -891,16 +1041,18 @@ describe("POST /v1/responses", () => {
     await expectOpenAiError(response, 400);
   });
 
-  test("returns 400 when input produces no executable messages", async () => {
+  test("rejects an unknown input item without silently skipping it", async () => {
     const server = scriptedServer([eventsWith({ text: "unused" })]);
     const response = await postResponse(server, {
       model: MODEL,
-      instructions: "policy only",
       input: [{ type: "future_item", payload: true }],
     });
     const body: unknown = await response.json();
     expect(response.status).toBe(400);
-    expect(body).toMatchObject({ error: { code: "empty_input" } });
+    expect(body).toMatchObject({
+      error: { code: "unsupported_input_item", param: "input.0" },
+    });
+    expect(server.capturedCommandInputs).toHaveLength(0);
   });
 
   test.each([

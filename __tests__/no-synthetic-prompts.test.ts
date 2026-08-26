@@ -12,6 +12,16 @@ const REQUEST_ADAPTER_FILES = [
 	"src/server/anthropic/request-adapter.ts",
 ] as const;
 
+const FORBIDDEN_REWRITE_SYMBOLS = [
+	"injectSystemPrompt",
+	"mergeAdjacentMessages",
+	"collapseAgenticLoops",
+	"sanitizeHistory",
+	"deduplicateToolCalls",
+	"parseTextToolCalls",
+	"parseBracketToolCalls",
+] as const;
+
 const FORBIDDEN_PROVIDER_PROMPTS = [
 	"[system:",
 	"Tool results provided.",
@@ -38,6 +48,9 @@ describe("zero hidden prompt invariant", () => {
 		for (const forbidden of FORBIDDEN_PROVIDER_PROMPTS) {
 			expect(combined).not.toContain(forbidden);
 		}
+		for (const forbidden of FORBIDDEN_REWRITE_SYMBOLS) {
+			expect(combined).not.toContain(forbidden);
+		}
 	});
 
 	test("Responses keeps client plaintext but never exposes encrypted replay as text", () => {
@@ -45,25 +58,19 @@ describe("zero hidden prompt invariant", () => {
 			model: "gpt-5.6-sol",
 			input: [
 				{
-					type: "agent_message",
-					author: "/root",
-					recipient: "/root/worker",
-					content: [
-						{ type: "input_text", text: "CLIENT_TASK_TEXT" },
-						{
-							type: "encrypted_content",
-							encrypted_content: "OPAQUE_REASONING_CIPHERTEXT",
-						},
-					],
+					type: "reasoning",
+					encrypted_content: "kr1_OPAQUE_REASONING_TOKEN",
 				},
+				{ role: "assistant", content: "CLIENT_PRIOR_ANSWER" },
+				{ role: "user", content: "CLIENT_TASK_TEXT" },
 			],
 		});
 		const adapted = responsesToInternalChat(parsed);
 		if (!adapted.ok) throw new TypeError("fixture must adapt");
-		const serialized = JSON.stringify(adapted.body);
+		const serialized = JSON.stringify(adapted.body.messages);
 
 		expect(serialized).toContain("CLIENT_TASK_TEXT");
-		expect(serialized).not.toContain("OPAQUE_REASONING_CIPHERTEXT");
+		expect(serialized).not.toContain("OPAQUE_REASONING_TOKEN");
 		for (const forbidden of FORBIDDEN_PROVIDER_PROMPTS) {
 			expect(serialized).not.toContain(forbidden);
 		}
@@ -71,9 +78,26 @@ describe("zero hidden prompt invariant", () => {
 
 	test("Anthropic preserves error status structurally without adding error prose", () => {
 		const adapted = adaptAnthropicMessagesRequest({
-			model: "claude-opus-4-8",
-			max_tokens: 128,
+			model: "claude-sonnet-5",
+			max_tokens: 1_024,
+			tools: [
+				{
+					name: "tool",
+					input_schema: { type: "object" },
+				},
+			],
 			messages: [
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "tool_use",
+							id: "tool-1",
+							name: "tool",
+							input: {},
+						},
+					],
+				},
 				{
 					role: "user",
 					content: [

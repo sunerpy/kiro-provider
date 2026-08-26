@@ -3,6 +3,7 @@
   "port": 8787,
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
+  "protocol_projection_mode": "safe",
   "proxy_url": null,
   "auth_source": "opencode-shared",
   "opencode_auth_db_path": null,
@@ -17,6 +18,10 @@
   "token_expiry_buffer_ms": 300000,
   "session_affinity_ttl_ms": 86400000,
   "session_affinity_max_entries": 10000,
+  "reasoning_replay_key_path": null,
+  "reasoning_replay_keys": [],
+  "reasoning_replay_ttl_ms": 86400000,
+  "reasoning_replay_max_entries": 10000,
   "effort": null,
   "auto_effort_mapping": true,
   "log_level": "info"

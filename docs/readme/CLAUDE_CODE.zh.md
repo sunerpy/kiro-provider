@@ -1,73 +1,51 @@
 # 配合 Claude Code 使用 kiro-provider
 
-Claude Code 的推理请求使用 Anthropic Messages 协议，不使用 OpenAI
-Responses 或 Chat Completions。
+kiro-provider 为 Anthropic 兼容客户端提供 `POST /v1/messages` 和
+`POST /v1/messages/count_tokens`。
 
-已于 2026-08-22 使用 **Claude Code 2.1.209** 完成真实端到端验证，包括一次
-实际 `Read` 工具调用和工具结果续接。
+## v0.5.0-rc.1 当前状态
 
-## 配置 Claude Code
+2026-08-26 使用编译后二进制和 **Claude Code 2.1.209** 进行门禁；客户端只
+配置标准 `ANTHROPIC_BASE_URL`、API key 和模型。当前 Claude Code 请求包含
+尚无法保真投影到 Kiro 的语义：
 
-先启动 kiro-provider，再把 Claude Code 指向网关根地址（不要追加
-`/v1`）：
+- `output_config.format`；
+- `context_management`；
+- 第一次拒绝后，把 `system` 放进 `messages.1.role` 的重试。
+
+前两者都会在调用 Kiro 前以 `unsupported_parameter` 和精确字段路径被拒绝。
+重试请求则由 Anthropic schema 拒绝，因为 `messages[].role` 只允许 `user` 或
+`assistant`；Provider 不会静默提升或搬移该角色。safe 与
+`legacy-user-prefix` 的结果相同；legacy 只处理合法的指令文本，不会开启其他
+能力。因此 Claude Code 2.1.209 **尚未通过 v0.5 稳定版门禁**，历史 v0.4
+工具循环结果不能作为当前 RC 已通过的证据。
+
+直接 Messages 子集本身支持文本、精确工具声明/结果、base64 图片、类型化
+JSON/SSE、估算 token 计数，以及完整 Kiro 签名/redacted reasoning 回放。
+safe 模式会拒绝 `system`；显式迁移模式只会前置原始指令块。强制工具选择、
+仅串行工具保证、prompt-cache 指令、不支持的输出格式和未知嵌套字段仍明确
+报错。
+
+## 隔离兼容性探针
+
+先启动 Provider，再只配置标准环境变量：
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
 export ANTHROPIC_AUTH_TOKEN="sk-your-private-key"
-claude
+export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-5"
+claude -p "Reply with exactly: CLAUDE_CODE_OK"
 ```
 
-`ANTHROPIC_AUTH_TOKEN` 会与 `api_keys` 匹配。Anthropic 路由也接受
-`x-api-key`。
+Claude Code 2.1.209 的当前预期结果是非零退出，并指出
+`output_config.format`、`context_management`，或非法的
+`messages.1.role=system` 重试。不要增加剥离字段或搬移角色的请求代理；真正
+支持该客户端需要等价原生实现，或客户端版本/配置发送已支持的请求形态。
 
-默认共享认证模式下，请先运行 `opencode auth login` 并登录 Kiro，同时要求
-需鉴权的 `GET /ready` 返回 200。只有 `auth_source: "local"` 才使用
-provider 本地登录/导入。
+共享认证模式下先执行 `opencode auth login`，并要求带鉴权的 `GET /ready`
+返回 200。base URL 使用网关根地址，不追加 `/v1`。
 
-如果 Claude Code 的默认模型别名与 `GET /v1/models` 返回值不一致，可以
-显式设置：
-
-```bash
-export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-4.5"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="claude-opus-4.1"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="claude-haiku-4.5"
-```
-
-实际值应以当前运行中网关暴露的模型 ID 为准。
-
-## 端点
-
-- `POST /v1/messages`：非流式 Anthropic Message JSON，或 Anthropic
-  Messages SSE。
-- `POST /v1/messages/count_tokens`：输入 token 估算。
-
-## 已支持
-
-- 文本、base64 图片、system prompt、工具声明、工具调用与工具结果。
-- 流式事件顺序为 `message_start`、content-block 事件、
-  `message_delta`、`message_stop`。
-- HTTP 200 之后发生的错误会输出 Anthropic `error` SSE 事件。
-- 请求截止时间、客户端取消、请求体大小限制、Bun 请求级 idle-timeout
-  租约清理与 Responses 共用同一生命周期约束。
-- 不需要私有会话 Header。`metadata.user_id` 加首个用户回合，或仅首个用户
-  回合，会驱动持久化的账号与 Kiro conversation 亲和。
-
-## 明确限制
-
-- Kiro 不提供 Anthropic signed-thinking block。重放的 `thinking` 与
-  `redacted_thinking` 不会被转换成模型可见文本，网关也不会伪造或返回
-  thinking signature。
-- Kiro 没有与 `tool_choice: any/tool` 或
-  `disable_parallel_tool_use: true` 等价的结构化硬约束，因此这些请求会返回
-  明确的 invalid-request 错误，不会通过拼接提示词模拟。
-- `max_tokens` 会按 Messages API 契约校验，但当前 Kiro 传输层没有精确的
-  输出 token 上限能力，不能将其视为硬性生成限制。
-- Kiro 没有提供独立 tokenizer。count-tokens 响应会带
-  `x-kiro-token-count-mode: estimate`，不能当作计费级精确值。
-- Anthropic prompt-cache 指令会作为前向兼容元数据被接受，但本网关无法
-  暴露 Kiro 的缓存计费数据。
-
-生产部署与共享认证要求见
-[生产级 provider 设计](../PRODUCTION_PROVIDER_DESIGN.zh.md)。真实客户端
-验证证据见
-[`E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)。
+当前证据见
+[`../audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](../audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md)。
+旧的 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
+仅是历史 v0.4 记录。

@@ -130,7 +130,7 @@ function client(response: SdkStreamResponse): PipelineSdkClient {
 
 function makeClientFor(body: Record<string, unknown>): PipelineClientFactory {
   return () => {
-    if (body.mode === "stream-error") return client(failingSdkResponse());
+    if (body.prompt_cache_key === "stream-error") return client(failingSdkResponse());
     if (body.stream === true) {
       return client(
         sdkResponse([
@@ -249,6 +249,39 @@ describe("POST /v1/chat/completions", () => {
       true,
     );
     expect(toolStarts.map((call) => call.index)).toEqual([0, 1]);
+    expect(jsonFrames.every((chunk) => chunk.usage === undefined)).toBe(true);
+  });
+
+  test("emits one separate choices-empty usage chunk only when requested", async () => {
+    const response = await postJson(
+      validBody({
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+    );
+    const frames = (await response.text())
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("data: {") && frame !== "data: [DONE]")
+      .map((frame) => JSON.parse(frame.slice("data: ".length)));
+    const usageFrames = frames.filter(
+      (chunk) => Array.isArray(chunk.choices) && chunk.choices.length === 0,
+    );
+
+    expect(usageFrames).toHaveLength(1);
+    expect(usageFrames[0]).toMatchObject({
+      object: "chat.completion.chunk",
+      choices: [],
+      usage: {
+        prompt_tokens: expect.any(Number),
+        completion_tokens: expect.any(Number),
+        total_tokens: expect.any(Number),
+      },
+    });
+    expect(
+      frames
+        .filter((chunk) => chunk.choices?.length > 0)
+        .every((chunk) => chunk.usage === undefined),
+    ).toBe(true);
   });
 
   test("passes a non-streaming OpenAI completion through as JSON", async () => {
@@ -267,6 +300,15 @@ describe("POST /v1/chat/completions", () => {
   test("accepts an assistant tool-call turn with null content", async () => {
     // Given
     const body = validBody({
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "lookup",
+            parameters: { type: "object" },
+          },
+        },
+      ],
       messages: [
         { role: "user", content: "call the tool" },
         {
@@ -293,7 +335,7 @@ describe("POST /v1/chat/completions", () => {
 
   test("emits an observable error frame without a done sentinel when the upstream stream errors", async () => {
     // Given
-    const body = validBody({ stream: true, mode: "stream-error" });
+    const body = validBody({ stream: true, prompt_cache_key: "stream-error" });
 
     // When
     const response = await postJson(body);
@@ -410,7 +452,21 @@ describe("POST /v1/chat/completions", () => {
       expect(pipelineOptions).toMatchObject({
         model: "auto",
         stream: true,
-        body: validBody({ stream: true }),
+        body: {
+          canonicalVersion: 1,
+          protocol: "chat-completions",
+          projectionMode: "safe",
+          model: "auto",
+          stream: true,
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "hello", path: "messages.0.content" }],
+              toolCalls: [],
+              path: "messages.0",
+            },
+          ],
+        },
       });
     } finally {
       await cleanupHeldReader?.();

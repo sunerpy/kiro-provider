@@ -1,7 +1,11 @@
+import { auditLog } from "./audit-log.js";
+
 export const CLEANUP_GRACE_MS = 500;
 
 export function reportFinalizeError(error: unknown): void {
-  console.error("stream-cleanup: cleanup step failed", error);
+  auditLog("warn", "stream_cleanup_failed", {
+    error_type: error instanceof Error ? error.name : typeof error,
+  });
 }
 
 export function safeStep(fn: () => void, onError?: (error: unknown) => void): void {

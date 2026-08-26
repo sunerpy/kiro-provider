@@ -14,6 +14,9 @@ export type ChatWireCompletion = {
   readonly message: {
     readonly content: string;
     readonly reasoningContent: string | undefined;
+    readonly reasoningSignature: string | undefined;
+    readonly reasoningRedactedContent: string | undefined;
+    readonly reasoningEncryptedContent: string | undefined;
     readonly toolCalls: readonly ChatWireToolCall[];
   };
   readonly usage: ChatWireUsage;
@@ -30,6 +33,9 @@ export type ChatWireDelta =
   | { readonly kind: "empty" }
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "reasoning"; readonly text: string }
+  | { readonly kind: "reasoning_signature"; readonly signature: string }
+  | { readonly kind: "reasoning_redacted"; readonly data: string }
+  | { readonly kind: "reasoning_encrypted"; readonly encryptedContent: string }
   | {
       readonly kind: "tool_calls";
       readonly calls: readonly ChatWireToolCallFragment[];
@@ -73,6 +79,24 @@ export function parseChatWireCompletion(value: unknown): ChatWireCompletion | un
   if (reasoningContent !== undefined && typeof reasoningContent !== "string") {
     return undefined;
   }
+  const reasoningSignature = message.reasoning_signature;
+  if (reasoningSignature !== undefined && typeof reasoningSignature !== "string") {
+    return undefined;
+  }
+  const reasoningRedactedContent = message.reasoning_redacted_content;
+  if (
+    reasoningRedactedContent !== undefined &&
+    typeof reasoningRedactedContent !== "string"
+  ) {
+    return undefined;
+  }
+  const reasoningEncryptedContent = message.reasoning_encrypted_content;
+  if (
+    reasoningEncryptedContent !== undefined &&
+    typeof reasoningEncryptedContent !== "string"
+  ) {
+    return undefined;
+  }
   const toolCalls: ChatWireToolCall[] = [];
   if (message.tool_calls !== undefined) {
     if (!Array.isArray(message.tool_calls)) return undefined;
@@ -94,7 +118,14 @@ export function parseChatWireCompletion(value: unknown): ChatWireCompletion | un
     }
   }
   return {
-    message: { content: message.content, reasoningContent, toolCalls },
+    message: {
+      content: message.content,
+      reasoningContent,
+      reasoningSignature,
+      reasoningRedactedContent,
+      reasoningEncryptedContent,
+      toolCalls,
+    },
     usage,
   };
 }
@@ -118,7 +149,14 @@ function parseToolCall(value: unknown): ChatWireToolCallFragment | undefined {
 
 function parseDelta(value: unknown): ChatWireDelta | undefined {
   if (!isRecord(value)) return undefined;
-  const knownFields = ["content", "reasoning_content", "tool_calls"].filter(
+  const knownFields = [
+    "content",
+    "reasoning_content",
+    "reasoning_signature",
+    "reasoning_redacted_content",
+    "reasoning_encrypted_content",
+    "tool_calls",
+  ].filter(
     (field) => value[field] !== undefined,
   );
   if (knownFields.length === 0) return { kind: "empty" };
@@ -126,6 +164,18 @@ function parseDelta(value: unknown): ChatWireDelta | undefined {
   if (typeof value.content === "string") return { kind: "text", text: value.content };
   if (typeof value.reasoning_content === "string") {
     return { kind: "reasoning", text: value.reasoning_content };
+  }
+  if (typeof value.reasoning_signature === "string") {
+    return { kind: "reasoning_signature", signature: value.reasoning_signature };
+  }
+  if (typeof value.reasoning_redacted_content === "string") {
+    return { kind: "reasoning_redacted", data: value.reasoning_redacted_content };
+  }
+  if (typeof value.reasoning_encrypted_content === "string") {
+    return {
+      kind: "reasoning_encrypted",
+      encryptedContent: value.reasoning_encrypted_content,
+    };
   }
   if (!Array.isArray(value.tool_calls)) return undefined;
   const calls: ChatWireToolCallFragment[] = [];

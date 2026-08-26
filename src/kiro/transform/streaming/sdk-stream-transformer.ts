@@ -1,211 +1,246 @@
-import { DialectGate } from "./dialect-gate.js";
+import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
 import { convertToOpenAI, type OpenAIStreamChunk } from "./openai-converter.js";
 import {
-	flushAssistantBuffer,
-	processAssistantText,
-} from "./sdk-stream-buffer.js";
-import {
-	appendToolFragment,
-	createToolCallEvents,
-	nextSdkEvent,
-	resolveUsage,
-	type SdkStreamResponse,
-	type UsageState,
-	updateUsageState,
+  appendReasoningCapture,
+  appendToolFragment,
+  createReasoningCaptureState,
+  createToolCallEvents,
+  nextSdkEvent,
+  resolveReasoningCapture,
+  resolveUsage,
+  type SdkOutputFingerprint,
+  type SdkReasoningCaptureHandler,
+  type SdkStreamResponse,
+  type UsageState,
+  updateUsageState,
 } from "./sdk-stream-runtime.js";
-import {
-	createTextDeltaEvents,
-	createThinkingDeltaEvents,
-	stopBlock,
-} from "./stream-state.js";
+import { createTextDeltaEvents, createThinkingDeltaEvents, stopBlock } from "./stream-state.js";
 import type { StreamEvent, StreamState, ToolCallState } from "./types.js";
 
-export type {
-	SdkStreamEvent,
-	SdkStreamResponse,
-} from "./sdk-stream-runtime.js";
+export type { SdkStreamEvent, SdkStreamResponse } from "./sdk-stream-runtime.js";
+
+export interface TransformSdkStreamOptions {
+  readonly captureReasoning?: SdkReasoningCaptureHandler;
+  readonly emitEncryptedReasoning?: boolean;
+  readonly emitAnthropicReasoningMetadata?: boolean;
+  readonly fingerprintOutput?: SdkOutputFingerprint;
+}
 
 export class MissingSdkEventStreamError extends Error {
-	readonly name = "MissingSdkEventStreamError";
+  readonly name = "MissingSdkEventStreamError";
 
-	constructor() {
-		super("SDK response has no event stream");
-	}
+  constructor() {
+    super("SDK response has no event stream");
+  }
+}
+
+function metadataChunk(
+  conversationId: string,
+  model: string,
+  delta: Readonly<Record<string, unknown>>,
+): OpenAIStreamChunk {
+  return {
+    id: conversationId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, delta, finish_reason: null }],
+  };
 }
 
 export async function* transformSdkStream(
-	sdkResponse: SdkStreamResponse,
-	model: string,
-	conversationId: string,
-	signal?: AbortSignal,
+  sdkResponse: SdkStreamResponse,
+  model: string,
+  conversationId: string,
+  signal?: AbortSignal,
+  options: TransformSdkStreamOptions = {},
 ): AsyncGenerator<OpenAIStreamChunk> {
-	const eventStream = sdkResponse.generateAssistantResponseResponse;
-	if (!eventStream) throw new MissingSdkEventStreamError();
+  const eventStream = sdkResponse.generateAssistantResponseResponse;
+  if (!eventStream) throw new MissingSdkEventStreamError();
 
-	const streamState: StreamState = {
-		thinkingRequested: true,
-		buffer: "",
-		inThinking: false,
-		thinkingExtracted: false,
-		thinkingBlockIndex: null,
-		textBlockIndex: null,
-		nextBlockIndex: 0,
-		stoppedBlocks: new Set(),
-	};
-	const dialectGate = new DialectGate();
-	const toolCalls = new Map<string, ToolCallState>();
-	const usage: UsageState = {};
-	const iterator = eventStream[Symbol.asyncIterator]();
-	let textOnlyContent = "";
-	let reasoningStarted = false;
-	let reasoningClosed = false;
-	let iteratorFinished = false;
-	let iteratorClosed = false;
+  const streamState: StreamState = {
+    thinkingRequested: true,
+    buffer: "",
+    inThinking: false,
+    thinkingExtracted: false,
+    thinkingBlockIndex: null,
+    textBlockIndex: null,
+    nextBlockIndex: 0,
+    stoppedBlocks: new Set(),
+  };
+  const toolCalls = new Map<string, ToolCallState>();
+  const usage: UsageState = {};
+  const reasoning = createReasoningCaptureState();
+  const iterator = eventStream[Symbol.asyncIterator]();
+  let textOnlyContent = "";
+  let reasoningStarted = false;
+  let reasoningClosed = false;
+  let anthropicSignatureEmitted = false;
+  let anthropicRedactedEmitted = false;
+  let iteratorFinished = false;
+  let iteratorClosed = false;
 
-	const convert = (
-		event: StreamEvent,
-		gateText = false,
-	): OpenAIStreamChunk | null => {
-		if (
-			gateText &&
-			event.type === "content_block_delta" &&
-			event.delta?.type === "text_delta"
-		) {
-			const safeText = dialectGate.ingest(event.delta.text ?? "");
-			if (!safeText) return null;
-			return convertToOpenAI(
-				{ ...event, delta: { ...event.delta, text: safeText } },
-				conversationId,
-				model,
-			);
-		}
-		return convertToOpenAI(event, conversationId, model);
-	};
+  const convert = (event: StreamEvent): OpenAIStreamChunk | null =>
+    convertToOpenAI(event, conversationId, model);
 
-	try {
-		while (true) {
-			const next = await nextSdkEvent(iterator, signal);
-			if (next.kind === "aborted") {
-				if (iterator.return) await iterator.return();
-				iteratorClosed = true;
-				return;
-			}
-			if (next.result.done) {
-				iteratorFinished = true;
-				break;
-			}
+  try {
+    while (true) {
+      const next = await nextSdkEvent(iterator, signal);
+      if (next.kind === "aborted") {
+        if (iterator.return) await iterator.return();
+        iteratorClosed = true;
+        return;
+      }
+      if (next.result.done) {
+        iteratorFinished = true;
+        break;
+      }
 
-			const event = next.result.value;
-			updateUsageState(usage, event);
+      const event = next.result.value;
+      updateUsageState(usage, event);
+      appendReasoningCapture(reasoning, event.reasoningContentEvent);
 
-			const reasoningText = event.reasoningContentEvent?.text;
-			if (reasoningText) {
-				if (reasoningClosed) {
-					streamState.thinkingBlockIndex = null;
-					reasoningClosed = false;
-				}
-				reasoningStarted = true;
-				for (const deltaEvent of createThinkingDeltaEvents(
-					reasoningText,
-					streamState,
-				)) {
-					const chunk = convert(deltaEvent);
-					if (chunk) yield chunk;
-				}
-				continue;
-			}
+      if (options.emitAnthropicReasoningMetadata) {
+        if (reasoning.signatureConflict) {
+          throw new TypeError("Kiro emitted conflicting reasoning signatures");
+        }
+        if (reasoning.text.length > 0 && reasoning.redactedChunks.length > 0) {
+          throw new TypeError("Kiro mixed visible and redacted reasoning payloads");
+        }
+        if (
+          reasoningClosed &&
+          event.reasoningContentEvent?.signature !== undefined &&
+          event.reasoningContentEvent.signature.length > 0
+        ) {
+          throw new TypeError("Kiro emitted a reasoning signature after assistant output began");
+        }
+      }
 
-			const assistantText = event.assistantResponseEvent?.content;
-			if (assistantText) {
-				textOnlyContent += assistantText;
-				if (reasoningStarted && !reasoningClosed) {
-					for (const stopEvent of stopBlock(
-						streamState.thinkingBlockIndex,
-						streamState,
-					)) {
-						const chunk = convert(stopEvent);
-						if (chunk) yield chunk;
-					}
-					reasoningClosed = true;
-				}
+      const reasoningText = event.reasoningContentEvent?.text;
+      if (reasoningText) {
+        if (reasoningClosed) {
+          streamState.thinkingBlockIndex = null;
+          reasoningClosed = false;
+        }
+        reasoningStarted = true;
+        for (const deltaEvent of createThinkingDeltaEvents(reasoningText, streamState)) {
+          const chunk = convert(deltaEvent);
+          if (chunk) yield chunk;
+        }
+      }
 
-				const textEvents = reasoningStarted
-					? createTextDeltaEvents(assistantText, streamState)
-					: processAssistantText(assistantText, streamState);
-				for (const textEvent of textEvents) {
-					const chunk = convert(textEvent, true);
-					if (chunk) yield chunk;
-				}
-				continue;
-			}
+      const assistantText = event.assistantResponseEvent?.content;
+      if (assistantText) {
+        if (options.emitAnthropicReasoningMetadata) {
+          const capturedBeforeText = resolveReasoningCapture(reasoning);
+          if (
+            reasoningStarted &&
+            !anthropicSignatureEmitted &&
+            capturedBeforeText.signature !== undefined
+          ) {
+            anthropicSignatureEmitted = true;
+            yield metadataChunk(conversationId, model, {
+              reasoning_signature: capturedBeforeText.signature,
+            });
+          }
+          if (
+            !reasoningStarted &&
+            !anthropicRedactedEmitted &&
+            capturedBeforeText.redactedContent !== undefined
+          ) {
+            anthropicRedactedEmitted = true;
+            yield metadataChunk(conversationId, model, {
+              reasoning_redacted_content: Buffer.from(
+                capturedBeforeText.redactedContent,
+              ).toString("base64"),
+            });
+          }
+        }
+        textOnlyContent += assistantText;
+        if (reasoningStarted && !reasoningClosed) {
+          for (const stopEvent of stopBlock(streamState.thinkingBlockIndex, streamState)) {
+            const chunk = convert(stopEvent);
+            if (chunk) yield chunk;
+          }
+          reasoningClosed = true;
+        }
+        for (const textEvent of createTextDeltaEvents(assistantText, streamState)) {
+          const chunk = convert(textEvent);
+          if (chunk) yield chunk;
+        }
+      }
 
-			if (event.toolUseEvent) appendToolFragment(toolCalls, event.toolUseEvent);
-		}
-	} finally {
-		if (!iteratorFinished && !iteratorClosed && iterator.return)
-			await iterator.return();
-	}
+      if (event.toolUseEvent) appendToolFragment(toolCalls, event.toolUseEvent);
+    }
+  } finally {
+    if (!iteratorFinished && !iteratorClosed && iterator.return) await iterator.return();
+  }
 
-	if (reasoningStarted && !reasoningClosed) {
-		for (const stopEvent of stopBlock(
-			streamState.thinkingBlockIndex,
-			streamState,
-		)) {
-			const chunk = convert(stopEvent);
-			if (chunk) yield chunk;
-		}
-	}
+  const captured = resolveReasoningCapture(reasoning);
+  if (options.emitAnthropicReasoningMetadata) {
+    if (
+      reasoningStarted &&
+      !reasoningClosed &&
+      !anthropicSignatureEmitted &&
+      captured.signature !== undefined
+    ) {
+      anthropicSignatureEmitted = true;
+      yield metadataChunk(conversationId, model, {
+        reasoning_signature: captured.signature,
+      });
+    }
+    if (!anthropicRedactedEmitted && captured.redactedContent !== undefined) {
+      anthropicRedactedEmitted = true;
+      yield metadataChunk(conversationId, model, {
+        reasoning_redacted_content: Buffer.from(captured.redactedContent).toString("base64"),
+      });
+    }
+  }
 
-	for (const bufferedEvent of flushAssistantBuffer(streamState)) {
-		const chunk = convert(
-			bufferedEvent,
-			bufferedEvent.delta?.type === "text_delta",
-		);
-		if (chunk) yield chunk;
-	}
+  if (reasoningStarted && !reasoningClosed) {
+    for (const stopEvent of stopBlock(streamState.thinkingBlockIndex, streamState)) {
+      const chunk = convert(stopEvent);
+      if (chunk) yield chunk;
+    }
+  }
+  for (const stopEvent of stopBlock(streamState.textBlockIndex, streamState)) {
+    const chunk = convert(stopEvent);
+    if (chunk) yield chunk;
+  }
+  for (const toolEvent of createToolCallEvents(toolCalls)) {
+    const chunk = convert(toolEvent);
+    if (chunk) yield chunk;
+  }
 
-	const { toolCalls: dialectToolCalls, remainderText } = dialectGate.finalize();
-	for (const textEvent of createTextDeltaEvents(remainderText, streamState)) {
-		const chunk = convert(textEvent);
-		if (chunk) yield chunk;
-	}
-	for (const stopEvent of stopBlock(streamState.textBlockIndex, streamState)) {
-		const chunk = convert(stopEvent);
-		if (chunk) yield chunk;
-	}
+  const output = {
+    text: textOnlyContent,
+    toolCalls: [...toolCalls.values()].map((call) => ({
+      id: call.toolUseId,
+      name: call.name,
+      input: call.input,
+    })),
+  };
+  const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output);
+  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
+  if (options.emitEncryptedReasoning && encryptedContent !== undefined) {
+    yield metadataChunk(conversationId, model, {
+      reasoning_encrypted_content: encryptedContent,
+    });
+  }
 
-	for (const dialectToolCall of dialectToolCalls) {
-		appendToolFragment(toolCalls, {
-			toolUseId: dialectToolCall.toolUseId,
-			name: dialectToolCall.name,
-			input:
-				typeof dialectToolCall.input === "string"
-					? dialectToolCall.input
-					: JSON.stringify(dialectToolCall.input),
-			stop: true,
-		});
-	}
-
-	for (const toolEvent of createToolCallEvents(toolCalls)) {
-		const chunk = convert(toolEvent);
-		if (chunk) yield chunk;
-	}
-
-	const tokenUsage = resolveUsage(usage, textOnlyContent, model);
-	const finalChunk = convert({
-		type: "message_delta",
-		delta: {
-			type: "message_delta",
-			stop_reason: toolCalls.size > 0 ? "tool_use" : "end_turn",
-		},
-		usage: {
-			input_tokens: tokenUsage.inputTokens,
-			output_tokens: tokenUsage.outputTokens,
-			cache_creation_input_tokens: 0,
-			cache_read_input_tokens: 0,
-		},
-	});
-	if (finalChunk) yield finalChunk;
-
-	convert({ type: "message_stop" });
+  const tokenUsage = resolveUsage(usage, textOnlyContent, model);
+  const finalChunk = convert({
+    type: "message_delta",
+    delta: {
+      type: "message_delta",
+      stop_reason: toolCalls.size > 0 ? "tool_use" : "end_turn",
+    },
+    usage: {
+      input_tokens: tokenUsage.inputTokens,
+      output_tokens: tokenUsage.outputTokens,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    },
+  });
+  if (finalChunk) yield finalChunk;
 }

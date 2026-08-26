@@ -1,14 +1,17 @@
 import type { Config } from "../../config/schema.js";
+import { auditLog } from "../../core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
   runChatCompletion,
 } from "../../core/pipeline.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import { openAiError } from "../errors.js";
+import { chatToCanonical } from "../protocol/chat-adapter.js";
 import type {
   IngressSignals,
   RequestIdleTimeoutLease,
@@ -21,6 +24,7 @@ export type ChatCompletionDependencies = {
   readonly tokenRefresher: PipelineTokenRefresher;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
+  readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
@@ -125,6 +129,7 @@ export function ndjsonToSse(
   response: Response,
   signals: IngressSignals,
   finalize: () => void,
+  includeUsage = false,
 ): Response {
   const upstream = response.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() });
   const reader = upstream.getReader();
@@ -187,6 +192,30 @@ export function ndjsonToSse(
         : new DOMException("Client closed request", "AbortError"),
     );
   };
+  const framesForLine = (line: string): readonly string[] => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return [line];
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return [line];
+    }
+    const record = parsed as Record<string, unknown>;
+    const choices = record.choices;
+    if (!("usage" in record) || !Array.isArray(choices)) return [line];
+    const { usage, ...completion } = record;
+    if (choices.length === 0) {
+      return includeUsage ? [line] : [];
+    }
+    const completionFrame = JSON.stringify(completion);
+    if (!includeUsage) return [completionFrame];
+    return [
+      completionFrame,
+      JSON.stringify({ ...completion, choices: [], usage }),
+    ];
+  };
 
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -207,7 +236,11 @@ export function ndjsonToSse(
               const line = buffer.slice(0, newline).trimEnd();
               buffer = buffer.slice(newline + 1);
               if (line.length > 0) {
-                controller.enqueue(encoder.encode(`data: ${line}\n\n`));
+                const frames = framesForLine(line);
+                if (frames.length === 0) continue;
+                for (const frame of frames) {
+                  controller.enqueue(encoder.encode(`data: ${frame}\n\n`));
+                }
                 return;
               }
               continue;
@@ -224,8 +257,13 @@ export function ndjsonToSse(
             const finalLine = buffer.trim();
             buffer = "";
             if (finalLine.length > 0) {
-              controller.enqueue(encoder.encode(`data: ${finalLine}\n\n`));
-              return;
+              const frames = framesForLine(finalLine);
+              if (frames.length > 0) {
+                for (const frame of frames) {
+                  controller.enqueue(encoder.encode(`data: ${frame}\n\n`));
+                }
+                return;
+              }
             }
             beginTerminal("normal-complete");
             return;
@@ -293,6 +331,23 @@ export async function handleChatCompletions(
     return parsed.response;
   }
   const affinity = chatSessionAffinity(parsed.value, dependencies.tenantId);
+  const canonical = chatToCanonical(parsed.value, config.protocol_projection_mode);
+  if (!canonical.ok) {
+    auditLog("warn", "protocol_projection_rejected", {
+      protocol: "chat-completions",
+      projection_mode: config.protocol_projection_mode,
+      code: canonical.code,
+      param: canonical.param,
+    });
+    clearTimeout(deadlineTimer);
+    return openAiError(
+      400,
+      canonical.message,
+      "invalid_request_error",
+      canonical.code,
+      canonical.param,
+    );
+  }
 
   let lease: RequestIdleTimeoutLease | undefined;
   let streamOwnsRouteResources = false;
@@ -308,7 +363,7 @@ export async function handleChatCompletions(
     lease?.disable();
 
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
-      body: parsed.value,
+      body: canonical.value,
       model: parsed.value.model,
       stream: parsed.value.stream,
       config,
@@ -317,6 +372,10 @@ export async function handleChatCompletions(
       ...(affinity ? { affinity } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
+        : {}),
+      tenantId: dependencies.tenantId,
+      ...(dependencies.reasoningReplayStore
+        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
         : {}),
       deadlineSignal: combinedSignal,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
@@ -338,7 +397,12 @@ export async function handleChatCompletions(
         "invalid_pipeline_response",
       );
     }
-    const streaming = ndjsonToSse(pipelineResponse, ingressSignals, routeFinalize);
+    const streaming = ndjsonToSse(
+      pipelineResponse,
+      ingressSignals,
+      routeFinalize,
+      parsed.value.stream_options?.include_usage === true,
+    );
     streamOwnsRouteResources = true;
     return streaming;
   } finally {

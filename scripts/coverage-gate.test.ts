@@ -148,11 +148,12 @@ describe("evaluateCoverage", () => {
 describe("canonical coverage scope", () => {
 	test("explicitly excludes type-only modules instead of detecting source syntax", () => {
 		// Given
-		const typeOnlyModules = [
-			"src/core/pipeline-types.ts",
-			"src/kiro/types.ts",
-			"src/server/request-lifecycle.ts",
-		];
+			const typeOnlyModules = [
+				"src/core/pipeline-types.ts",
+				"src/kiro/types.ts",
+				"src/kiro/transform/streaming/types.ts",
+				"src/server/request-lifecycle.ts",
+			];
 
 		// When
 		const excluded = typeOnlyModules.map((path) =>
@@ -160,6 +161,6 @@ describe("canonical coverage scope", () => {
 		);
 
 		// Then
-		expect(excluded).toEqual([true, true, true]);
-	});
+			expect(excluded).toEqual([true, true, true, true]);
+		});
 });

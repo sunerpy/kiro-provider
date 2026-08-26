@@ -1,7 +1,11 @@
-import type { PipelineAccountManager } from "../../core/pipeline.js";
+import type {
+	PipelineAccountManager,
+	PipelineReasoningReplayStore,
+} from "../../core/pipeline.js";
 
 export function handleReadiness(
 	accountManager: PipelineAccountManager,
+	reasoningReplayStore?: PipelineReasoningReplayStore,
 ): Response {
 	try {
 		accountManager.reconcileFromDb();
@@ -11,6 +15,31 @@ export function handleReadiness(
 				{ status: "not_ready", reason: "no_active_accounts" },
 				{ status: 503 },
 			);
+		}
+		if (reasoningReplayStore) {
+			const readiness = reasoningReplayStore.readiness();
+			if (!readiness.writable) {
+				return Response.json(
+					{ status: "not_ready", reason: "reasoning_replay_database_not_writable" },
+					{ status: 503 },
+				);
+			}
+			if (!readiness.keyringAvailable) {
+				return Response.json(
+					{ status: "not_ready", reason: "reasoning_replay_keyring_unavailable" },
+					{ status: 503 },
+				);
+			}
+			if (readiness.missingKeyIds.length > 0) {
+				return Response.json(
+					{
+						status: "not_ready",
+						reason: "reasoning_replay_key_coverage_incomplete",
+						missing_key_ids: readiness.missingKeyIds,
+					},
+					{ status: 503 },
+				);
+			}
 		}
 		return Response.json({ status: "ready" });
 	} catch {

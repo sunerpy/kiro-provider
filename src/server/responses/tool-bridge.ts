@@ -1,3 +1,4 @@
+import { canonicalFingerprint } from "../../protocol/canonical.js";
 import type {
   ResponsesAdditionalToolsItem,
   ResponsesCustomToolCallItem,
@@ -26,6 +27,18 @@ export type InternalToolCall = {
   readonly function: { readonly name: string; readonly arguments: string };
 };
 
+export type BridgedToolDeclaration = {
+  readonly publicType: "function" | "custom";
+  readonly publicName: string;
+  readonly wireName: string;
+  readonly description?: string;
+  readonly parameters: Record<string, unknown>;
+  readonly path: string;
+  readonly origin: "request" | "input";
+  readonly strict?: false;
+  readonly sourceMetadata?: Readonly<Record<string, unknown>>;
+};
+
 export type RestorableToolCall = {
   readonly itemId: string;
   readonly id: string;
@@ -46,6 +59,7 @@ type PublicToolIdentity =
 type BridgeErrorCode =
   | "invalid_tool_declaration"
   | "invalid_tool_history"
+  | "missing_tool_declaration"
   | "invalid_custom_tool_input"
   | "unknown_tool_alias";
 
@@ -57,7 +71,10 @@ export type BridgeFailure = {
 
 type BridgeBuildFailure = {
   readonly ok: false;
-  readonly code: "invalid_tool_declaration" | "invalid_tool_history";
+  readonly code:
+    | "invalid_tool_declaration"
+    | "invalid_tool_history"
+    | "missing_tool_declaration";
   readonly message: string;
 };
 
@@ -68,6 +85,11 @@ export type BridgeBuildResult =
 type Declaration = {
   readonly identity: PublicToolIdentity;
   readonly tool: InternalTool;
+  readonly path: string;
+  readonly origin: "request" | "input";
+  readonly strict?: false;
+  readonly sourceMetadata?: Readonly<Record<string, unknown>>;
+  readonly fingerprint: string;
 };
 
 type HistoricalCall = {
@@ -96,8 +118,7 @@ function descriptions(...values: readonly (string | undefined)[]): string | unde
   return present.length > 0 ? present.join("\n\n") : undefined;
 }
 
-function customSchema(format: unknown): Record<string, unknown> {
-  void format;
+function customSchema(): Record<string, unknown> {
   return {
     type: "object",
     properties: { input: { type: "string" } },
@@ -158,10 +179,6 @@ function isOutputItem(
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function hasReservedAlias(name: string): boolean {
-  return name.startsWith(CUSTOM_ALIAS_PREFIX) || name.startsWith(NAMESPACE_ALIAS_PREFIX);
-}
-
 function normalizedFunctionArguments(argumentsText: string): string {
   return argumentsText.trim().length === 0 ? "{}" : argumentsText;
 }
@@ -200,15 +217,18 @@ function exactCustomInput(
 
 export class ResponsesToolBridge {
   readonly internalTools: readonly InternalTool[];
+  readonly declarations: readonly BridgedToolDeclaration[];
   readonly #wireNameByIdentity: ReadonlyMap<string, string>;
   readonly #identityByWireName: ReadonlyMap<string, PublicToolIdentity>;
 
   constructor(input: {
     readonly internalTools: readonly InternalTool[];
+    readonly declarations: readonly BridgedToolDeclaration[];
     readonly wireNameByIdentity: ReadonlyMap<string, string>;
     readonly identityByWireName: ReadonlyMap<string, PublicToolIdentity>;
   }) {
     this.internalTools = input.internalTools;
+    this.declarations = input.declarations;
     this.#wireNameByIdentity = input.wireNameByIdentity;
     this.#identityByWireName = input.identityByWireName;
   }
@@ -234,21 +254,11 @@ export class ResponsesToolBridge {
     for (const call of calls) {
       const identity = this.#identityByWireName.get(call.name);
       if (!identity) {
-        if (hasReservedAlias(call.name)) {
-          return {
-            ok: false,
-            code: "unknown_tool_alias",
-            message: `Upstream returned unregistered tool alias ${call.name}`,
-          };
-        }
-        items.push({
-          id: call.itemId,
-          type: "function_call",
-          call_id: call.id,
-          name: call.name,
-          arguments: normalizedFunctionArguments(call.arguments),
-        });
-        continue;
+        return {
+          ok: false,
+          code: "unknown_tool_alias",
+          message: `Upstream returned undeclared tool ${call.name}`,
+        };
       }
       if (isCustomIdentity(identity)) {
         const parsed = exactCustomInput(call.arguments);
@@ -298,7 +308,27 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
     }
   }
 
-  const addDeclaration = (tool: ResponsesKnownTool): BridgeBuildFailure | undefined => {
+  const registerDeclaration = (declaration: Declaration): BridgeBuildFailure | undefined => {
+    const key = identityKey(declaration.identity);
+    const existing = declarations.get(key);
+    if (existing !== undefined) {
+      if (existing.fingerprint === declaration.fingerprint) return undefined;
+      return {
+        ok: false,
+        code: "invalid_tool_declaration",
+        message: `Tool ${declaration.path} conflicts with ${existing.path}`,
+      };
+    }
+    declarations.set(key, declaration);
+    return undefined;
+  };
+
+  const addDeclaration = (
+    tool: ResponsesKnownTool,
+    path: string,
+    origin: "request" | "input",
+    sourceRole?: string,
+  ): BridgeBuildFailure | undefined => {
     if (tool.type === "namespace") {
       if (malformedNamespace(tool)) {
         return {
@@ -307,31 +337,37 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
           message: `Namespace ${tool.name} contains duplicate child names`,
         };
       }
-      for (const child of tool.tools) {
+      for (const [childIndex, child] of tool.tools.entries()) {
         const identity: PublicToolIdentity = {
           kind: "namespace",
           namespace: tool.name,
           name: child.name,
           toolType: child.type,
         };
-        const key = identityKey(identity);
-        if (declarations.has(key)) continue;
-        declarations.set(key, {
-          identity,
-          tool: {
-            type: "function",
-            function: {
-              name: "",
-              ...(descriptions(tool.description, child.description) !== undefined
-                ? { description: descriptions(tool.description, child.description) }
-                : {}),
-              parameters:
-                child.type === "custom"
-                  ? customSchema(child.format)
-                  : (child.parameters ?? { type: "object" }),
-            },
+        const childPath = `${path}.tools.${childIndex}`;
+        const internalTool: InternalTool = {
+          type: "function",
+          function: {
+            name: "",
+            ...(descriptions(tool.description, child.description) !== undefined
+              ? { description: descriptions(tool.description, child.description) }
+              : {}),
+            parameters:
+              child.type === "custom"
+                ? customSchema()
+                : (child.parameters ?? { type: "object" }),
           },
+        };
+        const failure = registerDeclaration({
+          identity,
+          tool: internalTool,
+          path: childPath,
+          origin,
+          ...(sourceRole !== undefined ? { sourceMetadata: { role: sourceRole } } : {}),
+          ...(child.type === "function" ? { strict: false as const } : {}),
+          fingerprint: canonicalFingerprint({ identity, tool: internalTool, origin, sourceRole }),
         });
+        if (failure) return failure;
       }
       return undefined;
     }
@@ -346,35 +382,43 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
     ordinaryKindsByName.set(tool.name, tool.type);
     if (tool.type === "function") ordinaryNames.add(tool.name);
     const identity: PublicToolIdentity = { kind: tool.type, name: tool.name };
-    const key = identityKey(identity);
-    if (declarations.has(key)) return undefined;
-    declarations.set(key, {
-      identity,
-      tool:
-        tool.type === "function"
-          ? functionTool(tool)
-          : {
-              type: "function",
-              function: {
-                name: "",
-                ...(tool.description !== undefined ? { description: tool.description } : {}),
-                parameters: customSchema(tool.format),
-              },
+    const internalTool: InternalTool =
+      tool.type === "function"
+        ? functionTool(tool)
+        : {
+            type: "function",
+            function: {
+              name: "",
+              ...(tool.description !== undefined ? { description: tool.description } : {}),
+              parameters: customSchema(),
             },
+          };
+    return registerDeclaration({
+      identity,
+      tool: internalTool,
+      path,
+      origin,
+      ...(sourceRole !== undefined ? { sourceMetadata: { role: sourceRole } } : {}),
+      ...(tool.type === "function" ? { strict: false as const } : {}),
+      fingerprint: canonicalFingerprint({ identity, tool: internalTool, origin, sourceRole }),
     });
-    return undefined;
   };
 
-  for (const tool of req.tools ?? []) {
+  for (const [index, tool] of (req.tools ?? []).entries()) {
     if (!isKnownTool(tool)) continue;
-    const failure = addDeclaration(tool);
+    const failure = addDeclaration(tool, `tools.${index}`, "request");
     if (failure) return failure;
   }
-  for (const item of inputs) {
+  for (const [inputIndex, item] of inputs.entries()) {
     if (!isAdditionalToolsItem(item)) continue;
-    for (const tool of item.tools) {
+    for (const [toolIndex, tool] of item.tools.entries()) {
       if (!isKnownTool(tool)) continue;
-      const failure = addDeclaration(tool);
+      const failure = addDeclaration(
+        tool,
+        `input.${inputIndex}.tools.${toolIndex}`,
+        "input",
+        item.role,
+      );
       if (failure) return failure;
     }
   }
@@ -407,14 +451,11 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
     outputIds.add(item.call_id);
     const call = callsById.get(item.call_id);
     if (!call) {
-      if (item.type === "custom_tool_call_output") {
-        return {
-          ok: false,
-          code: "invalid_tool_history",
-          message: `Custom output ${item.call_id} has no matching call`,
-        };
-      }
-      continue;
+      return {
+        ok: false,
+        code: "invalid_tool_history",
+        message: `Tool output ${item.call_id} has no matching call`,
+      };
     }
     const callIsCustom = isCustomIdentity(call.identity);
     const compatible =
@@ -432,20 +473,14 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
   const ordered = [...declarations.values()];
   for (const call of historical) {
     const key = identityKey(call.identity);
-    if (call.identity.kind === "function" || declarations.has(key)) continue;
-    declarations.set(key, {
-      identity: call.identity,
-      tool: {
-        type: "function",
-        function: {
-          name: "",
-          parameters: isCustomIdentity(call.identity)
-            ? customSchema(undefined)
-            : { type: "object" },
-        },
-      },
-    });
-    ordered.push(declarations.get(key) as Declaration);
+    if (declarations.has(key)) continue;
+    return {
+      ok: false,
+      code: "missing_tool_declaration",
+      message:
+        `Historical ${call.identity.kind} tool call has no exact declaration; ` +
+        "resend the original tool declaration",
+    };
   }
 
   const usedWireNames = new Set(ordinaryNames);
@@ -465,6 +500,7 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
     }
   };
   const internalTools: InternalTool[] = [];
+  const bridgedDeclarations: BridgedToolDeclaration[] = [];
   for (const declaration of ordered) {
     const key = identityKey(declaration.identity);
     const wireName =
@@ -477,6 +513,24 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
       type: "function",
       function: { ...declaration.tool.function, name: wireName },
     });
+    bridgedDeclarations.push({
+      publicType: isCustomIdentity(declaration.identity) ? "custom" : "function",
+      publicName:
+        declaration.identity.kind === "namespace"
+          ? `${declaration.identity.namespace}.${declaration.identity.name}`
+          : declaration.identity.name,
+      wireName,
+      ...(declaration.tool.function.description !== undefined
+        ? { description: declaration.tool.function.description }
+        : {}),
+      parameters: declaration.tool.function.parameters ?? {},
+      path: declaration.path,
+      origin: declaration.origin,
+      ...(declaration.strict !== undefined ? { strict: declaration.strict } : {}),
+      ...(declaration.sourceMetadata !== undefined
+        ? { sourceMetadata: declaration.sourceMetadata }
+        : {}),
+    });
   }
   for (const name of ordinaryNames) {
     const identity: PublicToolIdentity = { kind: "function", name };
@@ -488,6 +542,7 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
     ok: true,
     bridge: new ResponsesToolBridge({
       internalTools,
+      declarations: bridgedDeclarations,
       wireNameByIdentity,
       identityByWireName,
     }),

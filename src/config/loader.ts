@@ -74,6 +74,7 @@ function getEnvOverrides(
 		KIRO_PROVIDER_AUTH_SOURCE: "auth_source",
 		KIRO_PROVIDER_DEFAULT_REGION: "default_region",
 		KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "account_selection_strategy",
+		KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE: "protocol_projection_mode",
 		KIRO_PROVIDER_EFFORT: "effort",
 		KIRO_PROVIDER_LOG_LEVEL: "log_level",
 		KIRO_PROVIDER_TEST_UPSTREAM: "test_upstream_endpoint",
@@ -95,8 +96,11 @@ function getEnvOverrides(
 			KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "max_request_body_bytes",
 			KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "token_expiry_buffer_ms",
 			KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS: "session_affinity_ttl_ms",
-			KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES:
+		KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES:
 				"session_affinity_max_entries",
+		KIRO_PROVIDER_REASONING_REPLAY_TTL_MS: "reasoning_replay_ttl_ms",
+		KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES:
+			"reasoning_replay_max_entries",
 	} as const;
 	for (const [envName, field] of Object.entries(numberFields)) {
 		const value = env[envName];
@@ -118,6 +122,19 @@ function getEnvOverrides(
 	const openCodeAuthDbPath = env.KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH;
 	if (openCodeAuthDbPath !== undefined) {
 		overrides.opencode_auth_db_path = openCodeAuthDbPath.trim();
+	}
+
+	const reasoningReplayKeyPath = env.KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH;
+	if (reasoningReplayKeyPath !== undefined) {
+		overrides.reasoning_replay_key_path = reasoningReplayKeyPath.trim();
+	}
+
+	const reasoningReplayKeys = env.KIRO_PROVIDER_REASONING_REPLAY_KEYS;
+	if (reasoningReplayKeys !== undefined) {
+		overrides.reasoning_replay_keys = reasoningReplayKeys
+			.split(",")
+			.map((value) => value.trim())
+			.filter((value) => value.length > 0);
 	}
 
 	const booleanFields = {

@@ -38,6 +38,44 @@ interface CountRow {
 	count: number;
 }
 
+interface KeyIdRow {
+	key_id: string;
+}
+
+export interface ReasoningReplayRecord {
+	readonly tokenHash: string;
+	readonly chatLookupHash: string | null;
+	readonly fingerprintHash: string;
+	readonly tenantId: string;
+	readonly accountId: string;
+	readonly conversationId: string;
+	readonly model: string;
+	readonly keyId: string;
+	readonly nonce: Uint8Array;
+	readonly ciphertext: Uint8Array;
+	readonly authTag: Uint8Array;
+	readonly createdAt: number;
+	readonly lastSeen: number;
+	readonly expiresAt: number;
+}
+
+interface ReasoningReplayRow {
+	token_hash: string;
+	chat_lookup_hash: string | null;
+	fingerprint_hash: string;
+	tenant_id: string;
+	account_id: string;
+	conversation_id: string;
+	model: string;
+	key_id: string;
+	nonce: Uint8Array;
+	ciphertext: Uint8Array;
+	auth_tag: Uint8Array;
+	created_at: number;
+	last_seen: number;
+	expires_at: number;
+}
+
 export interface SessionAffinityBinding {
 	readonly keyHash: string;
 	readonly accountId: string;
@@ -52,6 +90,25 @@ function rowToSessionAffinity(row: SessionAffinityRow): SessionAffinityBinding {
 		keyHash: row.key_hash,
 		accountId: row.account_id,
 		conversationId: row.conversation_id,
+		createdAt: row.created_at,
+		lastSeen: row.last_seen,
+		expiresAt: row.expires_at,
+	};
+}
+
+function rowToReasoningReplay(row: ReasoningReplayRow): ReasoningReplayRecord {
+	return {
+		tokenHash: row.token_hash,
+		chatLookupHash: row.chat_lookup_hash,
+		fingerprintHash: row.fingerprint_hash,
+		tenantId: row.tenant_id,
+		accountId: row.account_id,
+		conversationId: row.conversation_id,
+		model: row.model,
+		keyId: row.key_id,
+		nonce: row.nonce,
+		ciphertext: row.ciphertext,
+		authTag: row.auth_tag,
 		createdAt: row.created_at,
 		lastSeen: row.last_seen,
 		expiresAt: row.expires_at,
@@ -126,6 +183,36 @@ export class AccountsDatabase {
 				this.db.run(`
 	        CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
 	        ON session_affinity (last_seen)
+	      `);
+				this.db.run(`
+	        CREATE TABLE IF NOT EXISTS reasoning_replay (
+	          token_hash TEXT PRIMARY KEY,
+	          chat_lookup_hash TEXT,
+	          fingerprint_hash TEXT NOT NULL,
+	          tenant_id TEXT NOT NULL,
+	          account_id TEXT NOT NULL,
+	          conversation_id TEXT NOT NULL,
+	          model TEXT NOT NULL,
+	          key_id TEXT NOT NULL,
+	          nonce BLOB NOT NULL,
+	          ciphertext BLOB NOT NULL,
+	          auth_tag BLOB NOT NULL,
+	          created_at INTEGER NOT NULL,
+	          last_seen INTEGER NOT NULL,
+	          expires_at INTEGER NOT NULL
+	        )
+	      `);
+				this.db.run(`
+	        CREATE INDEX IF NOT EXISTS reasoning_replay_lookup_idx
+	        ON reasoning_replay (tenant_id, model, chat_lookup_hash, expires_at)
+	      `);
+				this.db.run(`
+	        CREATE INDEX IF NOT EXISTS reasoning_replay_lru_idx
+	        ON reasoning_replay (last_seen, token_hash)
+	      `);
+				this.db.run(`
+	        CREATE INDEX IF NOT EXISTS reasoning_replay_key_id_idx
+	        ON reasoning_replay (key_id, expires_at)
 	      `);
 			});
 	}
@@ -233,6 +320,9 @@ export class AccountsDatabase {
 				.query("DELETE FROM session_affinity WHERE account_id = ?")
 				.run(id);
 			this.db
+				.query("DELETE FROM reasoning_replay WHERE account_id = ?")
+				.run(id);
+			this.db
 				.query(`
           INSERT OR REPLACE INTO removed_accounts (id, removed_at, last_generation)
           VALUES (?, ?, ?)
@@ -333,6 +423,112 @@ export class AccountsDatabase {
 		);
 	}
 
+	insertReasoningReplay(
+		record: ReasoningReplayRecord,
+		maxEntries: number,
+		now: number = Date.now(),
+	): void {
+		this.withImmediateTransaction(() => {
+			this.db.query("DELETE FROM reasoning_replay WHERE expires_at <= ?").run(now);
+			this.db
+				.query(`
+	        INSERT INTO reasoning_replay (
+	          token_hash, chat_lookup_hash, fingerprint_hash, tenant_id, account_id,
+	          conversation_id, model, key_id, nonce, ciphertext, auth_tag,
+	          created_at, last_seen, expires_at
+	        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	      `)
+				.run(
+					record.tokenHash,
+					record.chatLookupHash,
+					record.fingerprintHash,
+					record.tenantId,
+					record.accountId,
+					record.conversationId,
+					record.model,
+					record.keyId,
+					record.nonce,
+					record.ciphertext,
+					record.authTag,
+					record.createdAt,
+					record.lastSeen,
+					record.expiresAt,
+				);
+			this.pruneReasoningReplayInternal(now, maxEntries, record.tokenHash);
+		});
+	}
+
+	getReasoningReplayByTokenHash(
+		tokenHash: string,
+		now: number = Date.now(),
+	): ReasoningReplayRecord | undefined {
+		const row = this.db
+			.query<ReasoningReplayRow, [string, number]>(`
+	      SELECT * FROM reasoning_replay
+	      WHERE token_hash = ? AND expires_at > ?
+	    `)
+			.get(tokenHash, now);
+		return row === null ? undefined : rowToReasoningReplay(row);
+	}
+
+	getReasoningReplayRecord(tokenHash: string): ReasoningReplayRecord | undefined {
+		const row = this.db
+			.query<ReasoningReplayRow, [string]>(
+				"SELECT * FROM reasoning_replay WHERE token_hash = ?",
+			)
+			.get(tokenHash);
+		return row === null ? undefined : rowToReasoningReplay(row);
+	}
+
+	findReasoningReplayByChatHash(
+		tenantId: string,
+		model: string,
+		chatLookupHash: string,
+		now: number = Date.now(),
+	): ReasoningReplayRecord[] {
+		return this.db
+			.query<ReasoningReplayRow, [string, string, string, number]>(`
+	      SELECT * FROM reasoning_replay
+	      WHERE tenant_id = ? AND model = ? AND chat_lookup_hash = ? AND expires_at > ?
+	      ORDER BY last_seen DESC, token_hash ASC
+	    `)
+			.all(tenantId, model, chatLookupHash, now)
+			.map(rowToReasoningReplay);
+	}
+
+	touchReasoningReplay(tokenHash: string, now: number = Date.now()): void {
+		this.db
+			.query("UPDATE reasoning_replay SET last_seen = ? WHERE token_hash = ?")
+			.run(now, tokenHash);
+	}
+
+	activeReasoningReplayKeyIds(now: number = Date.now()): string[] {
+		return this.db
+			.query<KeyIdRow, [number]>(`
+	      SELECT DISTINCT key_id FROM reasoning_replay
+	      WHERE expires_at > ? ORDER BY key_id ASC
+	    `)
+			.all(now)
+			.map((row) => row.key_id);
+	}
+
+	pruneReasoningReplay(now: number = Date.now(), maxEntries = 10_000): number {
+		return this.withImmediateTransaction(() =>
+			this.pruneReasoningReplayInternal(now, maxEntries),
+		);
+	}
+
+	checkWritable(): boolean {
+		try {
+			this.withImmediateTransaction(() => {
+				this.db.run("UPDATE reasoning_replay SET last_seen = last_seen WHERE 0");
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	close(): void {
 		this.db.close();
 	}
@@ -385,6 +581,45 @@ export class AccountsDatabase {
 				preserveKey ? prune.run(preserveKey, overflow) : prune.run(overflow)
 			).changes;
 		}
+		return changes;
+	}
+
+	private pruneReasoningReplayInternal(
+		now: number,
+		maxEntries: number,
+		preserveTokenHash?: string,
+	): number {
+		let changes = this.db
+			.query("DELETE FROM reasoning_replay WHERE expires_at <= ?")
+			.run(now).changes;
+		const row = this.db
+			.query<CountRow, []>("SELECT COUNT(*) AS count FROM reasoning_replay")
+			.get();
+		const overflow = Math.max(0, (row?.count ?? 0) - maxEntries);
+		if (overflow <= 0) return changes;
+		const prune = preserveTokenHash
+			? this.db.query(`
+	      DELETE FROM reasoning_replay
+	      WHERE token_hash IN (
+	        SELECT token_hash FROM reasoning_replay
+	        WHERE token_hash != ?
+	        ORDER BY last_seen ASC, token_hash ASC
+	        LIMIT ?
+	      )
+	    `)
+			: this.db.query(`
+	      DELETE FROM reasoning_replay
+	      WHERE token_hash IN (
+	        SELECT token_hash FROM reasoning_replay
+	        ORDER BY last_seen ASC, token_hash ASC
+	        LIMIT ?
+	      )
+	    `);
+		changes += (
+			preserveTokenHash
+				? prune.run(preserveTokenHash, overflow)
+				: prune.run(overflow)
+		).changes;
 		return changes;
 	}
 

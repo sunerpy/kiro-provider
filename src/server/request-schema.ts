@@ -94,6 +94,10 @@ const SystemMessageSchema = z
   .object({ role: z.literal("system"), content: MessageContentSchema })
   .passthrough();
 
+const DeveloperMessageSchema = z
+  .object({ role: z.literal("developer"), content: MessageContentSchema })
+  .passthrough();
+
 const UserMessageSchema = z
   .object({ role: z.literal("user"), content: MessageContentSchema })
   .passthrough();
@@ -103,6 +107,7 @@ const AssistantMessageSchema = z
     role: z.literal("assistant"),
     content: MessageContentSchema.nullable().optional(),
     tool_calls: z.array(ToolCallSchema).min(1).optional(),
+    reasoning_content: z.string().optional(),
   })
   .passthrough()
   .refine(
@@ -125,6 +130,7 @@ const ToolMessageSchema = z
 
 export const ChatMessageSchema = z.union([
   SystemMessageSchema,
+  DeveloperMessageSchema,
   UserMessageSchema,
   AssistantMessageSchema,
   ToolMessageSchema,
@@ -157,11 +163,46 @@ export const ChatCompletionRequestSchema = z
       message: "model is not supported",
     }),
     stream: z.boolean().default(false),
+    stream_options: z
+      .object({ include_usage: z.boolean().optional() })
+      .passthrough()
+      .optional(),
     messages: z.array(ChatMessageSchema).min(1),
     tools: z.array(z.union([OpenAiToolSchema, AnthropicToolSchema])).optional(),
     user: z.string().optional(),
     prompt_cache_key: z.string().optional(),
     reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    tool_choice: z
+      .union([
+        z.enum(["auto", "none", "required"]),
+        z
+          .object({
+            type: z.literal("function"),
+            function: z.object({ name: z.string().min(1) }).passthrough(),
+          })
+          .passthrough(),
+      ])
+      .optional(),
+    parallel_tool_calls: z.boolean().optional(),
+    max_tokens: z.number().int().positive().optional(),
+    max_completion_tokens: z.number().int().positive().optional(),
+    temperature: z.number().optional(),
+    top_p: z.number().optional(),
+    response_format: z.unknown().optional(),
+    n: z.number().int().positive().optional(),
+    stop: z.unknown().optional(),
+    seed: z.number().int().optional(),
+    presence_penalty: z.number().optional(),
+    frequency_penalty: z.number().optional(),
+    logit_bias: z.unknown().optional(),
+    logprobs: z.boolean().optional(),
+    top_logprobs: z.number().int().optional(),
+    modalities: z.unknown().optional(),
+    audio: z.unknown().optional(),
+    prediction: z.unknown().optional(),
+    store: z.boolean().optional(),
+    metadata: z.unknown().optional(),
+    service_tier: z.unknown().optional(),
   })
   .passthrough();
 
@@ -211,6 +252,8 @@ export const ResponsesContentPartSchema = z.union([
 const ResponsesMessageItemSchema = z
   .object({
     type: z.literal("message").optional(),
+    id: z.string().optional(),
+    status: z.string().optional(),
     role: z.enum(["system", "developer", "user", "assistant"]),
     content: z.union([z.string(), z.array(ResponsesContentPartSchema)]),
   })
@@ -228,6 +271,8 @@ const ResponsesAgentMessageItemSchema = z
 const ResponsesFunctionCallItemSchema = z
   .object({
     type: z.literal("function_call"),
+    id: z.string().optional(),
+    status: z.string().optional(),
     call_id: z.string().min(1),
     namespace: z.string().min(1).optional(),
     name: z.string().min(1),
@@ -241,6 +286,8 @@ const ResponsesFunctionCallItemSchema = z
 const ResponsesCustomToolCallItemSchema = z
   .object({
     type: z.literal("custom_tool_call"),
+    id: z.string().optional(),
+    status: z.string().optional(),
     call_id: z.string().min(1),
     namespace: z.string().min(1).optional(),
     name: z.string().min(1),
@@ -256,6 +303,8 @@ const ResponsesOutputPayloadSchema = z.union([
 const ResponsesFunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
+    id: z.string().optional(),
+    status: z.string().optional(),
     call_id: z.string().min(1),
     output: ResponsesOutputPayloadSchema,
   })
@@ -264,6 +313,8 @@ const ResponsesFunctionCallOutputItemSchema = z
 const ResponsesCustomToolCallOutputItemSchema = z
   .object({
     type: z.literal("custom_tool_call_output"),
+    id: z.string().optional(),
+    status: z.string().optional(),
     call_id: z.string().min(1),
     output: ResponsesOutputPayloadSchema,
   })
@@ -320,15 +371,13 @@ const ResponsesAdditionalFunctionToolSchema = z
   })
   .passthrough()
   .transform((tool) => ({
+    ...tool,
     type: "function" as const,
-    name: tool.name,
-    ...(tool.description !== undefined ? { description: tool.description } : {}),
     ...(tool.parameters !== undefined
       ? { parameters: tool.parameters }
       : tool.inputSchema !== undefined
         ? { parameters: tool.inputSchema }
         : {}),
-    ...(tool.strict !== undefined ? { strict: tool.strict } : {}),
   }));
 
 const ResponsesAdditionalNamespaceFunctionToolSchema = z
@@ -342,15 +391,13 @@ const ResponsesAdditionalNamespaceFunctionToolSchema = z
   })
   .passthrough()
   .transform((tool) => ({
+    ...tool,
     type: "function" as const,
-    name: tool.name,
-    ...(tool.description !== undefined ? { description: tool.description } : {}),
     ...(tool.parameters !== undefined
       ? { parameters: tool.parameters }
       : tool.inputSchema !== undefined
         ? { parameters: tool.inputSchema }
         : {}),
-    ...(tool.strict !== undefined ? { strict: tool.strict } : {}),
   }));
 
 const ResponsesAdditionalNamespaceChildToolSchema = z.union([
@@ -367,10 +414,8 @@ const ResponsesAdditionalNamespaceToolSchema = z
   })
   .passthrough()
   .transform((tool) => ({
+    ...tool,
     type: "namespace" as const,
-    name: tool.name,
-    ...(tool.description !== undefined ? { description: tool.description } : {}),
-    tools: tool.tools,
   }));
 
 const KNOWN_RESPONSES_TOOL_TYPES: ReadonlySet<string> = new Set([
@@ -423,6 +468,8 @@ const ResponsesReasoningContentPartSchema = z
 const ResponsesReasoningItemSchema = z
   .object({
     type: z.literal("reasoning"),
+    id: z.string().optional(),
+    status: z.string().optional(),
     summary: z.array(ResponsesReasoningSummaryPartSchema).nullable().optional(),
     content: z.array(ResponsesReasoningContentPartSchema).nullable().optional(),
     encrypted_content: z.string().nullable().optional(),
@@ -473,13 +520,21 @@ export const ResponsesRequestSchema = z
     instructions: z.string().optional(),
     stream: z.boolean().default(false),
     tools: z.array(ResponsesToolSchema).optional(),
-    tool_choice: z.literal("auto").optional(),
+    tool_choice: z
+      .union([z.enum(["auto", "none", "required"]), z.record(z.unknown())])
+      .optional(),
     parallel_tool_calls: z.boolean().optional(),
     reasoning: ResponsesReasoningConfigSchema.nullable().optional(),
     include: z.array(z.string()).optional(),
     store: z.boolean().optional(),
     text: z.unknown().optional(),
     service_tier: z.unknown().optional(),
+    max_output_tokens: z.number().int().positive().optional(),
+    temperature: z.number().optional(),
+    top_p: z.number().optional(),
+    truncation: z.unknown().optional(),
+    background: z.boolean().optional(),
+    max_tool_calls: z.number().int().positive().optional(),
     prompt_cache_key: z.string().optional(),
     client_metadata: z.unknown().optional(),
     previous_response_id: z.string().optional(),

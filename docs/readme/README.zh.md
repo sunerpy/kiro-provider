@@ -1,6 +1,6 @@
 # kiro-provider
 
-> 一个面向 OpenAI Responses 与 Anthropic Messages 客户端的独立 AWS Kiro（CodeWhisperer）HTTP 网关。
+> 一个基于 AWS Kiro（CodeWhisperer）、强调协议保真的 OpenAI Responses 与 Anthropic Messages 已验证子集网关。
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
@@ -12,6 +12,7 @@
 ## 目录
 
 - [特性](#特性)
+- [协议兼容范围](#协议兼容范围)
 - [安装](#安装)
 - [快速开始](#快速开始)
 - [常驻后台服务](#常驻后台服务)
@@ -29,14 +30,53 @@
 - OpenAI Responses `POST /v1/responses` 与 Anthropic Messages `POST /v1/messages`（均支持流式和非流式），以及 `POST /v1/messages/count_tokens`、`GET /v1/models`、`GET /health` 和需鉴权的 `GET /ready`。
 - 旧版 OpenAI Chat Completions 位于 `POST /v1/chat/completions`，默认关闭，必须通过 `enable_legacy_chat_completions` 显式开启。
 - Bearer API Key 校验，且默认拒绝启动：未配置任何 Key 时服务不会启动，默认绑定地址为 `127.0.0.1`。
-- 默认实时复用 OpenCode 认证：`auth_source: "opencode-shared"` 直接读取同一个 `~/.config/opencode/kiro.db`，遵守墓碑、更新共享健康/用量状态，并使用与 `opencode-kiro-auth` v0.20.6 兼容的刷新锁。
-- 标准字段驱动的会话亲和：Codex/OpenAI、OpenCode、Claude Code 无需私有 Header、Cookie 或客户端补丁，即可尽可能复用持久化的账号绑定与 Kiro `conversationId`。
+- 默认实时复用 OpenCode 认证：`auth_source: "opencode-shared"` 直接读取同一个 `~/.config/opencode/kiro.db`，遵守墓碑、更新共享健康/用量状态，并复用 `opencode-kiro-auth` v0.20.7 的账号 schema 与刷新锁行为。
+- 对已接受请求提供标准字段驱动的会话亲和：官方 OpenAI SDK、OpenCode、Codex、Claude Code 等客户端的请求只要落在已验证子集内，无需私有 Header、Cookie 或客户端补丁，即可尽可能复用持久化的账号绑定与 Kiro `conversationId`。
 - 账号级调度与 keep-alive 连接池：不同账号可以并行，同一账号上的 Kiro 流不会重叠；访问令牌刷新只更新缓存客户端的令牌，不重建连接池。
-- 零 provider 自有提示词注入：协议适配器只保留客户端文本和结构化字段；无法严格映射的能力返回显式错误，不靠隐藏指令模拟。
+- 默认 `safe` 模式零 provider 自有提示词注入：统一 IR 保留客户端文本、角色、内容块边界、工具身份、顺序与来源路径；无法严格映射的能力在调用 Kiro 前明确拒绝，不靠隐藏指令模拟。
+- 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
 - 多账号轮询、自动令牌刷新与故障切换。共享模式以 OpenCode 数据库为认证事实源，provider 数据库只保存会话亲和等状态。
 - 显式设置 `auth_source: "local"` 后仍可使用 `kiro-provider login` 与 `accounts import`；导入结果只是快照，不能与实时共享认证混为一谈。
 - 单一全局 `proxy_url`：一旦设置，所有上游出网流量（模型请求、令牌刷新、设备码登录）都会走同一个 HTTP(S) 代理。
 - 通过 `bun build --compile` 打包为单文件可执行文件，目标机器无需额外运行时依赖。
+
+## 协议兼容范围
+
+v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静默丢弃。默认
+`protocol_projection_mode: "safe"` 不会前置或改写客户端指令、合并相邻
+消息、清空重复 assistant 输出、删除 `{` 等尾部文本，也不会生成模型可见的
+补偿说明。
+
+主要边界：
+
+- 普通文本、连续同角色回合、function/custom 工具声明、调用和结果保持原始
+  结构与顺序；
+- 同一消息包含多个顶层文本块时返回
+  `unsupported_content_block_projection`；Kiro 只有一个文本字段，直接拼接
+  会抹掉块边界；
+- safe 模式下 `instructions`、`system`、`developer` 返回
+  `unsupported_instruction_projection`，因为实测 Kiro 的
+  `additionalContext` 通道被拒绝；
+- 支持 `tool_choice: auto`；required/指定工具、
+  `parallel_tool_calls: false`、strict schema、custom grammar 和 namespace
+  工具会被拒绝，不会被弱化；
+- 支持 base64/data URL 图片；远程图片 URL 与 detail 控制会被拒绝；
+- 输出 token 上限只对 `claude-sonnet-5` 变体的 1,024–128,000 范围完成探针
+  确认；
+- Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
+  搜索或引用事件。
+
+2026-08-26 编译后二进制的当前门禁：OpenAI JavaScript SDK 7.5.0 已通过
+Responses、显式 Chat、function/custom 工具循环，以及服务重启后的加密
+reasoning 回放。OpenCode Responses 仅在显式 `legacy-user-prefix` 且使用 Claude
+Sonnet 5 时通过；OpenCode Chat 被非标准 `cache_control` 阻塞。Codex
+0.149.0-alpha.4.1 被 `parallel_tool_calls: false` 阻塞；Claude Code 2.1.209
+被 `output_config.format`、`context_management`，以及重试时放入
+`messages.1.role` 的 `system` 阻塞。这些是 RC 结论；稳定版 v0.5.0 继续保持
+门禁，不会靠静默丢弃或搬移字段换取“通过”。
+
+完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
+[`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
 
 ## 安装
 
@@ -175,7 +215,8 @@ bun run src/cli/bin.ts --help
 ## 常驻后台服务
 
 在 Agent 主机上，建议每个系统用户只运行**一个长期存活的 provider**，再让
-Codex、OpenCode、Claude Code、Zuno 等客户端都连接这个本机端点。不要为每个
+兼容的 OpenAI/Anthropic 客户端、OpenCode、Zuno，以及 Codex/Claude Code
+兼容性探针都连接这个本机端点。不要为每个
 Agent 或每段会话分别启动 provider。单一常驻进程可以让这些标准客户端共享
 已持久化的会话/账号亲和状态，以及进程内按账号划分的 keep-alive 连接池。
 这仍然只是尽可能复用连接，并不保证每个请求都使用同一条物理 TCP 连接。
@@ -374,7 +415,9 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 1. 二进制和显式配置路径都存在；
 2. 服务/任务由拥有凭证的用户运行；
 3. `/health` 调用成功；
-4. 带鉴权的 `/ready` 调用成功，证明认证源可读且至少有一个活跃账号。
+4. 带鉴权的 `/ready` 调用成功，证明认证源可读、至少有一个活跃账号、
+   Provider 状态可写、reasoning 密钥环可用，且所有未过期回放记录引用的 key
+   ID 都已覆盖。
 
 固定使用上面的服务/任务名称，可以让重复配置保持幂等。配置或二进制更新后
 应重启服务。不要让客户端负责启动一份私有 provider 进程；客户端只需要配置
@@ -390,6 +433,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `port` | `8787` | `KIRO_PROVIDER_PORT` |
 | `api_keys` | 必填，不可为空 | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
+| `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null`（使用 OpenCode 默认路径） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
@@ -397,6 +441,10 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
+| `reasoning_replay_key_path` | 配置目录自动生成 | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
+| `reasoning_replay_keys` | `[]` | `KIRO_PROVIDER_REASONING_REPLAY_KEYS` |
+| `reasoning_replay_ttl_ms` | `86400000` | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS` |
+| `reasoning_replay_max_entries` | `10000` | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` |
 | `log_level` | `info` | `KIRO_PROVIDER_LOG_LEVEL` |
 
 完整字段说明（包括重试/超时调优参数与仅用于测试的 `test_upstream_endpoint`）见 [`docs/readme/CONFIGURATION.zh.md`](CONFIGURATION.zh.md)。
@@ -411,17 +459,24 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 - **默认只监听本机。** `host` 默认为 `127.0.0.1`；只有在放在防火墙或带认证的反向代理之后时才应绑定 `0.0.0.0`。
 - **认证事实源唯一。** 共享模式读写 OpenCode 现有 Kiro 数据库；schema 不兼容时默认拒绝启动，不会对该数据库执行 provider 自有迁移。
 - **Provider 状态权限收紧。** `accounts.db`（及其 WAL / SHM 文件）创建时权限为 `0600`；共享模式下它保存亲和状态，而不是权威凭据。
-- **日志不打印密钥。** 代理地址与账号令牌不会被打印；不要提交真实配置文件、账号数据库或网关 Key。
+- **Reasoning 回放带认证加密。** 数据库只保存令牌/指纹哈希和 AES-256-GCM 密文，不保存原始 `kr1_...`；缺少活动解密密钥时启动失败。
+- **日志不打印敏感正文。** 网关/账号密钥、回放令牌、签名、reasoning 与请求提示词不会写入日志；结构化审计只记录哈希和字段名。不要提交真实配置文件、账号数据库、密钥环或网关 Key。
 
 > **合规使用提示。** kiro-provider 复用的是你自己已认证的 AWS Kiro 账号，消耗的是你自己账号的额度。请只使用你自己的账号 —— 本项目不是用来共享或转卖他人 Kiro 使用权的工具，也不应用于绕过账号级别的用量限制。
 
 ## 配合 LLM 使用
 
-新 OpenAI 客户端与 Codex 使用 `POST /v1/responses`；Anthropic 客户端与
-Claude Code 使用 `POST /v1/messages`。只有在显式开启旧接口后，才应把
+OpenAI Responses 客户端使用 `POST /v1/responses`；Anthropic Messages
+客户端使用 `POST /v1/messages`。只有在显式开启旧接口后，才应把
 只支持 Chat Completions 的客户端（`@ai-sdk/openai-compatible`、旧版
 LangChain 适配器，或采用该包的 OpenCode 自定义 provider）指向
 `POST /v1/chat/completions`。
+
+标准客户端也必须落在已验证子集内。safe 模式下，始终发送
+system/developer、custom grammar、namespace 工具或 Anthropic
+`cache_control` 的客户端会收到字段级 400；网关不会修改请求强行通过 Kiro。
+可选的 `legacy-user-prefix` 仅是 v0.5.x/v0.6.x 的指令迁移手段，计划在
+v0.7.0 删除。
 
 客户端不需要增加会话扩展字段。网关会优先读取协议已有的标准/原生字段，
 缺失时使用首个用户回合生成不可逆指纹；数据库只保存指纹、账号绑定和 Kiro
@@ -445,7 +500,11 @@ LangChain 适配器，或采用该包的 OpenCode 自定义 provider）指向
 
 ## 配合 Codex CLI 使用
 
-kiro-provider 的 `POST /v1/responses` 端点使用 OpenAI Responses 协议格式，因此 [Codex CLI](https://github.com/openai/codex)（已于 2026-08-22 使用 0.149.0-alpha.4.1 做真实端到端验证）可以把它当作自定义 `model_provider`（`wire_api = "responses"`）来用。用一个隔离的 `CODEX_HOME` 测试，绝不会碰到你真实的 `~/.codex` 配置：
+Codex 使用正确的 Responses 端点，但当前编译后的 RC 对
+0.149.0-alpha.4.1 尚未通过：Codex 会发送 `parallel_tool_calls: false`，Kiro
+无法保证该约束。Provider 在调用 Kiro 前返回
+`unsupported_parallel_tool_calls`，不会忽略该字段。以下隔离配置只用于重现
+兼容性检查，不会碰到真实 `~/.codex`：
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -465,15 +524,18 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-需要网关先跑起来（`kiro-provider serve`），并且默认共享模式下 OpenCode
-至少有一个可用 Kiro 账号，或显式本地兼容存储中已有账号。完整说明及现成
-的隔离冒烟测试脚本（`scripts/codex-smoke.sh`）见
+Codex 0.149.0-alpha.4.1 的当前预期结果是携带该字段级错误的非零退出。未来
+基础请求成功后，还必须通过真实 shell/custom 工具循环、续轮和重启 reasoning
+回放，才能标记为支持。完整说明见
 [`docs/readme/CODEX.zh.md`](CODEX.zh.md)。
 
 ## 配合 Claude Code 使用
 
-Claude Code 使用 Anthropic Messages 协议，而不是 OpenAI Chat
-Completions。把它指向网关根地址：
+Claude Code 使用 Anthropic Messages，但 2.1.209 当前会发送
+`output_config.format` 与 `context_management`；第一次拒绝后还会把 `system`
+放进 `messages.1.role` 重试，这不是合法的 Anthropic Messages 角色，也不能被
+静默搬移。safe 和 legacy 指令模式都会在调用 Kiro 前拒绝这些请求形态。以下
+标准配置因此是兼容性探针，而不是当前支持声明：
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
@@ -482,21 +544,24 @@ claude
 ```
 
 Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
-`x-api-key: <key>`。文本和工具调用会转换为 Anthropic SSE。网关不会伪造
-extended-thinking 签名；`/v1/messages/count_tokens` 明确是估算值，响应会带
-`x-kiro-token-count-mode: estimate`。详见
+`x-api-key: <key>`。落在已验证子集内的直接 Messages 请求支持类型化 JSON/SSE
+和工具；`/v1/messages/count_tokens` 明确是估算值。详见
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
 
-OpenCode、Codex、Claude Code、共享认证、会话亲和与旧 Chat 开关的真实
-验证记录见
-[`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)。
+当前编译服务验证记录见
+[`docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](../audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md)。
+旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
+仅保留为历史 v0.4 证据。
 
 ## 开发
 
 ```bash
 bun install
+bun run lint
 bun run typecheck
 bun test
+bun run build
+bun run build:binary
 bash scripts/security-check.sh   # 安全回归测试（Linux，需要 openssl/curl/ss）
 ```
 
