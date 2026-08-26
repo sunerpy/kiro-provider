@@ -24,10 +24,12 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `api_keys`                   | `string[]`，**必填，去空格后不能为空**                                 | `KIRO_PROVIDER_API_KEYS`                   | 接受的 Bearer Key 列表。环境变量以逗号分隔。空列表或仅含空白会被拒绝，服务不会启动（默认拒绝启动）。                                                                                               |
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
 | `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
+| `session_affinity_mode`     | `"explicit-only" \| "legacy-initial-input"`，默认 `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` 绝不从提示词推导逻辑会话；`legacy-initial-input` 临时恢复旧版初始输入指纹，但不会改变模型可见内容。                                                                                  |
 | `auth_source`                | `"opencode-shared" \| "local"`，默认 `"opencode-shared"`              | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。共享模式实时使用 OpenCode 的 Kiro 数据库和兼容刷新锁；本地模式使用 provider 自有账号库，并允许 `kiro-provider login`。                                                               |
 | `opencode_auth_db_path`      | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | OpenCode Kiro 共享数据库的可选覆盖路径。`null` 使用 `$XDG_CONFIG_HOME/opencode/kiro.db` 或 `~/.config/opencode/kiro.db`；本地模式忽略此字段。                                                      |
 | `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。           |
 | `default_region`             | `string`，默认 `"us-east-1"`                                           | `KIRO_PROVIDER_DEFAULT_REGION`             | `login` 使用的区域，以及没有单独 profile ARN 覆盖的账号所使用的区域。                                                                                                                              |
+| `sdk_http_keep_alive`       | `boolean`，默认 `false`                                               | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | 只控制 Kiro 模型调用 socket；两种模式都会缓存 SDK 客户端和 transport 对象。`false` 使用新的直连/代理 SDK socket，`true` 在部署验证后启用池化。令牌刷新与设备登录保持各自独立的传输策略。       |
 | `account_selection_strategy` | `"sticky" \| "round-robin" \| "lowest-usage"`，默认 `"lowest-usage"`   | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` | 每次请求如何选择账号：`sticky` 倾向复用同一账号，`round-robin` 轮询，`lowest-usage` 优先选剩余额度最多的账号。                                                                                     |
 | `rate_limit_max_retries`     | `number`，默认 `3`                                                     | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | 对可重试限流响应的最大重试次数。                                                                                                                                                                   |
 | `rate_limit_retry_delay_ms`  | `number`，默认 `5000`                                                  | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | 限流重试的基础延迟（毫秒）。                                                                                                                                                                       |
@@ -133,24 +135,38 @@ Kiro 没有提供独立 tokenizer，因此 count-tokens 接口使用 provider
 
 ## 会话亲和与连接复用
 
-网关不要求客户端增加私有 Header、Cookie 或补丁，而是从标准客户端本来就会
-发送的字段中生成按 API Key 租户隔离、不可逆的会话指纹：
+生产默认值 `session_affinity_mode: "explicit-only"` 不会对 input、messages、
+工具参数或其他模型可见内容做哈希，来猜测两个请求是否属于同一会话。它只
+接受以下显式来源：
 
-- Responses：依次使用 `client_metadata.thread_id`、`session_id`、
-  `conversation_id`，然后是 `prompt_cache_key`，最后回退到初始输入。
-- Chat Completions：依次使用 `prompt_cache_key`、`user` 加首个用户回合，
-  最后回退到首个用户回合。
-- Anthropic Messages：优先使用 `metadata.user_id` 加首个用户回合，最后
-  回退到首个用户回合。
+- Responses 按优先级依次使用标准
+  `metadata.zuno_session_id`、标准
+  `metadata.kiro_provider_session_id`、兼容字段
+  `client_metadata.thread_id|session_id|conversation_id`，最后是
+  `prompt_cache_key`。
+- Chat Completions 只使用 `prompt_cache_key`。
+- Anthropic Messages 暂无经过验证的显式字段，因此本模式不建立亲和绑定。
 
-Provider 自有 SQLite 只保存指纹、选中的账号 ID、Kiro `conversationId` 和
-时间戳，不保存原始会话字段或提示词。同一逻辑会话在单进程内串行；不同账号可并行；共享
-同一账号的请求经过账号队列，并复用该账号的 keep-alive 传输池。遇到限流
-或不健康账号时，会话会重绑到替代账号并更换 Kiro `conversationId`。
+存在显式键时，Provider SQLite 只保存按租户隔离的键哈希、选中的账号 ID、
+Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同一逻辑会话在
+单进程内串行；不同账号可并行；共享同一账号的请求经过账号队列。SDK 客户端和
+transport 对象按账号缓存。遇到限流或不健康账号时，会话会重绑到替代账号并
+更换 Kiro `conversationId`。
 
-这属于“尽可能复用”，不是固定物理 TCP socket 的承诺：Node/Smithy
-Agent、代理、远端服务、空闲超时与网络都可能创建新 socket。多进程部署时，
-provider SQLite 共享逻辑账号/会话绑定，OpenCode 数据库和刷新锁协调认证；
+缺少显式键时，不保存会话绑定，每个请求都创建新的 Kiro conversation。
+账号选择和账号级 SDK/transport 对象复用仍然生效，因此复用不依赖不安全的
+prompt 指纹。Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境已经
+验证池化 socket 行为时，才显式设置 `sdk_http_keep_alive: true`。
+
+`legacy-initial-input` 仅用于迁移，会恢复旧版 Responses 初始输入、Chat
+`user`/首回合，以及 Anthropic `metadata.user_id`/首回合推导。启动时输出
+不含正文的结构化警告。该模式只影响路由亲和，不会前置、合并、删除或以其他
+方式修改模型可见内容。
+
+这里复用的是逻辑会话与 SDK 对象，不把会话绑定到固定物理 TCP socket。即使
+开启 keep-alive，Node/Smithy Agent、代理、远端服务、空闲超时与网络仍可能
+创建新 socket。多进程部署时，provider SQLite 共享逻辑账号/会话绑定，
+OpenCode 数据库和刷新锁协调认证；
 排队串行和 socket 池仍是每进程独立。
 
 本网关不保存 OpenAI response 对象状态，因此 `previous_response_id` 与
@@ -201,10 +217,12 @@ export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "safe",
+  "session_affinity_mode": "explicit-only",
   "auth_source": "opencode-shared",
   "opencode_auth_db_path": null,
   "proxy_url": null,
   "default_region": "us-east-1",
+  "sdk_http_keep_alive": false,
   "account_selection_strategy": "lowest-usage",
   "rate_limit_max_retries": 3,
   "rate_limit_retry_delay_ms": 5000,

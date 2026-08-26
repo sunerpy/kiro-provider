@@ -168,6 +168,86 @@ describe("standard-driven scheduler", () => {
 		});
 	});
 
+	test("uses a fresh Kiro conversation for identical requests without explicit affinity", async () => {
+		const { manager } = setup(["account-a"]);
+		const conversations: string[] = [];
+		const makeClient = (): PipelineSdkClient => ({
+			send(command) {
+				conversations.push(conversationId(command));
+				return Promise.resolve(
+					responseFrom([{ assistantResponseEvent: { content: "ok" } }]),
+				);
+			},
+		});
+		const options = {
+			body: BODY,
+			model: "auto",
+			stream: false,
+			config: config(),
+			accountManager: manager,
+			tokenRefresher: refresher,
+			makeClient,
+		} as const;
+
+		const first = await runChatCompletion(options);
+		const second = await runChatCompletion(options);
+
+		expect([first.status, second.status]).toEqual([200, 200]);
+		expect(conversations).toHaveLength(2);
+		expect(conversations[1]).not.toBe(conversations[0]);
+	});
+
+	test("serializes one explicit session and reuses its account and conversation", async () => {
+		const { database, manager } = setup(["account-a", "account-b"]);
+		const firstEntered = deferred();
+		const releaseFirst = deferred();
+		const accounts: string[] = [];
+		const conversations: string[] = [];
+		let sends = 0;
+		const makeClient = (
+			_auth: KiroAuthDetails,
+			_region: string,
+			_effort?: unknown,
+			_endpoint?: string,
+			_proxy?: string,
+			accountId?: string,
+		): PipelineSdkClient => ({
+			async send(command) {
+				sends += 1;
+				accounts.push(accountId ?? "");
+				conversations.push(conversationId(command));
+				if (sends === 1) {
+					firstEntered.resolve();
+					await releaseFirst.promise;
+				}
+				return responseFrom([{ assistantResponseEvent: { content: "ok" } }]);
+			},
+		});
+		const options = {
+			body: BODY,
+			model: "auto",
+			stream: false,
+			config: config(),
+			accountManager: manager,
+			tokenRefresher: refresher,
+			affinity: { keyHash: "session-concurrent", source: "test" },
+			affinityStore: database,
+			makeClient,
+		} as const;
+
+		const first = runChatCompletion(options);
+		await firstEntered.promise;
+		const second = runChatCompletion(options);
+		await Bun.sleep(20);
+
+		expect(sends).toBe(1);
+		releaseFirst.resolve();
+		expect([(await first).status, (await second).status]).toEqual([200, 200]);
+		expect(accounts).toEqual(["account-a", "account-a"]);
+		expect(conversations).toHaveLength(2);
+		expect(conversations[1]).toBe(conversations[0]);
+	});
+
 	test("runs different sessions concurrently when lowest-usage selects different accounts", async () => {
 		const { database, manager } = setup(["account-a", "account-b"]);
 		const release = deferred();

@@ -54,7 +54,58 @@ describe("standard-field session affinity", () => {
 		);
 	});
 
-	test("keeps Chat fallback affinity stable as full transcript history grows", () => {
+	test("uses standard Responses metadata for a Zuno session", () => {
+		const first = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: "same first turn",
+			metadata: { zuno_session_id: "session-a" },
+		});
+		const later = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: "later turn",
+			metadata: { zuno_session_id: "session-a" },
+		});
+		const other = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: "same first turn",
+			metadata: { zuno_session_id: "session-b" },
+		});
+
+		expect(responsesSessionAffinity(first, TENANT)).toEqual(
+			responsesSessionAffinity(later, TENANT),
+		);
+		expect(responsesSessionAffinity(first, TENANT)?.source).toBe(
+			"responses.metadata.zuno_session_id",
+		);
+		expect(responsesSessionAffinity(first, TENANT)?.keyHash).not.toBe(
+			responsesSessionAffinity(other, TENANT)?.keyHash,
+		);
+	});
+
+	test("does not infer affinity from identical initial input in explicit-only mode", () => {
+		const responses = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: "identical request",
+		});
+		const chat = ChatCompletionRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			messages: [{ role: "user", content: "identical request" }],
+		});
+		const anthropic = adaptAnthropicMessagesRequest({
+			model: "claude-opus-4-8",
+			messages: [{ role: "user", content: "identical request" }],
+			metadata: { user_id: "same-user" },
+		});
+		if (!anthropic.ok) throw new TypeError("fixture must adapt");
+
+		expect(responsesSessionAffinity(responses, TENANT)).toBeUndefined();
+		expect(chatSessionAffinity(chat, TENANT)).toBeUndefined();
+		expect(
+			anthropicSessionAffinity(anthropic.value.source, TENANT),
+		).toBeUndefined();
+	});
+
+	test("keeps Chat fallback affinity stable only in legacy mode", () => {
 		const first = ChatCompletionRequestSchema.parse({
 			model: "gpt-5.6-sol",
 			messages: [{ role: "user", content: "initial request" }],
@@ -68,15 +119,15 @@ describe("standard-field session affinity", () => {
 			],
 		});
 
-		expect(chatSessionAffinity(first, TENANT)).toEqual(
-			chatSessionAffinity(later, TENANT),
+		expect(chatSessionAffinity(first, TENANT, "legacy-initial-input")).toEqual(
+			chatSessionAffinity(later, TENANT, "legacy-initial-input"),
 		);
-		expect(chatSessionAffinity(first, TENANT)?.source).toBe(
+		expect(chatSessionAffinity(first, TENANT, "legacy-initial-input")?.source).toBe(
 			"chat.initial_input",
 		);
 	});
 
-	test("combines Anthropic metadata.user_id with the initial user turn", () => {
+	test("combines Anthropic metadata.user_id with initial input only in legacy mode", () => {
 		const first = adaptAnthropicMessagesRequest({
 			model: "claude-opus-4-8",
 			messages: [{ role: "user", content: "initial request" }],
@@ -93,11 +144,11 @@ describe("standard-field session affinity", () => {
 		});
 		if (!first.ok || !later.ok) throw new TypeError("fixtures must adapt");
 
-		expect(anthropicSessionAffinity(first.value.source, TENANT)).toEqual(
-			anthropicSessionAffinity(later.value.source, TENANT),
+		expect(anthropicSessionAffinity(first.value.source, TENANT, "legacy-initial-input")).toEqual(
+			anthropicSessionAffinity(later.value.source, TENANT, "legacy-initial-input"),
 		);
 		expect(
-			anthropicSessionAffinity(first.value.source, TENANT)?.source,
+			anthropicSessionAffinity(first.value.source, TENANT, "legacy-initial-input")?.source,
 		).toBe("anthropic.user_and_initial_input");
 	});
 

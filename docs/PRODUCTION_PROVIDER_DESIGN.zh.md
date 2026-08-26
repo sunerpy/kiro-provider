@@ -38,7 +38,7 @@ capability validation + safe/legacy projection
 session queue + account scheduler + shared auth refresh
             │
             ▼
-account-scoped SDK client / keep-alive transport pool
+account-scoped SDK client / configurable HTTP transport
             │
             ▼
 Kiro event stream
@@ -106,13 +106,25 @@ v0.5.x/v0.6.x 迁移。
 - `accounts import` 只属于显式 `local` 模式的一次性快照。
 
 Provider 自有 SQLite 只保存会话亲和、加密 reasoning 回放和本地兼容模式
-数据。会话键来自协议已有字段；缺失时使用初始用户回合的不可逆指纹。数据库
-保存账号与 Kiro `conversationId` 绑定，不保存原始 prompt。
+数据。默认 `session_affinity_mode: "explicit-only"` 只接受显式会话键：
+Responses 的标准 `metadata.zuno_session_id` /
+`metadata.kiro_provider_session_id`、兼容 `client_metadata` 或
+`prompt_cache_key`，以及 Chat 的 `prompt_cache_key`。Anthropic 暂无经过验证
+的显式字段。缺失显式键时不保存绑定，每个请求创建新的 Kiro conversation，
+绝不从初始 prompt 推导会话身份。
+
+`legacy-initial-input` 只用于迁移，可恢复旧版初始输入亲和推导，但不会改写任何
+模型可见内容。数据库只保存不可逆键哈希、账号与 Kiro `conversationId`
+绑定，不保存原始会话值或 prompt。
 
 同会话队列防止重叠回合，同账号队列防止并发 Kiro 流，不同账号可并行。
-SDK 客户端与 keep-alive transport 按账号缓存，token 刷新只更新凭据。这里
-承诺“尽可能复用账号、Kiro conversation 与连接池”，不保证固定一条 TCP
-socket。reasoning 回放会进一步锁死原账号和原 Kiro conversation。
+SDK 客户端与 transport 对象按账号缓存，token 刷新只更新凭据。Kiro 模型调用
+socket 默认新建（`sdk_http_keep_alive: false`）；只有显式开启后才尝试池化复用。
+这里承诺“尽可能复用账号、Kiro conversation 与 SDK 对象”，不保证固定一条
+TCP socket。缺少显式会话键时仍可复用账号级 SDK/transport 对象，但不会复用
+conversation。
+工具声明、公开名/上游别名和结果关联始终属于当前请求，多个并发会话不会共享
+可变工具映射。reasoning 回放会进一步锁死原账号和原 Kiro conversation。
 
 ## 6. 加密 reasoning 回放
 

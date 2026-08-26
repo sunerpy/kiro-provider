@@ -330,7 +330,11 @@ export async function handleChatCompletions(
     clearTimeout(deadlineTimer);
     return parsed.response;
   }
-  const affinity = chatSessionAffinity(parsed.value, dependencies.tenantId);
+  const affinity = chatSessionAffinity(
+    parsed.value,
+    dependencies.tenantId,
+    config.session_affinity_mode,
+  );
   const canonical = chatToCanonical(parsed.value, config.protocol_projection_mode);
   if (!canonical.ok) {
     auditLog("warn", "protocol_projection_rejected", {

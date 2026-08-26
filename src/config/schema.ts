@@ -50,7 +50,11 @@ export const ConfigSchema = z.object({
 	protocol_projection_mode: z
 		.enum(["safe", "legacy-user-prefix"])
 		.default("safe"),
+	session_affinity_mode: z
+		.enum(["explicit-only", "legacy-initial-input"])
+		.default("explicit-only"),
 	proxy_url: ProxyUrlSchema,
+	sdk_http_keep_alive: z.boolean().default(false),
 	auth_source: z.enum(["opencode-shared", "local"]).default("opencode-shared"),
 	opencode_auth_db_path: OptionalPathSchema,
 	default_region: z.string().default("us-east-1"),

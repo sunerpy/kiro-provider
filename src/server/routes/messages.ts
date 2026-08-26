@@ -226,6 +226,7 @@ export async function handleMessages(
   const affinity = anthropicSessionAffinity(
     adapted.value.source,
     dependencies.tenantId,
+    config.session_affinity_mode,
   );
 
   let lease: RequestIdleTimeoutLease | undefined;

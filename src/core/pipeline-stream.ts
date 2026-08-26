@@ -4,6 +4,7 @@ import type {
   SdkStreamResponse,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import { transformSdkStream } from "../kiro/transform/streaming/sdk-stream-transformer.js";
+import { auditHash, auditLog } from "./audit-log.js";
 import { abortReason } from "./pipeline-runtime.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 
@@ -38,6 +39,20 @@ export function createPipelineStreamResponse(
   idleTimeoutMs: number,
   finalize: () => void,
 ): Response {
+  const eventTypeCounts = new Map<string, number>();
+  let rawEventCount = 0;
+  let lastEventType: string | undefined;
+  const eventTypeCountsJson = (): string =>
+    JSON.stringify(Object.fromEntries([...eventTypeCounts.entries()].sort()));
+  const streamAuditFields = (): Readonly<
+    Record<string, string | number | undefined>
+  > => ({
+    model: result.model,
+    conversation_hash: auditHash(result.conversationId),
+    raw_event_count: rawEventCount,
+    last_event_type: lastEventType,
+    event_type_counts: eventTypeCountsJson(),
+  });
   const streamAbort = new AbortController();
   const composedSignal = AbortSignal.any([signal, streamAbort.signal]);
   const iterator = transformSdkStream(
@@ -54,6 +69,19 @@ export function createPipelineStreamResponse(
       ...(result.fingerprintOutput
         ? { fingerprintOutput: result.fingerprintOutput }
         : {}),
+      onCompletionMetadata: () => {
+        auditLog("info", "sdk_stream_completion_metadata_terminal", {
+          model: result.model,
+          conversation_hash: auditHash(result.conversationId),
+        });
+      },
+      onRawEvent: (eventTypes) => {
+        rawEventCount += 1;
+        lastEventType = eventTypes.join("+");
+        for (const eventType of eventTypes) {
+          eventTypeCounts.set(eventType, (eventTypeCounts.get(eventType) ?? 0) + 1);
+        }
+      },
     },
   )[Symbol.asyncIterator]();
   const encoder = new TextEncoder();
@@ -107,6 +135,10 @@ export function createPipelineStreamResponse(
         activeIdleTimer = setTimeout(() => {
           activeIdleTimer = undefined;
           const error = new StreamIdleTimeoutError(idleTimeoutMs);
+          auditLog("warn", "sdk_stream_idle_timeout", {
+            ...streamAuditFields(),
+            idle_timeout_ms: idleTimeoutMs,
+          });
           beginTerminal("idle-timeout", error);
         }, idleTimeoutMs);
         try {
@@ -114,6 +146,7 @@ export function createPipelineStreamResponse(
           if (terminalOutcome !== undefined) return;
           clearIdleTimer();
           if (next.done) {
+            auditLog("info", "sdk_stream_completed", streamAuditFields());
             beginTerminal("normal-complete");
             return;
           }
@@ -126,6 +159,10 @@ export function createPipelineStreamResponse(
               : new TypeError("SDK stream failed with a non-Error reason", {
                   cause: error,
                 });
+          auditLog("warn", "sdk_stream_upstream_error", {
+            ...streamAuditFields(),
+            error_type: streamError.name,
+          });
           beginTerminal("upstream-error", streamError);
         }
       },

@@ -89,6 +89,7 @@ export type ResponseTool = ResponseFunctionTool | ResponseCustomTool;
 export interface ResponseRequestConfiguration {
   readonly instructions: string | null;
   readonly maxOutputTokens: number | null;
+  readonly metadata: Readonly<Record<string, string>>;
   readonly reasoningEffort: CanonicalRequest["requestedReasoningEffort"] | null;
   readonly toolChoice: "auto" | "none";
   readonly tools: readonly ResponseTool[];
@@ -117,6 +118,7 @@ export function responseConfigurationFromCanonical(
   return {
     instructions: request.instructions?.text ?? null,
     maxOutputTokens: request.outputTokenLimit ?? null,
+    metadata: request.metadata ?? {},
     reasoningEffort: request.requestedReasoningEffort ?? null,
     toolChoice: request.toolChoice,
     tools: request.tools.filter((tool) => tool.origin === "request").map(responseTool),
@@ -126,6 +128,7 @@ export function responseConfigurationFromCanonical(
 const DEFAULT_CONFIGURATION: ResponseRequestConfiguration = {
   instructions: null,
   maxOutputTokens: null,
+  metadata: {},
   reasoningEffort: null,
   toolChoice: "auto",
   tools: [],
@@ -143,7 +146,7 @@ export interface ResponseStateObject {
   readonly instructions: string | null;
   readonly max_output_tokens: number | null;
   readonly max_tool_calls: null;
-  readonly metadata: Readonly<Record<string, never>>;
+  readonly metadata: Readonly<Record<string, string>>;
   readonly model: string;
   readonly output: readonly ResponseOutputItem[];
   readonly parallel_tool_calls: true;
@@ -192,7 +195,7 @@ export function responseState(input: {
     instructions: configuration.instructions,
     max_output_tokens: configuration.maxOutputTokens,
     max_tool_calls: null,
-    metadata: {},
+    metadata: configuration.metadata,
     model: input.model,
     output: input.output ?? [],
     parallel_tool_calls: true,

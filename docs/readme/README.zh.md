@@ -20,6 +20,7 @@
 - [代理](#代理)
 - [安全](#安全)
 - [配合 LLM 使用](#配合-llm-使用)
+- [配合 Zuno 使用](#配合-zuno-使用)
 - [配合 Codex CLI 使用](#配合-codex-cli-使用)
 - [配合 Claude Code 使用](#配合-claude-code-使用)
 - [开发](#开发)
@@ -31,8 +32,8 @@
 - 旧版 OpenAI Chat Completions 位于 `POST /v1/chat/completions`，默认关闭，必须通过 `enable_legacy_chat_completions` 显式开启。
 - Bearer API Key 校验，且默认拒绝启动：未配置任何 Key 时服务不会启动，默认绑定地址为 `127.0.0.1`。
 - 默认实时复用 OpenCode 认证：`auth_source: "opencode-shared"` 直接读取同一个 `~/.config/opencode/kiro.db`，遵守墓碑、更新共享健康/用量状态，并复用 `opencode-kiro-auth` v0.20.7 的账号 schema 与刷新锁行为。
-- 对已接受请求提供标准字段驱动的会话亲和：官方 OpenAI SDK、OpenCode、Codex、Claude Code 等客户端的请求只要落在已验证子集内，无需私有 Header、Cookie 或客户端补丁，即可尽可能复用持久化的账号绑定与 Kiro `conversationId`。
-- 账号级调度与 keep-alive 连接池：不同账号可以并行，同一账号上的 Kiro 流不会重叠；访问令牌刷新只更新缓存客户端的令牌，不重建连接池。
+- 默认只使用显式会话亲和：Responses 可通过标准 `metadata`、兼容 `client_metadata` 或 `prompt_cache_key` 选择加入；没有显式键时绝不从提示词推导会话身份。配套的 Zuno 原生 OpenAI transport 会自动发送 `metadata.zuno_session_id`。
+- 账号级调度与缓存的 SDK/transport 对象：不同账号可以并行，同一账号上的 Kiro 流不会重叠；访问令牌刷新只更新缓存客户端。Kiro 模型调用的 HTTP keep-alive 默认关闭，必须显式选择开启。
 - 默认 `safe` 模式零 provider 自有提示词注入：统一 IR 保留客户端文本、角色、内容块边界、工具身份、顺序与来源路径；无法严格映射的能力在调用 Kiro 前明确拒绝，不靠隐藏指令模拟。
 - 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
 - 多账号轮询、自动令牌刷新与故障切换。共享模式以 OpenCode 数据库为认证事实源，provider 数据库只保存会话亲和等状态。
@@ -217,9 +218,12 @@ bun run src/cli/bin.ts --help
 在 Agent 主机上，建议每个系统用户只运行**一个长期存活的 provider**，再让
 兼容的 OpenAI/Anthropic 客户端、OpenCode、Zuno，以及 Codex/Claude Code
 兼容性探针都连接这个本机端点。不要为每个
-Agent 或每段会话分别启动 provider。单一常驻进程可以让这些标准客户端共享
-已持久化的会话/账号亲和状态，以及进程内按账号划分的 keep-alive 连接池。
-这仍然只是尽可能复用连接，并不保证每个请求都使用同一条物理 TCP 连接。
+Agent 或每段会话分别启动 provider。单一常驻进程可以让带显式亲和键的请求
+复用已持久化的账号/Kiro conversation 绑定，同时让所有请求复用进程内按账号
+划分的 SDK 客户端与 transport 对象。没有显式键的请求会创建新的 Kiro
+conversation。Kiro 模型调用 socket 默认新建（`sdk_http_keep_alive: false`）；即使显式
+开启 keep-alive，也只是尽可能优化传输，不代表一个会话独占一条物理 TCP
+连接。
 
 常驻部署建议使用固定版本的独立二进制，不要在每次启动时通过 `bunx` 临时
 拉取。以下示例采用发布安装脚本的默认路径：
@@ -434,10 +438,12 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `api_keys` | 必填，不可为空 | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
+| `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null`（使用 OpenCode 默认路径） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
+| `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
@@ -478,10 +484,17 @@ system/developer、custom grammar、namespace 工具或 Anthropic
 可选的 `legacy-user-prefix` 仅是 v0.5.x/v0.6.x 的指令迁移手段，计划在
 v0.7.0 删除。
 
-客户端不需要增加会话扩展字段。网关会优先读取协议已有的标准/原生字段，
-缺失时使用首个用户回合生成不可逆指纹；数据库只保存指纹、账号绑定和 Kiro
-`conversationId`。底层通过账号级 keep-alive 池“尽可能”复用连接，但 HTTP
-与上游仍可能选择另一条物理 socket，不能把它理解成固定 TCP 连接保证。
+默认 `session_affinity_mode: "explicit-only"` 绝不会通过 prompt 文本猜测
+会话。Responses 按顺序检查 `metadata.zuno_session_id`、
+`metadata.kiro_provider_session_id`、兼容字段
+`client_metadata.thread_id|session_id|conversation_id` 和
+`prompt_cache_key`；Chat 只检查 `prompt_cache_key`；Anthropic Messages
+目前没有经过验证的显式亲和字段。缺少显式键时，请求使用新的 Kiro
+conversation，但仍可复用账号级 SDK 客户端和 transport 对象。Kiro SDK 的
+直连/代理 agent 默认使用新 socket；只有部署环境验证过池化 socket 行为后，才应
+设置 `sdk_http_keep_alive: true`。临时的
+`legacy-initial-input` 只恢复旧版亲和推导并输出启动警告，不会修改请求正文。
+
 在真正的响应状态存储完成前，Responses 的 `previous_response_id` 和
 `conversation` 会明确返回 400，客户端应重传完整输入。
 
@@ -497,6 +510,65 @@ v0.7.0 删除。
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models`、`GET /health` 与需鉴权的 `GET /ready` 返回结构化 JSON。
 
 </details>
+
+## 配合 Zuno 使用
+
+先以拥有 OpenCode/Kiro 凭证的系统用户运行一个编译后的 kiro-provider 常驻
+服务，再配置 Zuno 的原生 Rust OpenAI transport。这里不需要 Node 包、AI
+SDK、私有 Header 或由 Zuno 启动 provider 的钩子：
+
+```json
+{
+  "model": "kiro/auto",
+  "small_model": "kiro/auto",
+  "provider": {
+    "kiro": {
+      "name": "Local kiro-provider",
+      "transport": "openai",
+      "surface": "responses",
+      "env": ["KIRO_GATEWAY_API_KEY"],
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "maxTokens": null
+      },
+      "models": {
+        "auto": {
+          "name": "Kiro Auto",
+          "reasoning": true,
+          "tool_call": true
+        }
+      }
+    }
+  }
+}
+```
+
+把 `KIRO_GATEWAY_API_KEY` 设置为 provider `api_keys` 中的一项，再验证原生
+路由：
+
+```bash
+export KIRO_GATEWAY_API_KEY='sk-your-private-key'
+zuno debug config
+zuno models kiro --verbose
+```
+
+配套的 Zuno OpenAI Responses transport 会在每个主回合和工具续轮中，把
+持久 Zuno 会话 ID 映射到标准 `metadata.zuno_session_id`。它不会把该 ID
+放入 input、messages、instructions、工具描述或任何模型可见字段；内部标题/
+摘要请求也不会加入主会话。因此，同一 Zuno 会话会串行复用一份持久化的账号/
+Kiro conversation 绑定；不同会话即使首个 prompt 与上游工具别名完全相同，
+也保持隔离。工具声明和别名状态始终只属于当前请求。
+
+该集成应保持 `surface: "responses"`。选择 `chat` 需要另行显式开启旧接口，
+且不会携带上述 Zuno Responses 会话元数据。
+
+当前 Zuno 会发送 Agent instructions，而 Kiro `additionalContext` 实时探针尚未
+证明存在无损指令投影。因此，已验证的功能路径目前要求 Provider 显式设置
+`protocol_projection_mode: "legacy-user-prefix"`；`safe` 会正确返回
+`unsupported_instruction_projection`，绝不改写请求。还应按上例把 Zuno
+`options.maxTokens` 设为 `null`，避免通用层加入 Kiro 不支持的
+`max_output_tokens: 32000`。这两项都不依赖私有 Header 或客户端提示词补丁；
+legacy 模式只是计划在 v0.7.0 删除的显式迁移例外。
 
 ## 配合 Codex CLI 使用
 

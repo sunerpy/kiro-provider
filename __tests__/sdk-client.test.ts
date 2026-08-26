@@ -172,7 +172,7 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
   })
 
-  test('configures the same proxy agent for HTTP and HTTPS endpoints', async () => {
+  test('configures the same fresh-socket proxy agent for HTTP and HTTPS endpoints', async () => {
     clearSdkClientCache()
     const proxyUrl = 'http://127.0.0.1:43128'
     const client = createSdkClient(
@@ -186,11 +186,11 @@ describe('createSdkClient', () => {
     const handlerConfig = await resolveHandlerConfig(client)
 
     expect(handlerConfig.httpAgent).toBe(handlerConfig.httpsAgent)
-    expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
+    expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: false, maxSockets: 50 })
     clearSdkClientCache()
   })
 
-  test('uses explicit reusable direct HTTP and HTTPS pools', async () => {
+  test('uses fresh direct HTTP and HTTPS sockets by default without reducing capacity', async () => {
     clearSdkClientCache()
     const auth = makeAuth()
     const directConfig = buildClientConfig(auth, 'us-east-1', 'https://q.us-east-1.amazonaws.com')
@@ -199,6 +199,24 @@ describe('createSdkClient', () => {
 
     expect(directConfig.requestHandler).toBeInstanceOf(NodeHttpHandler)
     expect(client.config.requestHandler).toBeInstanceOf(NodeHttpHandler)
+    expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: false, maxSockets: 50 })
+    expect(handlerConfig.httpsAgent).toMatchObject({ keepAlive: false, maxSockets: 50 })
+    clearSdkClientCache()
+  })
+
+  test('allows explicit cross-request socket reuse', async () => {
+    clearSdkClientCache()
+    const client = createSdkClient(
+      makeAuth(),
+      'us-east-1',
+      undefined,
+      undefined,
+      undefined,
+      'account-a',
+      true
+    )
+    const handlerConfig = await resolveHandlerConfig(client)
+
     expect(handlerConfig.httpAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
     expect(handlerConfig.httpsAgent).toMatchObject({ keepAlive: true, maxSockets: 50 })
     clearSdkClientCache()
@@ -216,6 +234,19 @@ describe('createSdkClient', () => {
 
     expect(cachedProxiedClient).toBe(proxiedClient)
     expect(directClient).not.toBe(proxiedClient)
+    clearSdkClientCache()
+  })
+
+  test('keeps fresh-socket and keep-alive transports in separate cache entries', () => {
+    clearSdkClientCache()
+    const auth = makeAuth()
+    const fresh = createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a', false)
+    const reused = createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a', true)
+    const reusedAgain = createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a', true)
+
+    expect(reused).not.toBe(fresh)
+    expect(reused.config.requestHandler).not.toBe(fresh.config.requestHandler)
+    expect(reusedAgain).toBe(reused)
     clearSdkClientCache()
   })
 
@@ -254,6 +285,7 @@ describe('createSdkClient', () => {
         account_hash: expect.any(String),
         region: 'us-east-1',
         effort: 'high',
+        http_keep_alive: false,
         transport_pool_hit: false,
         sdk_client_pool_hit: false
       })

@@ -241,7 +241,11 @@ export async function handleResponses(
     clearTimeout(deadlineTimer);
     return parsed.response;
   }
-  const affinity = responsesSessionAffinity(parsed.value, dependencies.tenantId);
+  const affinity = responsesSessionAffinity(
+    parsed.value,
+    dependencies.tenantId,
+    config.session_affinity_mode,
+  );
   const adapted = responsesToInternalChat(
     parsed.value,
     config.protocol_projection_mode,

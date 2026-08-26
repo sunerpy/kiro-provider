@@ -20,6 +20,7 @@
 - [Proxy](#proxy)
 - [Security](#security)
 - [Using with an LLM](#using-with-an-llm)
+- [Use with Zuno](#use-with-zuno)
 - [Use with Codex CLI](#use-with-codex-cli)
 - [Use with Claude Code](#use-with-claude-code)
 - [Development](#development)
@@ -31,8 +32,8 @@
 - Legacy OpenAI Chat Completions is available at `POST /v1/chat/completions`, but is disabled by default and must be explicitly enabled with `enable_legacy_chat_completions`.
 - Bearer API-key gate that fails closed: the server refuses to start with no configured keys, and defaults to binding `127.0.0.1`.
 - Live OpenCode authentication reuse by default: `auth_source: "opencode-shared"` reads the same `~/.config/opencode/kiro.db`, honors tombstones, updates shared health/usage, and uses the account schema and refresh-lock behavior of `opencode-kiro-auth` v0.20.7.
-- Standard-field session affinity for accepted requests: official OpenAI SDK, OpenCode, Codex, Claude Code, and other clients can reuse a persisted account binding and Kiro conversation ID without private headers, cookies, or client patches when their request stays inside the verified subset.
-- Account-scoped scheduling and keep-alive transport pools: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams; access-token refresh updates the cached client instead of rebuilding its connection pool.
+- Explicit-only session affinity by default: Responses requests can opt in through standard `metadata`, compatibility `client_metadata`, or `prompt_cache_key`; requests without an explicit key never derive identity from prompt text. A matching Zuno native OpenAI transport supplies `metadata.zuno_session_id` automatically.
+- Account-scoped scheduling and cached SDK/transport objects: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams; access-token refresh updates the cached client instead of rebuilding it. Kiro model-call HTTP keep-alive is disabled by default and is an explicit transport opt-in.
 - Zero provider-owned prompt injection in the default `safe` mode: a canonical IR preserves client text, roles, content-block boundaries, tool identity, ordering, and source paths; unsupported guarantees are rejected before Kiro instead of being emulated with hidden instructions.
 - Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
 - Multi-account rotation with automatic token refresh and failover. Shared mode treats OpenCode's database as the authentication authority; the provider database stores session affinity only.
@@ -223,10 +224,13 @@ For an agent host, run **one long-lived provider per OS user** and point
 compatible OpenAI/Anthropic clients, OpenCode, Zuno, and compatibility probes
 for Codex or Claude Code at that local endpoint.
 Do not start a new provider for every agent or conversation. Keeping one
-process alive lets those standard clients share the provider's persisted
-session/account affinity and its process-local, account-scoped keep-alive
-pools. This remains best-effort connection reuse, not a promise that every
-request uses one physical TCP connection.
+process alive lets requests with an explicit affinity key reuse their
+persisted account/Kiro-conversation binding, while all requests can reuse
+process-local, account-scoped SDK clients and transport objects. A request
+without an explicit key gets a fresh Kiro conversation. Kiro model-call HTTP
+sockets are fresh by default (`sdk_http_keep_alive: false`); enabling it is a
+best-effort transport optimization, never a promise that one session owns one
+physical TCP connection.
 
 Use a pinned standalone binary for a service rather than fetching through
 `bunx` on every start. The examples below assume the release installers'
@@ -449,10 +453,12 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `api_keys` | required, non-empty | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
+| `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null` (uses the OpenCode default) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
+| `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
@@ -494,14 +500,22 @@ gateway does not modify that request to force it through Kiro. The optional
 `legacy-user-prefix` projection is a temporary instruction-only migration aid
 for v0.5.x/v0.6.x and is scheduled for removal in v0.7.0.
 
-No client-specific session extension is required. The gateway derives
-affinity from standard/native request fields when present and otherwise from
-the initial user turn, stores only an irreversible key hash, and persists the
-selected account plus Kiro conversation ID. Connection reuse is best-effort
-through an account-scoped keep-alive pool; HTTP and upstream behavior can
-still select a different physical socket. Stateful Responses fields
-`previous_response_id` and `conversation` are rejected until the gateway has
-a real response-state store, so clients must resend the complete input.
+The default `session_affinity_mode: "explicit-only"` never hashes prompt text
+to guess a conversation. Responses checks, in order,
+`metadata.zuno_session_id`, `metadata.kiro_provider_session_id`, compatibility
+`client_metadata.thread_id|session_id|conversation_id`, and
+`prompt_cache_key`. Chat checks only `prompt_cache_key`; Anthropic Messages
+has no verified explicit affinity field. With no key, the request gets a
+fresh Kiro conversation but can still reuse account-scoped SDK clients and
+transport objects. The Kiro SDK's direct/proxy agents use fresh sockets by default;
+set `sdk_http_keep_alive: true` only when the deployment has validated pooled
+socket behavior.
+The temporary `legacy-initial-input` mode restores only the old affinity
+heuristics and logs a startup warning; it does not alter request content.
+
+Stateful Responses fields `previous_response_id` and `conversation` are
+rejected until the gateway has a real response-state store, so clients must
+resend the complete input.
 
 <details>
 <summary>Agent command reference</summary>
@@ -515,6 +529,71 @@ a real response-state store, so clients must resend the complete input.
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.
 
 </details>
+
+## Use with Zuno
+
+Run one compiled kiro-provider service as the credential-owning OS user, then
+configure Zuno's native Rust OpenAI transport. No Node package, AI SDK, private
+header, or provider-spawn hook is required:
+
+```json
+{
+  "model": "kiro/auto",
+  "small_model": "kiro/auto",
+  "provider": {
+    "kiro": {
+      "name": "Local kiro-provider",
+      "transport": "openai",
+      "surface": "responses",
+      "env": ["KIRO_GATEWAY_API_KEY"],
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "maxTokens": null
+      },
+      "models": {
+        "auto": {
+          "name": "Kiro Auto",
+          "reasoning": true,
+          "tool_call": true
+        }
+      }
+    }
+  }
+}
+```
+
+Set `KIRO_GATEWAY_API_KEY` to one key from the provider's `api_keys`, then
+verify the native route:
+
+```bash
+export KIRO_GATEWAY_API_KEY='sk-your-private-key'
+zuno debug config
+zuno models kiro --verbose
+```
+
+The matching Zuno OpenAI Responses transport maps the durable Zuno session ID
+to standard `metadata.zuno_session_id` on every main turn and tool
+continuation. It does not add that ID to input, messages, instructions, tool
+descriptions, or any other model-visible field; internal title/summary calls
+do not join the main provider conversation. Therefore one Zuno session is
+serialized onto one persisted account/Kiro-conversation binding, while
+different sessions remain isolated even if their first prompt and upstream
+tool aliases are identical. Tool declaration and alias state remains local to
+each request.
+
+Keep `surface: "responses"` for this integration. Selecting `chat` requires
+the separately enabled legacy endpoint and does not carry the Zuno Responses
+session metadata.
+
+Current Zuno sends agent instructions, while the live Kiro
+`additionalContext` probe did not prove a lossless instruction projection.
+Consequently the verified functional path currently requires the provider's
+explicit `protocol_projection_mode: "legacy-user-prefix"`; `safe` correctly
+returns `unsupported_instruction_projection` and never rewrites the request.
+Set Zuno `options.maxTokens` to `null` as shown so its generic layer does not
+add the unsupported `max_output_tokens: 32000`. Neither setting uses a private
+Header or client-side prompt patch; the legacy mode is an explicit migration
+exception scheduled for removal in v0.7.0.
 
 ## Use with Codex CLI
 

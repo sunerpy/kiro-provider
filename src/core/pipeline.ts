@@ -353,7 +353,9 @@ async function executeLoop(
     preferredAccountId = selected.id;
     auditLog("info", "upstream_affinity_selected", {
       projection_mode: options.config.protocol_projection_mode,
+      session_affinity_mode: options.config.session_affinity_mode,
       affinity_source: options.affinity?.source,
+      affinity_bound: options.affinity !== undefined,
       account_hash: auditHash(selected.id),
       conversation_hash:
         requestConversationId === undefined
@@ -387,6 +389,7 @@ async function executeLoop(
         options.config.test_upstream_endpoint,
         resolveProxyUrl(options.config),
         account.id,
+        options.config.sdk_http_keep_alive,
       );
       const commandInput: unknown = {
         conversationState: prepared.conversationState,

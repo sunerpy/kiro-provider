@@ -406,6 +406,30 @@ describe("runChatCompletion success paths", () => {
     },
   );
 
+  test.each([false, true])(
+    "passes sdk_http_keep_alive=%s to the SDK client factory",
+    async (sdkHttpKeepAlive) => {
+      const capturedKeepAlive: Array<boolean | undefined> = [];
+      const response = await runChatCompletion({
+        body: REQUEST_BODY,
+        model: "auto",
+        stream: false,
+        config: config({ sdk_http_keep_alive: sdkHttpKeepAlive }),
+        accountManager: new FakeAccountManager([account("account-a")]),
+        tokenRefresher: new FakeTokenRefresher(),
+        makeClient: (...factoryArgs) => {
+          capturedKeepAlive.push(factoryArgs[6]);
+          return clientWith(async () =>
+            responseFrom([{ assistantResponseEvent: { content: "answer" } }]),
+          );
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(capturedKeepAlive).toEqual([sdkHttpKeepAlive]);
+    },
+  );
+
   test("returns a non-streaming completion with reasoning_content", async () => {
     // Given
     const manager = new FakeAccountManager([account("account-a")]);
