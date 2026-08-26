@@ -151,6 +151,84 @@ describe("SDK stream usage and finalization", () => {
 		});
 	});
 
+	test("treats token-usage metadata as terminal without waiting for transport EOF", async () => {
+		let closed = false;
+		let completions = 0;
+		const response = {
+			generateAssistantResponseResponse: (async function* () {
+				try {
+					yield { assistantResponseEvent: { content: "answer" } };
+					yield { metadataEvent: { tokenUsage: { inputTokens: 2, outputTokens: 1 } } };
+					await new Promise<void>(() => undefined);
+					yield { assistantResponseEvent: { content: "late content" } };
+				} finally {
+					closed = true;
+				}
+			})(),
+		};
+		const chunks = [];
+		for await (const chunk of transformSdkStream(
+			response,
+			"auto",
+			"completion-metadata",
+			undefined,
+			{
+				onCompletionMetadata: () => {
+					completions += 1;
+				},
+			},
+		)) {
+			chunks.push(chunk);
+		}
+
+		await Bun.sleep(0);
+
+		expect(contentOf(chunks)).toBe("answer");
+		expect(
+			chunks.find((chunk) => chunk.choices[0]?.finish_reason)?.choices[0]
+				?.finish_reason,
+		).toBe("stop");
+		expect(completions).toBe(1);
+		expect(closed).toBe(true);
+	});
+
+	test("does not treat context-only metadata as completion", async () => {
+		const chunks = await collectSdkChunks([
+			{ assistantResponseEvent: { content: "before" } },
+			{ metadataEvent: { contextUsagePercentage: 10 } },
+			{ assistantResponseEvent: { content: " after" } },
+		]);
+
+		expect(contentOf(chunks)).toBe("before after");
+	});
+
+	test("reports only raw SDK event discriminator names", async () => {
+		const observed: string[][] = [];
+		const response = makeSdkResponse([
+			{ assistantResponseEvent: { content: "answer" } },
+			{ metadataEvent: { tokenUsage: { inputTokens: 2, outputTokens: 1 } } },
+		]);
+
+		for await (const _chunk of transformSdkStream(
+			response,
+			"auto",
+			"event-types",
+			undefined,
+			{
+				onRawEvent: (eventTypes) => {
+					observed.push([...eventTypes]);
+				},
+			},
+		)) {
+			// Drain the transformed stream.
+		}
+
+		expect(observed).toEqual([
+			["assistantResponseEvent"],
+			["metadataEvent"],
+		]);
+	});
+
 	test("sets finish reason from native tool events", async () => {
 		const withTool = await collectSdkChunks([
 			{ toolUseEvent: { name: "x", toolUseId: "t", input: "{}", stop: true } },

@@ -43,6 +43,7 @@ const encoder = new TextEncoder();
 const DEFAULT_RESPONSE_CONFIGURATION = {
   instructions: null,
   maxOutputTokens: null,
+  metadata: {},
   reasoningEffort: null,
   toolChoice: "auto",
   tools: [],
@@ -50,6 +51,7 @@ const DEFAULT_RESPONSE_CONFIGURATION = {
 const RICH_RESPONSE_CONFIGURATION = {
   instructions: "exact instructions",
   maxOutputTokens: 4_096,
+  metadata: { zuno_session_id: "session-1" },
   reasoningEffort: "high",
   toolChoice: "none",
   tools: [

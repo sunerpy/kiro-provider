@@ -25,6 +25,7 @@ interface TransportCacheEntry {
 const clientCache = new Map<string, ClientCacheEntry>()
 const transportCache = new Map<string, TransportCacheEntry>()
 const KIRO_CLI_MAX_ATTEMPTS = 3
+const SDK_MAX_SOCKETS = 50
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -61,7 +62,7 @@ export function buildClientConfig(
   region: string,
   resolvedEndpoint: string,
   proxyUrl?: string,
-  requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl),
+  requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl, false),
   tokenState: { value: string } = { value: auth.access }
 ): CodeWhispererStreamingClientConfig {
   return {
@@ -75,11 +76,11 @@ export function buildClientConfig(
   }
 }
 
-function createRequestHandler(proxyUrl?: string): NodeHttpHandler {
+function createRequestHandler(proxyUrl: string | undefined, keepAlive: boolean): NodeHttpHandler {
   if (proxyUrl) {
     const proxyAgent = new HttpsProxyAgent(proxyUrl, {
-      keepAlive: true,
-      maxSockets: 50
+      keepAlive,
+      maxSockets: SDK_MAX_SOCKETS
     })
     return new NodeHttpHandler({
       httpAgent: proxyAgent,
@@ -87,8 +88,8 @@ function createRequestHandler(proxyUrl?: string): NodeHttpHandler {
     })
   }
   return new NodeHttpHandler({
-    httpAgent: new HttpAgent({ keepAlive: true, maxSockets: 50 }),
-    httpsAgent: new HttpsAgent({ keepAlive: true, maxSockets: 50 })
+    httpAgent: new HttpAgent({ keepAlive, maxSockets: SDK_MAX_SOCKETS }),
+    httpsAgent: new HttpsAgent({ keepAlive, maxSockets: SDK_MAX_SOCKETS })
   })
 }
 
@@ -105,19 +106,21 @@ export function createSdkClient(
   effort?: Effort,
   endpoint?: string,
   proxyUrl?: string,
-  accountId?: string
+  accountId?: string,
+  httpKeepAlive = false
 ): CodeWhispererStreamingClient {
   const resolvedEndpoint = endpoint ?? `https://q.${region}.amazonaws.com`
   const transportKey = JSON.stringify([
     accountId ?? fallbackAccountKey(auth),
     region,
     resolvedEndpoint,
-    proxyUrl ?? null
+    proxyUrl ?? null,
+    httpKeepAlive
   ])
   let transport = transportCache.get(transportKey)
   const transportPoolHit = transport !== undefined
   if (!transport) {
-    transport = { handler: createRequestHandler(proxyUrl) }
+    transport = { handler: createRequestHandler(proxyUrl, httpKeepAlive) }
     transportCache.set(transportKey, transport)
   }
   const cacheKey = JSON.stringify([transportKey, effort ?? null])
@@ -127,6 +130,7 @@ export function createSdkClient(
       account_hash: auditHash(accountId),
       region,
       effort: effort ?? null,
+      http_keep_alive: httpKeepAlive,
       transport_pool_hit: transportPoolHit,
       sdk_client_pool_hit: cached !== undefined
     })

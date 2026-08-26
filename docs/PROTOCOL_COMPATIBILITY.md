@@ -55,14 +55,41 @@ The migration mode remains available in v0.5.x and v0.6.x and is scheduled for
 removal in v0.7.0. The legacy Chat endpoint is controlled separately by
 `enable_legacy_chat_completions` and remains disabled by default.
 
+## Session affinity modes
+
+`session_affinity_mode` defaults to `explicit-only` and can also be set
+through `KIRO_PROVIDER_SESSION_AFFINITY_MODE`. Affinity metadata is transport
+routing state; it is never inserted into model-visible input.
+
+- Responses, in order: `metadata.zuno_session_id`,
+  `metadata.kiro_provider_session_id`, compatibility
+  `client_metadata.thread_id|session_id|conversation_id`, then
+  `prompt_cache_key`.
+- Chat Completions: `prompt_cache_key` only.
+- Anthropic Messages: no verified explicit affinity field.
+
+An explicit key serializes overlapping turns and persists the chosen account
+plus Kiro conversation ID. With no explicit key, each request gets a fresh
+Kiro conversation while retaining account-level scheduler and cached
+SDK/transport object reuse. Kiro model-call sockets are fresh by default;
+keep-alive is an explicit opt-in. Identical prompts in independent sessions therefore do
+not collide.
+
+`legacy-initial-input` temporarily restores the v0.4 prompt-fingerprint
+heuristics. It emits a content-free startup warning and affects routing only;
+it does not enable prompt injection, message merging, or any other protocol
+rewrite.
+
 ## Current compiled-client acceptance status
 
-The 2026-08-26 RC gate used the compiled binary and unmodified standard-client
-configuration (base URL, API key, and model only):
+The 2026-08-26 RC gate used the compiled binary without private headers,
+request patches, or client-side prompt compensation. Any required documented
+client option is stated in its row:
 
 | Client | v0.5.0-rc.1 result |
 | --- | --- |
 | OpenAI JavaScript SDK 7.5.0 | Pass: Responses streaming/non-streaming, Chat streaming/non-streaming, function/custom tool loops, and encrypted reasoning replay across a provider restart. |
+| Zuno native OpenAI Responses | Pass: compiled-service tool loop, same-session continuation, and two parallel isolated sessions through standard `metadata.zuno_session_id`. The current functional path explicitly uses provider `legacy-user-prefix` and Zuno `maxTokens: null`; safe mode correctly rejects Zuno's agent instructions. |
 | OpenCode 1.18.18 Responses | Pass only with explicit `legacy-user-prefix` and a Claude Sonnet 5 model. Safe mode correctly rejects its developer prompt; GPT requests also carry an unsupported output-token limit. |
 | OpenCode 1.18.18 Chat | Blocked: the client adds `messages.0.cache_control`, which this protocol does not define and the provider will not silently discard. |
 | Codex CLI 0.149.0-alpha.4.1 | Blocked before Kiro: the client sends `parallel_tool_calls: false`, which Kiro cannot guarantee. |
@@ -122,9 +149,12 @@ least-recently-used records happens transactionally.
    v0.7.0.
 4. Enable Chat only when required:
    `enable_legacy_chat_completions: true`.
-5. Persist the reasoning key file/keyring alongside the provider database and
+5. Keep `session_affinity_mode: "explicit-only"` and have capable Responses
+   clients send a stable metadata key. Use `legacy-initial-input` only as a
+   temporary routing migration.
+6. Persist the reasoning key file/keyring alongside the provider database and
    include it in service backup/restore procedures.
-6. Require authenticated `/ready` before routing clients; it checks active
+7. Require authenticated `/ready` before routing clients; it checks active
    accounts, database writability, keyring availability, and active key-ID
    coverage.
 

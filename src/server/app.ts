@@ -193,6 +193,13 @@ export function buildServerDeps(
 			planned_removal: "v0.7.0",
 		});
 	}
+	if (config.session_affinity_mode === "legacy-initial-input") {
+		auditLog("warn", "legacy_session_affinity_enabled", {
+			session_affinity_mode: config.session_affinity_mode,
+			risk: "identical_initial_input_can_alias_independent_sessions",
+			planned_removal: "v0.7.0",
+		});
+	}
 	const database = factories.createDatabase?.() ?? new AccountsDatabase();
 	const reasoningReplayStore =
 		factories.createReasoningReplayStore?.(database, config) ??

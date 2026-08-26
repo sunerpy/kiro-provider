@@ -35,6 +35,7 @@ describe("Responses state events", () => {
 		const configuration = {
 			instructions: "exact instructions",
 			maxOutputTokens: 4_096,
+			metadata: { zuno_session_id: "session-1" },
 			reasoningEffort: "minimal",
 			toolChoice: "none",
 			tools: [
@@ -92,7 +93,7 @@ describe("Responses state events", () => {
 				instructions: "exact instructions",
 				max_output_tokens: 4_096,
 				max_tool_calls: null,
-				metadata: {},
+				metadata: configuration.metadata,
 				parallel_tool_calls: true,
 				previous_response_id: null,
 				reasoning: { effort: "minimal", summary: null },

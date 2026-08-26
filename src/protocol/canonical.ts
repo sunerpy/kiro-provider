@@ -111,6 +111,7 @@ export interface CanonicalRequest {
   readonly reasoningReplays: readonly CanonicalReasoningReplay[];
   readonly includeEncryptedReasoning: boolean;
   readonly promptCacheKey?: string;
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface CanonicalAssistantOutput {

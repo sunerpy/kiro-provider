@@ -279,6 +279,18 @@ async function within<T>(promise: Promise<T>, timeoutMs: number, label: string):
   }
 }
 
+function deferred(): {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+} {
+  let resolver: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolver = resolve;
+  });
+  if (!resolver) throw new TypeError("deferred resolver was not initialized");
+  return { promise, resolve: resolver };
+}
+
 function eventsWith(options: {
   readonly reasoning?: string;
   readonly text?: string;
@@ -348,19 +360,21 @@ describe("POST /v1/responses", () => {
   test("streams Responses events with one completed event and an assembled message", async () => {
     // Given
     const server = scriptedServer([eventsWith({ reasoning: "considering", text: "full answer" })]);
+    const metadata = { zuno_session_id: "zuno-stream-session" };
 
     // When
-    const response = await postResponse(server, { model: MODEL, input: "hello", stream: true });
+    const response = await postResponse(server, { model: MODEL, input: "hello", stream: true, metadata });
     const frames = parseSseFrames(await response.text());
 
     // Then
     expect(response.headers.get("Content-Type")).toContain("text/event-stream");
-    expect(frames.some((frame) => frame.type === "response.created")).toBe(true);
+    expect(frames.find((frame) => frame.type === "response.created")).toMatchObject({ response: { metadata } });
     const completed = frames.filter((frame) => frame.type === "response.completed");
     expect(completed).toHaveLength(1);
     expect(completed[0]).toMatchObject({
       response: {
         id: expect.any(String),
+        metadata,
         usage: { input_tokens: 7, output_tokens: 5, total_tokens: 12 },
       },
     });
@@ -380,9 +394,10 @@ describe("POST /v1/responses", () => {
   test("uses the schema default when stream is omitted", async () => {
     // Given
     const server = scriptedServer([eventsWith({ text: "default JSON" })]);
+    const metadata = { zuno_session_id: "zuno-json-session" };
 
     // When
-    const response = await postResponse(server, { model: MODEL, input: "hello" });
+    const response = await postResponse(server, { model: MODEL, input: "hello", metadata });
     const body: unknown = await response.json();
 
     // Then
@@ -390,6 +405,7 @@ describe("POST /v1/responses", () => {
     expect(body).toMatchObject({
       object: "response",
       status: "completed",
+      metadata,
     });
     if (!isReadonlyRecord(body) || !Array.isArray(body.output)) {
       throw new TypeError("Responses body must contain output items");
@@ -411,6 +427,18 @@ describe("POST /v1/responses", () => {
     const response = await postResponse(server, { model: "unsupported-model", input: "hello" });
 
     // Then
+    await expectOpenAiError(response, 400);
+    expect(server.capturedCommandInputs).toHaveLength(0);
+  });
+
+  test("rejects non-string Responses metadata before invoking the SDK", async () => {
+    const server = scriptedServer([eventsWith({ text: "must not run" })]);
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      metadata: { zuno_session_id: 42 },
+    });
+
     await expectOpenAiError(response, 400);
     expect(server.capturedCommandInputs).toHaveLength(0);
   });
@@ -861,6 +889,92 @@ describe("POST /v1/responses", () => {
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,
     );
+  });
+
+  test("keeps concurrent custom-tool bridges isolated across Zuno sessions", async () => {
+    const bothEntered = deferred();
+    const affinities: Array<{
+      readonly keyHash: string | undefined;
+      readonly source: string | undefined;
+    }> = [];
+    let pipelineCalls = 0;
+    const runPipeline = async (options: RunChatCompletionOptions): Promise<Response> => {
+      pipelineCalls += 1;
+      affinities.push({
+        keyHash: options.affinity?.keyHash,
+        source: options.affinity?.source,
+      });
+      if (pipelineCalls === 2) bothEntered.resolve();
+      await bothEntered.promise;
+      return Response.json({
+        id: "chatcmpl_bridge",
+        object: "chat.completion",
+        created: 1_700_000_000,
+        model: MODEL,
+        choices: [
+          {
+            index: 0,
+            finish_reason: "tool_calls",
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_shared",
+                  type: "function",
+                  function: { name: "kiro_custom_0", arguments: '{"input":"ok"}' },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      });
+    };
+    const routeDependencies = {
+      accountManager: new FakeAccountManager(),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-zuno",
+      runPipeline,
+    };
+    const postCustom = (sessionId: string, name: string) =>
+      handleResponses(
+        new Request("http://test/v1/responses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: MODEL,
+            input: "run",
+            stream: false,
+            metadata: { zuno_session_id: sessionId },
+            tools: [{ type: "custom", name }],
+          }),
+        }),
+        testConfig(),
+        routeDependencies,
+      );
+
+    const [alphaResponse, betaResponse] = await Promise.all([
+      postCustom("session-alpha", "alpha_exec"),
+      postCustom("session-beta", "beta_exec"),
+    ]);
+    const [alphaBody, betaBody]: [unknown, unknown] = await Promise.all([
+      alphaResponse.json(),
+      betaResponse.json(),
+    ]);
+
+    expect([alphaResponse.status, betaResponse.status]).toEqual([200, 200]);
+    expect(alphaBody).toMatchObject({
+      output: [{ type: "custom_tool_call", name: "alpha_exec", input: "ok" }],
+    });
+    expect(betaBody).toMatchObject({
+      output: [{ type: "custom_tool_call", name: "beta_exec", input: "ok" }],
+    });
+    expect(affinities.map((affinity) => affinity.source)).toEqual([
+      "responses.metadata.zuno_session_id",
+      "responses.metadata.zuno_session_id",
+    ]);
+    expect(new Set(affinities.map((affinity) => affinity.keyHash)).size).toBe(2);
   });
 
   test("rejects namespace tools before invoking the SDK", async () => {

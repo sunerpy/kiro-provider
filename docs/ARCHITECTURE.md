@@ -20,8 +20,8 @@ CanonicalRequest (roles, content blocks, tools, reasoning, source paths)
 Capability validation + safe/explicit legacy Kiro projection
         │
         ▼
-Standard-field session affinity (tenant-isolated hash → persisted account
-and Kiro conversationId)
+Explicit-only session affinity when a key is present (tenant-isolated hash →
+persisted account and Kiro conversationId); otherwise a fresh conversation
         │
         ▼
 Session queue + account selection (preferred binding first, then sticky /
@@ -32,8 +32,8 @@ Account queue + token refresh if near expiry (shared OpenCode auth runtime by
 default, via optional proxy)
         │
         ▼
-Cached AWS CodeWhisperer Streaming SDK client and account-scoped keep-alive
-transport (conversationState built without provider-owned prompt text)
+Cached AWS CodeWhisperer Streaming SDK client and account-scoped transport
+(model-call sockets fresh by default; no provider-owned prompt text)
         │
         ▼
 Kiro / CodeWhisperer event stream
@@ -67,10 +67,12 @@ resolution).
 
 SDK clients are cached by account, region, endpoint, proxy, and effort. Their
 token provider is mutable, so an access-token refresh does not discard the
-client. Effort-specific clients for one account share one `NodeHttpHandler`
-and its keep-alive agents. This maximizes socket reuse but does not promise a
-specific physical TCP connection; remote and network lifecycle decisions
-still apply.
+client. Effort-specific clients for one account share one `NodeHttpHandler`.
+By default its direct and proxy agents use fresh sockets
+(`sdk_http_keep_alive: false`); setting the option to `true` explicitly opts
+into pooled socket reuse. SDK/transport object reuse therefore survives token
+refresh in either mode, but no mode promises a specific physical TCP
+connection.
 
 ## Authentication authority and provider state
 
@@ -96,6 +98,9 @@ mode it is the affinity/state database:
 - `session_affinity` stores only a tenant-isolated request fingerprint,
   account ID, Kiro conversation ID, and timestamps. It never stores the
   original client session value or prompt.
+- A row is created only for an explicit affinity key in the default mode.
+  Requests without one receive a fresh Kiro conversation and do not collide
+  merely because their prompt text is identical.
 - The database file and its WAL/SHM siblings are created with `0600`
   permissions.
 
@@ -113,7 +118,8 @@ failing the whole request.
 
 The scheduler has two independent keyed queues:
 
-- a logical-session queue prevents overlapping turns for one conversation;
+- a logical-session queue prevents overlapping turns when an explicit
+  conversation key exists;
 - an account queue protects one Kiro account while allowing different
   accounts to run concurrently.
 
@@ -122,6 +128,15 @@ finishes, errors, times out, or is cancelled. On account failover, the
 persisted session binding and Kiro conversation ID are rotated together.
 SQLite bindings work across processes, while queue and socket-pool ownership
 remain process-local.
+
+The default `session_affinity_mode: "explicit-only"` accepts Responses
+`metadata.zuno_session_id`, `metadata.kiro_provider_session_id`,
+compatibility `client_metadata`, or `prompt_cache_key`; Chat accepts only
+`prompt_cache_key`, and Anthropic has no verified explicit affinity field.
+The migration-only `legacy-initial-input` mode restores old fingerprint
+heuristics without changing model-visible content. Tool declarations,
+public/upstream aliases, and result correlation stay request-local so
+concurrent sessions cannot share a mutable tool map.
 
 Authenticated `GET /ready` verifies that the configured authority can be
 read and has at least one active account. `GET /health` remains a liveness
@@ -142,7 +157,7 @@ check only.
   and refresh orchestration for shared mode.
 - `src/core/account-manager.ts` — selection strategy and failover.
 - `src/core/pipeline-runtime.ts` — session/account keyed queue ownership.
-- `src/core/sdk-client.ts` — mutable-token SDK cache and keep-alive transports.
+- `src/core/sdk-client.ts` — mutable-token SDK cache and configurable HTTP transports.
 - `src/core/token-refresher.ts`, `src/core/proxy.ts` — token refresh and
   proxy resolution.
 - `src/storage/accounts-db.ts` — provider affinity/state and local-mode account

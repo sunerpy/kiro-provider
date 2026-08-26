@@ -45,6 +45,7 @@ export type PipelineClientFactory = (
 	endpoint?: string,
 	proxyUrl?: string,
 	accountId?: string,
+	httpKeepAlive?: boolean,
 ) => PipelineSdkClient;
 
 export interface PipelineAffinityBinding {

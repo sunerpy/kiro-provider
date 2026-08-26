@@ -85,6 +85,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   const createdAt = Math.floor(Date.now() / 1000);
   const tools = new Map<number, ToolCallAccumulator>();
   const completedOutput = new Map<number, ResponseOutputItem>();
+  const pendingFrames: Uint8Array[] = [];
   let buffer = "";
   let text = "";
   let messageIndex: number | undefined;
@@ -97,13 +98,43 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let terminalCompletion: TerminalCompletion | undefined;
   let terminalFailure: TerminalFailure | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let streamClosed = false;
 
   const emit = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
+    _controller: ReadableStreamDefaultController<Uint8Array>,
     create: (sequence: number) => ResponsesEvent,
   ): void => {
-    controller.enqueue(encoder.encode(formatSseEvent(create(sequenceNumber))));
+    pendingFrames.push(encoder.encode(formatSseEvent(create(sequenceNumber))));
     sequenceNumber += 1;
+  };
+  const closeIfDrained = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): void => {
+    if (
+      streamClosed ||
+      terminalOutcome === undefined ||
+      terminalOutcome === "consumer-cancel" ||
+      pendingFrames.length > 0
+    ) {
+      return;
+    }
+    streamClosed = true;
+    controller.close();
+  };
+  const flushOne = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): boolean => {
+    if (streamClosed) return false;
+    const desiredSize = controller.desiredSize;
+    if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
+      const frame = pendingFrames.shift();
+      if (!frame) return false;
+      controller.enqueue(frame);
+      closeIfDrained(controller);
+      return true;
+    }
+    closeIfDrained(controller);
+    return false;
   };
   const claimTerminal = (outcome: AdapterOutcome): boolean => {
     if (terminalOutcome !== undefined) return false;
@@ -123,6 +154,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   ): void => {
     if (!claimTerminal(outcome)) return;
     terminalFailure = failure;
+    if (outcome === "consumer-cancel") pendingFrames.length = 0;
     runCleanupSteps(
       removeDeadlineListener,
       removeClientListener,
@@ -169,10 +201,10 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           );
         }
       },
-      () => {
-        if (outcome !== "consumer-cancel") streamController?.close();
-      },
       options.finalize,
+      () => {
+        if (streamController) flushOne(streamController);
+      },
     );
     void boundedCleanup(() => reader.cancel(reason));
   };
@@ -569,8 +601,10 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         signals.client.addEventListener("abort", onClientAbort, { once: true });
         if (signals.deadline.aborted) onDeadlineAbort();
         else if (signals.client.aborted) onClientAbort();
+        flushOne(controller);
       },
       async pull(controller) {
+        if (flushOne(controller)) return;
         if (terminalOutcome !== undefined) return;
         try {
           while (terminalOutcome === undefined) {
@@ -593,7 +627,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 complete(controller, parsed.usage);
                 return;
               }
-              if (parsed.delta.kind !== "tool_calls" && parsed.delta.kind !== "empty") return;
+              if (parsed.delta.kind !== "tool_calls" && parsed.delta.kind !== "empty") {
+                if (flushOne(controller)) return;
+              }
               continue;
             }
             const next = await reader.read();

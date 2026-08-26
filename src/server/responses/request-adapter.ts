@@ -61,6 +61,7 @@ const RESPONSES_REQUEST_KEYS = new Set([
   "text",
   "service_tier",
   "prompt_cache_key",
+  "metadata",
   "client_metadata",
   "previous_response_id",
   "conversation",
@@ -836,6 +837,7 @@ export function responsesToInternalChat(
       ...(request.prompt_cache_key !== undefined
         ? { promptCacheKey: request.prompt_cache_key }
         : {}),
+      ...(request.metadata !== undefined ? { metadata: request.metadata } : {}),
     },
     bridge,
   };

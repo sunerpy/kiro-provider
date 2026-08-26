@@ -50,15 +50,37 @@ Web Search 生成解释性补偿文本。
 迁移模式在 v0.5.x、v0.6.x 保留，计划于 v0.7.0 删除。旧 Chat 端点由
 `enable_legacy_chat_completions` 独立控制，默认仍关闭。
 
+## 会话亲和模式
+
+`session_affinity_mode` 默认为 `explicit-only`，也可通过
+`KIRO_PROVIDER_SESSION_AFFINITY_MODE` 设置。亲和元数据只用于传输路由，绝不
+写入模型可见输入。
+
+- Responses 按顺序使用 `metadata.zuno_session_id`、
+  `metadata.kiro_provider_session_id`、兼容字段
+  `client_metadata.thread_id|session_id|conversation_id`，最后是
+  `prompt_cache_key`。
+- Chat Completions 只使用 `prompt_cache_key`。
+- Anthropic Messages 暂无经过验证的显式亲和字段。
+
+显式键会串行化重叠回合，并持久化选中账号与 Kiro conversation ID。没有
+显式键时，每个请求都创建新的 Kiro conversation，同时仍复用账号级调度及
+缓存的 SDK/transport 对象。Kiro 模型调用 socket 默认新建；keep-alive 必须显式开启。
+因此，不同会话即使 prompt 相同也不会碰撞。
+
+`legacy-initial-input` 临时恢复 v0.4 的 prompt 指纹推导。它会输出不含正文的
+启动警告，并且只影响路由；不会启用提示词注入、消息合并或其他协议改写。
+
 ## 当前编译后二进制真实客户端状态
 
-2026-08-26 的 RC 门禁仅使用标准客户端可配置项（base URL、API key、模型），
-没有私有 Header、请求补丁或客户端提示词补偿：
+2026-08-26 的 RC 门禁使用编译后二进制，没有私有 Header、请求补丁或客户端
+提示词补偿；客户端所需的文档化选项会在对应行明确列出：
 
 | 客户端 | v0.5.0-rc.1 结果 |
 | --- | --- |
 | OpenAI JavaScript SDK 7.5.0 | 通过：Responses 流式/非流式、Chat 流式/非流式、function/custom 工具循环，以及服务重启后的加密 reasoning 回放。 |
 | OpenCode 1.18.18 Responses | 仅在显式 `legacy-user-prefix` 且使用 Claude Sonnet 5 时通过。safe 模式会正确拒绝其 developer prompt；GPT 请求还会携带未获原生支持的输出 token 上限。 |
+| Zuno 原生 OpenAI Responses | 通过：编译后服务完成工具循环、同会话续轮和两个并行隔离会话，使用标准 `metadata.zuno_session_id`。当前功能路径显式使用 Provider `legacy-user-prefix` 和 Zuno `maxTokens: null`；safe 模式会正确拒绝 Zuno 的 Agent instructions。 |
 | OpenCode 1.18.18 Chat | 阻塞：客户端加入了协议未定义的 `messages.0.cache_control`，Provider 不会静默丢弃。 |
 | Codex CLI 0.149.0-alpha.4.1 | 在调用 Kiro 前阻塞：客户端发送 `parallel_tool_calls: false`，Kiro 无法保证该语义。 |
 | Claude Code 2.1.209 | 在调用 Kiro 前阻塞：客户端发送未支持的 `output_config.format` / `context_management`，随后以非法的 `messages.1.role=system` 重试；Provider 不会丢字段或搬移角色。 |
@@ -109,8 +131,10 @@ conversation、输出指纹、过期时间与 key ID。
 3. 旧客户端确实依赖 system/developer 投影时，可临时选择
    `legacy-user-prefix`，记录例外并计划在 v0.7.0 前移除。
 4. 只有确有需要时才设置 `enable_legacy_chat_completions: true`。
-5. 将 reasoning 密钥文件/密钥环与 Provider 数据库一起纳入服务备份和恢复。
-6. 只有带鉴权的 `/ready` 成功后才导入客户端流量；它会检查活跃账号、数据库
+5. 保持 `session_affinity_mode: "explicit-only"`，让有能力的 Responses
+   客户端发送稳定 metadata 键；`legacy-initial-input` 只用于临时路由迁移。
+6. 将 reasoning 密钥文件/密钥环与 Provider 数据库一起纳入服务备份和恢复。
+7. 只有带鉴权的 `/ready` 成功后才导入客户端流量；它会检查活跃账号、数据库
    可写性、密钥环可用性和活动 key ID 覆盖。
 
 支撑这些决策的上游实时证据见

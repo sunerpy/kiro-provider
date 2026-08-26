@@ -10,6 +10,7 @@ import {
   resolveUsage,
   type SdkOutputFingerprint,
   type SdkReasoningCaptureHandler,
+  type SdkStreamEvent,
   type SdkStreamResponse,
   type UsageState,
   updateUsageState,
@@ -24,6 +25,8 @@ export interface TransformSdkStreamOptions {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
+  readonly onCompletionMetadata?: () => void;
+  readonly onRawEvent?: (eventTypes: readonly string[]) => void;
 }
 
 export class MissingSdkEventStreamError extends Error {
@@ -31,6 +34,32 @@ export class MissingSdkEventStreamError extends Error {
 
   constructor() {
     super("SDK response has no event stream");
+  }
+}
+
+function isCompletionMetadataEvent(event: SdkStreamEvent): boolean {
+  const tokenUsage = event.metadataEvent?.tokenUsage;
+  return typeof tokenUsage === "object" && tokenUsage !== null;
+}
+
+function sdkEventTypes(event: SdkStreamEvent): readonly string[] {
+  const record = event as Readonly<Record<string, unknown>>;
+  const eventTypes = Object.keys(record)
+    .filter(
+      (key) =>
+        (key.endsWith("Event") || key === "error" || key === "$unknown") &&
+        record[key] !== undefined,
+    )
+    .sort();
+  return eventTypes.length > 0 ? eventTypes : ["unknown"];
+}
+
+function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): void {
+  try {
+    const closing = iterator.return?.();
+    if (closing) void Promise.resolve(closing).catch(() => undefined);
+  } catch {
+    // Completion metadata is authoritative; cleanup failures must not erase it.
   }
 }
 
@@ -97,8 +126,16 @@ export async function* transformSdkStream(
       }
 
       const event = next.result.value;
+      options.onRawEvent?.(sdkEventTypes(event));
       updateUsageState(usage, event);
       appendReasoningCapture(reasoning, event.reasoningContentEvent);
+
+      if (isCompletionMetadataEvent(event)) {
+        options.onCompletionMetadata?.();
+        iteratorClosed = true;
+        closeIteratorWithoutBlocking(iterator);
+        break;
+      }
 
       if (options.emitAnthropicReasoningMetadata) {
         if (reasoning.signatureConflict) {

@@ -24,10 +24,12 @@ The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG
 | `api_keys`                   | `string[]`, **required, non-empty after trimming**                        | `KIRO_PROVIDER_API_KEYS`                   | Accepted Bearer keys. The environment value is a comma-separated list. An empty or whitespace-only list is rejected and the server refuses to start (fail-closed).                                                                                                                    |
 | `enable_legacy_chat_completions` | `boolean`, default `false`                                            | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | Exposes `POST /v1/chat/completions`. Keep this disabled unless a client cannot use Responses or Anthropic Messages. Environment values accept `true`, `false`, `1`, `0`.                                                                                                             |
 | `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is an instruction-only migration mode scheduled for removal in v0.7.0.                                                                                              |
+| `session_affinity_mode`      | `"explicit-only" \| "legacy-initial-input"`, default `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` never derives a logical session from prompt text. `legacy-initial-input` temporarily restores the old initial-input fingerprint heuristics without changing model-visible content.                                                                                     |
 | `auth_source`                | `"opencode-shared" \| "local"`, default `"opencode-shared"`              | `KIRO_PROVIDER_AUTH_SOURCE`                | Authentication authority. Shared mode uses OpenCode's live Kiro database and compatible refresh lock. Local mode uses the provider-owned account database and enables `kiro-provider login`.                                                                                         |
 | `opencode_auth_db_path`      | `string \| null`, default `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | Optional override for the shared OpenCode Kiro database. `null` uses `$XDG_CONFIG_HOME/opencode/kiro.db` or `~/.config/opencode/kiro.db`. Ignored by local mode.                                                                                                                       |
 | `proxy_url`                  | `string \| null`, default `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | Optional global HTTP(S) proxy for **all** upstream egress (model requests, token refresh, device-code login). Must be a valid `http://` or `https://` URL; other schemes (e.g. SOCKS) are rejected. `null` or an empty string means direct connections.                               |
 | `default_region`             | `string`, default `"us-east-1"`                                           | `KIRO_PROVIDER_DEFAULT_REGION`             | Region used by `login` and for accounts without a profile ARN override.                                                                                                                                                                                                               |
+| `sdk_http_keep_alive`        | `boolean`, default `false`                                                | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | Controls Kiro model-call sockets only; SDK clients and transport objects stay cached in either mode. `false` uses fresh direct/proxy SDK sockets; `true` opts into pooling after deployment-specific validation. Token refresh and device login keep their independent transport policy. |
 | `account_selection_strategy` | `"sticky" \| "round-robin" \| "lowest-usage"`, default `"lowest-usage"`   | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` | How the gateway picks an account per request: `sticky` favors the same account, `round-robin` cycles, `lowest-usage` prefers the account with the most remaining quota.                                                                                                               |
 | `rate_limit_max_retries`     | `number`, default `3`                                                     | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | Maximum retry count for retryable rate-limit responses.                                                                                                                                                                                                                               |
 | `rate_limit_retry_delay_ms`  | `number`, default `5000`                                                  | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | Base retry delay in milliseconds before a rate-limit retry.                                                                                                                                                                                                                           |
@@ -140,28 +142,45 @@ does not expose a standalone tokenizer. Its successful response includes
 
 ## Session affinity and connection reuse
 
-The gateway does not require custom headers, cookies, or modified clients.
-It derives a tenant-isolated, irreversible affinity hash from fields already
-sent by standard clients:
+`session_affinity_mode: "explicit-only"` is the production default. It does
+not hash input text, messages, tool arguments, or any other model-visible
+content to guess whether two requests belong to one conversation. It accepts
+these explicit sources:
 
-- Responses: `client_metadata.thread_id`, `session_id`, or
-  `conversation_id`; then `prompt_cache_key`; then the initial input.
-- Chat Completions: `prompt_cache_key`; then `user` plus the initial user
-  turn; then the initial user turn alone.
-- Anthropic Messages: `metadata.user_id` plus the initial user turn; then the
-  initial user turn alone.
+- Responses, in priority order: standard
+  `metadata.zuno_session_id`, standard
+  `metadata.kiro_provider_session_id`, compatibility
+  `client_metadata.thread_id|session_id|conversation_id`, then
+  `prompt_cache_key`.
+- Chat Completions: `prompt_cache_key` only.
+- Anthropic Messages: no verified explicit field, so no affinity binding in
+  this mode.
 
-The provider SQLite binding stores the hash, selected account ID, Kiro
-`conversationId`, and timestamps—not the original session field or prompt.
-One logical session is serialized in-process. Different accounts can execute
-concurrently, while requests sharing an account use one account queue and a
-shared keep-alive transport pool. A rate-limit or unhealthy-account failover
-rebinds the session to the replacement account and rotates the Kiro
-conversation ID.
+With an explicit key, the provider stores only its tenant-isolated hash, the
+selected account ID, Kiro `conversationId`, and timestamps—not the original
+session value or prompt. One logical session is serialized in-process.
+Different accounts can execute concurrently, while requests sharing an
+account use one account queue. SDK clients and transport objects are cached
+per account. A rate-limit or unhealthy-account failover rebinds the session
+to the replacement account and rotates the Kiro conversation ID.
 
-This maximizes reuse but does not guarantee one physical TCP socket: the
-Node/Smithy agent, proxy, remote server, idle timeout, and network can open a
-new socket. Across multiple provider processes, the provider SQLite database
+Without an explicit key, no session binding is stored and every request gets
+a fresh Kiro conversation. Account selection and account-scoped SDK/transport
+object reuse still apply, so reuse does not depend on unsafe prompt
+fingerprinting. The Kiro SDK's direct/proxy agents use fresh sockets by default;
+`sdk_http_keep_alive: true` is an explicit opt-in for deployments that have
+validated pooled socket behavior.
+
+`legacy-initial-input` is migration-only. It restores the previous Responses
+initial-input, Chat `user`/initial-turn, and Anthropic
+`metadata.user_id`/initial-turn heuristics. Startup emits a structured
+content-free warning. This mode changes only routing affinity; it does not
+prepend, merge, delete, or otherwise modify model-visible request content.
+
+This maximizes logical-session and SDK-object reuse without tying a session to
+one physical TCP socket. Even when keep-alive is enabled, the Node/Smithy
+agent, proxy, remote server, idle timeout, and network can open a new socket.
+Across multiple provider processes, the provider SQLite database
 preserves the logical account/conversation binding, while the OpenCode
 database and refresh lock preserve authentication coordination. Queue
 serialization and socket pools remain per process.
@@ -221,12 +240,14 @@ If you need a hard upper bound on connection lifetime regardless of client read 
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "safe",
+  "session_affinity_mode": "explicit-only",
   "auth_source": "opencode-shared",
   "opencode_auth_db_path": null,
   "proxy_url": null,
   "default_region": "us-east-1",
   "account_selection_strategy": "lowest-usage",
   "rate_limit_max_retries": 3,
+  "sdk_http_keep_alive": false,
   "rate_limit_retry_delay_ms": 5000,
   "max_request_iterations": 20,
   "request_timeout_ms": 120000,

@@ -4,6 +4,31 @@ import { openAiError } from "./errors.js";
 
 const JsonObjectSchema = z.record(z.unknown());
 const PUBLIC_MODEL_IDS: ReadonlySet<string> = new Set(EXPECTED_PUBLIC_MODEL_IDS);
+const OpenAiMetadataSchema = z.record(z.string()).superRefine((metadata, context) => {
+  const entries = Object.entries(metadata);
+  if (entries.length > 16) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "metadata must contain at most 16 entries",
+    });
+  }
+  for (const [key, value] of entries) {
+    if (key.length > 64) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "metadata keys must contain at most 64 characters",
+        path: [key],
+      });
+    }
+    if (value.length > 512) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "metadata values must contain at most 512 characters",
+        path: [key],
+      });
+    }
+  }
+});
 
 const TextPartSchema = z.object({ type: z.literal("text"), text: z.string() }).passthrough();
 
@@ -536,6 +561,7 @@ export const ResponsesRequestSchema = z
     background: z.boolean().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     prompt_cache_key: z.string().optional(),
+    metadata: OpenAiMetadataSchema.optional(),
     client_metadata: z.unknown().optional(),
     previous_response_id: z.string().optional(),
     conversation: z.unknown().optional(),

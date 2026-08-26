@@ -75,6 +75,7 @@ function getEnvOverrides(
 		KIRO_PROVIDER_DEFAULT_REGION: "default_region",
 		KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "account_selection_strategy",
 		KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE: "protocol_projection_mode",
+		KIRO_PROVIDER_SESSION_AFFINITY_MODE: "session_affinity_mode",
 		KIRO_PROVIDER_EFFORT: "effort",
 		KIRO_PROVIDER_LOG_LEVEL: "log_level",
 		KIRO_PROVIDER_TEST_UPSTREAM: "test_upstream_endpoint",
@@ -140,6 +141,7 @@ function getEnvOverrides(
 	const booleanFields = {
 		KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS:
 			"enable_legacy_chat_completions",
+		KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE: "sdk_http_keep_alive",
 		KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "auto_effort_mapping",
 	} as const;
 	for (const [envName, field] of Object.entries(booleanFields)) {

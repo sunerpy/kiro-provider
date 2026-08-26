@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Config } from "../config/schema.js";
 import type { AnthropicMessagesRequest } from "./anthropic/request-adapter.js";
 import type {
 	ChatCompletionRequest,
@@ -9,6 +10,8 @@ import type {
 export interface SessionAffinityHint {
 	readonly keyHash: string;
 	readonly source:
+		| "responses.metadata.zuno_session_id"
+		| "responses.metadata.kiro_provider_session_id"
 		| "responses.client_metadata.thread_id"
 		| "responses.client_metadata.session_id"
 		| "responses.client_metadata.conversation_id"
@@ -20,6 +23,8 @@ export interface SessionAffinityHint {
 		| "anthropic.user_and_initial_input"
 		| "anthropic.initial_input";
 }
+
+export type SessionAffinityMode = Config["session_affinity_mode"];
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -57,9 +62,9 @@ function affinityHash(
 	};
 }
 
-function nonEmptyMetadataValue(
+function nonEmptyMetadataValue<const Field extends string>(
 	metadata: unknown,
-	field: "thread_id" | "session_id" | "conversation_id",
+	field: Field,
 ): string | undefined {
 	if (!isRecord(metadata)) return undefined;
 	const value = metadata[field];
@@ -92,8 +97,19 @@ function initialAnthropicInput(request: AnthropicMessagesRequest): unknown {
 export function responsesSessionAffinity(
 	request: ResponsesRequest,
 	tenantId: string | undefined,
+	mode: SessionAffinityMode = "explicit-only",
 ): SessionAffinityHint | undefined {
 	if (!tenantId) return undefined;
+	for (const field of [
+		"zuno_session_id",
+		"kiro_provider_session_id",
+	] as const) {
+		const value = nonEmptyMetadataValue(request.metadata, field);
+		if (value !== undefined) {
+			const source = `responses.metadata.${field}` as const;
+			return affinityHash(tenantId, "responses", source, value);
+		}
+	}
 	for (const field of [
 		"thread_id",
 		"session_id",
@@ -113,6 +129,7 @@ export function responsesSessionAffinity(
 			request.prompt_cache_key,
 		);
 	}
+	if (mode !== "legacy-initial-input") return undefined;
 	const initial = initialResponsesInput(request.input);
 	return initial === undefined
 		? undefined
@@ -127,6 +144,7 @@ export function responsesSessionAffinity(
 export function chatSessionAffinity(
 	request: ChatCompletionRequest,
 	tenantId: string | undefined,
+	mode: SessionAffinityMode = "explicit-only",
 ): SessionAffinityHint | undefined {
 	if (!tenantId) return undefined;
 	if (request.prompt_cache_key && request.prompt_cache_key.length > 0) {
@@ -137,6 +155,7 @@ export function chatSessionAffinity(
 			request.prompt_cache_key,
 		);
 	}
+	if (mode !== "legacy-initial-input") return undefined;
 	const initial = initialChatInput(request);
 	if (initial === undefined) return undefined;
 	if (request.user && request.user.length > 0) {
@@ -153,8 +172,10 @@ export function chatSessionAffinity(
 export function anthropicSessionAffinity(
 	request: AnthropicMessagesRequest,
 	tenantId: string | undefined,
+	mode: SessionAffinityMode = "explicit-only",
 ): SessionAffinityHint | undefined {
 	if (!tenantId) return undefined;
+	if (mode !== "legacy-initial-input") return undefined;
 	const initial = initialAnthropicInput(request);
 	if (initial === undefined) return undefined;
 	const userId = request.metadata?.user_id;

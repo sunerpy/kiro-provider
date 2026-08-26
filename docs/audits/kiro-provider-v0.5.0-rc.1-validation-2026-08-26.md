@@ -12,13 +12,13 @@ v0.4.0，不作为本次 RC 的通过证据。
 
 - 包版本：`0.5.0-rc.1`。
 - 验收主机：Linux 6.17.0-1019-aws x86_64。
-- 最终本机二进制：`dist/kiro-provider`，95,217,792 bytes，权限 `0755`。
+- 最终本机二进制：`dist/kiro-provider`，95,221,888 bytes，权限 `0755`。
 - 最终本机二进制 SHA-256：
-  `02d87333abeed075f577fa367c8069689e6bc18468551c0627ccd328052621ea`。
+  `6dddf69fa8efa708bccb921bc24146b747631077c2ec5335abd45a4acc6e9e26`。
 - 认证来源：复用 OpenCode 的共享 Kiro 凭证数据库；报告不保存 access token、
   refresh token、API key、reasoning、签名或提示词正文。
-- 客户端只配置标准 base URL、API key 和模型；没有私有 Header、请求补丁或
-  客户端侧提示词补偿。
+- 客户端没有使用私有 Header、请求补丁或客户端侧提示词补偿；所需的文档化
+  标准配置与迁移选项在各客户端章节单独列明。
 
 二进制 SHA 仅标识本次 Linux 本机验收产物。GitHub Release 的各平台资产由
 发布工作流独立构建，并通过 `SHA256SUMS` 校验。
@@ -61,10 +61,11 @@ Canonical IR，再由 Kiro 适配器降级。无法等价表达时在创建 Kiro
 
 | 门禁 | 结果 |
 | --- | --- |
+| `make fmt-check` | 通过；Markdown/JSON/YAML 与 147 个源码/测试文件均无格式差异 |
 | `bun run lint` | 通过；147 files，0 fixes |
 | `bun run typecheck` | 通过 |
-| `bun test` / 覆盖率运行 | 693 pass，0 fail，2,952 assertions |
-| `make coverage-gate` | 通过；10,258 / 10,979 lines，93.43%（门槛 93%） |
+| `bun test` / 覆盖率运行 | 706 pass，0 fail，2,989 expect calls |
+| `make coverage-gate` | 通过；10,413 / 11,147 lines，93.42%（门槛 93%） |
 | `make coverage-parity` | 通过；本地与 Codecov 有效排除集一致 |
 | `bun run build` | 通过 |
 | `bun run build:binary` | 通过 |
@@ -79,6 +80,24 @@ Canonical IR，再由 Kiro 适配器降级。无法等价表达时在创建 Kiro
 最终结构检查还发现 Responses state/events 的类型反向引用。共享响应类型移动到
 state 模块并由 events 兼容重导出后，运行时依赖成为单向，CodeGraph 循环归零；
 完整测试、覆盖率和编译后二进制 E2E 随后全部重跑。
+
+### Responses SSE 背压回归与修复
+
+编译后二进制最初在 Zuno 工具续轮中已经输出完整最终文本，但客户端直到
+`request_timeout_ms` 才结束。为区分 Kiro 未终止与本地适配器未继续拉取，流
+收集器加入了只记录 SDK 事件类型名、计数和最后事件类型的审计钩子；它不记录
+提示词、reasoning、工具参数、签名或响应正文。
+
+短超时诊断证明最终文本之后没有触发 15 秒 `sdk_stream_idle_timeout`，请求却在
+120 秒总期限终止。这说明适配器在 Zuno 的消费背压下没有再次拉取上游，而不是
+Kiro 正在持续占用连接。Responses SSE 适配器现使用 `pendingFrames` 队列，每次
+downstream pull 最多发送一个事件；终止事件先完整排队，资源先释放，只有队列
+排空后才关闭流。该修复只改变传输状态机，不改变任何模型可见输入或输出内容。
+
+同时，SDK 若发送带 `tokenUsage` 的 `metadataEvent`，收集器将其视为权威终止
+元数据并异步回收 iterator；仅含 context usage 的 metadata 不会误终止。相关
+Responses SSE、集成和 pipeline 定向回归为 69 pass、0 fail、519 assertions；
+修复后二进制 Zuno E2E 见第 8 节。
 
 ## 5. 官方 OpenAI SDK 7.5.0
 
@@ -106,7 +125,8 @@ bun openai-sdk-tools-e2e.mjs
 同一 `prompt_cache_key` 的 function 续轮复用账号哈希
 `9e0e6e9aa857355e` 和 conversation 哈希 `a3ea92371eb04c0b`；custom 续轮复用
 账号哈希 `c3b8caa532a65e5c` 和 conversation 哈希 `8ae0ed51cbe00df9`。续轮日志
-显示 `transport_pool_hit=true`、`sdk_client_pool_hit=true`。
+显示 `transport_pool_hit=true`、`sdk_client_pool_hit=true`；这两个字段表示缓存的
+transport/SDK 对象命中，不代表固定物理 socket。
 
 字段级 live 拒绝同样通过：多顶层文本块和 Web Search 都返回明确 400，不产生
 SDK 调用或伪造搜索事件。
@@ -151,7 +171,7 @@ SQLite 仅保存令牌/指纹哈希和 AES-256-GCM 密文。自动测试另覆�
 3. 最终文本为 `OPENCODE_FINAL_SHA_OK`。
 
 三个带 `prompt_cache_key` 的轮次复用账号哈希 `346335f3182f25dd` 和
-conversation 哈希 `b079f87e49cee963`；后续轮次连接池命中为 true。
+conversation 哈希 `b079f87e49cee963`；后续轮次 SDK/transport 对象缓存命中。
 
 safe 模式仍会正确拒绝 OpenCode 的 developer 指令，GPT 模型请求还会携带
 Kiro 未证实支持的输出 token 上限。因此这里只声明“显式 legacy + Claude
@@ -168,7 +188,45 @@ Sonnet 5”通过，不扩大到整个 OpenCode Responses 面。
 
 未静默删除该非标准字段，因此 Chat 不通过稳定版门禁。
 
-## 8. Codex CLI 0.149.0-alpha.4.1
+## 8. Zuno 原生 OpenAI Responses
+
+配套 Zuno 传输把主会话的持久 session ID 写入标准
+`metadata.zuno_session_id`，不会把会话 ID 加入 input、instructions、messages
+或工具描述。原始 Zuno 工作区存在与本任务无关的 ACP 编译错误，因此验收在
+隔离 clean clone 中只应用本次九个会话传递/Responses metadata 变更后构建
+`target/debug/zuno`，避免把用户其他未提交变更混入证据。
+
+Provider 使用最终 `dist/kiro-provider`，`session_affinity_mode` 为
+`explicit-only`，`sdk_http_keep_alive=false`。Zuno 只配置原生 OpenAI
+Responses surface、标准 base URL、API key 环境变量、模型，以及文档化的
+`maxTokens: null`。因为当前 Zuno 会发送 Agent instructions，而 Kiro
+`additionalContext` 探针未证明无损投影，功能验收显式使用
+`protocol_projection_mode: "legacy-user-prefix"`；safe 模式会在 Kiro 前返回
+`unsupported_instruction_projection`，没有自动降级或隐藏提示词。
+
+真实工具循环退出码 0：
+
+- Zuno session `ses_29a0b51094964195ad6dc3d6f6892754` 调用 read 工具读取
+  本项目 `package.json`，工具生命周期完成，最终输出
+  `@sunerpy/kiro-provider`，`finishReason=Stop`。
+- 同一 Zuno session 的下一轮输出 `CONTINUATION_OK`，仍为退出码 0。
+- 两轮 Provider 日志都使用账号哈希 `346335f3182f25dd` 和 conversation 哈希
+  `31ed7e11a0c75bad`；续轮为 `transport_pool_hit=true`、
+  `sdk_client_pool_hit=true`。在模型 SDK keep-alive 关闭的情况下，这证明复用的是
+  同一逻辑账号、Kiro conversation 和进程内 SDK/transport 对象，而不是误称
+  固定 TCP socket。
+
+随后并行启动两个新会话，均退出 0 并输出 `PARALLEL_OK`：
+
+- `ses_69d43e3c53ea4ae58136f4460c7825e7` 绑定账号哈希
+  `5bafd91ab936c907`、conversation 哈希 `87a2393d2092622d`；
+- `ses_c8d27cf2bff949fdaa94a1b94c0d32fd` 绑定账号哈希
+  `eb34f9c996db5b7b`、conversation 哈希 `0943918bcddbb180`。
+
+两个并发会话没有共享 conversation 或可变工具映射，未出现响应串线、工具调用
+混乱或会话碰撞。
+
+## 9. Codex CLI 0.149.0-alpha.4.1
 
 使用隔离 `CODEX_HOME`，provider 仅含标准 `base_url`、API key 环境变量、模型和
 `wire_api="responses"`。基础 `codex exec` 在调用 Kiro 前退出 1：
@@ -181,7 +239,7 @@ Sonnet 5”通过，不扩大到整个 OpenCode Responses 面。
 Provider 没有忽略或改写该字段，因此 Codex 的首轮、shell/tool 续轮与跨重启
 reasoning 整体门禁仍未通过。
 
-## 9. Claude Code 2.1.209
+## 10. Claude Code 2.1.209
 
 safe 与 `legacy-user-prefix` 两种服务都只通过标准 `ANTHROPIC_BASE_URL`、token
 和模型配置。两次 `claude -p --output-format json` 均退出 1。
@@ -197,11 +255,11 @@ safe 与 `legacy-user-prefix` 两种服务都只通过标准 `ANTHROPIC_BASE_URL
 绕过输出格式、上下文管理或非法消息角色。因此 Claude Code 2.1.209 不通过
 稳定版门禁。
 
-## 10. 发布决策
+## 11. 发布决策
 
-`v0.5.0-rc.1` 适合作为协议保真 RC 发布：核心 OpenAI SDK 子集、OpenCode
-Responses 的明确迁移子集、加密 reasoning 回放、连接池与会话亲和均有编译后
-服务证据；不支持能力全部 fail-closed。
+`v0.5.0-rc.1` 适合作为协议保真 RC 发布：核心 OpenAI SDK 子集、OpenCode 与
+Zuno Responses 的明确迁移子集、加密 reasoning 回放、SDK/transport 对象复用
+与会话亲和均有编译后服务证据；不支持能力全部 fail-closed。
 
 稳定版 `v0.5.0` 继续阻塞，直到以下真实客户端在不加私有 Header、请求补丁、
 字段剥离或提示词补偿的前提下通过：
