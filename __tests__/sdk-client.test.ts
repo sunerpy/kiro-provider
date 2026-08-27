@@ -149,7 +149,7 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
     const client = createSdkClient(makeAuth(), 'us-east-1', 'max')
 
-    const request = await captureBuiltRequest(client, 'claude-opus-4.8')
+    const request = await captureBuiltRequest(client, 'claude-opus-5')
     const body = parseRequestBody(request)
 
     expect(body.additionalModelRequestFields).toEqual({ output_config: { effort: 'max' } })
@@ -160,7 +160,7 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
     const client = createSdkClient(makeAuth(), 'us-east-1', 'high')
 
-    const request = await captureBuiltRequest(client, 'claude-sonnet-5', {
+    const request = await captureBuiltRequest(client, 'claude-opus-5', {
       max_tokens: 4096
     })
     const body = parseRequestBody(request)

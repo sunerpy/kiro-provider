@@ -83,7 +83,7 @@ Kiro 的单条消息只有一个文本字段，因此同一消息的多个顶层
 | required/指定工具 | `unsupported_tool_choice` |
 | `parallel_tool_calls: false` | 无可调用工具（含 `tool_choice: none`）时作为 no-op 接受；否则 `unsupported_parallel_tool_calls` |
 | strict/custom grammar/namespace 身份 | 不弱化、不改名，明确拒绝 |
-| output token limit | 仅探针确认 Claude Sonnet 5 的 1,024–128,000 |
+| output token limit | 探针确认 Claude Sonnet 5 与 Claude Opus 5 的 1,024–128,000 |
 | Stateful Responses | `unsupported_stateful_responses` |
 | Kiro Web Search | `unsupported_web_search`，不伪造搜索/引用事件 |
 
@@ -155,27 +155,27 @@ conversation。
   账号/conversation 哈希、亲和来源和连接池命中；
 - 日志不记录 API key、token、签名、reasoning、工具 payload 或 prompt 正文。
 
-## 8. v0.5.0-rc.2 真实客户端门禁
+## 8. v0.5.0-rc.3 真实客户端门禁
 
 所有测试均使用编译后二进制；客户端只配置标准 base URL、API key 和模型。
 
 | 门禁 | 当前结果 |
 | --- | --- |
-| 官方 OpenAI JavaScript SDK 7.5.0 | 通过 Responses/Chat 流式与非流式、function/custom 工具循环 |
+| 官方 OpenAI JavaScript SDK 7.5.0 | 使用 Opus 5 通过 Responses 流式/非流式、显式 Chat、function 工具续轮与直接 Messages JSON/SSE |
 | reasoning 重启回放 | 通过；同账号、同 conversation，服务重启后签名回放成功 |
-| OpenCode 1.18.18 Responses | 仅显式 legacy + Claude Sonnet 5 通过；工具循环通过 |
-| OpenCode 1.18.18 Chat | 阻塞于非标准 `messages.0.cache_control` |
-| Codex 0.149.0-alpha.4.1 | 首先阻塞于 `text.verbosity`；capture 还包含未支持的 reasoning、串行工具、grammar 与 namespace 控制 |
-| Claude Code 2.1.209 | 最终运行先阻塞于 `output_config.format`，随后非法 `messages.1.role=system`；此前 capture 还包含 `context_management` |
-| Zuno | RC.2 按范围未重跑，且未修改 Zuno 源码或配置；RC.1 只作历史集成证据 |
+| OpenCode 1.18.18 Responses | 显式 legacy + `claude-opus-5-max` 真实 bash/read 工具循环通过；同账号、同 conversation、`effort=max` |
+| OpenCode 1.18.18 Chat | RC.3 未重跑；RC.2 阻塞于非标准 `messages.0.cache_control` |
+| Codex 0.150.0-alpha.9 | Opus 5 模型校验通过；随后阻塞于 `reasoning.summary` |
+| Claude Code 2.1.209 | Opus 5 模型校验通过；随后阻塞于 `context_management` |
+| Zuno | 按范围未重跑，且未修改 Zuno 源码或配置；RC.1 只作历史集成证据 |
 | Web Search | 明确 `unsupported_web_search`，无伪事件 |
 
-因此可以发布预发布版 `v0.5.0-rc.2` 收集兼容反馈，但不能发布稳定版
+因此可以发布预发布版 `v0.5.0-rc.3` 收集兼容反馈，但不能发布稳定版
 `v0.5.0`。不能通过忽略字段、请求补丁、私有 Header 或拼接提示词把上述阻塞
 伪装成通过。
 
 详细证据见
-[当前 RC 验收报告](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md)
+[当前 RC 验收报告](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)
 和 [Kiro 原生探针](audits/kiro-protocol-projection-probe-2026-08-26.md)。
 
 ## 9. 部署边界

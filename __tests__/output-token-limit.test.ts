@@ -7,24 +7,32 @@ import {
 
 describe("probe-backed Kiro output-token limits", () => {
   test.each([
-    "claude-sonnet-5",
-    "claude-sonnet-5-thinking",
-    "claude-sonnet-5-high",
-  ])("maps %s to native Claude max_tokens", (model) => {
+    ["claude-sonnet-5", "claude-sonnet-5"],
+    ["claude-sonnet-5-thinking", "claude-sonnet-5"],
+    ["claude-sonnet-5-high", "claude-sonnet-5"],
+    ["claude-opus-5", "claude-opus-5"],
+    ["claude-opus-5-thinking", "claude-opus-5"],
+    ["claude-opus-5-max", "claude-opus-5"],
+  ])("maps %s to native Claude max_tokens", (model, wireModel) => {
     expect(resolveOutputTokenLimit(model, 4_096)).toEqual({
       ok: true,
-      wireModel: "claude-sonnet-5",
+      wireModel,
       additionalModelRequestFields: { max_tokens: 4_096 },
     });
   });
 
-  test.each([KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1])(
-    "rejects out-of-range Claude max_tokens value %d before Kiro",
-    (limit) => {
-      expect(resolveOutputTokenLimit("claude-sonnet-5", limit)).toMatchObject({
-        ok: false,
-        code: "invalid_output_token_limit",
-      });
+  test.each(["claude-sonnet-5", "claude-opus-5"])(
+    "rejects out-of-range %s max_tokens values before Kiro",
+    (model) => {
+      for (const limit of [
+        KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1,
+        KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1,
+      ]) {
+        expect(resolveOutputTokenLimit(model, limit)).toMatchObject({
+          ok: false,
+          code: "invalid_output_token_limit",
+        });
+      }
     },
   );
 

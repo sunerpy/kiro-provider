@@ -10,6 +10,7 @@ export function resolveKiroModel(model: string): string {
 }
 
 export const VARIANT_BASE_ALLOWLIST = new Set<string>([
+  'claude-opus-5',
   'claude-opus-4-8',
   'claude-opus-4-7',
   'claude-sonnet-5',
@@ -36,8 +37,8 @@ export interface ResolvedModelVariant {
  * VARIANT_BASE_ALLOWLIST. In that case the wire id is derived SOLELY from the
  * base via MODEL_MAPPING and the effort SOLELY from the parsed suffix.
  *
- * This guarantees ids like `claude-opus-4-8-thinking`, `claude-sonnet-4-5-1m`,
- * and the plain bases (`claude-opus-4-8`) are NEVER parsed as effort variants.
+ * This guarantees ids like `claude-opus-5-thinking`, `claude-sonnet-4-5-1m`,
+ * and the plain bases (`claude-opus-5`) are NEVER parsed as effort variants.
  * Non-variant ids fall through to `resolveKiroModel` (existing behavior/throw)
  * with `effort` left undefined.
  */

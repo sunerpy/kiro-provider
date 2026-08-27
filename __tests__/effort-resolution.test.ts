@@ -17,7 +17,7 @@ function requireEffort(effort: Effort | undefined): Effort {
 describe('resolveEffectiveEffort', () => {
   test('variant effort overrides request, global config, and budget mapping', () => {
     const effort = resolveEffectiveEffort({
-      model: 'claude-opus-4-8-max',
+      model: 'claude-opus-5-max',
       reasoningEffort: 'low',
       configEffort: 'high',
       think: true,
@@ -118,10 +118,10 @@ describe('resolveEffectiveEffort', () => {
   })
 
   test('dispatches Claude effort through output_config using the resolved wire id', () => {
-    const resolved = resolveModelVariant('claude-opus-4-8-high')
+    const resolved = resolveModelVariant('claude-opus-5-high')
     const effort = requireEffort(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8-high',
+        model: 'claude-opus-5-high',
         think: false,
         budget: 20000,
         autoEffortMapping: true

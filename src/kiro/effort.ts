@@ -23,6 +23,7 @@ const GPT_REASONING_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-l
  * These models support up to 128k thinking tokens with max effort.
  */
 const XHIGH_CAPABLE_MODELS = new Set([
+  'claude-opus-5',
   'claude-opus-4.7',
   'claude-opus-4.8',
   'claude-sonnet-5',
@@ -86,7 +87,7 @@ export function resolveEffort(kiroModel: string, requested: Effort): Effort | un
     return undefined
   }
 
-  // xhigh is only supported on opus-4.7 and opus-4.8
+  // xhigh is only preserved for models in the probe-backed xhigh allowlist.
   if (requested === 'xhigh' && !supportsXHighEffort(kiroModel)) {
     return 'max'
   }
@@ -107,7 +108,7 @@ export function resolveEffort(kiroModel: string, requested: Effort): Effort | un
  * - ≤10000  → low
  * - ≤20000  → medium
  * - ≤28000  → high
- * - ≤32768  → max (or xhigh on opus-4.7/4.8, max otherwise)
+ * - ≤32768  → max
  * - >32768  → max
  */
 export function budgetToEffort(budget: number, kiroModel: string): Effort | undefined {
