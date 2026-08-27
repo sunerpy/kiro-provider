@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
-  type ChatWireDelta,
-  type ChatWireUsage,
-  parseChatWireChunk,
-} from "../chat-wire.js";
+  type CanonicalOutputEvent,
+  type CanonicalOutputUsage,
+  parseCanonicalOutputEventLine,
+} from "../../protocol/output.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import {
   contentPartAdded,
@@ -99,6 +99,8 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let terminalFailure: TerminalFailure | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let streamClosed = false;
+  let canonicalStarted = false;
+  let canonicalCompleted = false;
 
   const emit = (
     _controller: ReadableStreamDefaultController<Uint8Array>,
@@ -306,19 +308,20 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     );
     completedOutput.set(run.outputIndex, item);
   };
-  const addDelta = (
+  const addEvent = (
     controller: ReadableStreamDefaultController<Uint8Array>,
-    delta: ChatWireDelta,
+    event: CanonicalOutputEvent,
   ): void => {
-    switch (delta.kind) {
-      case "empty":
+    switch (event.type) {
+      case "started":
+      case "completed":
         return;
-      case "reasoning": {
+      case "reasoning_delta": {
         // Codex tracks one active output item. Kiro can interleave a late
         // reasoning fragment between text deltas, so defer that fragment until
         // the message is complete instead of overlapping two active items.
         if (messageIndex !== undefined) {
-          deferredReasoningText += delta.text;
+          deferredReasoningText += event.text;
           return;
         }
         if (!activeReasoning) {
@@ -336,25 +339,25 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             }),
           );
         }
-        activeReasoning.text += delta.text;
+        activeReasoning.text += event.text;
         emit(controller, (sequence) =>
           reasoningSummaryTextDelta({
             itemId: activeReasoning?.id ?? "",
             outputIndex: activeReasoning?.outputIndex ?? 0,
             summaryIndex: 0,
-            delta: delta.text,
+            delta: event.text,
             sequenceNumber: sequence,
           }),
         );
         return;
       }
       case "reasoning_encrypted":
-        reasoningEncryptedContent = delta.encryptedContent;
+        reasoningEncryptedContent = event.encryptedContent;
         return;
       case "reasoning_signature":
       case "reasoning_redacted":
         return;
-      case "text": {
+      case "text_delta": {
         closeReasoning(controller);
         if (messageIndex === undefined) {
           messageIndex = nextOutputIndex;
@@ -382,40 +385,39 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             }),
           );
         }
-        text += delta.text;
+        text += event.text;
         emit(controller, (sequence) =>
           outputTextDelta({
             itemId: messageId,
             outputIndex: messageIndex ?? 0,
             contentIndex: 0,
-            delta: delta.text,
+            delta: event.text,
             sequenceNumber: sequence,
           }),
         );
         return;
       }
-      case "tool_calls":
+      case "tool_call_delta": {
         closeReasoning(controller);
-        for (const fragment of delta.calls) {
-          const existing = tools.get(fragment.index) ?? {
-            itemId: `fc_${randomUUID()}`,
-            id: "",
-            name: "",
-            arguments: "",
-          };
-          if (existing.id.length === 0 && fragment.id !== undefined) existing.id = fragment.id;
-          if (existing.name.length === 0 && fragment.name !== undefined)
-            existing.name = fragment.name;
-          existing.arguments += fragment.arguments;
-          tools.set(fragment.index, existing);
-        }
+        const existing = tools.get(event.index) ?? {
+          itemId: `fc_${randomUUID()}`,
+          id: "",
+          name: "",
+          arguments: "",
+        };
+        if (existing.id.length === 0 && event.id !== undefined) existing.id = event.id;
+        if (existing.name.length === 0 && event.name !== undefined) existing.name = event.name;
+        existing.arguments += event.arguments;
+        tools.set(event.index, existing);
         return;
+      }
     }
   };
 
   const complete = (
     controller: ReadableStreamDefaultController<Uint8Array>,
-    usage: ChatWireUsage,
+    usage: CanonicalOutputUsage,
+    finishReason: "stop" | "tool_calls",
   ): void => {
     const invalidTool = [...tools.values()].some(
       (tool) => tool.id.length === 0 || tool.name.length === 0,
@@ -425,6 +427,12 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       return;
     }
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
+    const expectedFinishReason =
+      orderedTools.length > 0 ? "tool_calls" : "stop";
+    if (finishReason !== expectedFinishReason) {
+      failProtocol("Upstream finish reason does not match its output");
+      return;
+    }
     const restorableTools = orderedTools.map(([, tool]) => ({
         itemId: tool.itemId,
         id: tool.id,
@@ -613,23 +621,34 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               const line = buffer.slice(0, newline).trimEnd();
               buffer = buffer.slice(newline + 1);
               if (line.length === 0) continue;
-              const parsed = parseChatWireChunk(line);
-              if (!parsed) {
+              const event = parseCanonicalOutputEventLine(line);
+              if (!event) {
                 failProtocol("Malformed upstream stream");
                 return;
               }
-              addDelta(controller, parsed.delta);
-              if (parsed.finishReason !== null) {
-                if (!parsed.usage) {
-                  failProtocol("Terminal upstream chunk omitted usage");
+              if (event.type === "started") {
+                if (
+                  canonicalStarted ||
+                  canonicalCompleted ||
+                  event.model !== options.model
+                ) {
+                  failProtocol("Malformed upstream stream start");
                   return;
                 }
-                complete(controller, parsed.usage);
+                canonicalStarted = true;
+                continue;
+              }
+              if (!canonicalStarted || canonicalCompleted) {
+                failProtocol("Malformed upstream event ordering");
                 return;
               }
-              if (parsed.delta.kind !== "tool_calls" && parsed.delta.kind !== "empty") {
-                if (flushOne(controller)) return;
+              if (event.type === "completed") {
+                canonicalCompleted = true;
+                complete(controller, event.usage, event.finishReason);
+                return;
               }
+              addEvent(controller, event);
+              if (flushOne(controller)) return;
               continue;
             }
             const next = await reader.read();
@@ -642,15 +661,30 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             const finalLine = buffer.trim();
             buffer = "";
             if (finalLine.length > 0) {
-              const parsed = parseChatWireChunk(finalLine);
-              if (!parsed) {
+              const event = parseCanonicalOutputEventLine(finalLine);
+              if (!event) {
                 failProtocol("Malformed upstream stream");
                 return;
               }
-              addDelta(controller, parsed.delta);
-              if (parsed.finishReason !== null && parsed.usage) {
-                complete(controller, parsed.usage);
+              if (event.type === "started") {
+                if (
+                  canonicalStarted ||
+                  canonicalCompleted ||
+                  event.model !== options.model
+                ) {
+                  failProtocol("Malformed upstream stream start");
+                  return;
+                }
+                canonicalStarted = true;
+              } else if (!canonicalStarted || canonicalCompleted) {
+                failProtocol("Malformed upstream event ordering");
                 return;
+              } else if (event.type === "completed") {
+                canonicalCompleted = true;
+                complete(controller, event.usage, event.finishReason);
+                return;
+              } else {
+                addEvent(controller, event);
               }
             }
             failProtocol("Upstream stream ended before completion");

@@ -2,23 +2,23 @@ import { describe, expect, test } from 'bun:test'
 import {
   type SdkStreamEvent,
   type SdkStreamResponse,
-  transformSdkStream
-} from '../src/kiro/transform/streaming/sdk-stream-transformer.js'
-import { collectSdkChunks, contentOf, reasoningOf } from './sdk-stream-test-helpers.js'
+  transformSdkOutputStream
+} from '../src/kiro/transform/streaming/sdk-output-transformer.js'
+import { collectSdkEvents, completionOf, contentOf, reasoningOf } from './sdk-stream-test-helpers.js'
 
-describe('transformSdkStream direct SDK streaming contract', () => {
-  test('streams assistant response events directly as OpenAI chunks', async () => {
-    const chunks = await collectSdkChunks([
+describe('transformSdkOutputStream direct SDK streaming contract', () => {
+  test('streams assistant response events directly as canonical events', async () => {
+    const chunks = await collectSdkEvents([
       { assistantResponseEvent: { content: 'A' } },
       { assistantResponseEvent: { content: 'B' } }
     ])
 
     expect(contentOf(chunks)).toBe('AB')
-    expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe('stop')
+    expect(completionOf(chunks)?.finishReason).toBe('stop')
   })
 
   test('streams reasoning and assistant content on separate delta fields', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { reasoningContentEvent: { text: 'thinking...' } },
       { assistantResponseEvent: { content: 'answer' } }
     ])
@@ -36,13 +36,16 @@ describe('transformSdkStream direct SDK streaming contract', () => {
         returnCalled = true
       }
     )
-    const transformed = transformSdkStream(response, 'auto', 'abort-test', controller.signal)
+    const transformed = transformSdkOutputStream(response, 'auto', 'abort-test', controller.signal)
 
+    const started = await transformed.next()
     const first = await transformed.next()
     const pending = transformed.next()
     controller.abort()
     const stopped = await pending
 
+    expect(started.value?.type).toBe('started')
+    expect(first.value?.type).toBe('reasoning_delta')
     expect(first.done).toBe(false)
     expect(stopped.done).toBe(true)
     expect(returnCalled).toBe(true)

@@ -3,21 +3,21 @@
 kiro-provider exposes `POST /v1/messages` and
 `POST /v1/messages/count_tokens` for Anthropic-compatible clients.
 
-## Current v0.5.0-rc.1 status
+## Current v0.5.0-rc.2 status
 
-The compiled-service gate on 2026-08-26 used **Claude Code 2.1.209** with only
-the standard `ANTHROPIC_BASE_URL`, API key, and model settings. Current Claude
-Code requests include semantics that the verified Kiro projection cannot
-preserve:
+The compiled-service gate on 2026-08-27 used **Claude Code 2.1.209** with only
+the standard `ANTHROPIC_BASE_URL`, API key, and model settings. The final run
+produced this request sequence:
 
-- `output_config.format`;
-- `context_management`;
-- after the first rejection, a retry with `system` in `messages.1.role`.
+- the first request included unsupported `output_config.format`;
+- after that rejection, Claude Code retried with `system` in
+  `messages.1.role`.
 
-The first two are rejected before Kiro with `unsupported_parameter` and their
+The first request is rejected before Kiro with `unsupported_parameter` and the
 exact field path. The retry is rejected by the Anthropic request schema because
 `messages[].role` permits only `user` or `assistant`; the provider will not
-silently lift or relocate it. The same result occurs in safe and
+silently lift or relocate it. An earlier redacted capture from the same client
+version also included `context_management`. The same result occurs in safe and
 `legacy-user-prefix` modes; legacy mode only projects valid instruction text
 and never enables unrelated features. Consequently Claude Code 2.1.209 has
 **not passed the v0.5 stable gate**, and the historical v0.4 tool-loop result
@@ -41,17 +41,17 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL="claude-sonnet-5"
 claude -p "Reply with exactly: CLAUDE_CODE_OK"
 ```
 
-For Claude Code 2.1.209, the expected RC result is a non-zero exit identifying
-`output_config.format`, `context_management`, or the invalid
-`messages.1.role=system` retry. Do not add a request-stripping or role-moving
-proxy: accepting the client requires an equivalent native implementation or a
-client version/configuration that sends a supported request shape.
+For Claude Code 2.1.209, the expected RC.2 result is a non-zero exit after
+`output_config.format` and/or the invalid `messages.1.role=system` retry.
+Earlier captures may also expose `context_management`. Do not add a
+request-stripping or role-moving proxy: support requires an equivalent native
+implementation or a client version/configuration with a supported shape.
 
 In shared-auth mode, authenticate with `opencode auth login` and require
 authenticated `GET /ready` to return 200 before running the probe. The gateway
 root is used as the base URL; do not append `/v1`.
 
 See the current evidence in
-[`audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md).
+[`audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).
 The older [`E2E_VALIDATION_2026-08-22.md`](E2E_VALIDATION_2026-08-22.md) is a
 historical v0.4 record only.

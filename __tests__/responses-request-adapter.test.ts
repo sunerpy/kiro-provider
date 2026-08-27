@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
-import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import {
 	parsedResponses,
 	TEST_AUTH,
@@ -12,7 +12,7 @@ function adapt(
 	raw: unknown,
 	mode: "safe" | "legacy-user-prefix" = "safe",
 ) {
-	return responsesToInternalChat(parsedResponses(raw), mode);
+	return adaptResponsesRequest(parsedResponses(raw), mode);
 }
 
 function expectFailure(
@@ -312,7 +312,7 @@ describe("Responses exact function/custom tools", () => {
 });
 
 describe("Responses reasoning replay input", () => {
-	test("accepts only an opaque kr1 token paired to exact assistant output", () => {
+	test("accepts a returned reasoning item while treating the opaque kr1 token as authoritative", () => {
 		const outputFingerprint = assistantOutputFingerprint({
 			text: "answer",
 			toolCalls: [],
@@ -321,7 +321,19 @@ describe("Responses reasoning replay input", () => {
 			model: TEST_MODEL,
 			include: ["reasoning.encrypted_content"],
 			input: [
-				{ type: "reasoning", encrypted_content: "kr1_test-token" },
+				{
+					type: "reasoning",
+					id: "rs_test",
+					status: "completed",
+					summary: [{ type: "summary_text", text: "visible summary" }],
+					content: [
+						{
+							type: "reasoning_text",
+							reasoning_text: "visible reasoning",
+						},
+					],
+					encrypted_content: "kr1_test-token",
+				},
 				{ role: "assistant", content: "answer" },
 				{ role: "user", content: "next" },
 			],
@@ -338,6 +350,8 @@ describe("Responses reasoning replay input", () => {
 				},
 				outputFingerprint,
 				insertBeforeMessage: 0,
+				sourceId: "rs_test",
+				sourceStatus: "completed",
 				path: "input.0",
 			},
 		]);
@@ -351,7 +365,6 @@ describe("Responses reasoning replay input", () => {
 					{
 						type: "reasoning",
 						summary: [{ type: "summary_text", text: "plain" }],
-						encrypted_content: "kr1_token",
 					},
 					{ role: "assistant", content: "answer" },
 					{ role: "user", content: "next" },
@@ -399,6 +412,34 @@ describe("Responses fail-closed capability validation", () => {
 			{ model: TEST_MODEL, input: "q", [field]: value },
 			"unsupported_parameter",
 			field,
+		);
+	});
+
+	test("reports unsupported text controls at their exact field paths", () => {
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", text: { verbosity: "low" } },
+			"unsupported_parameter",
+			"text.verbosity",
+		);
+		expectFailure(
+			{
+				model: TEST_MODEL,
+				input: "q",
+				text: {
+					format: {
+						type: "json_schema",
+						name: "result",
+						schema: { type: "object" },
+					},
+				},
+			},
+			"unsupported_structured_output",
+			"text.format",
+		);
+		expectFailure(
+			{ model: TEST_MODEL, input: "q", text: { unexpected: true } },
+			"unsupported_parameter",
+			"text.unexpected",
 		);
 	});
 
@@ -547,8 +588,19 @@ describe("Responses fail-closed capability validation", () => {
 			"unsupported_tool_choice",
 			"tool_choice",
 		);
+		const noTools = adapt({
+			model: TEST_MODEL,
+			input: "q",
+			parallel_tool_calls: false,
+		});
+		expect(noTools.ok).toBe(true);
 		expectFailure(
-			{ model: TEST_MODEL, input: "q", parallel_tool_calls: false },
+			{
+				model: TEST_MODEL,
+				input: "q",
+				parallel_tool_calls: false,
+				tools: [{ type: "function", name: "f", parameters: { type: "object" } }],
+			},
 			"unsupported_parallel_tool_calls",
 			"parallel_tool_calls",
 		);

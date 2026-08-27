@@ -32,9 +32,7 @@ import {
   type ResponsesToolBridge,
 } from "./tool-bridge.js";
 
-export type InternalChatBody = CanonicalRequest;
-
-export type ResponsesToInternalChatResult =
+export type ResponsesRequestAdaptationResult =
   | {
       readonly ok: true;
       readonly body: CanonicalRequest;
@@ -362,18 +360,31 @@ function validateTextConfig(value: unknown): ProtocolResult<undefined> {
       "text",
     );
   }
-  const keys = Object.keys(value);
-  if (keys.length === 0) return { ok: true, value: undefined };
-  if (keys.length === 1 && keys[0] === "format") {
-    const format = value.format;
-    if (isRecord(format) && format.type === "text" && Object.keys(format).length === 1) {
-      return { ok: true, value: undefined };
+  for (const key of Object.keys(value)) {
+    if (key !== "format" && key !== "verbosity") {
+      return protocolFailure(
+        "unsupported_parameter",
+        `Responses text.${key} is not supported`,
+        `text.${key}`,
+      );
     }
+  }
+  if (value.verbosity !== undefined) {
+    return protocolFailure(
+      "unsupported_parameter",
+      "Responses text.verbosity cannot be represented by the Kiro upstream",
+      "text.verbosity",
+    );
+  }
+  if (value.format === undefined) return { ok: true, value: undefined };
+  const format = value.format;
+  if (isRecord(format) && format.type === "text" && Object.keys(format).length === 1) {
+    return { ok: true, value: undefined };
   }
   return protocolFailure(
     "unsupported_structured_output",
     "Structured Responses text output cannot be represented by the Kiro upstream",
-    "text",
+    "text.format",
   );
 }
 
@@ -527,10 +538,10 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
   return { ok: true, value: undefined };
 }
 
-export function responsesToInternalChat(
+export function adaptResponsesRequest(
   request: ResponsesRequest,
   projectionMode: ProtocolProjectionMode = "safe",
-): ResponsesToInternalChatResult {
+): ResponsesRequestAdaptationResult {
   try {
     resolveModelVariant(request.model);
   } catch {
@@ -570,13 +581,6 @@ export function responsesToInternalChat(
       "unsupported_parameter",
       "Responses store=true is not supported",
       "store",
-    );
-  }
-  if (request.parallel_tool_calls === false) {
-    return protocolFailure(
-      "unsupported_parallel_tool_calls",
-      "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
-      "parallel_tool_calls",
     );
   }
   if (
@@ -635,6 +639,17 @@ export function responsesToInternalChat(
 
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
+  if (
+    request.parallel_tool_calls === false &&
+    request.tool_choice !== "none" &&
+    tools.length > 0
+  ) {
+    return protocolFailure(
+      "unsupported_parallel_tool_calls",
+      "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
+      "parallel_tool_calls",
+    );
+  }
   const instructions =
     request.instructions !== undefined ? textPart(request.instructions, "instructions") : undefined;
   if (request.instructions !== undefined && request.instructions.length > 0) {
@@ -670,11 +685,18 @@ export function responsesToInternalChat(
       if (isReasoningItem(item)) {
         const hasSummary = item.summary !== undefined && item.summary !== null && item.summary.length > 0;
         const hasContent = item.content !== undefined && item.content !== null && item.content.length > 0;
-        if (hasSummary || hasContent) {
+        if (item.encrypted_content === undefined || item.encrypted_content === null) {
+          if (hasSummary || hasContent) {
+            return protocolFailure(
+              "unsupported_reasoning_plaintext_replay",
+              "Reasoning replay requires encrypted_content; summary/content are output metadata only",
+              path,
+            );
+          }
           return protocolFailure(
-            "unsupported_reasoning_plaintext_replay",
-            "Reasoning replay must use encrypted_content without plaintext summary/content",
-            path,
+            "invalid_reasoning_replay",
+            "Reasoning replay requires a kiro-provider kr1_ encrypted_content token",
+            `${path}.encrypted_content`,
           );
         }
         if (

@@ -12,9 +12,11 @@ import {
 } from "../../core/pipeline.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
-  type ChatWireCompletion,
-  parseChatWireCompletion,
-} from "../chat-wire.js";
+  CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
+  CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
+  type CanonicalCompletion,
+  parseCanonicalCompletion,
+} from "../../protocol/output.js";
 import { openAiError } from "../errors.js";
 import type {
   IngressSignals,
@@ -27,7 +29,7 @@ import type {
   ResponseOutputItem,
   ResponseUsage,
 } from "../responses/events.js";
-import { responsesToInternalChat } from "../responses/request-adapter.js";
+import { adaptResponsesRequest } from "../responses/request-adapter.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
 import {
   type ResponseRequestConfiguration,
@@ -137,47 +139,44 @@ async function readRequestBody(
 }
 
 function completedResponse(
-  payload: ChatWireCompletion,
+  payload: CanonicalCompletion,
   model: string,
   bridge: ResponsesToolBridge,
   configuration: ResponseRequestConfiguration,
 ): Response {
   const restored = bridge.restoreCalls(
-    payload.message.toolCalls.map((call) => ({
+    payload.toolCalls.map((call) => ({
       itemId: `fc_${randomUUID()}`,
       id: call.id,
       name: call.name,
-      arguments: call.arguments,
+      arguments: call.input,
     })),
   );
   if (!restored.ok) {
     return openAiError(502, restored.message, "upstream_error", "upstream_protocol_error");
   }
   const output: ResponseOutputItem[] = [];
-  if (
-    payload.message.reasoningContent ||
-    payload.message.reasoningEncryptedContent
-  ) {
+  if (payload.reasoning?.text || payload.reasoning?.encryptedContent) {
     const reasoning: ReasoningOutputItem = {
       id: `rs_${randomUUID()}`,
       type: "reasoning",
-      summary: payload.message.reasoningContent
-        ? [{ type: "summary_text", text: payload.message.reasoningContent }]
+      summary: payload.reasoning.text
+        ? [{ type: "summary_text", text: payload.reasoning.text }]
         : [],
-      ...(payload.message.reasoningEncryptedContent
-        ? { encrypted_content: payload.message.reasoningEncryptedContent }
+      ...(payload.reasoning.encryptedContent
+        ? { encrypted_content: payload.reasoning.encryptedContent }
         : {}),
     };
     output.push(reasoning);
   }
-  if (payload.message.content.length > 0) {
+  if (payload.text.length > 0) {
     const message: MessageOutputItem = {
       id: `msg_${randomUUID()}`,
       type: "message",
       role: "assistant",
       status: "completed",
       content: [
-        { type: "output_text", text: payload.message.content, annotations: [] },
+        { type: "output_text", text: payload.text, annotations: [] },
       ],
     };
     output.push(message);
@@ -246,7 +245,7 @@ export async function handleResponses(
     dependencies.tenantId,
     config.session_affinity_mode,
   );
-  const adapted = responsesToInternalChat(
+  const adapted = adaptResponsesRequest(
     parsed.value,
     config.protocol_projection_mode,
   );
@@ -306,7 +305,17 @@ export async function handleResponses(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (stream && contentType.includes("application/x-ndjson")) {
+    if (!pipelineResponse.ok) return pipelineResponse;
+    if (stream) {
+      if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
+        void boundedCleanup(() => pipelineResponse.body?.cancel());
+        return openAiError(
+          500,
+          "Pipeline returned an unsupported streaming response",
+          "internal_error",
+          "invalid_pipeline_response",
+        );
+      }
       const streaming = responsesSseAdapter(pipelineResponse, {
         model: adapted.body.model,
         signals: ingressSignals,
@@ -317,11 +326,9 @@ export async function handleResponses(
       streamOwnsRouteResources = true;
       return streaming;
     }
-    if (contentType.includes("application/json")) {
-      if (stream || !pipelineResponse.ok) return pipelineResponse;
-      const completion: unknown = await pipelineResponse.json();
-      const payload = parseChatWireCompletion(completion);
-      if (payload) {
+    if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
+      const payload = parseCanonicalCompletion(await pipelineResponse.json());
+      if (payload && payload.model === adapted.body.model) {
         return completedResponse(
           payload,
           adapted.body.model,

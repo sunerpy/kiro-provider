@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { transformSdkOutputStream } from "../src/kiro/transform/streaming/sdk-output-transformer.js";
 import {
 	appendReasoningCapture,
 	createReasoningCaptureState,
 	resolveReasoningCapture,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
-import { transformSdkStream } from "../src/kiro/transform/streaming/sdk-stream-transformer.js";
 import {
-	collectSdkChunks,
+	collectSdkEvents,
+	completionOf,
 	contentOf,
 	makeSdkResponse,
 	reasoningOf,
@@ -17,7 +18,7 @@ import {
 describe("SDK stream protocol fidelity", () => {
 	test("preserves thinking-like tags as ordinary assistant text", async () => {
 		const exact = "intro <thinking>literal</thinking>\r\n{";
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ assistantResponseEvent: { content: "intro <thin" } },
 			{ assistantResponseEvent: { content: "king>literal</thinking>\r\n{" } },
 		]);
@@ -31,7 +32,7 @@ describe("SDK stream protocol fidelity", () => {
 			'<invoke name="read"><parameter name="path">/x</parameter></invoke>' +
 			'<｜DSML｜function_calls name="grep" {"q":"x"}' +
 			'[Called shell with args: {"cmd":"pwd"}]';
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ assistantResponseEvent: { content: exact } },
 		]);
 
@@ -40,7 +41,7 @@ describe("SDK stream protocol fidelity", () => {
 	});
 
 	test("uses only native reasoningContentEvent for reasoning deltas", async () => {
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ reasoningContentEvent: { text: "native reasoning", signature: "sig" } },
 			{ assistantResponseEvent: { content: "answer" } },
 		]);
@@ -79,7 +80,7 @@ describe("SDK stream protocol fidelity", () => {
 
 	test("emits only a complete reasoning signature before assistant text", async () => {
 		const chunks = [];
-		for await (const chunk of transformSdkStream(
+		for await (const chunk of transformSdkOutputStream(
 			makeSdkResponse([
 				{ reasoningContentEvent: { text: "native reasoning" } },
 				{ reasoningContentEvent: { signature: "sig" } },
@@ -92,16 +93,18 @@ describe("SDK stream protocol fidelity", () => {
 		)) {
 			chunks.push(chunk);
 		}
-		const deltas = chunks.map((chunk) => chunk.choices[0]?.delta ?? {});
-		const signatureIndex = deltas.findIndex(
-			(delta) => delta.reasoning_signature === "sig",
+		const signatureIndex = chunks.findIndex(
+			(event) =>
+				event.type === "reasoning_signature" && event.signature === "sig",
 		);
-		const textIndex = deltas.findIndex((delta) => delta.content === "answer");
+		const textIndex = chunks.findIndex(
+			(event) => event.type === "text_delta" && event.text === "answer",
+		);
 		expect(signatureIndex).toBeGreaterThanOrEqual(0);
 		expect(signatureIndex).toBeLessThan(textIndex);
 
 		const signatureOnly = [];
-		for await (const chunk of transformSdkStream(
+		for await (const chunk of transformSdkOutputStream(
 			makeSdkResponse([
 				{ reasoningContentEvent: { signature: "sig-only" } },
 				{ assistantResponseEvent: { content: "answer" } },
@@ -114,16 +117,14 @@ describe("SDK stream protocol fidelity", () => {
 			signatureOnly.push(chunk);
 		}
 		expect(
-			signatureOnly.some(
-				(chunk) => chunk.choices[0]?.delta.reasoning_signature !== undefined,
-			),
+			signatureOnly.some((event) => event.type === "reasoning_signature"),
 		).toBe(false);
 	});
 });
 
 describe("SDK stream structural tool events", () => {
 	test("aggregates fragmented native tool input by toolUseId", async () => {
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ toolUseEvent: { name: "write", toolUseId: "tid", input: '{"path":"a",' } },
 			{ toolUseEvent: { name: "write", toolUseId: "tid", input: '"content":"b"}' } },
 			{ toolUseEvent: { name: "write", toolUseId: "tid", input: "", stop: true } },
@@ -139,15 +140,15 @@ describe("SDK stream structural tool events", () => {
 
 describe("SDK stream usage and finalization", () => {
 	test("uses direct metadata token counts when provided", async () => {
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ assistantResponseEvent: { content: "answer" } },
 			{ metadataEvent: { tokenUsage: { inputTokens: 12, outputTokens: 3 } } },
 		]);
 
-		expect(chunks.find((chunk) => chunk.usage !== undefined)?.usage).toEqual({
-			prompt_tokens: 12,
-			completion_tokens: 3,
-			total_tokens: 15,
+		expect(completionOf(chunks)?.usage).toEqual({
+			inputTokens: 12,
+			outputTokens: 3,
+			totalTokens: 15,
 		});
 	});
 
@@ -167,7 +168,7 @@ describe("SDK stream usage and finalization", () => {
 			})(),
 		};
 		const chunks = [];
-		for await (const chunk of transformSdkStream(
+		for await (const chunk of transformSdkOutputStream(
 			response,
 			"auto",
 			"completion-metadata",
@@ -184,16 +185,13 @@ describe("SDK stream usage and finalization", () => {
 		await Bun.sleep(0);
 
 		expect(contentOf(chunks)).toBe("answer");
-		expect(
-			chunks.find((chunk) => chunk.choices[0]?.finish_reason)?.choices[0]
-				?.finish_reason,
-		).toBe("stop");
+		expect(completionOf(chunks)?.finishReason).toBe("stop");
 		expect(completions).toBe(1);
 		expect(closed).toBe(true);
 	});
 
 	test("does not treat context-only metadata as completion", async () => {
-		const chunks = await collectSdkChunks([
+		const chunks = await collectSdkEvents([
 			{ assistantResponseEvent: { content: "before" } },
 			{ metadataEvent: { contextUsagePercentage: 10 } },
 			{ assistantResponseEvent: { content: " after" } },
@@ -209,7 +207,7 @@ describe("SDK stream usage and finalization", () => {
 			{ metadataEvent: { tokenUsage: { inputTokens: 2, outputTokens: 1 } } },
 		]);
 
-		for await (const _chunk of transformSdkStream(
+		for await (const _chunk of transformSdkOutputStream(
 			response,
 			"auto",
 			"event-types",
@@ -230,30 +228,24 @@ describe("SDK stream usage and finalization", () => {
 	});
 
 	test("sets finish reason from native tool events", async () => {
-		const withTool = await collectSdkChunks([
+		const withTool = await collectSdkEvents([
 			{ toolUseEvent: { name: "x", toolUseId: "t", input: "{}", stop: true } },
 		]);
-		const withoutTool = await collectSdkChunks([
+		const withoutTool = await collectSdkEvents([
 			{ assistantResponseEvent: { content: "hi" } },
 		]);
 
-		expect(
-			withTool.find((chunk) => chunk.choices[0]?.finish_reason)?.choices[0]
-				?.finish_reason,
-		).toBe("tool_calls");
-		expect(
-			withoutTool.find((chunk) => chunk.choices[0]?.finish_reason)?.choices[0]
-				?.finish_reason,
-		).toBe("stop");
+		expect(completionOf(withTool)?.finishReason).toBe("tool_calls");
+		expect(completionOf(withoutTool)?.finishReason).toBe("stop");
 	});
 
 	test("rejects an SDK response without an event stream", async () => {
-		const { transformSdkStream } = await import(
-			"../src/kiro/transform/streaming/sdk-stream-transformer.js"
+		const { transformSdkOutputStream } = await import(
+			"../src/kiro/transform/streaming/sdk-output-transformer.js"
 		);
 
 		await expect(async () => {
-			for await (const chunk of transformSdkStream({}, "auto", "id")) {
+			for await (const chunk of transformSdkOutputStream({}, "auto", "id")) {
 				void chunk;
 			}
 		}).toThrow("SDK response has no event stream");

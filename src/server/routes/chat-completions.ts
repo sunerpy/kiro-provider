@@ -10,6 +10,16 @@ import {
   runChatCompletion,
 } from "../../core/pipeline.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
+import {
+  CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
+  CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
+  parseCanonicalCompletion,
+} from "../../protocol/output.js";
+import {
+  canonicalCompletionToChat,
+  canonicalOutputToChatSse,
+} from "../chat-output.js";
+
 import { openAiError } from "../errors.js";
 import { chatToCanonical } from "../protocol/chat-adapter.js";
 import type {
@@ -34,12 +44,6 @@ type BodyReadResult =
   | { readonly ok: true; readonly text: string }
   | { readonly ok: false; readonly response: Response };
 
-type ChatAdapterOutcome =
-  | "normal-complete"
-  | "deadline"
-  | "client-abort"
-  | "consumer-cancel"
-  | "upstream-error";
 
 class RequestBodyTooLargeError extends Error {
   readonly name = "RequestBodyTooLargeError";
@@ -125,168 +129,6 @@ async function readRequestBody(
   }
 }
 
-export function ndjsonToSse(
-  response: Response,
-  signals: IngressSignals,
-  finalize: () => void,
-  includeUsage = false,
-): Response {
-  const upstream = response.body ?? new ReadableStream<Uint8Array>({ start: (c) => c.close() });
-  const reader = upstream.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-  let terminalOutcome: ChatAdapterOutcome | undefined;
-  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const errorFrame = encoder.encode(
-    `data: ${JSON.stringify({
-      error: {
-        message: "Upstream stream error",
-        type: "upstream_error",
-      },
-    })}\n\n`,
-  );
-  const claimTerminal = (outcome: ChatAdapterOutcome): boolean => {
-    if (terminalOutcome !== undefined) return false;
-    terminalOutcome = outcome;
-    return true;
-  };
-  const removeDeadlineListener = (): void => {
-    signals.deadline.removeEventListener("abort", onDeadlineAbort);
-  };
-  const removeClientListener = (): void => {
-    signals.client.removeEventListener("abort", onClientAbort);
-  };
-  const beginTerminal = (outcome: ChatAdapterOutcome, reason?: unknown): void => {
-    if (!claimTerminal(outcome)) return;
-    runCleanupSteps(
-      removeDeadlineListener,
-      removeClientListener,
-      () => {
-        if (outcome === "normal-complete") {
-          streamController?.enqueue(encoder.encode("data: [DONE]\n\n"));
-        } else if (outcome === "deadline" || outcome === "upstream-error") {
-          streamController?.enqueue(errorFrame);
-        }
-      },
-      () => {
-        if (outcome !== "consumer-cancel") streamController?.close();
-      },
-      finalize,
-    );
-    void boundedCleanup(() => reader.cancel(reason));
-  };
-  const onDeadlineAbort = (): void => {
-    beginTerminal(
-      "deadline",
-      signals.deadline.reason instanceof Error
-        ? signals.deadline.reason
-        : new DOMException("Request deadline exceeded", "TimeoutError"),
-    );
-  };
-  const onClientAbort = (): void => {
-    beginTerminal(
-      "client-abort",
-      signals.client.reason instanceof Error
-        ? signals.client.reason
-        : new DOMException("Client closed request", "AbortError"),
-    );
-  };
-  const framesForLine = (line: string): readonly string[] => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      return [line];
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return [line];
-    }
-    const record = parsed as Record<string, unknown>;
-    const choices = record.choices;
-    if (!("usage" in record) || !Array.isArray(choices)) return [line];
-    const { usage, ...completion } = record;
-    if (choices.length === 0) {
-      return includeUsage ? [line] : [];
-    }
-    const completionFrame = JSON.stringify(completion);
-    if (!includeUsage) return [completionFrame];
-    return [
-      completionFrame,
-      JSON.stringify({ ...completion, choices: [], usage }),
-    ];
-  };
-
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        streamController = controller;
-        signals.deadline.addEventListener("abort", onDeadlineAbort, { once: true });
-        signals.client.addEventListener("abort", onClientAbort, { once: true });
-        if (signals.deadline.aborted) onDeadlineAbort();
-        else if (signals.client.aborted) onClientAbort();
-      },
-      async pull(controller) {
-        if (terminalOutcome !== undefined) return;
-        try {
-          while (true) {
-            if (terminalOutcome !== undefined) return;
-            const newline = buffer.indexOf("\n");
-            if (newline >= 0) {
-              const line = buffer.slice(0, newline).trimEnd();
-              buffer = buffer.slice(newline + 1);
-              if (line.length > 0) {
-                const frames = framesForLine(line);
-                if (frames.length === 0) continue;
-                for (const frame of frames) {
-                  controller.enqueue(encoder.encode(`data: ${frame}\n\n`));
-                }
-                return;
-              }
-              continue;
-            }
-
-            const next = await reader.read();
-            if (terminalOutcome !== undefined) return;
-            if (!next.done) {
-              buffer += decoder.decode(next.value, { stream: true });
-              continue;
-            }
-
-            buffer += decoder.decode();
-            const finalLine = buffer.trim();
-            buffer = "";
-            if (finalLine.length > 0) {
-              const frames = framesForLine(finalLine);
-              if (frames.length > 0) {
-                for (const frame of frames) {
-                  controller.enqueue(encoder.encode(`data: ${frame}\n\n`));
-                }
-                return;
-              }
-            }
-            beginTerminal("normal-complete");
-            return;
-          }
-        } catch (error) {
-          if (terminalOutcome !== undefined) return;
-          beginTerminal("upstream-error", error);
-        }
-      },
-      cancel(reason) {
-        beginTerminal("consumer-cancel", reason);
-      },
-    }),
-    {
-      status: response.status,
-      headers: {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    },
-  );
-}
 
 export async function handleChatCompletions(
   request: Request,
@@ -389,10 +231,32 @@ export async function handleChatCompletions(
       return openAiError(499, "Client closed request", "request_aborted", "client_disconnected");
     }
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (!parsed.value.stream || contentType.includes("application/json")) {
-      return pipelineResponse;
+    if (!pipelineResponse.ok) return pipelineResponse;
+    if (!parsed.value.stream) {
+      if (!contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
+        void boundedCleanup(() => pipelineResponse.body?.cancel());
+        return openAiError(
+          500,
+          "Pipeline returned an unsupported non-streaming response",
+          "internal_error",
+          "invalid_pipeline_response",
+        );
+      }
+      const completion = parseCanonicalCompletion(await pipelineResponse.json());
+      if (
+        !completion ||
+        completion.model !== parsed.value.model
+      ) {
+        return openAiError(
+          500,
+          "Pipeline returned an invalid canonical completion",
+          "internal_error",
+          "invalid_pipeline_response",
+        );
+      }
+      return canonicalCompletionToChat(completion);
     }
-    if (!contentType.includes("application/x-ndjson")) {
+    if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
       void boundedCleanup(() => pipelineResponse.body?.cancel());
       return openAiError(
         500,
@@ -401,11 +265,14 @@ export async function handleChatCompletions(
         "invalid_pipeline_response",
       );
     }
-    const streaming = ndjsonToSse(
+    const streaming = canonicalOutputToChatSse(
       pipelineResponse,
       ingressSignals,
       routeFinalize,
-      parsed.value.stream_options?.include_usage === true,
+      {
+        expectedModel: parsed.value.model,
+        includeUsage: parsed.value.stream_options?.include_usage === true,
+      },
     );
     streamOwnsRouteResources = true;
     return streaming;

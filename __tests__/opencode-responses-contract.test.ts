@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { parsedResponses } from "./canonical-test-helpers.js";
 
 describe("OpenCode Responses request contract", () => {
 	test("accepts AI SDK easy input messages when the request stays in the verified subset", () => {
-		const result = responsesToInternalChat(
+		const result = adaptResponsesRequest(
 			parsedResponses({
 				model: "auto",
 				input: [
@@ -46,7 +46,7 @@ describe("OpenCode Responses request contract", () => {
 	});
 
 	test("safe mode fails closed for OpenCode system input and max output limits", () => {
-		const instruction = responsesToInternalChat(
+		const instruction = adaptResponsesRequest(
 			parsedResponses({
 				model: "auto",
 				input: [
@@ -61,7 +61,7 @@ describe("OpenCode Responses request contract", () => {
 			param: "input.0",
 		});
 
-		const outputLimit = responsesToInternalChat(
+		const outputLimit = adaptResponsesRequest(
 			parsedResponses({ model: "auto", input: "Hello", max_output_tokens: 32_000 }),
 		);
 		expect(outputLimit).toMatchObject({

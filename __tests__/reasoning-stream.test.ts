@@ -1,15 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  collectSdkChunks,
+  collectSdkEvents,
+  completionOf,
   contentOf,
   contentTextOf,
   reasoningOf,
   reasoningTextOf
 } from './sdk-stream-test-helpers.js'
 
-describe('transformSdkStream reasoningContentEvent handling', () => {
+describe('transformSdkOutputStream reasoningContentEvent handling', () => {
   test('keeps contiguous reasoning deltas before text deltas', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { reasoningContentEvent: { text: 'Let me' } },
       { reasoningContentEvent: { text: ' think' } },
       { assistantResponseEvent: { content: 'The answer' } },
@@ -30,7 +31,7 @@ describe('transformSdkStream reasoningContentEvent handling', () => {
   })
 
   test('emits clean text without a reasoning delta for text-only responses', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { assistantResponseEvent: { content: 'Hello' } },
       { assistantResponseEvent: { content: ' world' } }
     ])
@@ -40,12 +41,12 @@ describe('transformSdkStream reasoningContentEvent handling', () => {
   })
 
   test('finalizes a reasoning-only response without visible content', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { reasoningContentEvent: { text: 'thinking...' } }
     ])
 
     expect(reasoningOf(chunks)).toBe('thinking...')
     expect(chunks.some((chunk) => contentTextOf(chunk) !== undefined)).toBe(false)
-    expect(chunks.at(-1)?.choices[0]?.finish_reason).toBe('stop')
+    expect(completionOf(chunks)?.finishReason).toBe('stop')
   })
 })

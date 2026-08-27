@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
-  type ChatWireCompletion,
-  type ChatWireDelta,
-  type ChatWireUsage,
-  parseChatWireChunk,
-} from "../chat-wire.js";
+  type CanonicalCompletion,
+  type CanonicalOutputEvent,
+  type CanonicalOutputUsage,
+  parseCanonicalOutputEventLine,
+} from "../../protocol/output.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import { anthropicError, anthropicStreamError } from "./errors.js";
 
@@ -34,7 +34,7 @@ function formatEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function usagePayload(usage: ChatWireUsage): Readonly<Record<string, number>> {
+function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, number>> {
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
@@ -56,30 +56,45 @@ function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>
 }
 
 export function anthropicMessageResponse(
-  completion: ChatWireCompletion,
+  completion: CanonicalCompletion,
   model: string,
 ): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
-  if (completion.message.reasoningRedactedContent) {
+  const reasoning = completion.reasoning;
+  if (
+    reasoning?.redactedContent !== undefined &&
+    (reasoning.text !== undefined || reasoning.signature !== undefined)
+  ) {
+    return anthropicError(
+      502,
+      "Upstream mixed visible and redacted reasoning payloads",
+      "api_error",
+    );
+  }
+  if (reasoning?.redactedContent !== undefined) {
     content.push({
       type: "redacted_thinking",
-      data: completion.message.reasoningRedactedContent,
+      data: reasoning.redactedContent,
     });
-  } else if (
-    completion.message.reasoningContent &&
-    completion.message.reasoningSignature
-  ) {
+  } else if (reasoning?.text !== undefined || reasoning?.signature !== undefined) {
+    if (!reasoning.text || !reasoning.signature) {
+      return anthropicError(
+        502,
+        "Upstream returned incomplete signed reasoning metadata",
+        "api_error",
+      );
+    }
     content.push({
       type: "thinking",
-      thinking: completion.message.reasoningContent,
-      signature: completion.message.reasoningSignature,
+      thinking: reasoning.text,
+      signature: reasoning.signature,
     });
   }
-  if (completion.message.content.length > 0) {
-    content.push({ type: "text", text: completion.message.content });
+  if (completion.text.length > 0) {
+    content.push({ type: "text", text: completion.text });
   }
-  for (const toolCall of completion.message.toolCalls) {
-    const input = parseToolInput(toolCall.arguments);
+  for (const toolCall of completion.toolCalls) {
+    const input = parseToolInput(toolCall.input);
     if (!input) {
       return anthropicError(
         502,
@@ -100,7 +115,7 @@ export function anthropicMessageResponse(
     role: "assistant",
     model,
     content,
-    stop_reason: completion.message.toolCalls.length > 0 ? "tool_use" : "end_turn",
+    stop_reason: completion.finishReason === "tool_calls" ? "tool_use" : "end_turn",
     stop_sequence: null,
     usage: usagePayload(completion.usage),
   });
@@ -126,6 +141,8 @@ export function anthropicSseAdapter(
   let reasoningStopped = false;
   let deferredReasoningSignature: string | undefined;
   let textStarted = false;
+  let canonicalStarted = false;
+  let canonicalCompleted = false;
   let textStopped = false;
   let terminalOutcome: AdapterOutcome | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -212,11 +229,12 @@ export function anthropicSseAdapter(
       index: reasoningIndex,
     });
   };
-  const addDelta = (delta: ChatWireDelta): boolean => {
-    switch (delta.kind) {
-      case "empty":
+  const addEvent = (event: CanonicalOutputEvent): boolean => {
+    switch (event.type) {
+      case "started":
+      case "completed":
         return false;
-      case "reasoning": {
+      case "reasoning_delta": {
         if (!reasoningStarted) {
           reasoningIndex = nextContentIndex;
           nextContentIndex += 1;
@@ -230,7 +248,7 @@ export function anthropicSseAdapter(
         emit("content_block_delta", {
           type: "content_block_delta",
           index: reasoningIndex,
-          delta: { type: "thinking_delta", thinking: delta.text },
+          delta: { type: "thinking_delta", thinking: event.text },
         });
         return true;
       }
@@ -239,14 +257,14 @@ export function anthropicSseAdapter(
           emit("content_block_delta", {
             type: "content_block_delta",
             index: reasoningIndex,
-            delta: { type: "signature_delta", signature: delta.signature },
+            delta: { type: "signature_delta", signature: event.signature },
           });
         } else {
-          deferredReasoningSignature = delta.signature;
+          deferredReasoningSignature = event.signature;
         }
         return false;
       case "reasoning_redacted": {
-        if (reasoningStarted) {
+        if (reasoningStarted || deferredReasoningSignature !== undefined) {
           failProtocol("Upstream mixed visible and redacted reasoning payloads");
           return false;
         }
@@ -255,14 +273,14 @@ export function anthropicSseAdapter(
         emit("content_block_start", {
           type: "content_block_start",
           index,
-          content_block: { type: "redacted_thinking", data: delta.data },
+          content_block: { type: "redacted_thinking", data: event.data },
         });
         emit("content_block_stop", { type: "content_block_stop", index });
         return true;
       }
       case "reasoning_encrypted":
         return false;
-      case "text": {
+      case "text_delta": {
         stopReasoning();
         if (!textStarted) {
           textIndex = nextContentIndex;
@@ -277,29 +295,35 @@ export function anthropicSseAdapter(
         emit("content_block_delta", {
           type: "content_block_delta",
           index: textIndex,
-          delta: { type: "text_delta", text: delta.text },
+          delta: { type: "text_delta", text: event.text },
         });
         return true;
       }
-      case "tool_calls": {
+      case "tool_call_delta": {
         stopReasoning();
-        for (const fragment of delta.calls) {
-          const tool = tools.get(fragment.index) ?? {
-            id: "",
-            name: "",
-            arguments: "",
-          };
-          if (tool.id.length === 0 && fragment.id !== undefined) tool.id = fragment.id;
-          if (tool.name.length === 0 && fragment.name !== undefined) tool.name = fragment.name;
-          tool.arguments += fragment.arguments;
-          tools.set(fragment.index, tool);
-        }
+        const tool = tools.get(event.index) ?? {
+          id: "",
+          name: "",
+          arguments: "",
+        };
+        if (tool.id.length === 0 && event.id !== undefined) tool.id = event.id;
+        if (tool.name.length === 0 && event.name !== undefined) tool.name = event.name;
+        tool.arguments += event.arguments;
+        tools.set(event.index, tool);
         return false;
       }
     }
   };
-  const complete = (usage: ChatWireUsage): void => {
+  const complete = (
+    usage: CanonicalOutputUsage,
+    finishReason: "stop" | "tool_calls",
+  ): void => {
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
+    const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
+    if (finishReason !== expectedFinishReason) {
+      failProtocol("Upstream finish reason does not match its output");
+      return;
+    }
     const invalidTool = orderedTools.some(([, tool]) => {
       return (
         tool.id.length === 0 ||
@@ -402,20 +426,34 @@ export function anthropicSseAdapter(
               const line = buffer.slice(0, newline).trimEnd();
               buffer = buffer.slice(newline + 1);
               if (line.length === 0) continue;
-              const parsed = parseChatWireChunk(line);
-              if (!parsed) {
+              const event = parseCanonicalOutputEventLine(line);
+              if (!event) {
                 failProtocol("Malformed upstream stream");
                 return;
               }
-              const emitted = addDelta(parsed.delta);
-              if (parsed.finishReason !== null) {
-                if (!parsed.usage) {
-                  failProtocol("Terminal upstream chunk omitted usage");
+              if (event.type === "started") {
+                if (
+                  canonicalStarted ||
+                  canonicalCompleted ||
+                  event.model !== options.model
+                ) {
+                  failProtocol("Malformed upstream stream start");
                   return;
                 }
-                complete(parsed.usage);
+                canonicalStarted = true;
+                continue;
+              }
+              if (!canonicalStarted || canonicalCompleted) {
+                failProtocol("Malformed upstream event ordering");
                 return;
               }
+              if (event.type === "completed") {
+                canonicalCompleted = true;
+                complete(event.usage, event.finishReason);
+                return;
+              }
+              const emitted = addEvent(event);
+              if (terminalOutcome !== undefined) return;
               if (emitted) return;
               continue;
             }
@@ -429,15 +467,31 @@ export function anthropicSseAdapter(
             const finalLine = buffer.trim();
             buffer = "";
             if (finalLine.length > 0) {
-              const parsed = parseChatWireChunk(finalLine);
-              if (!parsed) {
+              const event = parseCanonicalOutputEventLine(finalLine);
+              if (!event) {
                 failProtocol("Malformed upstream stream");
                 return;
               }
-              addDelta(parsed.delta);
-              if (parsed.finishReason !== null && parsed.usage) {
-                complete(parsed.usage);
+              if (event.type === "started") {
+                if (
+                  canonicalStarted ||
+                  canonicalCompleted ||
+                  event.model !== options.model
+                ) {
+                  failProtocol("Malformed upstream stream start");
+                  return;
+                }
+                canonicalStarted = true;
+              } else if (!canonicalStarted || canonicalCompleted) {
+                failProtocol("Malformed upstream event ordering");
                 return;
+              } else if (event.type === "completed") {
+                canonicalCompleted = true;
+                complete(event.usage, event.finishReason);
+                return;
+              } else {
+                addEvent(event);
+                if (terminalOutcome !== undefined) return;
               }
             }
             failProtocol("Upstream stream ended before completion");

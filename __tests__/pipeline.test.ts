@@ -17,6 +17,12 @@ import {
   assistantOutputFingerprint,
   type CanonicalRequest,
 } from "../src/protocol/canonical.js";
+import {
+  CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
+  CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
+  parseCanonicalCompletion,
+  parseCanonicalOutputEventLine,
+} from "../src/protocol/output.js";
 import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
 function requestBody(model = "auto"): CanonicalRequest {
@@ -457,19 +463,14 @@ describe("runChatCompletion success paths", () => {
     });
 
     // Then
-    const completion: unknown = await response.json();
+    const completion = parseCanonicalCompletion(await response.json());
     expect(response.status).toBe(200);
-    expect(completion).toMatchObject({
-      choices: [
-        {
-          message: {
-            role: "assistant",
-            content: "answer",
-            reasoning_content: "reason",
-          },
-        },
-      ],
-    });
+    expect(response.headers.get("Content-Type")).toContain(
+      CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
+    );
+    expect(completion?.text).toBe("answer");
+    expect(completion?.reasoning?.text).toBe("reason");
+    expect(completion?.finishReason).toBe("stop");
     expect(sendSignal).toBe(controller.signal);
     expect(refresher.refreshSignals).toEqual([controller.signal]);
   });
@@ -495,13 +496,20 @@ describe("runChatCompletion success paths", () => {
     const body = await response.text();
 
     // Then
-    const content = body
+    const events = body
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line).choices[0].delta.content ?? "")
+      .map((line) => parseCanonicalOutputEventLine(line));
+    const content = events
+      .filter((event) => event?.type === "text_delta")
+      .map((event) => event?.type === "text_delta" ? event.text : "")
       .join("");
-    expect(response.headers.get("Content-Type")).toContain("application/x-ndjson");
+    expect(response.headers.get("Content-Type")).toContain(
+      CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
+    );
     expect(content).toBe("streamed answer");
+    expect(events.at(0)?.type).toBe("started");
+    expect(events.at(-1)?.type).toBe("completed");
     expect(body).not.toContain("[DONE]");
   });
 });
@@ -1056,6 +1064,7 @@ describe("runChatCompletion cancellation", () => {
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     const first = await reader.read();
 
     // When
@@ -1082,6 +1091,7 @@ describe("runChatCompletion cancellation", () => {
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     const first = await reader.read();
 
     // When / Then
@@ -1112,6 +1122,7 @@ describe("runChatCompletion cancellation", () => {
     );
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     const first = await reader.read();
 
     // When
@@ -1147,6 +1158,7 @@ describe("runChatCompletion cancellation", () => {
     );
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     const first = await reader.read();
 
     // When
@@ -1202,6 +1214,7 @@ describe("runChatCompletion cancellation", () => {
     );
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     const first = await reader.read();
 
     // When
@@ -1278,6 +1291,7 @@ describe("runChatCompletion cancellation", () => {
     );
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
+    await reader.read();
     await reader.read();
 
     // When / Then
