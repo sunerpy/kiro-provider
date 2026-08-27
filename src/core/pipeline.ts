@@ -9,6 +9,7 @@ import {
   type CanonicalRequest,
   type ResolvedReasoningReplay,
 } from "../protocol/canonical.js";
+import { CANONICAL_OUTPUT_JSON_CONTENT_TYPE } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { transformToSdkRequest } from "../kiro/transform/request-sdk.js";
@@ -434,7 +435,7 @@ async function executeLoop(
       return {
         kind: "response",
         response: Response.json(completion, {
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
         }),
       };
     } catch (caught) {

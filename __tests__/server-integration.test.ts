@@ -12,6 +12,10 @@ import type {
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import {
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+  CANONICAL_OUTPUT_VERSION,
+} from "../src/protocol/output.js";
 import { createApp } from "../src/server/app.js";
 import {
   type ChatCompletionDependencies,
@@ -383,11 +387,17 @@ describe("POST /v1/chat/completions", () => {
           new ReadableStream<Uint8Array>({
             start(controller): void {
               controller.enqueue(
-                encoder.encode('{"choices":[{"delta":{"content":"must not escape"}}]}\n'),
+                encoder.encode(`${JSON.stringify({
+                  canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+                  type: "started",
+                  conversationId: "locked-conversation",
+                  model: "auto",
+                  createdAt: 1_700_000_000,
+                })}\n`),
               );
             },
           }),
-          { headers: { "Content-Type": "application/x-ndjson" } },
+          { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
         );
         if (!pipelineResponse.body) {
           throw new TypeError("Injected pipeline response must have a body");

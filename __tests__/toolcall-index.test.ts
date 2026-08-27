@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  collectSdkChunks,
+  collectSdkEvents,
   contentOf,
   reasoningOf,
   toolCallStarts
@@ -8,7 +8,7 @@ import {
 
 describe('tool-call index is a 0-based ordinal on the SDK path', () => {
   test('does not offset tool indices by reasoning and text blocks', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { reasoningContentEvent: { text: 'thinking' } },
       { assistantResponseEvent: { content: 'ok' } },
       { toolUseEvent: { name: 't1', toolUseId: 'id1', input: '{"a":1}', stop: true } },
@@ -24,7 +24,7 @@ describe('tool-call index is a 0-based ordinal on the SDK path', () => {
   })
 
   test('uses index zero for a tool-only response', async () => {
-    const chunks = await collectSdkChunks([
+    const chunks = await collectSdkEvents([
       { toolUseEvent: { name: 't1', toolUseId: 'id1', input: '{"x":1}', stop: true } }
     ])
 

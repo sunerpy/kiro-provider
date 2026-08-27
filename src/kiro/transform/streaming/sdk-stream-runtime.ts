@@ -1,7 +1,13 @@
 import type { CanonicalAssistantOutput } from '../../../protocol/canonical.js'
 import { getContextWindowSize } from '../../models.js'
 import { estimateTokens } from '../response.js'
-import type { StreamEvent, ToolCallState } from './types.js'
+
+/** Mutable accumulator for fragments belonging to one SDK tool call. */
+export interface ToolCallState {
+  readonly toolUseId: string
+  readonly name: string
+  input: string
+}
 
 export interface SdkTokenUsage {
   readonly inputTokens?: number
@@ -161,42 +167,6 @@ export function appendToolFragment(
     name: event.name,
     input: event.input ?? ''
   })
-}
-
-export function createToolCallEvents(toolCalls: ReadonlyMap<string, ToolCallState>): StreamEvent[] {
-  const events: StreamEvent[] = []
-  let ordinal = 0
-
-  for (const toolCall of toolCalls.values()) {
-    let inputJson = toolCall.input
-    try {
-      inputJson = JSON.stringify(JSON.parse(toolCall.input))
-    } catch {
-      inputJson = toolCall.input
-    }
-
-    events.push(
-      {
-        type: 'content_block_start',
-        index: ordinal,
-        content_block: {
-          type: 'tool_use',
-          id: toolCall.toolUseId,
-          name: toolCall.name,
-          input: {}
-        }
-      },
-      {
-        type: 'content_block_delta',
-        index: ordinal,
-        delta: { type: 'input_json_delta', partial_json: inputJson }
-      },
-      { type: 'content_block_stop', index: ordinal }
-    )
-    ordinal += 1
-  }
-
-  return events
 }
 
 export function updateUsageState(usage: UsageState, event: SdkStreamEvent): void {

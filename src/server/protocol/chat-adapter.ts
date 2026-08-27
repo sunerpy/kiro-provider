@@ -459,13 +459,6 @@ export function chatToCanonical(
       );
     }
   }
-  if (request.parallel_tool_calls === false) {
-    return protocolFailure(
-      "unsupported_parallel_tool_calls",
-      "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
-      "parallel_tool_calls",
-    );
-  }
   if (
     request.tool_choice === "required" ||
     (typeof request.tool_choice === "object" && request.tool_choice !== null)
@@ -480,6 +473,17 @@ export function chatToCanonical(
   const toolsResult = mapTools(request.tools);
   if (!toolsResult.ok) return toolsResult;
   const messages: CanonicalMessage[] = [];
+  if (
+    request.parallel_tool_calls === false &&
+    request.tool_choice !== "none" &&
+    toolsResult.value.length > 0
+  ) {
+    return protocolFailure(
+      "unsupported_parallel_tool_calls",
+      "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
+      "parallel_tool_calls",
+    );
+  }
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
   for (const [index, message] of request.messages.entries()) {
     const path = `messages.${index}`;

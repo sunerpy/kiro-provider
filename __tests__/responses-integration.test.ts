@@ -12,6 +12,11 @@ import type {
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import {
+  CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+  CANONICAL_OUTPUT_VERSION,
+} from "../src/protocol/output.js";
 import { createApp } from "../src/server/app.js";
 import { handleResponses } from "../src/server/routes/responses.js";
 
@@ -504,17 +509,18 @@ describe("POST /v1/responses", () => {
           { headers: { "Content-Type": "application/octet-stream" } },
         );
       }
-      return Response.json({
-        choices: [
-          {
-            message: {
-              content: "next request",
-              reasoning_content: "queue released",
-              tool_calls: [],
-            },
-          },
-        ],
-        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+      return new Response(JSON.stringify({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        conversationId: "next-conversation",
+        model: MODEL,
+        createdAt: 1_700_000_000,
+        text: "next request",
+        reasoning: { text: "queue released" },
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      }), {
+        headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
       });
     };
     // When
@@ -570,7 +576,7 @@ describe("POST /v1/responses", () => {
             );
           },
         }),
-        { headers: { "Content-Type": "application/x-ndjson" } },
+        { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
       );
       if (!pipelineResponse.body) {
         throw new TypeError("Injected pipeline response must have a body");
@@ -906,30 +912,22 @@ describe("POST /v1/responses", () => {
       });
       if (pipelineCalls === 2) bothEntered.resolve();
       await bothEntered.promise;
-      return Response.json({
-        id: "chatcmpl_bridge",
-        object: "chat.completion",
-        created: 1_700_000_000,
+      return new Response(JSON.stringify({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        conversationId: "bridge-conversation",
         model: MODEL,
-        choices: [
+        createdAt: 1_700_000_000,
+        text: "",
+        toolCalls: [
           {
-            index: 0,
-            finish_reason: "tool_calls",
-            message: {
-              role: "assistant",
-              content: "",
-              tool_calls: [
-                {
-                  id: "call_shared",
-                  type: "function",
-                  function: { name: "kiro_custom_0", arguments: '{"input":"ok"}' },
-                },
-              ],
-            },
+            id: "call_shared",
+            name: "kiro_custom_0",
+            input: '{"input":"ok"}',
           },
         ],
-        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
-      });
+        finishReason: "tool_calls",
+        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+      }), { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } });
     };
     const routeDependencies = {
       accountManager: new FakeAccountManager(),

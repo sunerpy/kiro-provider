@@ -1,9 +1,10 @@
+import { transformSdkOutputStream } from "../kiro/transform/streaming/sdk-output-transformer.js";
 import type {
   SdkOutputFingerprint,
   SdkReasoningCaptureHandler,
   SdkStreamResponse,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
-import { transformSdkStream } from "../kiro/transform/streaming/sdk-stream-transformer.js";
+import { CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } from "../protocol/output.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import { abortReason } from "./pipeline-runtime.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
@@ -55,7 +56,7 @@ export function createPipelineStreamResponse(
   });
   const streamAbort = new AbortController();
   const composedSignal = AbortSignal.any([signal, streamAbort.signal]);
-  const iterator = transformSdkStream(
+  const iterator = transformSdkOutputStream(
     result.sdkResponse,
     result.model,
     result.conversationId,
@@ -84,6 +85,7 @@ export function createPipelineStreamResponse(
       },
     },
   )[Symbol.asyncIterator]();
+  let initialNext: ReturnType<typeof iterator.next> | undefined = iterator.next();
   const encoder = new TextEncoder();
   let terminalOutcome: PipelineOutcome | undefined;
   let activeIdleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -142,7 +144,9 @@ export function createPipelineStreamResponse(
           beginTerminal("idle-timeout", error);
         }, idleTimeoutMs);
         try {
-          const next = await iterator.next();
+          const nextPromise = initialNext ?? iterator.next();
+          initialNext = undefined;
+          const next = await nextPromise;
           if (terminalOutcome !== undefined) return;
           clearIdleTimer();
           if (next.done) {
@@ -170,6 +174,6 @@ export function createPipelineStreamResponse(
         beginTerminal("consumer-cancel", reason);
       },
     }),
-    { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } },
+    { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
   );
 }

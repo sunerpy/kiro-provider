@@ -11,13 +11,17 @@ import {
 } from "../../core/pipeline.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import { estimateTokens } from "../../kiro/transform/response.js";
+import {
+  CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
+  CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
+  parseCanonicalCompletion,
+} from "../../protocol/output.js";
 import { type AnthropicErrorType, anthropicError } from "../anthropic/errors.js";
 import { adaptAnthropicMessagesRequest } from "../anthropic/request-adapter.js";
 import {
   anthropicMessageResponse,
   anthropicSseAdapter,
 } from "../anthropic/response-adapter.js";
-import { parseChatWireCompletion } from "../chat-wire.js";
 import type {
   IngressSignals,
   RequestIdleTimeoutLease,
@@ -266,10 +270,15 @@ export async function handleMessages(
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
     if (!pipelineResponse.ok) return await translatePipelineError(pipelineResponse);
-    if (
-      adapted.value.source.stream &&
-      contentType.includes("application/x-ndjson")
-    ) {
+    if (adapted.value.source.stream) {
+      if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
+        void boundedCleanup(() => pipelineResponse.body?.cancel());
+        return anthropicError(
+          502,
+          "Pipeline returned an unsupported streaming response",
+          "api_error",
+        );
+      }
       const streaming = anthropicSseAdapter(pipelineResponse, {
         model: adapted.value.body.model,
         inputTokens: estimateInputTokens(adapted.value.body),
@@ -279,16 +288,9 @@ export async function handleMessages(
       streamOwnsRouteResources = true;
       return streaming;
     }
-    if (contentType.includes("application/json")) {
-      if (adapted.value.source.stream) {
-        return anthropicError(
-          502,
-          "Pipeline returned a non-streaming response for a streaming request",
-          "api_error",
-        );
-      }
-      const completion = parseChatWireCompletion(await pipelineResponse.json());
-      if (completion) {
+    if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
+      const completion = parseCanonicalCompletion(await pipelineResponse.json());
+      if (completion && completion.model === adapted.value.body.model) {
         return anthropicMessageResponse(completion, adapted.value.body.model);
       }
       return anthropicError(

@@ -1,6 +1,6 @@
 # kiro-provider v0.5 生产级协议保真设计
 
-> 当前基线：2026-08-26。认证参考为同级目录最新
+> 当前基线：2026-08-27。认证参考为同级目录最新
 > `opencode-kiro-auth` v0.20.7，提交 `bae3e14`。本项目复用其公开数据库/锁
 > 契约与已验证的刷新、重试、流处理经验，不复制 GPL 私有实现，也不复用其
 > 提示词修补逻辑。
@@ -15,6 +15,7 @@ kiro-provider 是 AWS Kiro/CodeWhisperer 之上的协议网关，目标是提供
 
 - 所有外部协议先转换为 `CanonicalRequest`；
 - IR 保留角色、消息、内容块、工具声明/调用/结果、reasoning 和来源路径；
+- Kiro 输出先转换为严格版本化的 `CanonicalCompletion` / `CanonicalEvent`；
 - Kiro 适配器只做结构化降级；无法等价表达时在调用上游前返回字段级 400；
 - 默认 `safe` 模式不加入、改写、合并或删除任何模型可见文本；
 - Chat 由 `enable_legacy_chat_completions` 独立控制，默认关闭；
@@ -44,11 +45,15 @@ account-scoped SDK client / configurable HTTP transport
 Kiro event stream
             │
             ▼
-shared response state builder → protocol JSON/SSE
+CanonicalCompletion / CanonicalEvent
+            │
+            ▼
+protocol-specific JSON/SSE encoders
 ```
 
-Responses 不再经过 Chat 形状的中间转换。三个入口共享同一能力校验和 Kiro
-管道，避免每个协议复制账号选择、刷新、重试和流式终态逻辑。
+Responses 与 Messages 都不再经过 Chat 形状的输出中间层。三个入口共享同一
+能力校验和 Kiro 管道；流式与非流式出口共享同一 Canonical 状态契约，再分别
+编码为 Responses、Messages 或显式开启的 Chat，避免跨协议语义污染。
 
 ## 3. 协议保真边界
 
@@ -76,7 +81,7 @@ Kiro 的单条消息只有一个文本字段，因此同一消息的多个顶层
 | `tool_choice: auto` | 支持 |
 | `tool_choice: none` | 无未完成工具状态时支持 |
 | required/指定工具 | `unsupported_tool_choice` |
-| `parallel_tool_calls: false` | `unsupported_parallel_tool_calls` |
+| `parallel_tool_calls: false` | 无可调用工具（含 `tool_choice: none`）时作为 no-op 接受；否则 `unsupported_parallel_tool_calls` |
 | strict/custom grammar/namespace 身份 | 不弱化、不改名，明确拒绝 |
 | output token limit | 仅探针确认 Claude Sonnet 5 的 1,024–128,000 |
 | Stateful Responses | `unsupported_stateful_responses` |
@@ -132,6 +137,10 @@ conversation。
 只返回随机 `kr1_...` 令牌，数据库保存令牌哈希而非原始令牌。AAD 绑定租户、
 模型、账号、conversation、输出指纹、过期时间与 key ID。
 
+
+标准 Responses 手工续轮可把返回的 reasoning item（包括 `summary`、`content`
+和 `encrypted_content`）原样放入下一次 input。只有有效的 `kr1_...` 令牌具有
+回放权威；显示元数据不投影到 Kiro，也不作为明文 reasoning 降级。
 默认 TTL 24 小时、最多 10,000 条，事务内清理过期和 LRU。支持环境密钥环；
 未配置时原子生成权限 `0600` 的密钥文件。数据库存在未过期记录但缺少对应
 密钥时，服务启动失败。跨租户、跨账号、跨会话、过期、篡改、歧义和解密
@@ -146,7 +155,7 @@ conversation。
   账号/conversation 哈希、亲和来源和连接池命中；
 - 日志不记录 API key、token、签名、reasoning、工具 payload 或 prompt 正文。
 
-## 8. v0.5.0-rc.1 真实客户端门禁
+## 8. v0.5.0-rc.2 真实客户端门禁
 
 所有测试均使用编译后二进制；客户端只配置标准 base URL、API key 和模型。
 
@@ -156,16 +165,17 @@ conversation。
 | reasoning 重启回放 | 通过；同账号、同 conversation，服务重启后签名回放成功 |
 | OpenCode 1.18.18 Responses | 仅显式 legacy + Claude Sonnet 5 通过；工具循环通过 |
 | OpenCode 1.18.18 Chat | 阻塞于非标准 `messages.0.cache_control` |
-| Codex 0.149.0-alpha.4.1 | 阻塞于 `parallel_tool_calls: false` |
-| Claude Code 2.1.209 | 阻塞于 `output_config.format`、`context_management`，以及非法的 `messages.1.role=system` 重试 |
+| Codex 0.149.0-alpha.4.1 | 首先阻塞于 `text.verbosity`；capture 还包含未支持的 reasoning、串行工具、grammar 与 namespace 控制 |
+| Claude Code 2.1.209 | 最终运行先阻塞于 `output_config.format`，随后非法 `messages.1.role=system`；此前 capture 还包含 `context_management` |
+| Zuno | RC.2 按范围未重跑，且未修改 Zuno 源码或配置；RC.1 只作历史集成证据 |
 | Web Search | 明确 `unsupported_web_search`，无伪事件 |
 
-因此可以发布预发布版 `v0.5.0-rc.1` 收集兼容反馈，但不能发布稳定版
+因此可以发布预发布版 `v0.5.0-rc.2` 收集兼容反馈，但不能发布稳定版
 `v0.5.0`。不能通过忽略字段、请求补丁、私有 Header 或拼接提示词把上述阻塞
 伪装成通过。
 
 详细证据见
-[当前 RC 验收报告](audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md)
+[当前 RC 验收报告](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md)
 和 [Kiro 原生探针](audits/kiro-protocol-projection-probe-2026-08-26.md)。
 
 ## 9. 部署边界

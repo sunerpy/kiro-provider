@@ -6,6 +6,11 @@ import type {
   RunChatCompletionOptions,
 } from "../src/core/pipeline.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import {
+  CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+  CANONICAL_OUTPUT_VERSION,
+} from "../src/protocol/output.js";
 import { adaptAnthropicMessagesRequest } from "../src/server/anthropic/request-adapter.js";
 import { createApp } from "../src/server/app.js";
 import {
@@ -108,24 +113,41 @@ function completion(
   overrides: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {
   return {
-    id: "completion-id",
-    object: "chat.completion",
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    conversationId: "conversation-id",
     model: MODEL,
-    choices: [
-      {
-        index: 0,
-        message: { role: "assistant", content: "hello from Kiro" },
-        finish_reason: "stop",
-      },
-    ],
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    createdAt: 1_700_000_000,
+    text: "hello from Kiro",
+    toolCalls: [],
+    finishReason: "stop",
+    usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
     ...overrides,
   };
 }
 
-function ndjson(lines: readonly unknown[]): Response {
-  return new Response(lines.map((line) => JSON.stringify(line)).join("\n"), {
-    headers: { "Content-Type": "application/x-ndjson" },
+function canonicalResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
+  });
+}
+
+function startedEvent(): Readonly<Record<string, unknown>> {
+  return {
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    type: "started",
+    conversationId: "conversation-id",
+    model: MODEL,
+    createdAt: 1_700_000_000,
+  };
+}
+
+function ndjson(lines: readonly (unknown | readonly unknown[])[]): Response {
+  const flattened = [
+    startedEvent(),
+    ...lines.flatMap((line) => (Array.isArray(line) ? line : [line])),
+  ];
+  return new Response(flattened.map((line) => JSON.stringify(line)).join("\n"), {
+    headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
   });
 }
 
@@ -133,14 +155,59 @@ function chunk(
   delta: Readonly<Record<string, unknown>>,
   finishReason: "stop" | "tool_calls" | null,
   usage?: Readonly<Record<string, number>>,
-): unknown {
-  return {
-    id: "completion-id",
-    object: "chat.completion.chunk",
-    model: MODEL,
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-    ...(usage ? { usage } : {}),
-  };
+): readonly Readonly<Record<string, unknown>>[] {
+  if (finishReason !== null) {
+    return [{
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "completed",
+      finishReason,
+      usage: {
+        inputTokens: usage?.prompt_tokens ?? 0,
+        outputTokens: usage?.completion_tokens ?? 0,
+        totalTokens: usage?.total_tokens ?? 0,
+      },
+    }];
+  }
+  const events: Array<Readonly<Record<string, unknown>>> = [];
+  if (typeof delta.reasoning_signature === "string") {
+    events.push({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "reasoning_signature",
+      signature: delta.reasoning_signature,
+    });
+  }
+  if (typeof delta.reasoning_content === "string") {
+    events.push({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "reasoning_delta",
+      text: delta.reasoning_content,
+    });
+  }
+  if (typeof delta.content === "string") {
+    events.push({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "text_delta",
+      text: delta.content,
+    });
+  }
+  if (Array.isArray(delta.tool_calls)) {
+    for (const candidate of delta.tool_calls) {
+      const call = candidate as {
+        readonly index: number;
+        readonly id?: string;
+        readonly function?: { readonly name?: string; readonly arguments?: string };
+      };
+      events.push({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "tool_call_delta",
+        index: call.index,
+        ...(call.id !== undefined ? { id: call.id } : {}),
+        ...(call.function?.name !== undefined ? { name: call.function.name } : {}),
+        arguments: call.function?.arguments ?? "",
+      });
+    }
+  }
+  return events;
 }
 
 function dependencies(
@@ -412,29 +479,21 @@ describe("POST /v1/messages", () => {
       config(),
       dependencies(async (options) => {
         captured = options;
-        return Response.json(
+        return canonicalResponse(
           completion({
-            choices: [
+            text: "I will read it.",
+            reasoning: {
+              text: "hidden reasoning",
+              signature: "native-signature",
+            },
+            toolCalls: [
               {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  content: "I will read it.",
-                  reasoning_content: "hidden reasoning",
-                  tool_calls: [
-                    {
-                      id: "tool-1",
-                      type: "function",
-                      function: {
-                        name: "read",
-                        arguments: '{"path":"a.txt"}',
-                      },
-                    },
-                  ],
-                },
-                finish_reason: "tool_calls",
+                id: "tool-1",
+                name: "read",
+                input: '{"path":"a.txt"}',
               },
             ],
+            finishReason: "tool_calls",
           }),
         );
       }, leaseEvents),
@@ -447,6 +506,7 @@ describe("POST /v1/messages", () => {
       role: "assistant",
       model: MODEL,
       content: [
+        { type: "thinking", thinking: "hidden reasoning", signature: "native-signature" },
         { type: "text", text: "I will read it." },
         {
           type: "tool_use",
@@ -638,25 +698,17 @@ describe("POST /v1/messages", () => {
       request(validRequest()),
       config(),
       dependencies(async () =>
-        Response.json(
+        canonicalResponse(
           completion({
-            choices: [
+            text: "",
+            toolCalls: [
               {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  content: "",
-                  tool_calls: [
-                    {
-                      id: "tool-1",
-                      type: "function",
-                      function: { name: "read", arguments: "{bad-json" },
-                    },
-                  ],
-                },
-                finish_reason: "tool_calls",
+                id: "tool-1",
+                name: "read",
+                input: "{bad-json",
               },
             ],
+            finishReason: "tool_calls",
           }),
         ),
       ),

@@ -23,7 +23,7 @@ or invents prose for orphan tools, omitted images, thinking, or Web Search.
 | `tool_choice: auto` | Supported. |
 | `tool_choice: none` | Supported only when no unfinished tool state requires a declaration. Otherwise rejected. |
 | Required/specific tool choice | Rejected with `unsupported_tool_choice`; Kiro cannot guarantee it. |
-| `parallel_tool_calls: false` | Rejected with `unsupported_parallel_tool_calls`. |
+| `parallel_tool_calls: false` | Accepted as a no-op only when no callable tools can run, including `tool_choice: none`; otherwise rejected with `unsupported_parallel_tool_calls`. |
 | Strict schemas, custom grammar, namespace tools | `strict: true`, custom `format`, and namespace identity are rejected rather than weakened or renamed. |
 | Reasoning effort | Explicit effort mapping is retained. Unsupported effort controls are rejected field-by-field. |
 | Responses `reasoning.encrypted_content` | When Kiro emits a complete signed-text or redacted envelope, the response contains a random `kr1_...` token backed by encrypted local storage. Incomplete/signature-only upstream events produce no token. |
@@ -82,18 +82,18 @@ rewrite.
 
 ## Current compiled-client acceptance status
 
-The 2026-08-26 RC gate used the compiled binary without private headers,
+The 2026-08-27 RC.2 gate used the compiled binary without private headers,
 request patches, or client-side prompt compensation. Any required documented
 client option is stated in its row:
 
-| Client | v0.5.0-rc.1 result |
+| Client | v0.5.0-rc.2 result |
 | --- | --- |
 | OpenAI JavaScript SDK 7.5.0 | Pass: Responses streaming/non-streaming, Chat streaming/non-streaming, function/custom tool loops, and encrypted reasoning replay across a provider restart. |
-| Zuno native OpenAI Responses | Pass: compiled-service tool loop, same-session continuation, and two parallel isolated sessions through standard `metadata.zuno_session_id`. The current functional path explicitly uses provider `legacy-user-prefix` and Zuno `maxTokens: null`; safe mode correctly rejects Zuno's agent instructions. |
 | OpenCode 1.18.18 Responses | Pass only with explicit `legacy-user-prefix` and a Claude Sonnet 5 model. Safe mode correctly rejects its developer prompt; GPT requests also carry an unsupported output-token limit. |
 | OpenCode 1.18.18 Chat | Blocked: the client adds `messages.0.cache_control`, which this protocol does not define and the provider will not silently discard. |
-| Codex CLI 0.149.0-alpha.4.1 | Blocked before Kiro: the client sends `parallel_tool_calls: false`, which Kiro cannot guarantee. |
-| Claude Code 2.1.209 | Blocked before Kiro: the client sends unsupported `output_config.format` / `context_management`, then retries with invalid `messages.1.role=system`; the provider will not discard fields or relocate roles. |
+| Codex CLI 0.149.0-alpha.4.1 | Blocked before Kiro first on `text.verbosity`. The captured request also contains unsupported `reasoning.context`, serial-only tool semantics while callable tools are active, and custom grammar/namespace controls. |
+| Claude Code 2.1.209 | Blocked before Kiro: the final run first sent unsupported `output_config.format`, then retried with invalid `messages.1.role=system`; an earlier redacted capture also contained `context_management`. |
+| Zuno native OpenAI Responses | Not rerun in RC.2 by explicit scope, and no Zuno source or configuration was changed. RC.1 evidence remains historical integration guidance, not a fresh RC.2 pass. |
 
 These are RC compatibility findings, not fields the provider should ignore.
 The stable v0.5.0 gate remains closed until all required real clients pass
@@ -105,6 +105,11 @@ The response token is random and opaque; the SQLite database stores only its
 SHA-256-derived lookup hash. Complete Kiro reasoning envelopes are encrypted
 with AES-256-GCM. Authenticated additional data binds tenant, model, account,
 Kiro conversation, output fingerprint, expiry, and key ID.
+
+For standard manual Responses continuation, a client may resubmit the returned
+reasoning item, including its `summary` and `content`, unchanged. A valid
+`encrypted_content: "kr1_..."` token remains authoritative; visible metadata
+is never projected to Kiro and is never used as a plaintext fallback.
 
 Replay must resolve to the same tenant, model, account, Kiro conversation, and
 assistant/tool output fingerprint. A missing, expired, ambiguous, cross-account,
@@ -161,4 +166,4 @@ least-recently-used records happens transactionally.
 The live upstream evidence behind these decisions is in
 [`audits/kiro-protocol-projection-probe-2026-08-26.md`](audits/kiro-protocol-projection-probe-2026-08-26.md).
 The compiled-service client gate is recorded in
-[`audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md).
+[`audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).

@@ -1,10 +1,12 @@
 import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
-import { convertToOpenAI, type OpenAIStreamChunk } from "./openai-converter.js";
+import {
+  CANONICAL_OUTPUT_VERSION,
+  type CanonicalOutputEvent,
+} from "../../../protocol/output.js";
 import {
   appendReasoningCapture,
   appendToolFragment,
   createReasoningCaptureState,
-  createToolCallEvents,
   nextSdkEvent,
   resolveReasoningCapture,
   resolveUsage,
@@ -12,15 +14,14 @@ import {
   type SdkReasoningCaptureHandler,
   type SdkStreamEvent,
   type SdkStreamResponse,
+  type ToolCallState,
   type UsageState,
   updateUsageState,
 } from "./sdk-stream-runtime.js";
-import { createTextDeltaEvents, createThinkingDeltaEvents, stopBlock } from "./stream-state.js";
-import type { StreamEvent, StreamState, ToolCallState } from "./types.js";
 
 export type { SdkStreamEvent, SdkStreamResponse } from "./sdk-stream-runtime.js";
 
-export interface TransformSdkStreamOptions {
+export interface TransformSdkOutputOptions {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
@@ -29,8 +30,8 @@ export interface TransformSdkStreamOptions {
   readonly onRawEvent?: (eventTypes: readonly string[]) => void;
 }
 
-export class MissingSdkEventStreamError extends Error {
-  readonly name = "MissingSdkEventStreamError";
+export class MissingSdkOutputStreamError extends Error {
+  readonly name = "MissingSdkOutputStreamError";
 
   constructor() {
     super("SDK response has no event stream");
@@ -54,7 +55,9 @@ function sdkEventTypes(event: SdkStreamEvent): readonly string[] {
   return eventTypes.length > 0 ? eventTypes : ["unknown"];
 }
 
-function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): void {
+function closeIteratorWithoutBlocking(
+  iterator: AsyncIterator<SdkStreamEvent>,
+): void {
   try {
     const closing = iterator.return?.();
     if (closing) void Promise.resolve(closing).catch(() => undefined);
@@ -63,56 +66,45 @@ function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): 
   }
 }
 
-function metadataChunk(
-  conversationId: string,
-  model: string,
-  delta: Readonly<Record<string, unknown>>,
-): OpenAIStreamChunk {
-  return {
-    id: conversationId,
-    object: "chat.completion.chunk",
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta, finish_reason: null }],
-  };
+function normalizedToolInput(input: string): string {
+  try {
+    return JSON.stringify(JSON.parse(input));
+  } catch {
+    return input;
+  }
 }
 
-export async function* transformSdkStream(
+export async function* transformSdkOutputStream(
   sdkResponse: SdkStreamResponse,
   model: string,
   conversationId: string,
   signal?: AbortSignal,
-  options: TransformSdkStreamOptions = {},
-): AsyncGenerator<OpenAIStreamChunk> {
+  options: TransformSdkOutputOptions = {},
+): AsyncGenerator<CanonicalOutputEvent> {
   const eventStream = sdkResponse.generateAssistantResponseResponse;
-  if (!eventStream) throw new MissingSdkEventStreamError();
+  if (!eventStream) throw new MissingSdkOutputStreamError();
 
-  const streamState: StreamState = {
-    thinkingRequested: true,
-    buffer: "",
-    inThinking: false,
-    thinkingExtracted: false,
-    thinkingBlockIndex: null,
-    textBlockIndex: null,
-    nextBlockIndex: 0,
-    stoppedBlocks: new Set(),
-  };
   const toolCalls = new Map<string, ToolCallState>();
   const usage: UsageState = {};
   const reasoning = createReasoningCaptureState();
   const iterator = eventStream[Symbol.asyncIterator]();
   let textOnlyContent = "";
   let reasoningStarted = false;
-  let reasoningClosed = false;
+  let assistantOutputStarted = false;
   let anthropicSignatureEmitted = false;
   let anthropicRedactedEmitted = false;
   let iteratorFinished = false;
   let iteratorClosed = false;
 
-  const convert = (event: StreamEvent): OpenAIStreamChunk | null =>
-    convertToOpenAI(event, conversationId, model);
-
   try {
+    yield {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "started",
+      conversationId,
+      model,
+      createdAt: Math.floor(Date.now() / 1000),
+    };
+
     while (true) {
       const next = await nextSdkEvent(iterator, signal);
       if (next.kind === "aborted") {
@@ -145,25 +137,25 @@ export async function* transformSdkStream(
           throw new TypeError("Kiro mixed visible and redacted reasoning payloads");
         }
         if (
-          reasoningClosed &&
+          assistantOutputStarted &&
+          reasoningStarted &&
           event.reasoningContentEvent?.signature !== undefined &&
           event.reasoningContentEvent.signature.length > 0
         ) {
-          throw new TypeError("Kiro emitted a reasoning signature after assistant output began");
+          throw new TypeError(
+            "Kiro emitted a reasoning signature after assistant output began",
+          );
         }
       }
 
       const reasoningText = event.reasoningContentEvent?.text;
       if (reasoningText) {
-        if (reasoningClosed) {
-          streamState.thinkingBlockIndex = null;
-          reasoningClosed = false;
-        }
         reasoningStarted = true;
-        for (const deltaEvent of createThinkingDeltaEvents(reasoningText, streamState)) {
-          const chunk = convert(deltaEvent);
-          if (chunk) yield chunk;
-        }
+        yield {
+          canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+          type: "reasoning_delta",
+          text: reasoningText,
+        };
       }
 
       const assistantText = event.assistantResponseEvent?.content;
@@ -176,9 +168,11 @@ export async function* transformSdkStream(
             capturedBeforeText.signature !== undefined
           ) {
             anthropicSignatureEmitted = true;
-            yield metadataChunk(conversationId, model, {
-              reasoning_signature: capturedBeforeText.signature,
-            });
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_signature",
+              signature: capturedBeforeText.signature,
+            };
           }
           if (
             !reasoningStarted &&
@@ -186,67 +180,70 @@ export async function* transformSdkStream(
             capturedBeforeText.redactedContent !== undefined
           ) {
             anthropicRedactedEmitted = true;
-            yield metadataChunk(conversationId, model, {
-              reasoning_redacted_content: Buffer.from(
-                capturedBeforeText.redactedContent,
-              ).toString("base64"),
-            });
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_redacted",
+              data: Buffer.from(capturedBeforeText.redactedContent).toString(
+                "base64",
+              ),
+            };
           }
         }
+        assistantOutputStarted = true;
         textOnlyContent += assistantText;
-        if (reasoningStarted && !reasoningClosed) {
-          for (const stopEvent of stopBlock(streamState.thinkingBlockIndex, streamState)) {
-            const chunk = convert(stopEvent);
-            if (chunk) yield chunk;
-          }
-          reasoningClosed = true;
-        }
-        for (const textEvent of createTextDeltaEvents(assistantText, streamState)) {
-          const chunk = convert(textEvent);
-          if (chunk) yield chunk;
-        }
+        yield {
+          canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+          type: "text_delta",
+          text: assistantText,
+        };
       }
 
-      if (event.toolUseEvent) appendToolFragment(toolCalls, event.toolUseEvent);
+      if (event.toolUseEvent) {
+        appendToolFragment(toolCalls, event.toolUseEvent);
+      }
     }
   } finally {
-    if (!iteratorFinished && !iteratorClosed && iterator.return) await iterator.return();
+    if (!iteratorFinished && !iteratorClosed && iterator.return) {
+      await iterator.return();
+    }
   }
 
   const captured = resolveReasoningCapture(reasoning);
   if (options.emitAnthropicReasoningMetadata) {
     if (
       reasoningStarted &&
-      !reasoningClosed &&
       !anthropicSignatureEmitted &&
       captured.signature !== undefined
     ) {
-      anthropicSignatureEmitted = true;
-      yield metadataChunk(conversationId, model, {
-        reasoning_signature: captured.signature,
-      });
+      yield {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "reasoning_signature",
+        signature: captured.signature,
+      };
     }
-    if (!anthropicRedactedEmitted && captured.redactedContent !== undefined) {
-      anthropicRedactedEmitted = true;
-      yield metadataChunk(conversationId, model, {
-        reasoning_redacted_content: Buffer.from(captured.redactedContent).toString("base64"),
-      });
+    if (
+      !anthropicRedactedEmitted &&
+      captured.redactedContent !== undefined
+    ) {
+      yield {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "reasoning_redacted",
+        data: Buffer.from(captured.redactedContent).toString("base64"),
+      };
     }
   }
 
-  if (reasoningStarted && !reasoningClosed) {
-    for (const stopEvent of stopBlock(streamState.thinkingBlockIndex, streamState)) {
-      const chunk = convert(stopEvent);
-      if (chunk) yield chunk;
-    }
-  }
-  for (const stopEvent of stopBlock(streamState.textBlockIndex, streamState)) {
-    const chunk = convert(stopEvent);
-    if (chunk) yield chunk;
-  }
-  for (const toolEvent of createToolCallEvents(toolCalls)) {
-    const chunk = convert(toolEvent);
-    if (chunk) yield chunk;
+  let ordinal = 0;
+  for (const toolCall of toolCalls.values()) {
+    yield {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "tool_call_delta",
+      index: ordinal,
+      id: toolCall.toolUseId,
+      name: toolCall.name,
+      arguments: normalizedToolInput(toolCall.input),
+    };
+    ordinal += 1;
   }
 
   const output = {
@@ -257,27 +254,30 @@ export async function* transformSdkStream(
       input: call.input,
     })),
   };
-  const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output);
-  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
+  const outputFingerprint = (
+    options.fingerprintOutput ?? assistantOutputFingerprint
+  )(output);
+  const encryptedContent = options.captureReasoning?.(
+    captured,
+    outputFingerprint,
+  );
   if (options.emitEncryptedReasoning && encryptedContent !== undefined) {
-    yield metadataChunk(conversationId, model, {
-      reasoning_encrypted_content: encryptedContent,
-    });
+    yield {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "reasoning_encrypted",
+      encryptedContent,
+    };
   }
 
   const tokenUsage = resolveUsage(usage, textOnlyContent, model);
-  const finalChunk = convert({
-    type: "message_delta",
-    delta: {
-      type: "message_delta",
-      stop_reason: toolCalls.size > 0 ? "tool_use" : "end_turn",
-    },
+  yield {
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    type: "completed",
+    finishReason: toolCalls.size > 0 ? "tool_calls" : "stop",
     usage: {
-      input_tokens: tokenUsage.inputTokens,
-      output_tokens: tokenUsage.outputTokens,
-      cache_creation_input_tokens: 0,
-      cache_read_input_tokens: 0,
+      inputTokens: tokenUsage.inputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.inputTokens + tokenUsage.outputTokens,
     },
-  });
-  if (finalChunk) yield finalChunk;
+  };
 }

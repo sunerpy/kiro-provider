@@ -25,14 +25,14 @@ describe('collectSdkResponse tool aggregation', () => {
 
     const completion = await collectSdkResponse(response, 'claude-opus-4-8', 'conversation-1')
 
-    expect(completion.choices[0]?.message.tool_calls).toEqual([
+    expect(completion.toolCalls).toEqual([
       {
         id: 'tool-1',
-        type: 'function',
-        function: { name: 'write', arguments: '{"path":"a","content":"b"}' }
+        name: 'write',
+        input: '{"path":"a","content":"b"}'
       }
     ])
-    expect(completion.choices[0]?.finish_reason).toBe('tool_calls')
+    expect(completion.finishReason).toBe('tool_calls')
   })
 
   test('aggregates interleaved duplicate ids while preserving distinct tools', async () => {
@@ -44,16 +44,16 @@ describe('collectSdkResponse tool aggregation', () => {
 
     const completion = await collectSdkResponse(response, 'auto', 'conversation-2')
 
-    expect(completion.choices[0]?.message.tool_calls).toEqual([
+    expect(completion.toolCalls).toEqual([
       {
         id: 'tool-a',
-        type: 'function',
-        function: { name: 'first', arguments: '{"x":1}' }
+        name: 'first',
+        input: '{"x":1}'
       },
       {
         id: 'tool-b',
-        type: 'function',
-        function: { name: 'second', arguments: '{"y":2}' }
+        name: 'second',
+        input: '{"y":2}'
       }
     ])
   })
@@ -68,12 +68,9 @@ describe('collectSdkResponse content and usage', () => {
 
     const completion = await collectSdkResponse(response, 'claude-opus-4-8', 'reasoning-only')
 
-    expect(completion.choices[0]?.message).toEqual({
-      role: 'assistant',
-      content: '',
-      reasoning_content: 'inspect the constraints then decide'
-    })
-    expect(completion.choices[0]?.finish_reason).toBe('stop')
+    expect(completion.text).toBe('')
+    expect(completion.reasoning?.text).toBe('inspect the constraints then decide')
+    expect(completion.finishReason).toBe('stop')
   })
 
   test('collects reasoning and assistant text into separate message fields', async () => {
@@ -85,8 +82,8 @@ describe('collectSdkResponse content and usage', () => {
 
     const completion = await collectSdkResponse(response, 'claude-opus-4-8', 'mixed-content')
 
-    expect(completion.choices[0]?.message.content).toBe('answer complete')
-    expect(completion.choices[0]?.message.reasoning_content).toBe('reason')
+    expect(completion.text).toBe('answer complete')
+    expect(completion.reasoning?.text).toBe('reason')
   })
 
   test('maps metadata token usage to OpenAI usage', async () => {
@@ -108,9 +105,9 @@ describe('collectSdkResponse content and usage', () => {
     const completion = await collectSdkResponse(response, 'auto', 'usage')
 
     expect(completion.usage).toEqual({
-      prompt_tokens: 15,
-      completion_tokens: 7,
-      total_tokens: 22
+      inputTokens: 15,
+      outputTokens: 7,
+      totalTokens: 22
     })
   })
 })
@@ -153,6 +150,6 @@ test('collectSdkResponse stops an aborted iterator and calls return', async () =
   controller.abort()
   const completion = await pending
 
-  expect(completion.choices[0]?.message.content).toBe('partial')
+  expect(completion.text).toBe('partial')
   expect(returnCalled).toBe(true)
 })

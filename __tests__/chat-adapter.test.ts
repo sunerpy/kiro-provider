@@ -333,7 +333,14 @@ describe("Chat protocol-fidelity validation", () => {
 		["unknown top-level field", { private_option: true }, "private_option"],
 		["sampling control", { temperature: 0 }, "temperature"],
 		["server storage", { store: true }, "store"],
-		["serial tool guarantee", { parallel_tool_calls: false }, "parallel_tool_calls"],
+		[
+			"serial tool guarantee",
+			{
+				parallel_tool_calls: false,
+				tools: [{ type: "function", function: { name: "read", parameters: {} } }],
+			},
+			"parallel_tool_calls",
+		],
 		["required tool choice", { tool_choice: "required" }, "tool_choice"],
 		[
 			"named tool choice",
@@ -348,6 +355,25 @@ describe("Chat protocol-fidelity validation", () => {
 				...option,
 			}),
 		).toMatchObject({ ok: false, param });
+	});
+
+	test("accepts parallel_tool_calls=false when it cannot affect model behavior", () => {
+		expect(
+			adapt({
+				model: "gpt-5.6-sol",
+				messages: [{ role: "user", content: "hello" }],
+				parallel_tool_calls: false,
+			}),
+		).toMatchObject({ ok: true });
+		expect(
+			adapt({
+				model: "gpt-5.6-sol",
+				messages: [{ role: "user", content: "hello" }],
+				parallel_tool_calls: false,
+				tool_choice: "none",
+				tools: [{ type: "function", function: { name: "read", parameters: {} } }],
+			}),
+		).toMatchObject({ ok: true });
 	});
 
 	test("keeps instruction projection fail-closed unless legacy mode is explicit", () => {

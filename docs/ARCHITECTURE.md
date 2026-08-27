@@ -39,9 +39,18 @@ Cached AWS CodeWhisperer Streaming SDK client and account-scoped transport
 Kiro / CodeWhisperer event stream
         │
         ▼
-Protocol-specific response translation (typed Responses SSE, Anthropic
-Messages SSE, or explicitly enabled legacy Chat SSE)
+CanonicalCompletion / CanonicalEvent
+(strict versioned internal JSON / NDJSON media types)
+        │
+        ▼
+Protocol-specific JSON/SSE encoders (Responses, Anthropic Messages, or
+explicitly enabled legacy Chat)
 ```
+
+Responses and Messages never traverse an internal Chat-shaped output. Both
+non-streaming and streaming paths consume the same canonical completion/event
+contract, so protocol-specific encoders cannot silently reinterpret Kiro
+events through another public API's semantics.
 
 The gateway's own HTTP surface (`src/server/app.ts`) is a small `fetch`-style
 handler: it checks the Bearer key, dispatches on method + path, and delegates
@@ -147,6 +156,13 @@ check only.
 - `src/server/app.ts` — HTTP entry point and route dispatch.
 - `src/server/routes/` — per-endpoint handlers (`responses.ts`, `messages.ts`,
   `chat-completions.ts`, `models.ts`, `health.ts`, `readiness.ts`).
+- `src/protocol/output.ts` — strict, versioned canonical completion/event
+  schema and internal media types.
+- `src/kiro/transform/streaming/sdk-output-transformer.ts` — direct Kiro SDK
+  event-to-canonical transformation.
+- `src/server/chat-output.ts`, `src/server/responses/sse-adapter.ts`, and
+  `src/server/anthropic/response-adapter.ts` — protocol-specific encoders that
+  consume canonical output without a Chat wire intermediary.
 - `src/server/anthropic/` — Anthropic request, response, and SSE adapters.
 - `src/server/session-affinity.ts` — standard-field affinity extraction and
   tenant-isolated hashing.

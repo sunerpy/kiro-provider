@@ -34,7 +34,9 @@
 - 默认实时复用 OpenCode 认证：`auth_source: "opencode-shared"` 直接读取同一个 `~/.config/opencode/kiro.db`，遵守墓碑、更新共享健康/用量状态，并复用 `opencode-kiro-auth` v0.20.7 的账号 schema 与刷新锁行为。
 - 默认只使用显式会话亲和：Responses 可通过标准 `metadata`、兼容 `client_metadata` 或 `prompt_cache_key` 选择加入；没有显式键时绝不从提示词推导会话身份。配套的 Zuno 原生 OpenAI transport 会自动发送 `metadata.zuno_session_id`。
 - 账号级调度与缓存的 SDK/transport 对象：不同账号可以并行，同一账号上的 Kiro 流不会重叠；访问令牌刷新只更新缓存客户端。Kiro 模型调用的 HTTP keep-alive 默认关闭，必须显式选择开启。
-- 默认 `safe` 模式零 provider 自有提示词注入：统一 IR 保留客户端文本、角色、内容块边界、工具身份、顺序与来源路径；无法严格映射的能力在调用 Kiro 前明确拒绝，不靠隐藏指令模拟。
+- 默认 `safe` 模式零 provider 自有提示词注入：统一输入 IR 保留客户端文本、
+  角色、内容块边界、工具身份、顺序与来源路径；Kiro 输出先进入独立的统一
+  completion/event IR，再编码为各外部协议。
 - 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
 - 多账号轮询、自动令牌刷新与故障切换。共享模式以 OpenCode 数据库为认证事实源，provider 数据库只保存会话亲和等状态。
 - 显式设置 `auth_source: "local"` 后仍可使用 `kiro-provider login` 与 `accounts import`；导入结果只是快照，不能与实时共享认证混为一谈。
@@ -58,23 +60,27 @@ v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静�
 - safe 模式下 `instructions`、`system`、`developer` 返回
   `unsupported_instruction_projection`，因为实测 Kiro 的
   `additionalContext` 通道被拒绝；
-- 支持 `tool_choice: auto`；required/指定工具、
-  `parallel_tool_calls: false`、strict schema、custom grammar 和 namespace
-  工具会被拒绝，不会被弱化；
+- 支持 `tool_choice: auto`；`parallel_tool_calls: false` 只在没有可调用工具
+  （包括 `tool_choice: none`）时作为无副作用字段接受，否则返回
+  `unsupported_parallel_tool_calls`；required/指定工具、strict schema、
+  custom grammar 和 namespace 工具会被拒绝，不会被弱化；
 - 支持 base64/data URL 图片；远程图片 URL 与 detail 控制会被拒绝；
 - 输出 token 上限只对 `claude-sonnet-5` 变体的 1,024–128,000 范围完成探针
   确认；
 - Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
   搜索或引用事件。
 
-2026-08-26 编译后二进制的当前门禁：OpenAI JavaScript SDK 7.5.0 已通过
+2026-08-27 编译后二进制的当前门禁：OpenAI JavaScript SDK 7.5.0 已通过
 Responses、显式 Chat、function/custom 工具循环，以及服务重启后的加密
 reasoning 回放。OpenCode Responses 仅在显式 `legacy-user-prefix` 且使用 Claude
 Sonnet 5 时通过；OpenCode Chat 被非标准 `cache_control` 阻塞。Codex
-0.149.0-alpha.4.1 被 `parallel_tool_calls: false` 阻塞；Claude Code 2.1.209
-被 `output_config.format`、`context_management`，以及重试时放入
-`messages.1.role` 的 `system` 阻塞。这些是 RC 结论；稳定版 v0.5.0 继续保持
-门禁，不会靠静默丢弃或搬移字段换取“通过”。
+0.149.0-alpha.4.1 首先被 `text.verbosity` 阻塞；捕获请求还包含未支持的
+reasoning、工具串行化、grammar 与 namespace 控制。Claude Code 2.1.209 首先
+发送 `output_config.format`，随后用非法的
+`messages.1.role=system` 重试；同版本此前的脱敏 capture 还包含
+`context_management`。RC.2 按明确范围未重跑 Zuno，也没有修改 Zuno 源码或
+配置。这些是 RC 结论；稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃或搬移
+字段换取“通过”。
 
 完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
 [`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
@@ -572,11 +578,14 @@ legacy 模式只是计划在 v0.7.0 删除的显式迁移例外。
 
 ## 配合 Codex CLI 使用
 
-Codex 使用正确的 Responses 端点，但当前编译后的 RC 对
-0.149.0-alpha.4.1 尚未通过：Codex 会发送 `parallel_tool_calls: false`，Kiro
-无法保证该约束。Provider 在调用 Kiro 前返回
-`unsupported_parallel_tool_calls`，不会忽略该字段。以下隔离配置只用于重现
-兼容性检查，不会碰到真实 `~/.codex`：
+Codex 使用正确的 Responses 端点，但编译后的 RC.2 对
+0.149.0-alpha.4.1 尚未通过。第一个字段级错误是 `text.verbosity`；该字段没有
+经过证明的 Kiro 等价能力，因此 Provider 在调用 Kiro 前返回
+`unsupported_parameter`，`param` 为 `text.verbosity`。脱敏请求还包含
+`reasoning.context`、存在可调用 additional tools 时的
+`parallel_tool_calls: false`，以及 custom grammar/namespace 语义。Provider
+不会剥离这些字段，也不会用提示词模拟。以下隔离配置只用于重现兼容性检查，
+不会碰到真实 `~/.codex`：
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -596,18 +605,18 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-Codex 0.149.0-alpha.4.1 的当前预期结果是携带该字段级错误的非零退出。未来
-基础请求成功后，还必须通过真实 shell/custom 工具循环、续轮和重启 reasoning
-回放，才能标记为支持。完整说明见
+Codex 0.149.0-alpha.4.1 的 RC.2 预期结果是非零退出，并返回
+`text.verbosity` 字段级错误。未来出现受支持的请求形态后，还必须通过真实
+shell/custom 工具循环、续轮和重启 reasoning 回放，才能标记为支持。完整说明见
 [`docs/readme/CODEX.zh.md`](CODEX.zh.md)。
 
 ## 配合 Claude Code 使用
 
-Claude Code 使用 Anthropic Messages，但 2.1.209 当前会发送
-`output_config.format` 与 `context_management`；第一次拒绝后还会把 `system`
-放进 `messages.1.role` 重试，这不是合法的 Anthropic Messages 角色，也不能被
-静默搬移。safe 和 legacy 指令模式都会在调用 Kiro 前拒绝这些请求形态。以下
-标准配置因此是兼容性探针，而不是当前支持声明：
+Claude Code 使用 Anthropic Messages，但 2.1.209 的最终 RC.2 运行先发送
+`output_config.format`，随后把 `system` 放进 `messages.1.role` 重试。这不是
+合法的 Anthropic Messages 角色，也不能被静默搬移。同版本此前的脱敏 capture
+还包含 `context_management`。safe 和 legacy 指令模式都会在调用 Kiro 前拒绝
+这些请求形态。以下标准配置因此是兼容性探针，而不是当前支持声明：
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
@@ -621,7 +630,7 @@ Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
 
 当前编译服务验证记录见
-[`docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](../audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md)。
+[`docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md)。
 旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
 仅保留为历史 v0.4 证据。
 

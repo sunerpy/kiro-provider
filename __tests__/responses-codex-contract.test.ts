@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { parsedResponses } from "./canonical-test-helpers.js";
 
 function fixture(name: string): unknown {
@@ -36,7 +36,7 @@ describe("redacted Codex Responses fixtures", () => {
 			content: "HELLO_REDACTED",
 		} as never);
 
-		const result = responsesToInternalChat(
+		const result = adaptResponsesRequest(
 			parsedResponses(raw),
 			"legacy-user-prefix",
 		);
@@ -46,8 +46,20 @@ describe("redacted Codex Responses fixtures", () => {
 		expect(result.body.messages.at(-1)?.role).toBe("user");
 	});
 
+	test("rejects the current Codex verbosity request at its exact field path", () => {
+		const result = adaptResponsesRequest(
+			parsedResponses(fixture("codex-first-turn.json")),
+			"legacy-user-prefix",
+		);
+		expect(result).toMatchObject({
+			ok: false,
+			code: "unsupported_parameter",
+			param: "text.verbosity",
+		});
+	});
+
 	test("rejects the Codex custom grammar constraint instead of silently dropping it", () => {
-		const result = responsesToInternalChat(
+		const result = adaptResponsesRequest(
 			parsedResponses({
 				model: "gpt-5.6-sol",
 				input: "q",
@@ -77,14 +89,14 @@ describe("redacted Codex Responses fixtures", () => {
 			"codex-tool-turn.json",
 			"codex-tool-turn-array.json",
 		] as const) {
-			const result = responsesToInternalChat(parsedResponses(fixture(name)));
+			const result = adaptResponsesRequest(parsedResponses(fixture(name)));
 			expect(result.ok).toBe(false);
 			if (!result.ok) expect(result.code).toBe("missing_tool_declaration");
 		}
 	});
 
 	test("rejects namespace history instead of changing public tool identity", () => {
-		const result = responsesToInternalChat(
+		const result = adaptResponsesRequest(
 			parsedResponses(fixture("codex-namespace-tool-turn.json")),
 		);
 		expect(result.ok).toBe(false);

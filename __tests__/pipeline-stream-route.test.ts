@@ -5,7 +5,8 @@ import type {
   SdkStreamEvent,
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
-import { ndjsonToSse } from "../src/server/routes/chat-completions.js";
+import { CANONICAL_OUTPUT_VERSION } from "../src/protocol/output.js";
+import { canonicalOutputToChatSse } from "../src/server/chat-output.js";
 
 const ASSERTION_BOUND_MS = 100;
 
@@ -15,10 +16,11 @@ type IngressSignals = {
   readonly client: AbortSignal;
 };
 
-type FutureNdjsonToSse = (
+type FutureCanonicalToChatSse = (
   response: Response,
   signals: IngressSignals,
   finalize: () => void,
+  options: { readonly expectedModel: string },
 ) => Response;
 
 type Observation<T> =
@@ -31,13 +33,19 @@ type ResponseBodyReader = {
   cancel(reason?: unknown): Promise<void>;
 };
 
-function ndjsonToSseWithSignals(
+function canonicalToChatSseWithSignals(
   response: Response,
   signals: IngressSignals,
   finalize: () => void,
+  expectedModel = "auto",
 ): Response {
-  const futureNdjsonToSse = ndjsonToSse as FutureNdjsonToSse;
-  return futureNdjsonToSse(response, signals, finalize);
+  const futureCanonicalToChatSse = canonicalOutputToChatSse as FutureCanonicalToChatSse;
+  return futureCanonicalToChatSse(
+    response,
+    signals,
+    finalize,
+    { expectedModel },
+  );
 }
 
 function makeIngressSignals(deadline: AbortController, client: AbortController): IngressSignals {
@@ -107,6 +115,29 @@ function deferred(): {
   if (!resolver) throw new TypeError("deferred resolver was not initialized");
   return { promise, resolve: resolver };
 }
+
+function completedCanonicalStream(): Uint8Array {
+  return new TextEncoder().encode(
+    `${[
+      {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "started",
+        conversationId: "controlled-conversation",
+        model: "auto",
+        createdAt: 1_700_000_000,
+      },
+      {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "completed",
+        finishReason: "stop",
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join("\n")}\n`,
+  );
+}
+
 
 function stalledSdkResponse(cleanup: Promise<void>): {
   readonly response: SdkStreamResponse;
@@ -267,7 +298,7 @@ describe("pipeline stream route framing", () => {
         cancellationReason = reason;
       },
     });
-    const sse = ndjsonToSseWithSignals(
+    const sse = canonicalToChatSseWithSignals(
       new Response(upstream, {
         headers: { "Content-Type": "application/x-ndjson" },
       }),
@@ -298,7 +329,12 @@ describe("pipeline stream route framing", () => {
       15,
       finalized.resolve,
     );
-    const sse = ndjsonToSseWithSignals(ndjson, activeIngressSignals(), () => undefined);
+    const sse = canonicalToChatSseWithSignals(
+      ndjson,
+      activeIngressSignals(),
+      () => undefined,
+      "claude-opus-4-8",
+    );
 
     // When
     const receivedText = sse.text();
@@ -333,10 +369,11 @@ describe("pipeline stream route framing", () => {
     );
 
     // When
-    const received = await ndjsonToSseWithSignals(
+    const received = await canonicalToChatSseWithSignals(
       ndjson,
       activeIngressSignals(),
       () => undefined,
+      "claude-opus-4-8",
     ).text();
     const errorFrames = received.split("\n\n").filter((frame) => frame.includes('"error"'));
 
@@ -369,9 +406,12 @@ describe("pipeline stream route framing", () => {
     );
     const reader = responseReader(response);
 
+    const startedChunk = await observeWithin(reader.read());
     const firstChunk = await observeWithin(reader.read());
+    const pendingRead = reader.read();
     const pendingStarted = await observeWithin(sdk.pendingNext.promise);
     externalAbort.abort(new DOMException("deadline", "TimeoutError"));
+    const abortedRead = await observeWithin(pendingRead);
     const returnAttempted = await observeWithin(
       sdk.returnAttempted.promise.then(() => order.push("return")),
     );
@@ -383,11 +423,16 @@ describe("pipeline stream route framing", () => {
     await observeWithin(reader.cancel("test cleanup"));
 
     expect(firstChunk.status).toBe("fulfilled");
+    expect(startedChunk.status).toBe("fulfilled");
+    if (startedChunk.status === "fulfilled") {
+      expect(decodedRead(startedChunk.value)).toContain('"type":"started"');
+    }
     if (firstChunk.status === "fulfilled") {
       expect(firstChunk.value.done).toBe(false);
     }
     expect(pendingStarted.status).toBe("fulfilled");
     expect(returnAttempted.status).toBe("fulfilled");
+    expect(abortedRead.status).toBe("rejected");
     expect(finalizedBeforeCleanup.status).toBe("fulfilled");
     expect(orderBeforeCleanupRelease).toEqual(["finalize", "return"]);
     expect(sdk.state.returnCalls).toBe(1);
@@ -402,7 +447,7 @@ describe("pipeline stream route framing", () => {
     client.abort(new DOMException("client also aborted", "AbortError"));
     const upstream = controlledUpstream();
     let finalizeCalls = 0;
-    const sse = ndjsonToSseWithSignals(
+    const sse = canonicalToChatSseWithSignals(
       upstream.response,
       makeIngressSignals(deadline, client),
       () => {
@@ -434,7 +479,7 @@ describe("pipeline stream route framing", () => {
     const upstream = controlledUpstream();
     let finalizeCalls = 0;
     const reader = responseReader(
-      ndjsonToSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
+      canonicalToChatSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
         finalizeCalls += 1;
       }),
     );
@@ -469,7 +514,7 @@ describe("pipeline stream route framing", () => {
         },
       }),
     });
-    const sse = ndjsonToSseWithSignals(new Response(upstream), activeIngressSignals(), () =>
+    const sse = canonicalToChatSseWithSignals(new Response(upstream), activeIngressSignals(), () =>
       order.push("finalize"),
     );
     if (!sse.body) throw new TypeError("SSE response has no body");
@@ -494,7 +539,7 @@ describe("pipeline stream route framing", () => {
     const upstream = controlledUpstream();
     let finalizeCalls = 0;
     const reader = responseReader(
-      ndjsonToSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
+      canonicalToChatSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
         finalizeCalls += 1;
       }),
     );
@@ -531,7 +576,7 @@ describe("pipeline stream route framing", () => {
     };
     let finalizeCalls = 0;
     const reader = responseReader(
-      ndjsonToSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
+      canonicalToChatSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
         finalizeCalls += 1;
       }),
     );
@@ -563,7 +608,7 @@ describe("pipeline stream route framing", () => {
     const resolvedFirstUpstream = controlledUpstream();
     let resolvedFirstFinalizeCalls = 0;
     const resolvedFirstReader = responseReader(
-      ndjsonToSseWithSignals(
+      canonicalToChatSseWithSignals(
         resolvedFirstUpstream.response,
         makeIngressSignals(resolvedFirstDeadline, resolvedFirstClient),
         () => {
@@ -573,8 +618,12 @@ describe("pipeline stream route framing", () => {
     );
     const resolvedFirstRead = resolvedFirstReader.read();
     const resolvedFirstStarted = await observeWithin(resolvedFirstUpstream.readStarted.promise);
-    resolvedFirstUpstream.read.resolve({ done: true, value: undefined });
+    resolvedFirstUpstream.read.resolve({
+      done: false,
+      value: completedCanonicalStream(),
+    });
     const resolvedFirstFrame = await observeWithin(resolvedFirstRead);
+    const resolvedFirstDone = await observeWithin(resolvedFirstReader.read());
     const resolvedFirstEnd = await observeWithin(resolvedFirstReader.read());
     resolvedFirstDeadline.abort(new DOMException("too late", "TimeoutError"));
     await observeWithin(resolvedFirstReader.cancel("test cleanup"));
@@ -584,7 +633,7 @@ describe("pipeline stream route framing", () => {
     const abortedFirstUpstream = controlledUpstream();
     let abortedFirstFinalizeCalls = 0;
     const abortedFirstReader = responseReader(
-      ndjsonToSseWithSignals(
+      canonicalToChatSseWithSignals(
         abortedFirstUpstream.response,
         makeIngressSignals(abortedFirstDeadline, abortedFirstClient),
         () => {
@@ -603,11 +652,15 @@ describe("pipeline stream route framing", () => {
     expect(resolvedFirstStarted.status).toBe("fulfilled");
     expect(resolvedFirstFrame.status).toBe("fulfilled");
     if (resolvedFirstFrame.status === "fulfilled") {
-      expect(decodedRead(resolvedFirstFrame.value)).toBe("data: [DONE]\n\n");
+      expect(decodedRead(resolvedFirstFrame.value)).toContain('"finish_reason":"stop"');
     }
     expect(resolvedFirstEnd.status).toBe("fulfilled");
     if (resolvedFirstEnd.status === "fulfilled") expect(resolvedFirstEnd.value.done).toBe(true);
     expect(resolvedFirstFinalizeCalls).toBe(1);
+    expect(resolvedFirstDone.status).toBe("fulfilled");
+    if (resolvedFirstDone.status === "fulfilled") {
+      expect(decodedRead(resolvedFirstDone.value)).toBe("data: [DONE]\n\n");
+    }
 
     expect(abortedFirstStarted.status).toBe("fulfilled");
     expect(abortedFirstFrame.status).toBe("fulfilled");
@@ -626,7 +679,7 @@ describe("pipeline stream route framing", () => {
     const upstream = controlledUpstream();
     let finalizeCalls = 0;
     const reader = responseReader(
-      ndjsonToSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
+      canonicalToChatSseWithSignals(upstream.response, makeIngressSignals(deadline, client), () => {
         finalizeCalls += 1;
       }),
     );

@@ -1,5 +1,10 @@
 import { assistantOutputFingerprint } from '../../protocol/canonical.js'
 import {
+  CANONICAL_OUTPUT_VERSION,
+  type CanonicalCompletion,
+  type CanonicalOutputReasoning
+} from '../../protocol/output.js'
+import {
   appendReasoningCapture,
   appendToolFragment,
   createReasoningCaptureState,
@@ -9,54 +14,16 @@ import {
   type SdkOutputFingerprint,
   type SdkReasoningCaptureHandler,
   type SdkStreamResponse,
+  type ToolCallState,
   type UsageState,
   updateUsageState
 } from './streaming/sdk-stream-runtime.js'
-import type { ToolCallState } from './streaming/types.js'
-
-export interface OpenAIToolCall {
-  readonly id: string
-  readonly type: 'function'
-  readonly function: {
-    readonly name: string
-    readonly arguments: string
-  }
-}
-
-export interface OpenAICompletionMessage {
-  readonly role: 'assistant'
-  readonly content: string
-  readonly reasoning_content?: string
-  readonly reasoning_signature?: string
-  readonly reasoning_redacted_content?: string
-  readonly reasoning_encrypted_content?: string
-  readonly tool_calls?: readonly OpenAIToolCall[]
-}
 
 export interface CollectSdkResponseOptions {
   readonly captureReasoning?: SdkReasoningCaptureHandler
   readonly emitEncryptedReasoning?: boolean
   readonly emitAnthropicReasoningMetadata?: boolean
   readonly fingerprintOutput?: SdkOutputFingerprint
-}
-
-export interface OpenAIChatCompletion {
-  readonly id: string
-  readonly object: 'chat.completion'
-  readonly created: number
-  readonly model: string
-  readonly choices: readonly [
-    {
-      readonly index: 0
-      readonly message: OpenAICompletionMessage
-      readonly finish_reason: 'stop' | 'tool_calls'
-    }
-  ]
-  readonly usage: {
-    readonly prompt_tokens: number
-    readonly completion_tokens: number
-    readonly total_tokens: number
-  }
 }
 
 export class MissingSdkEventStreamError extends Error {
@@ -73,7 +40,7 @@ export async function collectSdkResponse(
   conversationId: string,
   signal?: AbortSignal,
   options: CollectSdkResponseOptions = {}
-): Promise<OpenAIChatCompletion> {
+): Promise<CanonicalCompletion> {
   const eventStream = sdkResponse.generateAssistantResponseResponse
   if (!eventStream) throw new MissingSdkEventStreamError()
 
@@ -120,46 +87,32 @@ export async function collectSdkResponse(
   }
   const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output)
   const encryptedContent = options.captureReasoning?.(captured, outputFingerprint)
-  const message: OpenAICompletionMessage = {
-    role: 'assistant',
-    content,
-    ...(captured.text ? { reasoning_content: captured.text } : {}),
+  const canonicalReasoning: CanonicalOutputReasoning = {
+    ...(captured.text ? { text: captured.text } : {}),
     ...(options.emitAnthropicReasoningMetadata && captured.signature !== undefined
-      ? { reasoning_signature: captured.signature }
+      ? { signature: captured.signature }
       : {}),
     ...(options.emitAnthropicReasoningMetadata && captured.redactedContent !== undefined
-      ? { reasoning_redacted_content: Buffer.from(captured.redactedContent).toString('base64') }
+      ? { redactedContent: Buffer.from(captured.redactedContent).toString('base64') }
       : {}),
     ...(options.emitEncryptedReasoning && encryptedContent !== undefined
-      ? { reasoning_encrypted_content: encryptedContent }
-      : {}),
-    ...(toolCalls.size > 0
-      ? {
-          tool_calls: Array.from(toolCalls.values(), (toolCall) => ({
-            id: toolCall.toolUseId,
-            type: 'function' as const,
-            function: { name: toolCall.name, arguments: toolCall.input }
-          }))
-        }
+      ? { encryptedContent }
       : {})
   }
 
   return {
-    id: conversationId,
-    object: 'chat.completion',
-    created: Math.floor(Date.now() / 1000),
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    conversationId,
     model,
-    choices: [
-      {
-        index: 0,
-        message,
-        finish_reason: toolCalls.size > 0 ? 'tool_calls' : 'stop'
-      }
-    ],
+    createdAt: Math.floor(Date.now() / 1000),
+    text: content,
+    ...(Object.keys(canonicalReasoning).length > 0 ? { reasoning: canonicalReasoning } : {}),
+    toolCalls: output.toolCalls,
+    finishReason: toolCalls.size > 0 ? 'tool_calls' : 'stop',
     usage: {
-      prompt_tokens: resolvedUsage.inputTokens,
-      completion_tokens: resolvedUsage.outputTokens,
-      total_tokens: resolvedUsage.inputTokens + resolvedUsage.outputTokens
+      inputTokens: resolvedUsage.inputTokens,
+      outputTokens: resolvedUsage.outputTokens,
+      totalTokens: resolvedUsage.inputTokens + resolvedUsage.outputTokens
     }
   }
 }

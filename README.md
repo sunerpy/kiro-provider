@@ -34,7 +34,10 @@
 - Live OpenCode authentication reuse by default: `auth_source: "opencode-shared"` reads the same `~/.config/opencode/kiro.db`, honors tombstones, updates shared health/usage, and uses the account schema and refresh-lock behavior of `opencode-kiro-auth` v0.20.7.
 - Explicit-only session affinity by default: Responses requests can opt in through standard `metadata`, compatibility `client_metadata`, or `prompt_cache_key`; requests without an explicit key never derive identity from prompt text. A matching Zuno native OpenAI transport supplies `metadata.zuno_session_id` automatically.
 - Account-scoped scheduling and cached SDK/transport objects: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams; access-token refresh updates the cached client instead of rebuilding it. Kiro model-call HTTP keep-alive is disabled by default and is an explicit transport opt-in.
-- Zero provider-owned prompt injection in the default `safe` mode: a canonical IR preserves client text, roles, content-block boundaries, tool identity, ordering, and source paths; unsupported guarantees are rejected before Kiro instead of being emulated with hidden instructions.
+- Zero provider-owned prompt injection in the default `safe` mode: a canonical
+  input IR preserves client text, roles, content-block boundaries, tool
+  identity, ordering, and source paths; Kiro output is normalized into a
+  separate canonical completion/event IR before protocol-specific encoding.
 - Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
 - Multi-account rotation with automatic token refresh and failover. Shared mode treats OpenCode's database as the authentication authority; the provider database stores session affinity only.
 - An explicit `auth_source: "local"` compatibility mode retains `kiro-provider login` and `accounts import`; imported accounts are snapshots and must not be confused with live shared authentication.
@@ -59,9 +62,11 @@ Key boundaries:
 - `instructions`, `system`, and `developer` return
   `unsupported_instruction_projection` in safe mode because the tested Kiro
   `additionalContext` channel was rejected;
-- `tool_choice: auto` is supported; required/named choice,
-  `parallel_tool_calls: false`, strict schemas, custom grammars, and namespace
-  tools are rejected rather than weakened;
+- `tool_choice: auto` is supported; `parallel_tool_calls: false` is accepted as
+  a no-op only when no callable tool can run (including `tool_choice: none`),
+  and otherwise returns `unsupported_parallel_tool_calls`; required/named
+  choice, strict schemas, custom grammars, and namespace tools are rejected
+  rather than weakened;
 - base64/data-URL images are supported, while remote image URLs and detail
   controls are rejected;
 - an output-token limit is probe-confirmed only for `claude-sonnet-5` variants
@@ -69,15 +74,19 @@ Key boundaries:
 - stateful Responses fields and native Web Search remain unsupported, and the
   provider never fabricates search/citation events.
 
-Current compiled-binary acceptance on 2026-08-26: OpenAI JavaScript SDK 7.5.0
+Current compiled-binary acceptance on 2026-08-27: OpenAI JavaScript SDK 7.5.0
 passes Responses, explicit Chat, function/custom tool loops, and encrypted
 reasoning replay across restart. OpenCode Responses passes only in explicit
 `legacy-user-prefix` mode with Claude Sonnet 5; OpenCode Chat is blocked by
 its nonstandard `cache_control`. Codex 0.149.0-alpha.4.1 is blocked by
-`parallel_tool_calls: false`, and Claude Code 2.1.209 is blocked by
-`output_config.format`, `context_management`, and its retry that places
-`system` in `messages.1.role`. These are RC findings; stable v0.5.0 remains
-gated rather than silently discarding or relocating those fields.
+`text.verbosity`; its captured request also contains further unsupported
+reasoning, tool-serialization, grammar, and namespace controls. Claude Code
+2.1.209 first sends unsupported `output_config.format`, then retries with
+invalid `system` in `messages.1.role`; an earlier redacted capture also
+contained `context_management`. Zuno was intentionally not rerun for RC.2,
+and no Zuno source or configuration was changed for this release. These are
+RC findings; stable v0.5.0 remains gated rather than silently discarding or
+relocating those fields.
 
 For the complete capability matrix, error codes, reasoning replay contract,
 and v0.4 migration steps, see
@@ -597,12 +606,16 @@ exception scheduled for removal in v0.7.0.
 
 ## Use with Codex CLI
 
-Codex uses the correct Responses endpoint, but the current compiled RC gate
-against 0.149.0-alpha.4.1 does not pass: Codex sends
-`parallel_tool_calls: false`, and Kiro cannot guarantee that constraint. The
-provider returns `unsupported_parallel_tool_calls` before Kiro instead of
-ignoring the field. The following isolated configuration reproduces the
-compatibility check without touching the real `~/.codex` state:
+Codex uses the correct Responses endpoint, but the compiled RC.2 gate against
+0.149.0-alpha.4.1 does not pass. Its first field-level failure is
+`text.verbosity`, which has no proven Kiro equivalent, so the provider returns
+`unsupported_parameter` with `param: "text.verbosity"` before Kiro. The
+redacted captured request also contains `reasoning.context`,
+`parallel_tool_calls: false` while callable additional tools are active, and
+custom grammar/namespace semantics. The provider does not strip these fields
+or simulate them with prompt text. The following isolated configuration
+reproduces the compatibility check without touching the real `~/.codex`
+state:
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -622,21 +635,22 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-For Codex 0.149.0-alpha.4.1 the expected RC result is a non-zero exit carrying
-that field-level error. A future successful basic request must still pass a
-real shell/custom-tool loop, continuation, and restart reasoning replay before
-Codex is marked supported. Full details live in
+For Codex 0.149.0-alpha.4.1 the expected RC.2 result is a non-zero exit with
+the `text.verbosity` field-level error. A future supported request shape must
+then pass a real shell/custom-tool loop, continuation, and restart reasoning
+replay before Codex is marked supported. Full details live in
 [`docs/CODEX.md`](docs/CODEX.md).
 
 ## Use with Claude Code
 
-Claude Code uses Anthropic Messages, but Claude Code 2.1.209 currently sends
-`output_config.format` and `context_management`; after the first rejection it
-also retries with `system` inside `messages.1.role`, which is not a valid
-Anthropic Messages role and cannot be silently moved. The provider rejects
-these shapes before Kiro in both safe and legacy instruction modes. The
-standard configuration below is therefore a compatibility probe, not a
-current support claim:
+Claude Code uses Anthropic Messages, but the final Claude Code 2.1.209 RC.2
+run first sent unsupported `output_config.format` and then retried with
+`system` inside `messages.1.role`. That role is invalid in Anthropic Messages
+and cannot be silently moved. An earlier redacted capture from the same
+version also contained `context_management`. The provider rejects these
+shapes before Kiro in both safe and legacy instruction modes. The standard
+configuration below is therefore a compatibility probe, not a current
+support claim:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
@@ -651,7 +665,7 @@ an explicit estimate. See
 [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 
 The current compiled-service validation record is in
-[`docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](docs/audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md).
+[`docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).
 The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
 is retained as historical v0.4 evidence only.
 

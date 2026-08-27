@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { adaptAnthropicMessagesRequest } from "../src/server/anthropic/request-adapter.js";
 import { ResponsesRequestSchema } from "../src/server/request-schema.js";
-import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 
 const REQUEST_ADAPTER_FILES = [
 	"src/kiro/transform/history-builder.ts",
@@ -65,7 +65,7 @@ describe("zero hidden prompt invariant", () => {
 				{ role: "user", content: "CLIENT_TASK_TEXT" },
 			],
 		});
-		const adapted = responsesToInternalChat(parsed);
+		const adapted = adaptResponsesRequest(parsed);
 		if (!adapted.ok) throw new TypeError("fixture must adapt");
 		const serialized = JSON.stringify(adapted.body.messages);
 

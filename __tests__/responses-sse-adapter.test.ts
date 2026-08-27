@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import {
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+  CANONICAL_OUTPUT_VERSION,
+} from "../src/protocol/output.js";
 import { parseResponsesRequest } from "../src/server/request-schema.js";
-import { responsesToInternalChat } from "../src/server/responses/request-adapter.js";
+import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import type { ResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
 
@@ -137,17 +141,64 @@ function chunk(
   delta: Readonly<Record<string, unknown>>,
   finishReason: "stop" | "tool_calls" | null = null,
 ): string {
-  const base = {
-    id: "chatcmpl_test",
-    object: "chat.completion.chunk",
-    created: 1_700_000_000,
-    model: "gpt-5.6-sol",
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-  if (finishReason === null) return JSON.stringify(base);
+  if (finishReason !== null) {
+    return JSON.stringify({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "completed",
+      finishReason,
+      usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+    });
+  }
+  const events: Array<Readonly<Record<string, unknown>>> = [];
+  if (typeof delta.reasoning_content === "string") {
+    events.push({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "reasoning_delta",
+      text: delta.reasoning_content,
+    });
+  }
+  if (typeof delta.content === "string") {
+    events.push({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "text_delta",
+      text: delta.content,
+    });
+  }
+  if (Array.isArray(delta.tool_calls)) {
+    for (const candidate of delta.tool_calls) {
+      if (!isRecord(candidate) || typeof candidate.index !== "number") {
+        throw new TypeError("invalid tool call test fixture");
+      }
+      const functionValue = candidate.function;
+      if (!isRecord(functionValue)) {
+        throw new TypeError("invalid tool function test fixture");
+      }
+      events.push({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "tool_call_delta",
+        index: candidate.index,
+        ...(typeof candidate.id === "string" ? { id: candidate.id } : {}),
+        ...(typeof functionValue.name === "string"
+          ? { name: functionValue.name }
+          : {}),
+        arguments:
+          typeof functionValue.arguments === "string"
+            ? functionValue.arguments
+            : "",
+      });
+    }
+  }
+  if (events.length === 0) throw new TypeError("empty canonical test fixture");
+  return events.map((event) => JSON.stringify(event)).join("\n");
+}
+
+function startedEvent(): string {
   return JSON.stringify({
-    ...base,
-    usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    type: "started",
+    conversationId: "conversation_test",
+    model: "gpt-5.6-sol",
+    createdAt: 1_700_000_000,
   });
 }
 
@@ -164,6 +215,7 @@ function makeHarness(
   const finalized = deferred();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      controller.enqueue(encoder.encode(`${startedEvent()}\n`));
       for (const part of parts) controller.enqueue(part);
       if (end === "close") controller.close();
       if (end === "error") controller.error(new TypeError("upstream read failed"));
@@ -174,7 +226,7 @@ function makeHarness(
     },
   });
   const response = new Response(stream, {
-    headers: { "Content-Type": "application/x-ndjson" },
+    headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
   });
   const body = response.body;
   if (!body) throw new TypeError("harness response has no body");
@@ -224,7 +276,7 @@ function makeControlledHarness(options: { readonly cancelThrows?: boolean } = {}
   const readStarted = deferred();
   const readResult = deferredValue<ControlledReadResult<Uint8Array>>();
   const response = new Response(new ReadableStream<Uint8Array>({}), {
-    headers: { "Content-Type": "application/x-ndjson" },
+    headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
   });
   const body = response.body;
   if (!body) throw new TypeError("controlled harness response has no body");
@@ -241,6 +293,12 @@ function makeControlledHarness(options: { readonly cancelThrows?: boolean } = {}
         value() {
           state.readCount += 1;
           readStarted.resolve();
+          if (state.readCount === 1) {
+            return Promise.resolve({
+              done: false,
+              value: encoder.encode(`${startedEvent()}\n`),
+            });
+          }
           return readResult.promise;
         },
       });
@@ -423,7 +481,7 @@ function bridgeFor(tools: readonly Record<string, unknown>[]): ResponsesToolBrid
     tools,
   });
   if (!parsed.ok) throw new TypeError("Expected a valid bridge request");
-  const adapted = responsesToInternalChat(parsed.value);
+  const adapted = adaptResponsesRequest(parsed.value);
   if (!adapted.ok) throw new TypeError(`Expected a bridge, received ${adapted.code}`);
   return adapted.bridge;
 }

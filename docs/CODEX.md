@@ -3,28 +3,33 @@
 kiro-provider exposes `POST /v1/responses`, which is the wire API used by a
 Codex custom `model_provider` when `wire_api = "responses"` is selected.
 
-## Current v0.5.0-rc.1 status
+## Current v0.5.0-rc.2 status
 
-The compiled-service gate on 2026-08-26 used Codex CLI
+The compiled-service gate on 2026-08-27 used Codex CLI
 **0.149.0-alpha.4.1** with only a standard base URL, API key, and model. The
-request was rejected before Kiro because Codex sent:
+first field-level rejection before Kiro was:
 
 ```json
-{"parallel_tool_calls": false}
+{"text":{"verbosity":"low"}}
 ```
 
-Kiro has no native control that guarantees serial-only tool execution, so safe
-mode returns HTTP 400 with `unsupported_parallel_tool_calls` and
-`param: "parallel_tool_calls"`. The provider does not ignore this field or
-simulate it with prompt text. Therefore this Codex version is **not an accepted
-v0.5 stable client yet**, and the historical v0.4 success record must not be
-read as a current RC pass.
+`text.verbosity` has no proven Kiro equivalent, so the provider returns HTTP
+400 with `unsupported_parameter` and `param: "text.verbosity"`. It does not
+ignore the field or simulate it with prompt text. Therefore this Codex version
+is **not an accepted v0.5 stable client yet**, and the historical v0.4 success
+record must not be read as a current RC pass.
+
+The redacted captured request also contains `reasoning.context`,
+`parallel_tool_calls: false` while callable `additional_tools` are active, and
+custom grammar/namespace semantics. Each remains a distinct capability
+boundary; the provider does not strip them to force a successful request.
 
 When a future Codex request stays within the verified subset, the Responses
 adapter supports exact function/custom declarations and results, encrypted
 reasoning replay, and standard-field account/Kiro-conversation affinity.
 Namespace identity, custom grammar constraints, hosted Web Search, stateful
-Responses, and `parallel_tool_calls: false` remain explicit capability errors.
+Responses, and serial-only execution with callable tools remain explicit
+capability errors.
 
 ## Isolated compatibility probe
 
@@ -50,9 +55,9 @@ EOF
 codex exec --skip-git-repo-check "Reply with exactly: CODEX_OK"
 ```
 
-For Codex 0.149.0-alpha.4.1, the expected RC result is a non-zero exit with
-`unsupported_parallel_tool_calls`. A successful future run must then be
-extended to a real shell/custom-tool round trip, continuation, and reasoning
+For Codex 0.149.0-alpha.4.1, the expected RC.2 result is a non-zero exit with
+`unsupported_parameter` at `text.verbosity`. A supported future request shape
+must then pass a real shell/custom-tool round trip, continuation, and reasoning
 replay across a provider restart before Codex can be marked supported.
 
 The gateway must already be running. In the default shared-auth mode, first
@@ -61,6 +66,6 @@ authenticate Kiro with `opencode auth login` and require authenticated
 of the acceptance contract.
 
 See the current evidence in
-[`audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md`](audits/kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md).
+[`audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).
 The older [`E2E_VALIDATION_2026-08-22.md`](E2E_VALIDATION_2026-08-22.md) is a
 historical v0.4 record only.
