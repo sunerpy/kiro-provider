@@ -65,22 +65,22 @@ v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静�
   `unsupported_parallel_tool_calls`；required/指定工具、strict schema、
   custom grammar 和 namespace 工具会被拒绝，不会被弱化；
 - 支持 base64/data URL 图片；远程图片 URL 与 detail 控制会被拒绝；
-- 输出 token 上限只对 `claude-sonnet-5` 变体的 1,024–128,000 范围完成探针
-  确认；
+- 输出 token 上限已对 `claude-sonnet-5` 与 `claude-opus-5` 变体的
+  1,024–128,000 范围完成探针确认；
 - Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
   搜索或引用事件。
 
-2026-08-27 编译后二进制的当前门禁：OpenAI JavaScript SDK 7.5.0 已通过
-Responses、显式 Chat、function/custom 工具循环，以及服务重启后的加密
-reasoning 回放。OpenCode Responses 仅在显式 `legacy-user-prefix` 且使用 Claude
-Sonnet 5 时通过；OpenCode Chat 被非标准 `cache_control` 阻塞。Codex
-0.149.0-alpha.4.1 首先被 `text.verbosity` 阻塞；捕获请求还包含未支持的
-reasoning、工具串行化、grammar 与 namespace 控制。Claude Code 2.1.209 首先
-发送 `output_config.format`，随后用非法的
-`messages.1.role=system` 重试；同版本此前的脱敏 capture 还包含
-`context_management`。RC.2 按明确范围未重跑 Zuno，也没有修改 Zuno 源码或
-配置。这些是 RC 结论；稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃或搬移
-字段换取“通过”。
+2026-08-27 编译后二进制的当前门禁：RC.3 公开
+`claude-opus-5` 与 `low/medium/high/xhigh/max`，上下文为 1,000,000，
+原生输出上限经探针确认支持 1,024–128,000。OpenAI JavaScript SDK 7.5.0
+已通过 Opus 5 Responses 流式/非流式、显式 Chat、function 工具，以及直接
+Anthropic Messages JSON/SSE。OpenCode 1.18.18 在显式
+`legacy-user-prefix` 下通过 Opus 5 Max 的真实 bash/read 工具循环，并复用
+同一账号和 Kiro conversation。Codex 0.150.0-alpha.9 已通过模型校验，但在
+调用 Kiro 前被 `reasoning.summary` 阻塞；Claude Code 2.1.209 同样已通过
+Opus 5 模型校验，但被 `context_management` 阻塞。Zuno 未修改也未重跑。
+这些是 RC 结论；稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃不支持字段换取
+“通过”。
 
 完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
 [`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
@@ -578,14 +578,11 @@ legacy 模式只是计划在 v0.7.0 删除的显式迁移例外。
 
 ## 配合 Codex CLI 使用
 
-Codex 使用正确的 Responses 端点，但编译后的 RC.2 对
-0.149.0-alpha.4.1 尚未通过。第一个字段级错误是 `text.verbosity`；该字段没有
-经过证明的 Kiro 等价能力，因此 Provider 在调用 Kiro 前返回
-`unsupported_parameter`，`param` 为 `text.verbosity`。脱敏请求还包含
-`reasoning.context`、存在可调用 additional tools 时的
-`parallel_tool_calls: false`，以及 custom grammar/namespace 语义。Provider
-不会剥离这些字段，也不会用提示词模拟。以下隔离配置只用于重现兼容性检查，
-不会碰到真实 `~/.codex`：
+Codex 使用正确的 Responses 端点。编译后的 RC.3 使用 Codex
+0.150.0-alpha.9 与 `claude-opus-5-max` 时已通过 Provider 模型校验，但首个
+请求会在调用 Kiro 前被 `reasoning.summary` 阻塞；该字段没有经过证明的原生
+等价能力。Provider 不会剥离该字段，也不会用提示词模拟。以下隔离配置只用于
+重现兼容性检查，不会碰到真实 `~/.codex`：
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -594,8 +591,9 @@ export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
 mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
 export LOCALGW_KEY="sk-...你的网关 api key..."
 cat > "$CODEX_HOME/config.toml" <<'EOF'
-model = "gpt-5.6-sol"
+model = "claude-opus-5-max"
 model_provider = "localgw"
+model_reasoning_effort = "high"
 [model_providers.localgw]
 name = "Local Gateway"
 base_url = "http://127.0.0.1:8787/v1"
@@ -605,23 +603,24 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-Codex 0.149.0-alpha.4.1 的 RC.2 预期结果是非零退出，并返回
-`text.verbosity` 字段级错误。未来出现受支持的请求形态后，还必须通过真实
-shell/custom 工具循环、续轮和重启 reasoning 回放，才能标记为支持。完整说明见
+Codex 0.150.0-alpha.9 的 RC.3 预期结果是非零退出，并在
+`reasoning.summary` 返回 `unsupported_reasoning_summary`。未来出现受支持的
+请求形态后，还必须通过真实 shell/custom 工具循环、续轮和重启 reasoning
+回放，才能标记为支持。完整说明见
 [`docs/readme/CODEX.zh.md`](CODEX.zh.md)。
 
 ## 配合 Claude Code 使用
 
-Claude Code 使用 Anthropic Messages，但 2.1.209 的最终 RC.2 运行先发送
-`output_config.format`，随后把 `system` 放进 `messages.1.role` 重试。这不是
-合法的 Anthropic Messages 角色，也不能被静默搬移。同版本此前的脱敏 capture
-还包含 `context_management`。safe 和 legacy 指令模式都会在调用 Kiro 前拒绝
-这些请求形态。以下标准配置因此是兼容性探针，而不是当前支持声明：
+Claude Code 使用 Anthropic Messages。编译后的 RC.3 使用 Claude Code
+2.1.209、`claude-opus-5` 与 max effort 时已通过 Provider 模型校验，但会在
+调用 Kiro 前被 `context_management` 阻塞；该字段没有经过证明的原生等价
+能力，Provider 不会丢弃它。已验证子集内的直接 Opus 5 Messages JSON/SSE
+通过；以下标准配置仍是兼容性探针，而不是完整支持声明：
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
-export ANTHROPIC_AUTH_TOKEN="sk-your-private-key"
-claude
+export ANTHROPIC_API_KEY="sk-your-private-key"
+claude --bare --safe-mode --model claude-opus-5 --effort max
 ```
 
 Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
@@ -630,7 +629,7 @@ Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
 
 当前编译服务验证记录见
-[`docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md)。
+[`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
 旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
 仅保留为历史 v0.4 证据。
 

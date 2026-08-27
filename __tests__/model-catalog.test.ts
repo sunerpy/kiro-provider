@@ -39,6 +39,24 @@ describe('MODEL_CATALOG', () => {
     }
   })
 
+  test('advertises the probe-backed Opus 5 family with exact limits', () => {
+    const opus5 = MODEL_CATALOG.filter(({ id }) => id === 'claude-opus-5' || id.startsWith('claude-opus-5-'))
+
+    expect(opus5.map(({ id }) => id)).toEqual([
+      'claude-opus-5',
+      'claude-opus-5-low',
+      'claude-opus-5-medium',
+      'claude-opus-5-high',
+      'claude-opus-5-xhigh',
+      'claude-opus-5-max'
+    ])
+    for (const entry of opus5) {
+      expect(entry.wireId).toBe('claude-opus-5')
+      expect(entry.contextLimit).toBe(1_000_000)
+      expect(entry.outputLimit).toBe(128_000)
+    }
+  })
+
   test('does not expose legacy or wire-only model ids', () => {
     const catalogIds = new Set(MODEL_CATALOG.map(({ id }) => id))
 

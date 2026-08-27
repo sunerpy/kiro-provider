@@ -49,6 +49,22 @@ describe('GET /v1/models', () => {
       expect(entry.shell_type).toBe('unified_exec')
       expect(Array.isArray(entry.supported_reasoning_levels)).toBe(true)
     }
+
+    const opus5 = entries.find((entry) => entry.id === 'claude-opus-5') as
+      | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
+      | undefined
+    const opus5Codex = body.models.find((entry) => entry.slug === 'claude-opus-5')
+    expect(opus5).toMatchObject({ context_limit: 1_000_000, output_limit: 128_000 })
+    expect(opus5Codex).toMatchObject({
+      context_window: 1_000_000,
+      supported_reasoning_levels: [
+        { effort: 'low' },
+        { effort: 'medium' },
+        { effort: 'high' },
+        { effort: 'xhigh' },
+        { effort: 'max' }
+      ]
+    })
   })
 })
 

@@ -1366,12 +1366,14 @@ async function runLiveProbe(
 		console.log(`Auth method: ${account.auth_method}`);
 		console.log(`Generation region: ${generationRegion}`);
 
-		const claudeModel = MODEL_MAPPING["claude-sonnet-4-5"];
+		const claudeModel = MODEL_MAPPING["claude-opus-5"];
 		const claudeOutputLimitModel = MODEL_MAPPING["claude-sonnet-5"];
+		const claudeOpusOutputLimitModel = MODEL_MAPPING["claude-opus-5"];
 		const gptModel = MODEL_MAPPING["gpt-5.6-sol"];
 		if (
 			claudeModel === undefined ||
 			claudeOutputLimitModel === undefined ||
+			claudeOpusOutputLimitModel === undefined ||
 			gptModel === undefined
 		) {
 			throw new ProbeConfigurationError(
@@ -1411,6 +1413,24 @@ async function runLiveProbe(
 							prompt: "Say ok.",
 							additionalModelRequestFields: {
 								max_tokens: 2_147_483_647,
+							},
+							expectSchemaRejection: true,
+						},
+						{
+							label: "Claude Opus 5 native max_tokens",
+							modelId: claudeOpusOutputLimitModel,
+							prompt: OUTPUT_TOKEN_LIMIT_PROMPT,
+							additionalModelRequestFields: {
+								max_tokens: OUTPUT_TOKEN_LIMIT,
+							},
+							expectAcceptedModelFields: true,
+						},
+						{
+							label: "Claude Opus 5 oversized max_tokens boundary",
+							modelId: claudeOpusOutputLimitModel,
+							prompt: "Say ok.",
+							additionalModelRequestFields: {
+								max_tokens: 128_001,
 							},
 							expectSchemaRejection: true,
 						},

@@ -343,6 +343,35 @@ describe("Anthropic request adapter", () => {
     expect(adaptAnthropicMessagesRequest(raw)).toMatchObject({ ok: true });
   });
 
+  test("accepts Opus 5 effort and max_tokens without changing message content", () => {
+    const result = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "claude-opus-5",
+        max_tokens: 128_000,
+        output_config: { effort: "xhigh" },
+        messages: [{ role: "user", content: "exact user bytes" }],
+      }),
+      { requireMaxTokens: true },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          model: "claude-opus-5",
+          outputTokenLimit: 128_000,
+          reasoningEffort: "xhigh",
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "exact user bytes" }],
+            },
+          ],
+        },
+      },
+    });
+  });
+
   test("rejects unproven models and Kiro-invalid max_tokens ranges before the pipeline", () => {
     expect(
       adaptAnthropicMessagesRequest(

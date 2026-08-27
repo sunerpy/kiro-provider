@@ -26,6 +26,22 @@ describe("Chat output-token projection", () => {
     },
   );
 
+  test("maps Opus 5 max_tokens and effort variant through the same canonical path", () => {
+    expect(
+      adapt({
+        model: "claude-opus-5-max",
+        messages: [{ role: "user", content: "hello" }],
+        max_tokens: 128_000,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        model: "claude-opus-5-max",
+        outputTokenLimit: 128_000,
+      },
+    });
+  });
+
   test("rejects conflicting aliases, unsupported models, and invalid ranges", () => {
     expect(
       adapt({

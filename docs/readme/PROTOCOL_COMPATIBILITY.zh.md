@@ -24,10 +24,10 @@ Web Search 生成解释性补偿文本。
 | required/指定工具 | 返回 `unsupported_tool_choice`；Kiro 无法保证。 |
 | `parallel_tool_calls: false` | 仅在没有可调用工具（包括 `tool_choice: none`）时作为无副作用字段接受，否则返回 `unsupported_parallel_tool_calls`。 |
 | strict schema、custom grammar、namespace 工具 | `strict: true`、custom `format` 和 namespace 身份都会被拒绝，不会被弱化或改名。 |
-| reasoning effort | 保留显式 effort 映射；无法映射的控制项按字段拒绝。 |
+| reasoning effort | 保留显式 effort 映射；Opus 5 的 `low/medium/high/xhigh/max` 已通过原生 `output_config.effort` 实时探针确认，无法映射的控制项按字段拒绝。 |
 | Responses `reasoning.encrypted_content` | Kiro 返回完整签名文本或 redacted envelope 时，响应包含随机 `kr1_...` 令牌，并由本地加密存储支撑。只有签名等不完整事件不会生成令牌。 |
 | 图片 | Anthropic base64 图片和 OpenAI data URL 映射到 Kiro。远程 URL、detail 控制、非法媒体、超过 4 张图片或超过 3.75 MiB base64 数据会被拒绝。 |
-| 输出 token 上限 | 仅探针确认 `claude-sonnet-5` 变体支持 1,024 到 128,000；其他模型返回 `unsupported_output_token_limit`。 |
+| 输出 token 上限 | 已探针确认 `claude-sonnet-5` 与 `claude-opus-5` 变体支持 1,024 到 128,000；其他模型返回 `unsupported_output_token_limit`。 |
 | 结构化输出、采样/logprob、文件 | 在取得等价 Kiro 原生能力证据前拒绝；默认纯文本格式可用。 |
 | `previous_response_id`、Responses `conversation`、`store: true` | 拒绝；本版本没有服务端 OpenAI response 状态存储。 |
 | Kiro 托管 Web Search | 返回 `unsupported_web_search`，不会伪造 `web_search_call` 或引用事件。 |
@@ -73,17 +73,17 @@ Web Search 生成解释性补偿文本。
 
 ## 当前编译后二进制真实客户端状态
 
-2026-08-27 的 RC.2 门禁使用编译后二进制，没有私有 Header、请求补丁或客户端
+2026-08-27 的 RC.3 门禁使用编译后二进制，没有私有 Header、请求补丁或客户端
 提示词补偿；客户端所需的文档化选项会在对应行明确列出：
 
-| 客户端 | v0.5.0-rc.2 结果 |
+| 客户端 | v0.5.0-rc.3 结果 |
 | --- | --- |
-| OpenAI JavaScript SDK 7.5.0 | 通过：Responses 流式/非流式、Chat 流式/非流式、function/custom 工具循环，以及服务重启后的加密 reasoning 回放。 |
-| OpenCode 1.18.18 Responses | 仅在显式 `legacy-user-prefix` 且使用 Claude Sonnet 5 时通过。safe 模式会正确拒绝其 developer prompt；GPT 请求还会携带未获原生支持的输出 token 上限。 |
-| OpenCode 1.18.18 Chat | 阻塞：客户端加入了协议未定义的 `messages.0.cache_control`，Provider 不会静默丢弃。 |
-| Codex CLI 0.149.0-alpha.4.1 | 在调用 Kiro 前首先被 `text.verbosity` 阻塞。捕获请求还包含未支持的 `reasoning.context`、有可调用工具时的仅串行语义，以及 custom grammar/namespace 控制。 |
-| Claude Code 2.1.209 | 在调用 Kiro 前阻塞：最终运行先发送 `output_config.format`，随后以非法的 `messages.1.role=system` 重试；同版本此前的脱敏 capture 还包含 `context_management`。 |
-| Zuno 原生 OpenAI Responses | RC.2 按明确范围未重跑，也没有修改 Zuno 源码或配置。RC.1 证据只保留为历史集成说明，不视为新的 RC.2 通过。 |
+| OpenAI JavaScript SDK 7.5.0 | 使用 Opus 5 通过：Responses 流式/非流式、显式开启的 Chat、function 工具续轮、直接 Messages JSON/SSE，以及 128,001 的精确越界拒绝。 |
+| OpenCode 1.18.18 Responses | 显式 `legacy-user-prefix` 下使用 `claude-opus-5-max` 通过：真实 bash→read 工具循环、同一账号、同一 Kiro conversation、`effort=max`。一个辅助 reasoning-summary 请求被明确拒绝，但不影响主命令成功。 |
+| OpenCode 1.18.18 Chat | RC.3 未重跑；RC.2 仍因客户端加入非标准 `messages.0.cache_control` 而阻塞。 |
+| Codex CLI 0.150.0-alpha.9 | Opus 5 模型校验通过；在调用 Kiro 前被没有原生等价能力的 `reasoning.summary` 阻塞。 |
+| Claude Code 2.1.209 | Opus 5 模型校验通过；在调用 Kiro 前被未支持的 `context_management` 阻塞。 |
+| Zuno 原生 OpenAI Responses | 按明确范围未修改也未重跑。RC.1 只保留为历史集成说明，不视为新的 RC.3 通过。 |
 
 这些是 RC 兼容性结论，不是应被 Provider 忽略的字段。所有要求的真实客户端
 在标准配置下通过之前，稳定版 v0.5.0 的发布门禁保持关闭。
@@ -145,4 +145,4 @@ Kiro，也绝不会作为明文 reasoning 降级。
 支撑这些决策的上游实时证据见
 [`../audits/kiro-protocol-projection-probe-2026-08-26.md`](../audits/kiro-protocol-projection-probe-2026-08-26.md)。
 编译后二进制的客户端门禁记录见
-[`../audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md)。
+[`../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。

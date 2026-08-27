@@ -25,10 +25,10 @@ or invents prose for orphan tools, omitted images, thinking, or Web Search.
 | Required/specific tool choice | Rejected with `unsupported_tool_choice`; Kiro cannot guarantee it. |
 | `parallel_tool_calls: false` | Accepted as a no-op only when no callable tools can run, including `tool_choice: none`; otherwise rejected with `unsupported_parallel_tool_calls`. |
 | Strict schemas, custom grammar, namespace tools | `strict: true`, custom `format`, and namespace identity are rejected rather than weakened or renamed. |
-| Reasoning effort | Explicit effort mapping is retained. Unsupported effort controls are rejected field-by-field. |
+| Reasoning effort | Explicit effort mapping is retained. Opus 5 `low/medium/high/xhigh/max` is live-probe confirmed through native `output_config.effort`; unsupported controls are rejected field-by-field. |
 | Responses `reasoning.encrypted_content` | When Kiro emits a complete signed-text or redacted envelope, the response contains a random `kr1_...` token backed by encrypted local storage. Incomplete/signature-only upstream events produce no token. |
 | Images | Base64 Anthropic images and OpenAI data URLs are mapped to Kiro. Remote URLs, image-detail controls, invalid media, more than four images, or more than 3.75 MiB of base64 data are rejected. |
-| Output token limit | Probe-confirmed only for `claude-sonnet-5` variants, from 1,024 through 128,000. Other models return `unsupported_output_token_limit`. |
+| Output token limit | Probe-confirmed for `claude-sonnet-5` and `claude-opus-5` variants, from 1,024 through 128,000. Other models return `unsupported_output_token_limit`. |
 | Structured output, sampling/logprob controls, files | Rejected until an equivalent native Kiro capability is proven. Default text format is accepted. |
 | `previous_response_id`, Responses `conversation`, `store: true` | Rejected; this version does not provide a server-side OpenAI response store. |
 | Kiro-managed Web Search | Rejected with `unsupported_web_search`. The provider does not fabricate `web_search_call` or citation events. |
@@ -82,18 +82,18 @@ rewrite.
 
 ## Current compiled-client acceptance status
 
-The 2026-08-27 RC.2 gate used the compiled binary without private headers,
+The 2026-08-27 RC.3 gate used the compiled binary without private headers,
 request patches, or client-side prompt compensation. Any required documented
 client option is stated in its row:
 
-| Client | v0.5.0-rc.2 result |
+| Client | v0.5.0-rc.3 result |
 | --- | --- |
-| OpenAI JavaScript SDK 7.5.0 | Pass: Responses streaming/non-streaming, Chat streaming/non-streaming, function/custom tool loops, and encrypted reasoning replay across a provider restart. |
-| OpenCode 1.18.18 Responses | Pass only with explicit `legacy-user-prefix` and a Claude Sonnet 5 model. Safe mode correctly rejects its developer prompt; GPT requests also carry an unsupported output-token limit. |
-| OpenCode 1.18.18 Chat | Blocked: the client adds `messages.0.cache_control`, which this protocol does not define and the provider will not silently discard. |
-| Codex CLI 0.149.0-alpha.4.1 | Blocked before Kiro first on `text.verbosity`. The captured request also contains unsupported `reasoning.context`, serial-only tool semantics while callable tools are active, and custom grammar/namespace controls. |
-| Claude Code 2.1.209 | Blocked before Kiro: the final run first sent unsupported `output_config.format`, then retried with invalid `messages.1.role=system`; an earlier redacted capture also contained `context_management`. |
-| Zuno native OpenAI Responses | Not rerun in RC.2 by explicit scope, and no Zuno source or configuration was changed. RC.1 evidence remains historical integration guidance, not a fresh RC.2 pass. |
+| OpenAI JavaScript SDK 7.5.0 | Pass with Opus 5: Responses streaming/non-streaming, explicitly enabled Chat, function-tool continuation, direct Messages JSON/SSE, and exact 128,001 boundary rejection. |
+| OpenCode 1.18.18 Responses | Pass with `claude-opus-5-max` in explicit `legacy-user-prefix` mode: real bash then read tool loop, one account, one Kiro conversation, and `effort=max`. An auxiliary unsupported reasoning-summary request was rejected without breaking the main command. |
+| OpenCode 1.18.18 Chat | Not rerun in RC.3; RC.2 remains blocked because the client adds nonstandard `messages.0.cache_control`. |
+| Codex CLI 0.150.0-alpha.9 | Opus 5 model validation passes; blocked before Kiro on `reasoning.summary`, which has no proven native equivalent. |
+| Claude Code 2.1.209 | Opus 5 model validation passes; blocked before Kiro on unsupported `context_management`. |
+| Zuno native OpenAI Responses | Not changed or rerun by explicit scope. RC.1 remains historical integration guidance, not a fresh RC.3 pass. |
 
 These are RC compatibility findings, not fields the provider should ignore.
 The stable v0.5.0 gate remains closed until all required real clients pass
@@ -166,4 +166,4 @@ least-recently-used records happens transactionally.
 The live upstream evidence behind these decisions is in
 [`audits/kiro-protocol-projection-probe-2026-08-26.md`](audits/kiro-protocol-projection-probe-2026-08-26.md).
 The compiled-service client gate is recorded in
-[`audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).
+[`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).

@@ -16,6 +16,15 @@ describe('resolveModelVariant', () => {
       })
     })
 
+    test('all claude-opus-5 effort variants resolve to the no-dot wire id', () => {
+      for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+        expect(resolveModelVariant(`claude-opus-5-${effort}`)).toEqual({
+          wireId: 'claude-opus-5',
+          effort
+        })
+      }
+    })
+
     test('claude-sonnet-4-6-max -> {wireId: claude-sonnet-4.6, effort: max}', () => {
       expect(resolveModelVariant('claude-sonnet-4-6-max')).toEqual({
         wireId: 'claude-sonnet-4.6',
@@ -70,6 +79,12 @@ describe('resolveModelVariant', () => {
       expect(r.effort).toBeUndefined()
     })
 
+    test('claude-opus-5-thinking gets wire id from map, no effort', () => {
+      const r = resolveModelVariant('claude-opus-5-thinking')
+      expect(r.wireId).toBe('claude-opus-5')
+      expect(r.effort).toBeUndefined()
+    })
+
     test('claude-sonnet-4-5-1m is a mapped slug, not an effort variant', () => {
       const r = resolveModelVariant('claude-sonnet-4-5-1m')
       expect(r.wireId).toBe('claude-sonnet-4.5-1m')
@@ -121,9 +136,10 @@ describe('effort capability', () => {
     expect(resolveEffort('claude-sonnet-4.5', 'high')).toBeUndefined()
   })
 
-  test('opus 4.7 and 4.8 keep xhigh (no clamp)', () => {
+  test('opus 4.7, 4.8, and 5 keep xhigh (no clamp)', () => {
     expect(resolveEffort('claude-opus-4.7', 'xhigh')).toBe('xhigh')
     expect(resolveEffort('claude-opus-4.8', 'xhigh')).toBe('xhigh')
+    expect(resolveEffort('claude-opus-5', 'xhigh')).toBe('xhigh')
   })
 })
 
@@ -135,7 +151,12 @@ describe('buildEffortRequestFields — per-model wire shape dispatch', () => {
   })
 
   test('Claude models use output_config.effort', () => {
-    for (const wire of ['claude-opus-4.8', 'claude-sonnet-5', 'claude-sonnet-4.6']) {
+    for (const wire of [
+      'claude-opus-5',
+      'claude-opus-4.8',
+      'claude-sonnet-5',
+      'claude-sonnet-4.6'
+    ]) {
       expect(buildEffortRequestFields(wire, 'high')).toEqual({ output_config: { effort: 'high' } })
     }
   })

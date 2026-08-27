@@ -457,10 +457,10 @@ describe("transformToSdkRequest profile, region, effort, and output limits", () 
 	test("projects only the probe-confirmed Claude max_tokens field", () => {
 		const supported = transformToSdkRequest(
 			canonicalRequest([message("user", "q")], {
-				model: "claude-sonnet-5",
+				model: "claude-opus-5",
 				outputTokenLimit: 4_096,
 			}),
-			"claude-sonnet-5",
+			"claude-opus-5",
 			auth,
 		);
 		expect(supported.additionalModelRequestFields).toEqual({ max_tokens: 4_096 });

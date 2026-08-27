@@ -444,22 +444,24 @@ describe("Responses fail-closed capability validation", () => {
 	});
 
 	test("maps only the probe-confirmed Claude output-token range", () => {
-		const supported = adapt({
-			model: "claude-sonnet-5",
-			input: "q",
-			max_output_tokens: 4_096,
-		});
-		expect(supported).toMatchObject({
-			ok: true,
-			body: { outputTokenLimit: 4_096 },
-		});
+		for (const model of ["claude-sonnet-5", "claude-opus-5-max"]) {
+			const supported = adapt({
+				model,
+				input: "q",
+				max_output_tokens: 4_096,
+			});
+			expect(supported).toMatchObject({
+				ok: true,
+				body: { outputTokenLimit: 4_096 },
+			});
+		}
 		expectFailure(
 			{ model: TEST_MODEL, input: "q", max_output_tokens: 4_096 },
 			"unsupported_output_token_limit",
 			"max_output_tokens",
 		);
 		expectFailure(
-			{ model: "claude-sonnet-5", input: "q", max_output_tokens: 1_023 },
+			{ model: "claude-opus-5", input: "q", max_output_tokens: 128_001 },
 			"invalid_output_token_limit",
 			"max_output_tokens",
 		);

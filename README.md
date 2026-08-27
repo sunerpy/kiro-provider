@@ -69,24 +69,23 @@ Key boundaries:
   rather than weakened;
 - base64/data-URL images are supported, while remote image URLs and detail
   controls are rejected;
-- an output-token limit is probe-confirmed only for `claude-sonnet-5` variants
-  in the range 1,024–128,000;
+- an output-token limit is probe-confirmed for `claude-sonnet-5` and
+  `claude-opus-5` variants in the range 1,024–128,000;
 - stateful Responses fields and native Web Search remain unsupported, and the
   provider never fabricates search/citation events.
 
-Current compiled-binary acceptance on 2026-08-27: OpenAI JavaScript SDK 7.5.0
-passes Responses, explicit Chat, function/custom tool loops, and encrypted
-reasoning replay across restart. OpenCode Responses passes only in explicit
-`legacy-user-prefix` mode with Claude Sonnet 5; OpenCode Chat is blocked by
-its nonstandard `cache_control`. Codex 0.149.0-alpha.4.1 is blocked by
-`text.verbosity`; its captured request also contains further unsupported
-reasoning, tool-serialization, grammar, and namespace controls. Claude Code
-2.1.209 first sends unsupported `output_config.format`, then retries with
-invalid `system` in `messages.1.role`; an earlier redacted capture also
-contained `context_management`. Zuno was intentionally not rerun for RC.2,
-and no Zuno source or configuration was changed for this release. These are
-RC findings; stable v0.5.0 remains gated rather than silently discarding or
-relocating those fields.
+Current compiled-binary acceptance on 2026-08-27: RC.3 exposes
+`claude-opus-5` plus `low/medium/high/xhigh/max`, with a 1,000,000-token
+context window and a probe-confirmed 1,024–128,000 native output limit. OpenAI
+JavaScript SDK 7.5.0 passes Opus 5 Responses streaming/non-streaming, explicit
+Chat, function tools, and direct Anthropic Messages JSON/SSE. OpenCode 1.18.18
+passes a real Opus 5 Max bash/read tool loop in explicit
+`legacy-user-prefix` mode while reusing one account and Kiro conversation.
+Codex 0.150.0-alpha.9 now passes model validation but remains blocked before
+Kiro by `reasoning.summary`; Claude Code 2.1.209 likewise passes Opus 5 model
+validation but remains blocked by `context_management`. Zuno was intentionally
+not changed or rerun. These are RC findings; stable v0.5.0 remains gated
+rather than silently discarding unsupported fields.
 
 For the complete capability matrix, error codes, reasoning replay contract,
 and v0.4 migration steps, see
@@ -606,16 +605,12 @@ exception scheduled for removal in v0.7.0.
 
 ## Use with Codex CLI
 
-Codex uses the correct Responses endpoint, but the compiled RC.2 gate against
-0.149.0-alpha.4.1 does not pass. Its first field-level failure is
-`text.verbosity`, which has no proven Kiro equivalent, so the provider returns
-`unsupported_parameter` with `param: "text.verbosity"` before Kiro. The
-redacted captured request also contains `reasoning.context`,
-`parallel_tool_calls: false` while callable additional tools are active, and
-custom grammar/namespace semantics. The provider does not strip these fields
-or simulate them with prompt text. The following isolated configuration
-reproduces the compatibility check without touching the real `~/.codex`
-state:
+Codex uses the correct Responses endpoint. The compiled RC.3 gate with Codex
+0.150.0-alpha.9 and `claude-opus-5-max` now passes provider model validation,
+but its first request is rejected before Kiro at `reasoning.summary`, which
+has no proven native equivalent. The provider does not strip that field or
+simulate it with prompt text. The following isolated configuration reproduces
+the compatibility check without touching the real `~/.codex` state:
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -624,8 +619,9 @@ export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
 mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
 export LOCALGW_KEY="sk-...your gateway api key..."
 cat > "$CODEX_HOME/config.toml" <<'EOF'
-model = "gpt-5.6-sol"
+model = "claude-opus-5-max"
 model_provider = "localgw"
+model_reasoning_effort = "high"
 [model_providers.localgw]
 name = "Local Gateway"
 base_url = "http://127.0.0.1:8787/v1"
@@ -635,27 +631,25 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-For Codex 0.149.0-alpha.4.1 the expected RC.2 result is a non-zero exit with
-the `text.verbosity` field-level error. A future supported request shape must
+For Codex 0.150.0-alpha.9 the expected RC.3 result is a non-zero exit with
+`unsupported_reasoning_summary` at `reasoning.summary`. A future supported request shape must
 then pass a real shell/custom-tool loop, continuation, and restart reasoning
 replay before Codex is marked supported. Full details live in
 [`docs/CODEX.md`](docs/CODEX.md).
 
 ## Use with Claude Code
 
-Claude Code uses Anthropic Messages, but the final Claude Code 2.1.209 RC.2
-run first sent unsupported `output_config.format` and then retried with
-`system` inside `messages.1.role`. That role is invalid in Anthropic Messages
-and cannot be silently moved. An earlier redacted capture from the same
-version also contained `context_management`. The provider rejects these
-shapes before Kiro in both safe and legacy instruction modes. The standard
-configuration below is therefore a compatibility probe, not a current
-support claim:
+Claude Code uses Anthropic Messages. The compiled RC.3 run with Claude Code
+2.1.209, `claude-opus-5`, and max effort passes provider model validation but
+is rejected before Kiro at `context_management`, which has no proven native
+equivalent. The provider does not discard it. Direct Opus 5 Messages JSON/SSE
+within the verified subset passes; the standard Claude Code configuration
+below remains a compatibility probe rather than a full support claim:
 
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
-export ANTHROPIC_AUTH_TOKEN="sk-your-private-key"
-claude
+export ANTHROPIC_API_KEY="sk-your-private-key"
+claude --bare --safe-mode --model claude-opus-5 --effort max
 ```
 
 The gateway accepts either `Authorization: Bearer <key>` or `x-api-key:
@@ -665,7 +659,7 @@ an explicit estimate. See
 [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 
 The current compiled-service validation record is in
-[`docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md).
+[`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
 The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
 is retained as historical v0.4 evidence only.
 
