@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/sunerpy/kiro-provider/compare/v0.4.0...v0.5.0) (2026-08-29)
+
+
+### Features
+
+* add Claude Opus 5 support ([b223952](https://github.com/sunerpy/kiro-provider/commit/b22395200bc69b87d5af9442f34e6a86f68e7daa))
+* add production account management commands ([#14](https://github.com/sunerpy/kiro-provider/issues/14)) ([71a5027](https://github.com/sunerpy/kiro-provider/commit/71a5027c417a04833c3ba1ebe305d28ce209bf74))
+* harden protocol fidelity and local auth lifecycle ([#13](https://github.com/sunerpy/kiro-provider/issues/13)) ([5e84aa3](https://github.com/sunerpy/kiro-provider/commit/5e84aa34054d848809e5a4f1882405b21aef66aa))
+* harden protocol projection for v0.5.0-rc.1 ([af5069a](https://github.com/sunerpy/kiro-provider/commit/af5069a482ba78ccb9895c489420b6ac919cce9f))
+
+
+### Bug Fixes
+
+* harden responses streaming and session affinity ([#10](https://github.com/sunerpy/kiro-provider/issues/10)) ([f48803f](https://github.com/sunerpy/kiro-provider/commit/f48803f3ed5d8d1aa336c1a226bdb639d0212fd3))
+* preserve typed stream failures ([ce70491](https://github.com/sunerpy/kiro-provider/commit/ce704919749798ec9db6b83d7ca68ce57f8b9c91))
+* preserve typed stream failures ([c836f9a](https://github.com/sunerpy/kiro-provider/commit/c836f9a590e93d3590b3c16e91bf9f3dbc0fdb03))
+* preserve typed stream failures ([#15](https://github.com/sunerpy/kiro-provider/issues/15)) ([ce70491](https://github.com/sunerpy/kiro-provider/commit/ce704919749798ec9db6b83d7ca68ce57f8b9c91))
+
 ## [0.4.0](https://github.com/sunerpy/kiro-provider/compare/v0.3.1...v0.4.0) (2026-08-24)
 
 
