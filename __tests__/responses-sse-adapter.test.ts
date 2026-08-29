@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SdkStreamProtocolError,
+  SemanticStreamTruncationError,
+} from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
+import {
   CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
   CANONICAL_OUTPUT_VERSION,
 } from "../src/protocol/output.js";
@@ -207,6 +211,7 @@ function makeHarness(
   parts: readonly Uint8Array[],
   end: "abort" | "close" | "stall" | "error" = "close",
   model = "gpt-5.6-sol",
+  errorReason: unknown = new TypeError("upstream read failed"),
 ): {
   readonly response: Response;
   readonly state: HarnessState;
@@ -220,7 +225,7 @@ function makeHarness(
       controller.enqueue(encoder.encode(`${startedEvent(model)}\n`));
       for (const part of parts) controller.enqueue(part);
       if (end === "close") controller.close();
-      if (end === "error") controller.error(new TypeError("upstream read failed"));
+      if (end === "error") controller.error(errorReason);
       if (end === "abort") controller.error(new DOMException("deadline exceeded", "AbortError"));
     },
     cancel(reason) {
@@ -638,6 +643,14 @@ describe("responsesSseAdapter", () => {
       "response.failed",
     ]);
     expect(terminalTypes(events)).toEqual(["response.failed"]);
+    expect(events.at(-1)?.body).toMatchObject({
+      response: {
+        error: {
+          code: "upstream_stream_incomplete",
+          message: "Upstream stream ended before completion",
+        },
+      },
+    });
     expect(harness.state.finalizeCount).toBe(1);
   });
 
@@ -976,6 +989,9 @@ describe("responsesSseAdapter", () => {
     const events = await adapt(harness);
 
     expect(terminalTypes(events)).toEqual(["response.failed"]);
+    expect(events.at(-1)?.body).toMatchObject({
+      response: { error: { code: "upstream_protocol_error" } },
+    });
     expect(events.some((event) => event.type === "response.completed")).toBe(false);
     expect(harness.state.cancelReasons).toHaveLength(1);
     expect(harness.state.finalizeCount).toBe(1);
@@ -987,9 +1003,55 @@ describe("responsesSseAdapter", () => {
     const events = await adapt(harness);
 
     expect(events.map((event) => event.type)).toEqual(["response.created", "response.failed"]);
+    expect(events.at(-1)?.body).toMatchObject({
+      response: { error: { code: "upstream_stream_error" } },
+    });
     expect(harness.state.cancelAttempts).toHaveLength(1);
     expect(harness.state.cancelReasons).toHaveLength(0);
     expect(harness.state.finalizeCount).toBe(1);
+  });
+
+  test("preserves a typed upstream stream failure code", async () => {
+    const events = await adapt(
+      makeHarness(
+        [],
+        "error",
+        "gpt-5.6-sol",
+        new SemanticStreamTruncationError(),
+      ),
+    );
+
+    expect(events.at(-1)?.body).toMatchObject({
+      response: {
+        error: {
+          code: "upstream_stream_incomplete",
+          message: "Upstream stream ended before completion",
+        },
+      },
+    });
+  });
+
+  test("preserves a typed fatal protocol code", async () => {
+    const events = await adapt(
+      makeHarness(
+        [],
+        "error",
+        "gpt-5.6-sol",
+        new SdkStreamProtocolError(
+          "private tool detail",
+          "invalid_upstream_tool_call",
+        ),
+      ),
+    );
+
+    expect(events.at(-1)?.body).toMatchObject({
+      response: {
+        error: {
+          code: "invalid_upstream_tool_call",
+          message: "Upstream returned an invalid tool call",
+        },
+      },
+    });
   });
 
   test("fails, attempts wrapped cancellation, and finalizes once on deadline abort", async () => {
@@ -998,6 +1060,9 @@ describe("responsesSseAdapter", () => {
     const events = await adapt(harness);
 
     expect(terminalTypes(events)).toEqual(["response.failed"]);
+    expect(events.at(-1)?.body).toMatchObject({
+      response: { error: { code: "upstream_stream_error" } },
+    });
     expect(harness.state.cancelAttempts).toHaveLength(1);
     expect(harness.state.finalizeCount).toBe(1);
   });
@@ -1277,6 +1342,9 @@ describe("responsesSseAdapter", () => {
         const events = parseEvents(await within(text, "already-aborted deadline response"));
 
         expect(terminalTypes(events)).toEqual(["response.failed"]);
+        expect(events.at(-1)?.body).toMatchObject({
+          response: { error: { code: "request_deadline_exceeded" } },
+        });
         expect(harness.state.finalizeCount).toBe(1);
         expect(harness.state.cancelAttempts).toHaveLength(1);
         signalProbe.assertRemoved();
@@ -1465,6 +1533,9 @@ describe("responsesSseAdapter", () => {
         const events = parseEvents(await within(text, "deadline response before late resolution"));
 
         expectSingleFailureWithoutLateOutput(events);
+        expect(events.at(-1)?.body).toMatchObject({
+          response: { error: { code: "request_deadline_exceeded" } },
+        });
         expect(harness.state.finalizeCount).toBe(1);
         expect(harness.state.cancelAttempts).toHaveLength(1);
         signalProbe.assertRemoved();

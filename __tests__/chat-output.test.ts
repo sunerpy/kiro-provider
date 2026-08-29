@@ -246,7 +246,8 @@ describe("canonical Chat output", () => {
       () => undefined,
       { expectedModel: "claude-sonnet-5" },
     ).text();
-    expect(incomplete).toContain('"type":"upstream_protocol_error"');
+    expect(incomplete).toContain('"type":"upstream_error"');
+    expect(incomplete).toContain('"code":"upstream_stream_incomplete"');
 
     const malformed = await canonicalOutputToChatSse(
       new Response("{"),
@@ -255,6 +256,30 @@ describe("canonical Chat output", () => {
       { expectedModel: "claude-sonnet-5" },
     ).text();
     expect(malformed).toContain('"type":"upstream_protocol_error"');
+    expect(malformed).toContain('"code":"upstream_protocol_error"');
+  });
+
+  test("preserves a typed reader failure code", async () => {
+    const error = Object.assign(new Error("typed failure"), {
+      code: "upstream_stream_idle_timeout",
+    });
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(error);
+        },
+      }),
+    );
+
+    const text = await canonicalOutputToChatSse(
+      response,
+      activeSignals(),
+      () => undefined,
+      { expectedModel: "claude-sonnet-5" },
+    ).text();
+
+    expect(text).toContain('"type":"upstream_error"');
+    expect(text).toContain('"code":"upstream_stream_idle_timeout"');
   });
 
   test("uses safe default abort reasons for non-Error signal values", async () => {

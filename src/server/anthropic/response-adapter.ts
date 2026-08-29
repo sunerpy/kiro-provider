@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
+  normalizeStreamFailure,
+  type StreamFailure,
+  streamFailure,
+} from "../../core/stream-error.js";
+import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
   type CanonicalOutputUsage,
@@ -29,6 +34,24 @@ type ToolAccumulator = {
   name: string;
   arguments: string;
 };
+
+type AnthropicTerminalFailure = {
+  readonly message: string;
+  readonly type: "api_error" | "overloaded_error";
+};
+
+function toAnthropicFailure(
+  failure: StreamFailure,
+  message = failure.message,
+): AnthropicTerminalFailure {
+  return {
+    message,
+    type:
+      failure.disposition === "retryable"
+        ? "overloaded_error"
+        : "api_error",
+  };
+}
 
 function formatEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -164,7 +187,7 @@ export function anthropicSseAdapter(
   const beginTerminal = (
     outcome: AdapterOutcome,
     reason?: unknown,
-    failure?: { readonly message: string; readonly type?: "api_error" | "overloaded_error" },
+    failure?: AnthropicTerminalFailure,
   ): void => {
     if (!claimTerminal(outcome)) return;
     runCleanupSteps(
@@ -186,14 +209,29 @@ export function anthropicSseAdapter(
     void boundedCleanup(() => reader.cancel(reason));
   };
   const failProtocol = (message: string): void => {
-    beginTerminal("upstream-protocol-error", undefined, { message });
+    beginTerminal(
+      "upstream-protocol-error",
+      undefined,
+      toAnthropicFailure(streamFailure("upstream_protocol_error"), message),
+    );
+  };
+  const failIncomplete = (): void => {
+    beginTerminal(
+      "upstream-error",
+      undefined,
+      toAnthropicFailure(streamFailure("upstream_stream_incomplete")),
+    );
   };
   const onDeadlineAbort = (): void => {
     const reason =
       options.signals.deadline.reason instanceof Error
         ? options.signals.deadline.reason
         : new DOMException("Request deadline exceeded", "TimeoutError");
-    beginTerminal("deadline", reason, { message: "Request deadline exceeded" });
+    beginTerminal(
+      "deadline",
+      reason,
+      toAnthropicFailure(streamFailure("request_deadline_exceeded")),
+    );
   };
   const onClientAbort = (): void => {
     const reason =
@@ -494,14 +532,19 @@ export function anthropicSseAdapter(
                 if (terminalOutcome !== undefined) return;
               }
             }
-            failProtocol("Upstream stream ended before completion");
+            failIncomplete();
             return;
           }
         } catch (error) {
           if (terminalOutcome !== undefined) return;
-          beginTerminal("upstream-error", error, {
-            message: "Upstream stream error",
-          });
+          const failure = normalizeStreamFailure(error);
+          beginTerminal(
+            failure.disposition === "fatal"
+              ? "upstream-protocol-error"
+              : "upstream-error",
+            error,
+            toAnthropicFailure(failure),
+          );
         }
       },
       cancel(reason) {

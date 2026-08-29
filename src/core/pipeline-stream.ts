@@ -9,6 +9,7 @@ import { CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } from "../protocol/output.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import { abortReason } from "./pipeline-runtime.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
+import { streamErrorAuditFields } from "./stream-error.js";
 
 export interface PipelineStreamResult {
   readonly sdkResponse: SdkStreamResponse;
@@ -23,6 +24,7 @@ export interface PipelineStreamResult {
 
 class StreamIdleTimeoutError extends Error {
   readonly name = "StreamIdleTimeoutError";
+  readonly code = "upstream_stream_idle_timeout";
 
   constructor(readonly timeoutMs: number) {
     super(`SDK stream idle timeout after ${timeoutMs}ms`);
@@ -143,6 +145,7 @@ export function createPipelineStreamResponse(
           const error = new StreamIdleTimeoutError(idleTimeoutMs);
           auditLog("warn", "sdk_stream_idle_timeout", {
             ...streamAuditFields(),
+            ...streamErrorAuditFields(error),
             idle_timeout_ms: idleTimeoutMs,
           });
           beginTerminal("idle-timeout", error);
@@ -169,7 +172,7 @@ export function createPipelineStreamResponse(
                 });
           auditLog("warn", "sdk_stream_upstream_error", {
             ...streamAuditFields(),
-            error_type: streamError.name,
+            ...streamErrorAuditFields(streamError),
           });
           beginTerminal("upstream-error", streamError);
         }
