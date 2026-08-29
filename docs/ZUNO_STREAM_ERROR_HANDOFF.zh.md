@@ -135,3 +135,20 @@ if matches!(
 Provider 的完整跨协议定义见
 [STREAM_ERROR_CONTRACT.md](STREAM_ERROR_CONTRACT.md)。本次 Provider 正式版
 不修改 Zuno 仓库、配置或数据库。
+
+## 8. Provider v0.5.0 发布门禁
+
+stream 实现合并到主工作区后执行的源码门禁：
+
+- `make ci`：`891 pass / 0 fail`；
+- `make coverage-gate`：`13775/14720 = 93.58%`，高于 `93%` 门槛；
+- `make fmt-check`：通过；
+- `make coverage-parity`：通过；
+- `make security`：`7/7` 通过；
+- `make codex-smoke-security`：通过；
+- `bun run build`、`bun run build:binary`、`bun run build:npm`：全部通过；
+- CodeGraph：`173` files、`2677` nodes、`10847` edges，无待同步文件。
+
+受限沙箱内的 Bun 临时端口测试会统一返回 `EADDRINUSE`；同一主工作区、同一
+提交在正常本机网络命名空间原样重跑后为上述 `891/891` 全部通过。该现象是
+测试执行环境限制，不是 Provider 端口竞争或产品回归。
