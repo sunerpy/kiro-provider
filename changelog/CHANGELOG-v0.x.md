@@ -14,8 +14,6 @@
 ### Bug Fixes
 
 * harden responses streaming and session affinity ([#10](https://github.com/sunerpy/kiro-provider/issues/10)) ([f48803f](https://github.com/sunerpy/kiro-provider/commit/f48803f3ed5d8d1aa336c1a226bdb639d0212fd3))
-* preserve typed stream failures ([ce70491](https://github.com/sunerpy/kiro-provider/commit/ce704919749798ec9db6b83d7ca68ce57f8b9c91))
-* preserve typed stream failures ([c836f9a](https://github.com/sunerpy/kiro-provider/commit/c836f9a590e93d3590b3c16e91bf9f3dbc0fdb03))
 * preserve typed stream failures ([#15](https://github.com/sunerpy/kiro-provider/issues/15)) ([ce70491](https://github.com/sunerpy/kiro-provider/commit/ce704919749798ec9db6b83d7ca68ce57f8b9c91))
 
 ## [0.4.0](https://github.com/sunerpy/kiro-provider/compare/v0.3.1...v0.4.0) (2026-08-24)
