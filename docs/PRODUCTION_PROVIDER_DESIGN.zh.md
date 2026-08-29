@@ -194,13 +194,14 @@ metering 则必须随后 clean EOF 才可证明完成。旧 `q` 方言只保留�
   账号/conversation 哈希、亲和来源和连接池命中；
 - 日志不记录 API key、token、签名、reasoning、工具 payload 或 prompt 正文。
 
-## 8. v0.5.0-rc.4 真实客户端与本地认证门禁
+## 8. v0.5.0-rc.5 真实客户端与本地认证门禁
 
 所有测试均使用编译后二进制；客户端只配置标准 base URL、API key 和模型。
 
 | 门禁 | 当前结果 |
 | --- | --- |
 | 一次导入后的本地认证 | 通过；OpenCode 数据库路径不存在时仍独立刷新故意过期的 access token 与陈旧 usage |
+| Provider 账号运维 | RC.5 通过；编译后二进制列出 42 个本地账号，并在 3.911 秒内完成 42/42 权威 usage 刷新，0 失败、0 超时 |
 | 官方 OpenAI JavaScript SDK 7.5.0 | 使用 Opus 5 通过 Responses 流式/非流式、显式 Chat、function 工具续轮与直接 Messages JSON/SSE |
 | RC.4 官方 SDK 本地认证 E2E | 通过两轮标准 Responses；无需实时共享认证库或跨进程锁 |
 | reasoning 重启回放 | RC.3 通过；同账号、同 conversation，服务重启后签名回放成功 |
@@ -211,11 +212,12 @@ metering 则必须随后 clean EOF 才可证明完成。旧 `q` 方言只保留�
 | Zuno | 按范围未重跑，且未修改 Zuno 源码或配置；RC.1 只作历史集成证据 |
 | Web Search | 明确 `unsupported_web_search`，无伪事件 |
 
-因此可以发布预发布版 `v0.5.0-rc.4` 收集兼容反馈，但不能发布稳定版
+因此可以发布预发布版 `v0.5.0-rc.5` 收集兼容反馈，但不能发布稳定版
 `v0.5.0`。不能通过忽略字段、请求补丁、私有 Header 或拼接提示词把上述阻塞
 伪装成通过。
 
 详细证据见
+[RC.5 账号管理验收报告](audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)、
 [RC.4 本地认证验收报告](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)、
 [RC.3 协议验收报告](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)
 和 [Kiro 原生探针](audits/kiro-protocol-projection-probe-2026-08-26.md)。

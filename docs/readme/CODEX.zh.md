@@ -3,9 +3,9 @@
 kiro-provider 提供 `POST /v1/responses`。Codex 自定义 `model_provider` 设置
 `wire_api = "responses"` 时会使用该协议。
 
-## v0.5.0-rc.4 当前状态
+## v0.5.0-rc.5 当前状态
 
-RC.4 修改的是本地认证权威与维护，不改变这里的协议投影边界。最近一次 Codex
+RC.5 增加的是 provider 自有账号运维与真实用量刷新，不改变这里的协议投影边界。最近一次 Codex
 门禁于 2026-08-27 使用编译后二进制和 **Codex CLI 0.150.0-alpha.9**；
 客户端只配置标准 base URL、API key、模型和 reasoning effort。
 `claude-opus-5-max` 已通过 Provider 模型校验。调用 Kiro 前的第一个字段级
@@ -59,7 +59,9 @@ reasoning 回放，才能标记为支持。
 `kiro-provider accounts import` 填充 provider 自有本地认证库；带鉴权的
 `GET /ready` 必须返回 200。验收契约不包含私有 Header 或请求改写代理。
 
-RC.4 认证生命周期证据见
+RC.5 账号管理证据见
+[`../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)。
+RC.4 认证生命周期证据保留在
 [`../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
 最近一次 Codex 协议证据仍为
 [`../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。

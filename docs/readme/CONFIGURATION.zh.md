@@ -13,7 +13,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为 `~/.config/kiro-provider/config.json`，若设置了 `XDG_CONFIG_HOME`，则为 `$XDG_CONFIG_HOME/kiro-provider/config.json`。账号管理子命令（`accounts list|import|remove`）只操作 provider 自有本地认证库，不加载网关配置，也不要求 `api_keys`。
+配置文件默认路径为 `~/.config/kiro-provider/config.json`，若设置了 `XDG_CONFIG_HOME`，则为 `$XDG_CONFIG_HOME/kiro-provider/config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域和代理设置，并要求 `auth_source: "local"`。
 
 ## 字段参考
 
@@ -88,6 +88,33 @@ kiro-provider accounts import --from /path/to/kiro.db
 - 只在持久化复查时间到期时探测耗尽账号，并仅在权威快照确认额度恢复后回池；
 - 将永久失效的 refresh credential 标记为不健康，不让其进入模型重试循环；
 - 去重同账号探测，并限制后台维护并发。
+
+本地账号库可完全脱离 OpenCode 进行运维：
+
+```bash
+kiro-provider accounts list
+kiro-provider accounts list --details
+kiro-provider accounts list --json
+kiro-provider accounts refresh --all
+kiro-provider accounts refresh <id|email> --json
+kiro-provider accounts relogin <id|email>
+kiro-provider accounts remove <id|email>
+```
+
+默认列表为对齐后的摘要；`--details` 与 `--json` 会显示用于消歧重复邮箱的稳定
+内部 ID，但绝不包含 access token、refresh token 或 client secret。邮箱匹配不区分
+大小写，且只有唯一匹配时才允许继续。
+
+手工 refresh 始终调用 Kiro 权威用量接口，包括刚刷新过或当前已耗尽的账号；
+仅在 access token 临近到期，或收到一次 invalid-bearer 响应后才刷新 token。
+只要任一账号失败、超时或需要重新登录，命令就返回非零退出码，并给出逐账号
+结果；`--json` 可用于监控。后台维护仍会自动完成临期 token 刷新、普通账号
+用量刷新以及耗尽账号的周期性额度恢复探测。
+
+`accounts relogin` 会先解析目标，再打开设备授权，并在写入凭证前通过 Kiro usage
+邮箱校验实际登录身份。它保留所选内部账号 ID，因此已有会话亲和仍可继续引用
+同一账号。`accounts remove` 默认要求确认；非交互删除必须使用 `--yes`，且会
+一并删除该账号的持久化亲和、输出 lineage 与 reasoning replay 记录。
 
 一个会轮换的 refresh token 只应由一个认证所有者维护。导入后继续让独立运行
 的 OpenCode 插件使用同一账号可能产生 token 轮换竞争；再次导入应是明确的

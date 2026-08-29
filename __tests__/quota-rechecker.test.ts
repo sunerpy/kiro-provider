@@ -412,4 +412,127 @@ describe("QuotaRechecker", () => {
 		expect(healthy.failCount).toBe(10);
 		expect(manager.unhealthy).toHaveLength(1);
 	});
+
+	test("manual refresh bypasses fresh and future-quota schedules", async () => {
+		const fresh = account("fresh-manual", {
+			usedCount: 20,
+			limitCount: 100,
+			lastSync: 999_999,
+		});
+		const exhausted = account("exhausted-manual", {
+			rateLimitResetTime: 9_999_999,
+		});
+		const manager = new FakeManager([fresh, exhausted]);
+		const fetched: string[] = [];
+		const service = rechecker(manager, new FakeRefresher(), async (auth) => {
+			fetched.push(auth.email ?? "");
+			return auth.email === fresh.email
+				? { usedCount: 25, limitCount: 100, overageCount: 0 }
+				: { usedCount: 0, limitCount: 100, overageCount: 0 };
+		});
+
+		const summary = await service.refreshAccounts(
+			[fresh, exhausted],
+			new AbortController().signal,
+		);
+
+		expect(fetched.sort()).toEqual([exhausted.email, fresh.email].sort());
+		expect(summary).toMatchObject({
+			totalAccounts: 2,
+			tokenRenewed: 0,
+			usageUpdated: 2,
+			failed: 0,
+			timedOut: false,
+		});
+		expect(fresh.usedCount).toBe(25);
+		expect(isQuotaExhausted(exhausted)).toBe(false);
+	});
+
+	test("manual refresh reports token renewal without exposing credentials", async () => {
+		const selected = account("renewed-manual", {
+			usedCount: 1,
+			limitCount: 100,
+		});
+		const manager = new FakeManager([selected]);
+		const refresher = new FakeRefresher();
+		refresher.refreshIfNeeded = async (candidate) => {
+			refresher.refreshCalls += 1;
+			candidate.accessToken = "rotated-access-secret";
+			candidate.expiresAt += 60_000;
+			return candidate;
+		};
+		const service = rechecker(manager, refresher, async () => ({
+			usedCount: 2,
+			limitCount: 100,
+			overageCount: 0,
+		}));
+
+		const summary = await service.refreshAccounts(
+			[selected],
+			new AbortController().signal,
+		);
+		const serialized = JSON.stringify(summary);
+
+		expect(summary.tokenRenewed).toBe(1);
+		expect(summary.accounts[0]).toMatchObject({
+			tokenStatus: "renewed",
+			usageStatus: "updated",
+		});
+		expect(serialized).not.toContain("rotated-access-secret");
+		expect(serialized).not.toContain(selected.refreshToken);
+	});
+
+	test("manual refresh reports permanent credentials as needing re-login", async () => {
+		const selected = account("dead-manual", {
+			isHealthy: false,
+			unhealthyReason: "invalid_grant",
+		});
+		const manager = new FakeManager([selected]);
+		let fetchCalls = 0;
+		const service = rechecker(manager, new FakeRefresher(), async () => {
+			fetchCalls += 1;
+			return { usedCount: 0, limitCount: 100, overageCount: 0 };
+		});
+
+		const summary = await service.refreshAccounts(
+			[selected],
+			new AbortController().signal,
+		);
+
+		expect(fetchCalls).toBe(0);
+		expect(summary.failed).toBe(1);
+		expect(summary.accounts[0]).toMatchObject({
+			tokenStatus: "skipped_unhealthy",
+			usageStatus: "skipped",
+			error: "Account needs re-login before its usage can be refreshed.",
+		});
+	});
+
+	test("manual refresh emits terminal timeout results for unstarted accounts", async () => {
+		const selected = account("timeout-manual");
+		const manager = new FakeManager([selected]);
+		const service = rechecker(manager, new FakeRefresher(), async () => ({
+			usedCount: 0,
+			limitCount: 100,
+			overageCount: 0,
+		}));
+		const controller = new AbortController();
+		controller.abort(new DOMException("deadline", "TimeoutError"));
+
+		const summary = await service.refreshAccounts(
+			[selected],
+			controller.signal,
+		);
+
+		expect(summary).toMatchObject({
+			totalAccounts: 1,
+			usageUpdated: 0,
+			failed: 1,
+			timedOut: true,
+		});
+		expect(summary.accounts[0]).toMatchObject({
+			tokenStatus: "timeout",
+			usageStatus: "timeout",
+		});
+	});
 });

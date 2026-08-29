@@ -3,9 +3,9 @@
 kiro-provider exposes `POST /v1/messages` and
 `POST /v1/messages/count_tokens` for Anthropic-compatible clients.
 
-## Current v0.5.0-rc.4 status
+## Current v0.5.0-rc.5 status
 
-RC.4 changes local authentication ownership and maintenance, not this protocol
+RC.5 adds provider-owned account operations and live usage refresh, not this protocol
 projection boundary. The latest compiled-service Claude Code gate on 2026-08-27 used
 **Claude Code 2.1.209** with only
 the standard `ANTHROPIC_BASE_URL`, API key, `claude-opus-5`, and max effort.
@@ -45,7 +45,9 @@ one-time `kiro-provider accounts import`, and require authenticated
 `GET /ready` to return 200 before running the probe. The gateway root is used
 as the base URL; do not append `/v1`.
 
-See the RC.4 authentication lifecycle evidence in
+See the RC.5 account-management evidence in
+[`audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
+The RC.4 authentication lifecycle evidence remains in
 [`audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
 The latest Claude Code protocol evidence remains
 [`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).

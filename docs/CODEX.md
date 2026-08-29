@@ -3,9 +3,9 @@
 kiro-provider exposes `POST /v1/responses`, which is the wire API used by a
 Codex custom `model_provider` when `wire_api = "responses"` is selected.
 
-## Current v0.5.0-rc.4 status
+## Current v0.5.0-rc.5 status
 
-RC.4 changes local authentication ownership and maintenance, not this protocol
+RC.5 adds provider-owned account operations and live usage refresh, not this protocol
 projection boundary. The latest compiled-service Codex gate on 2026-08-27 used Codex CLI
 **0.150.0-alpha.9** with only a standard base URL, API key, model, and
 reasoning-effort setting. `claude-opus-5-max` passes provider model validation.
@@ -64,7 +64,9 @@ populated by `kiro-provider login` or a one-time
 200. No private header or request-rewrite proxy is part of the acceptance
 contract.
 
-See the RC.4 authentication lifecycle evidence in
+See the RC.5 account-management evidence in
+[`audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
+The RC.4 authentication lifecycle evidence remains in
 [`audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
 The latest Codex protocol evidence remains
 [`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).

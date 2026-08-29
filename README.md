@@ -195,6 +195,14 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
    Avoid continuing to use the same imported refresh tokens from two
    independently running authentication owners.
 
+   Inspect or refresh the provider-owned account pool at any time:
+
+   ```bash
+   ./dist/kiro-provider accounts list
+   ./dist/kiro-provider accounts list --details
+   ./dist/kiro-provider accounts refresh --all
+   ```
+
 3. **Start the gateway.**
 
    ```bash
@@ -569,9 +577,11 @@ resend the complete input.
 
 - `kiro-provider serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]` — start the gateway.
 - `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` — authenticate directly into the provider-owned local store.
-- `kiro-provider accounts list` — list accounts in the provider-owned local store.
+- `kiro-provider accounts list [--details | --json]` — show aligned account health/usage; details and JSON include the stable account ID but never credentials.
+- `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` — bypass the usage cache, refresh authoritative Kiro usage, and renew an access token only when needed or rejected upstream.
+- `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` — re-authenticate a selected account after Kiro identity verification while preserving its internal ID and session-affinity references.
 - `kiro-provider accounts import [--from <path>] [--config <path>]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; no live database link remains.
-- `kiro-provider accounts remove <id|email>` — remove one account from the provider-owned local store.
+- `kiro-provider accounts remove <id|email> [--yes]` — remove one account and its affinity/lineage/reasoning state; interactive confirmation is required unless `--yes` is supplied.
 
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.
 
@@ -699,7 +709,9 @@ subset support typed JSON/SSE and tools, while `/v1/messages/count_tokens` is
 an explicit estimate. See
 [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 
-The current local-auth lifecycle validation record is in
+The current account-management and live-usage validation record is in
+[`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
+The preceding local-auth lifecycle record is retained in
 [`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
 The preceding protocol/client matrix is retained in
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
