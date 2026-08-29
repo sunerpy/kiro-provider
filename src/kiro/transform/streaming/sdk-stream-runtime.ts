@@ -7,6 +7,7 @@ export interface ToolCallState {
   readonly toolUseId: string
   readonly name: string
   input: string
+  stopped: boolean
 }
 
 export interface SdkTokenUsage {
@@ -20,6 +21,10 @@ export interface SdkTokenUsage {
 }
 
 export interface SdkStreamEvent {
+  readonly messageMetadataEvent?: {
+    readonly conversationId?: string
+    readonly utteranceId?: string
+  }
   readonly reasoningContentEvent?: {
     readonly text?: string
     readonly signature?: string
@@ -37,6 +42,104 @@ export interface SdkStreamEvent {
     readonly contextUsagePercentage?: number
   }
   readonly contextUsageEvent?: { readonly contextUsagePercentage?: number }
+  readonly meteringEvent?: {
+    readonly usage?: number
+    readonly unit?: string
+    readonly unitPlural?: string
+  }
+  readonly invalidStateEvent?: {
+    readonly reason?: string
+    readonly message?: string
+  }
+  readonly error?: unknown
+  readonly $unknown?: readonly [string, unknown]
+}
+
+const SAFE_STREAM_EVENT_TYPES = new Set([
+  'assistantResponseEvent',
+  'contextUsageEvent',
+  'messageMetadataEvent',
+  'metadataEvent',
+  'meteringEvent',
+  'reasoningContentEvent',
+  'toolUseEvent'
+])
+
+export class SemanticStreamTruncationError extends Error {
+  readonly name = 'SemanticStreamTruncationError'
+  readonly code = 'upstream_stream_incomplete'
+
+  constructor() {
+    super('Kiro event stream ended before an authoritative completion witness')
+  }
+}
+
+export class SdkStreamProtocolError extends Error {
+  readonly name = 'SdkStreamProtocolError'
+
+  constructor(
+    message: string,
+    readonly code: string
+  ) {
+    super(message)
+  }
+}
+
+export function sdkEventTypes(event: SdkStreamEvent): readonly string[] {
+  const record = event as Readonly<Record<string, unknown>>
+  const eventTypes = Object.keys(record)
+    .filter(
+      (key) =>
+        (key.endsWith('Event') || key === 'error' || key === '$unknown') &&
+        record[key] !== undefined
+    )
+    .sort()
+  return eventTypes.length > 0 ? eventTypes : ['unknown']
+}
+
+export function isCompletionMetadataEvent(event: SdkStreamEvent): boolean {
+  const tokenUsage = event.metadataEvent?.tokenUsage
+  return typeof tokenUsage === 'object' && tokenUsage !== null
+}
+
+export function isCompletionMeteringEvent(event: SdkStreamEvent): boolean {
+  const metering = event.meteringEvent
+  return (
+    typeof metering?.usage === 'number' &&
+    Number.isFinite(metering.usage) &&
+    metering.usage >= 0 &&
+    typeof metering.unit === 'string' &&
+    metering.unit.length > 0
+  )
+}
+
+export function assertSupportedSdkEvent(event: SdkStreamEvent): void {
+  const eventTypes = sdkEventTypes(event)
+  if (event.error !== undefined) {
+    throw new SdkStreamProtocolError(
+      'Kiro returned an embedded stream error',
+      'upstream_stream_error'
+    )
+  }
+  if (event.invalidStateEvent !== undefined) {
+    throw new SdkStreamProtocolError(
+      'Kiro returned an invalid stream state',
+      'upstream_invalid_state'
+    )
+  }
+  if (event.$unknown !== undefined || eventTypes.includes('unknown')) {
+    throw new SdkStreamProtocolError(
+      'Kiro returned an unknown stream event',
+      'unsupported_upstream_event'
+    )
+  }
+  const unsupported = eventTypes.find((eventType) => !SAFE_STREAM_EVENT_TYPES.has(eventType))
+  if (unsupported !== undefined) {
+    throw new SdkStreamProtocolError(
+      `Kiro returned unsupported stream event type ${unsupported}`,
+      'unsupported_upstream_event'
+    )
+  }
 }
 
 export interface SdkReasoningCapture {
@@ -58,6 +161,10 @@ export type SdkReasoningCaptureHandler = (
 ) => string | undefined
 
 export type SdkOutputFingerprint = (output: CanonicalAssistantOutput) => string
+export type SdkOutputCaptureHandler = (
+  output: CanonicalAssistantOutput,
+  outputFingerprint: string
+) => void
 
 export function createReasoningCaptureState(): SdkReasoningCaptureState {
   return { text: '', signature: '', signatureConflict: false, redactedChunks: [] }
@@ -154,19 +261,58 @@ export function appendToolFragment(
   toolCalls: Map<string, ToolCallState>,
   event: SdkStreamEvent['toolUseEvent']
 ): void {
-  if (!event?.name || !event.toolUseId) return
+  if (!event) return
+  if (!event.name || !event.toolUseId) {
+    throw new SdkStreamProtocolError(
+      'Kiro emitted a tool call without both name and toolUseId',
+      'invalid_upstream_tool_call'
+    )
+  }
 
   const existing = toolCalls.get(event.toolUseId)
   if (existing) {
+    if (existing.name !== event.name) {
+      throw new SdkStreamProtocolError(
+        'Kiro changed a tool name while streaming one tool call',
+        'invalid_upstream_tool_call'
+      )
+    }
+    if (existing.stopped && (event.input ?? '').length > 0) {
+      throw new SdkStreamProtocolError(
+        'Kiro emitted tool arguments after the tool call stopped',
+        'invalid_upstream_tool_call'
+      )
+    }
     existing.input += event.input ?? ''
+    existing.stopped ||= event.stop === true
     return
   }
 
   toolCalls.set(event.toolUseId, {
     toolUseId: event.toolUseId,
     name: event.name,
-    input: event.input ?? ''
+    input: event.input ?? '',
+    stopped: event.stop === true
   })
+}
+
+export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCallState>): void {
+  for (const toolCall of toolCalls.values()) {
+    if (!toolCall.stopped) {
+      throw new SdkStreamProtocolError(
+        `Kiro ended before tool call ${toolCall.toolUseId} emitted its stop marker`,
+        'incomplete_upstream_tool_call'
+      )
+    }
+    try {
+      JSON.parse(toolCall.input)
+    } catch {
+      throw new SdkStreamProtocolError(
+        `Kiro returned invalid JSON arguments for tool call ${toolCall.toolUseId}`,
+        'invalid_upstream_tool_call'
+      )
+    }
+  }
 }
 
 export function updateUsageState(usage: UsageState, event: SdkStreamEvent): void {

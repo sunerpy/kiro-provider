@@ -74,7 +74,7 @@ export function normalizeSdkError(error: unknown): NormalizedSdkError {
 
 	const status = readStatus(error);
 	const message = readString(error, "message") ?? String(error);
-	const code = readString(error, "name");
+	const code = readString(error, "code") ?? readString(error, "name");
 	const reason = readString(error, "reason");
 	const headers = readHeaders(error);
 	return {
@@ -125,18 +125,24 @@ export function classifyError(
 	}
 
 	switch (error.status) {
-		case 400:
-			return {
-				action: "fail",
-				status: 400,
-				terminalStatus: isKiroContextOverflowBody(error.message) ? 413 : 400,
-			};
-		case 401:
-			return context.retryCount < context.maxRetries
-				? { action: "retry", status: 401 }
-				: { action: "fail", status: 401, terminalStatus: 401 };
-		case 402:
-			return { action: "fail", status: 402, terminalStatus: 402 };
+			case 400:
+				return {
+					action: "fail",
+					status: 400,
+					terminalStatus: isKiroContextOverflowBody(error.message) ? 413 : 400,
+				};
+			case 401:
+				if (!context.forcedRefreshAccountIds.has(context.accountId)) {
+					context.forcedRefreshAccountIds.add(context.accountId);
+					return { action: "refresh-then-retry", status: 401 };
+				}
+				return context.accountCount > 1
+					? { action: "switch", status: 401 }
+					: { action: "fail", status: 401, terminalStatus: 401 };
+			case 402:
+				return context.accountCount > 1
+					? { action: "switch", status: 402 }
+					: { action: "fail", status: 402, terminalStatus: 402 };
 		case 403:
 			if (isAccessTokenError(error.message)) {
 				if (!context.forcedRefreshAccountIds.has(context.accountId)) {

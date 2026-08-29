@@ -1,9 +1,7 @@
 import { z } from "zod";
-import { EXPECTED_PUBLIC_MODEL_IDS } from "../kiro/model-catalog.js";
 import { openAiError } from "./errors.js";
 
 const JsonObjectSchema = z.record(z.unknown());
-const PUBLIC_MODEL_IDS: ReadonlySet<string> = new Set(EXPECTED_PUBLIC_MODEL_IDS);
 const OpenAiMetadataSchema = z.record(z.string()).superRefine((metadata, context) => {
   const entries = Object.entries(metadata);
   if (entries.length > 16) {
@@ -184,9 +182,7 @@ const AnthropicToolSchema = z
 
 export const ChatCompletionRequestSchema = z
   .object({
-    model: z.string().refine((model) => PUBLIC_MODEL_IDS.has(model), {
-      message: "model is not supported",
-    }),
+    model: z.string().trim().min(1),
     stream: z.boolean().default(false),
     stream_options: z
       .object({ include_usage: z.boolean().optional() })
@@ -245,6 +241,15 @@ const ResponsesInputImagePartSchema = z
   .object({ type: z.literal("input_image"), image_url: z.string() })
   .passthrough();
 
+const ResponsesInputFilePartSchema = z
+  .object({
+    type: z.literal("input_file"),
+    file_data: z.string().optional(),
+    file_id: z.string().optional(),
+    filename: z.string().min(1).optional(),
+  })
+  .passthrough();
+
 const ResponsesEncryptedContentPartSchema = z
   .object({
     type: z.literal("encrypted_content"),
@@ -256,6 +261,7 @@ const KNOWN_RESPONSES_CONTENT_PART_TYPES: ReadonlySet<string> = new Set([
   "input_text",
   "output_text",
   "input_image",
+  "input_file",
   "encrypted_content",
 ]);
 
@@ -270,6 +276,7 @@ export const ResponsesContentPartSchema = z.union([
   ResponsesInputTextPartSchema,
   ResponsesOutputTextPartSchema,
   ResponsesInputImagePartSchema,
+  ResponsesInputFilePartSchema,
   ResponsesEncryptedContentPartSchema,
   UnknownResponsesContentPartSchema,
 ]);
@@ -540,7 +547,7 @@ const ResponsesReasoningConfigSchema = z
 
 export const ResponsesRequestSchema = z
   .object({
-    model: z.string(),
+    model: z.string().trim().min(1),
     input: z.union([z.string(), z.array(ResponsesInputItemSchema)]),
     instructions: z.string().optional(),
     stream: z.boolean().default(false),

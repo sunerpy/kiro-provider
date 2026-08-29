@@ -305,6 +305,35 @@ describe('AccountsDatabase', () => {
     expect(database.getSessionAffinity('session-key', 2_000)).toBeUndefined()
   })
 
+  test('resolves output lineage only when one active binding is unambiguous', () => {
+    const [database] = createDatabasePair()
+    database.recordOutputLineage(
+      'lineage-key',
+      'account-a',
+      'conversation-a',
+      1_000,
+      10_000,
+      100
+    )
+
+    expect(database.resolveOutputLineage('lineage-key', 2_000)).toMatchObject({
+      accountId: 'account-a',
+      conversationId: 'conversation-a'
+    })
+
+    database.recordOutputLineage(
+      'lineage-key',
+      'account-b',
+      'conversation-b',
+      2_000,
+      10_000,
+      100
+    )
+
+    expect(database.resolveOutputLineage('lineage-key', 3_000)).toBeUndefined()
+    expect(database.resolveOutputLineage('lineage-key', 12_000)).toBeUndefined()
+  })
+
   test('restricts the database and existing WAL sidecars to mode 0600', () => {
     const [database, , path] = createDatabasePair()
     database.insertAccount(account())

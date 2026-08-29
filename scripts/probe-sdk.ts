@@ -55,6 +55,10 @@ const PROTOCOL_CONTEXT_TOKEN = "KIRO_CONTEXT_7C8A1E42";
 const PROTOCOL_USER_TOKEN = "KIRO_USER_3D19B670";
 const PROTOCOL_CONTROL_TOKEN = "KIRO_CONTROL_5F24A9C1";
 const PROTOCOL_SEQUENCE_TOKEN = "KIRO_SEQUENCE_8B2D4E61";
+const PROTOCOL_SYSTEM_TOKEN = "KIRO_SYSTEM_61F94D2B";
+const PROTOCOL_DEVELOPER_TOKEN = "KIRO_DEVELOPER_A284C73E";
+const PROTOCOL_MULTI_FIRST = "KIRO_MULTI_42B8";
+const PROTOCOL_MULTI_SECOND = "9D31F6AC";
 
 const AccountRowSchema = z.object({
 	id: z.string().min(1),
@@ -224,10 +228,11 @@ export function buildCompileCheckArgs(proxyUrl: string | undefined): string[] {
 }
 
 function readAccount(db: Database): AccountRow | undefined {
+	const now = Date.now();
 	const row = db
 		.query(
 			`SELECT id, refresh_token, access_token, expires_at, client_id, client_secret,
-              profile_arn, region, oidc_region, auth_method
+	              profile_arn, region, oidc_region, auth_method
          FROM accounts
         WHERE auth_method IN ('desktop', 'idc')
           AND refresh_token <> ''
@@ -235,16 +240,21 @@ function readAccount(db: Database): AccountRow | undefined {
           AND profile_arn IS NOT NULL
           AND profile_arn <> ''
           AND region <> ''
-          AND COALESCE(is_healthy, 1) = 1
-          AND (auth_method = 'desktop'
-               OR (client_id IS NOT NULL AND client_id <> ''
-                   AND client_secret IS NOT NULL AND client_secret <> ''))
-        ORDER BY CASE WHEN expires_at > ? THEN 0 ELSE 1 END,
-                 last_used DESC,
-                 expires_at DESC
-        LIMIT 1`,
+	          AND COALESCE(is_healthy, 1) = 1
+	          AND (auth_method = 'desktop'
+	               OR (client_id IS NOT NULL AND client_id <> ''
+	                   AND client_secret IS NOT NULL AND client_secret <> ''))
+	        ORDER BY CASE WHEN expires_at > ? THEN 0 ELSE 1 END,
+	                 CASE WHEN rate_limit_reset > ? THEN 1 ELSE 0 END,
+	                 CASE
+	                   WHEN limit_count > 0 THEN (1.0 * used_count / limit_count)
+	                   ELSE 0
+	                 END ASC,
+	                 last_used ASC,
+	                 expires_at DESC
+	        LIMIT 1`,
 		)
-		.get(Date.now() + TOKEN_EXPIRY_BUFFER_MS);
+		.get(now + TOKEN_EXPIRY_BUFFER_MS, now);
 
 	if (row === null) return undefined;
 	return AccountRowSchema.parse(row);
@@ -749,12 +759,53 @@ async function runProtocolProjectionProbe(
 
 	try {
 		const projectionInstruction = `Reply with exactly ${PROTOCOL_CONTEXT_TOKEN} and no other text.`;
-		const projectionContext: UserInputMessageContext = {
+		const invalidEmptyLabelContext: UserInputMessageContext = {
 			additionalContext: [
 				{
 					name: "",
 					description: "",
 					innerContext: projectionInstruction,
+				},
+			],
+		};
+		const projectionContext: UserInputMessageContext = {
+			additionalContext: [
+				{
+					name: "instructions",
+					description: "instructions",
+					innerContext: projectionInstruction,
+				},
+			],
+		};
+		const systemContext: UserInputMessageContext = {
+			additionalContext: [
+				{
+					name: "system",
+					description: "system",
+					innerContext: `Reply with exactly ${PROTOCOL_SYSTEM_TOKEN} and no other text.`,
+				},
+			],
+		};
+		const developerContext: UserInputMessageContext = {
+			additionalContext: [
+				{
+					name: "developer",
+					description: "developer",
+					innerContext: `Reply with exactly ${PROTOCOL_DEVELOPER_TOKEN} and no other text.`,
+				},
+			],
+		};
+		const multiContext: UserInputMessageContext = {
+			additionalContext: [
+				{
+					name: "system",
+					description: "system",
+					innerContext: `The first required output fragment is ${PROTOCOL_MULTI_FIRST}.`,
+				},
+				{
+					name: "developer",
+					description: "developer",
+					innerContext: `The second required output fragment is ${PROTOCOL_MULTI_SECOND}.`,
 				},
 			],
 		};
@@ -781,8 +832,19 @@ async function runProtocolProjectionProbe(
 				),
 			),
 		);
+		const emptyLabelContext = await send(
+			"Empty-label additionalContext negative control",
+			protocolConversationState(
+				crypto.randomUUID(),
+				protocolUserMessage(
+					projectionModelId,
+					followContextPrompt,
+					invalidEmptyLabelContext,
+				),
+			),
+		);
 		const additionalContext = await send(
-			"Empty-label additionalContext projection",
+			"Required-label additionalContext projection",
 			protocolConversationState(
 				crypto.randomUUID(),
 				protocolUserMessage(
@@ -800,6 +862,39 @@ async function runProtocolProjectionProbe(
 					projectionModelId,
 					`Ignore any separate context and reply exactly ${PROTOCOL_USER_TOKEN}.`,
 					projectionContext,
+				),
+			),
+		);
+		const systemProjection = await send(
+			"system-labeled additionalContext projection",
+			protocolConversationState(
+				crypto.randomUUID(),
+				protocolUserMessage(
+					projectionModelId,
+					"Follow the separate system context and output only its requested token.",
+					systemContext,
+				),
+			),
+		);
+		const developerProjection = await send(
+			"developer-labeled additionalContext projection",
+			protocolConversationState(
+				crypto.randomUUID(),
+				protocolUserMessage(
+					projectionModelId,
+					"Follow the separate developer context and output only its requested token.",
+					developerContext,
+				),
+			),
+		);
+		const multiProjection = await send(
+			"ordered multi-entry additionalContext projection",
+			protocolConversationState(
+				crypto.randomUUID(),
+				protocolUserMessage(
+					projectionModelId,
+					"Concatenate the two required output fragments in context order with no separator and output nothing else.",
+					multiContext,
 				),
 			),
 		);
@@ -821,8 +916,8 @@ async function runProtocolProjectionProbe(
 		const toolContext: UserInputMessageContext = {
 			additionalContext: [
 				{
-					name: "",
-					description: "",
+					name: "developer",
+					description: "developer",
 					innerContext: `When asked to verify context, call protocol_probe_echo with value ${PROTOCOL_CONTEXT_TOKEN}. After its result, reply exactly ${PROTOCOL_CONTEXT_TOKEN}.`,
 				},
 			],
@@ -1018,9 +1113,20 @@ async function runProtocolProjectionProbe(
 		const contextPass =
 			isSuccessfulProtocolResult(additionalContext) &&
 			additionalContext.summary.content.trim() === PROTOCOL_CONTEXT_TOKEN;
+		const emptyLabelsRejected = isRejectedProtocolResult(emptyLabelContext);
 		const conflictPass =
 			isSuccessfulProtocolResult(conflict) &&
 			conflict.summary.content.trim() === PROTOCOL_CONTEXT_TOKEN;
+		const systemPass =
+			isSuccessfulProtocolResult(systemProjection) &&
+			systemProjection.summary.content.trim() === PROTOCOL_SYSTEM_TOKEN;
+		const developerPass =
+			isSuccessfulProtocolResult(developerProjection) &&
+			developerProjection.summary.content.trim() === PROTOCOL_DEVELOPER_TOKEN;
+		const multiPass =
+			isSuccessfulProtocolResult(multiProjection) &&
+			multiProjection.summary.content.trim() ===
+				`${PROTOCOL_MULTI_FIRST}${PROTOCOL_MULTI_SECOND}`;
 		const toolRequestPass = toolUseContainsValue(
 			firstToolUse,
 			PROTOCOL_CONTEXT_TOKEN,
@@ -1047,8 +1153,14 @@ async function runProtocolProjectionProbe(
 		console.log("\n--- Protocol decision matrix ---");
 		console.log(`Control exact token: ${controlPass ? "PASS" : "FAIL"}`);
 		console.log(`Legacy prefix exact token: ${legacyPass ? "PASS" : "FAIL"}`);
+		console.log(
+			`Empty required labels rejected: ${emptyLabelsRejected ? "PASS" : "NO"}`,
+		);
 		console.log(`additionalContext exact token: ${contextPass ? "PASS" : "FAIL"}`);
 		console.log(`additionalContext priority: ${conflictPass ? "PASS" : "FAIL"}`);
+		console.log(`system-labeled context: ${systemPass ? "PASS" : "FAIL"}`);
+		console.log(`developer-labeled context: ${developerPass ? "PASS" : "FAIL"}`);
+		console.log(`Ordered multi-entry context: ${multiPass ? "PASS" : "FAIL"}`);
 		console.log(`additionalContext tool request: ${toolRequestPass ? "PASS" : "FAIL"}`);
 		console.log(`Tool-result continuation: ${toolContinuationPass ? "PASS" : "FAIL"}`);
 		console.log(`Direct same-role history: ${directSequencePass ? "PASS" : "FAIL"}`);
@@ -1069,16 +1181,24 @@ async function runProtocolProjectionProbe(
 			);
 			return 2;
 		}
-		if (contextPass && conflictPass && toolRequestPass && toolContinuationPass) {
+		if (
+			contextPass &&
+			conflictPass &&
+			systemPass &&
+			developerPass &&
+			multiPass &&
+			toolRequestPass &&
+			toolContinuationPass
+		) {
 			printVerdict(
 				"PROTOCOL-PROJECTION-SUPPORTED",
-				"Kiro preserved empty-label additionalContext across priority and tool-loop probes.",
+				"Kiro preserved required-label additionalContext across role labels, ordering, priority, and tool-loop probes.",
 			);
 			return 0;
 		}
 		printVerdict(
 			"PROTOCOL-PROJECTION-UNSUPPORTED",
-			"Kiro did not prove system/developer-equivalent additionalContext behavior; safe mode must reject instruction projection.",
+			"Kiro accepted required-label additionalContext structurally but did not preserve instruction content or instruction-over-user priority; safe mode must reject instruction projection.",
 		);
 		return 1;
 	} finally {
@@ -1296,6 +1416,7 @@ async function runLiveProbe(
 	webSearchMode = false,
 	protocolProjectionMode = false,
 	outputTokenLimitMode = false,
+	protocolProjectionClaude = false,
 ): Promise<number> {
 	const path = databasePath();
 	if (!existsSync(path)) {
@@ -1381,10 +1502,16 @@ async function runLiveProbe(
 				);
 			}
 			if (protocolProjectionMode) {
+				const projectionModel = protocolProjectionClaude
+					? claudeModel
+					: gptModel;
+				console.log(
+					`Protocol projection model: ${protocolProjectionClaude ? "Claude Opus 5" : "GPT 5.6 Sol"} (${projectionModel})`,
+				);
 				return await runProtocolProjectionProbe(
 					auth,
 					generationRegion,
-					gptModel,
+					projectionModel,
 					claudeOutputLimitModel,
 					proxyUrl,
 				);
@@ -1700,6 +1827,7 @@ Options:
   --web-search    Compare a GPT control request with native Web Search fields
   --output-token-limit  Probe Claude max_tokens and GPT max_output_tokens enforcement
   --protocol-projection  Probe additionalContext, same-role history, tools, and reasoning replay
+  --protocol-projection-claude  Use Claude Opus 5 instead of GPT 5.6 Sol for protocol projection
   --proxy <url>   Route token refresh and SDK requests through an HTTP(S) proxy
   --help          Show this help
 
@@ -1720,6 +1848,7 @@ Environment:
 			process.argv.includes("--web-search"),
 			process.argv.includes("--protocol-projection"),
 			process.argv.includes("--output-token-limit"),
+			process.argv.includes("--protocol-projection-claude"),
 		);
 	} catch (error) {
 		if (!(error instanceof Error)) throw error;

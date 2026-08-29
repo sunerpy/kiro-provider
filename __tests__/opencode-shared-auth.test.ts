@@ -274,6 +274,149 @@ describe("OpenCode shared authentication runtime", () => {
 		});
 	});
 
+	test("excludes shared accounts whose persisted quota is exhausted", () => {
+		const databasePath = createDatabase([
+			account({
+				id: "exhausted",
+				usedCount: 10_000,
+				limitCount: 10_000,
+			}),
+			account({
+				id: "available",
+				usedCount: 9_000,
+				limitCount: 10_000,
+			}),
+		]);
+		const store = openStore(databasePath);
+		const manager = new OpenCodeAccountManager(store, "sticky");
+
+		const selected = manager.selectHealthyAccount("exhausted");
+		expect(selected?.id).toBe("available");
+		expect(store.getById("exhausted")?.usedCount).toBe(10_000);
+		if (!selected) return;
+		const recheckAfter = Date.now() + 60_000;
+		expect(manager.markQuotaExhausted(selected, recheckAfter)).toMatchObject({
+			usedCount: 10_000,
+			limitCount: 10_000,
+			rateLimitResetTime: recheckAfter,
+		});
+		expect(store.getById("available")).toMatchObject({
+			usedCount: 10_000,
+			rateLimitResetTime: recheckAfter,
+		});
+	});
+
+	test("restores a shared account from a newer exact usage snapshot", () => {
+		const databasePath = createDatabase([
+			account({
+				id: "exhausted",
+				usedCount: 10_000,
+				limitCount: 10_000,
+				lastSync: 10,
+			}),
+		]);
+		const store = openStore(databasePath);
+		const manager = new OpenCodeAccountManager(store, "sticky");
+		const exhausted = store.getById("exhausted");
+		expect(exhausted).toBeDefined();
+		if (!exhausted) return;
+
+		expect(
+			manager.updateQuotaUsage(
+				exhausted,
+				{
+					usedCount: 0,
+					limitCount: 10_000,
+					overageCount: 0,
+					lastSync: 20,
+				},
+				0,
+			),
+		).toMatchObject({
+			usedCount: 0,
+			limitCount: 10_000,
+			lastSync: 20,
+			rateLimitResetTime: 0,
+		});
+		expect(manager.selectHealthyAccount("exhausted")?.id).toBe("exhausted");
+	});
+
+	test("does not re-block an account recovered by another shared writer", () => {
+		const databasePath = createDatabase([
+			account({
+				id: "exhausted",
+				usedCount: 10_000,
+				limitCount: 10_000,
+				lastSync: 10,
+			}),
+		]);
+		const store = openStore(databasePath);
+		const manager = new OpenCodeAccountManager(store, "sticky");
+		const stale = store.getById("exhausted");
+		expect(stale).toBeDefined();
+		if (!stale) return;
+		store.updateQuotaUsage(
+			stale.id,
+			{
+				usedCount: 0,
+				limitCount: 10_000,
+				overageCount: 0,
+				lastSync: 30,
+			},
+			0,
+		);
+
+		const scheduled = manager.scheduleQuotaRecheck(
+			stale,
+			Date.now() + 60_000,
+		);
+
+		expect(scheduled).toMatchObject({
+			usedCount: 0,
+			lastSync: 30,
+			rateLimitResetTime: 0,
+		});
+	});
+
+	test("shared usage refresh preserves an unrelated cooldown and health state", () => {
+		const cooldown = Date.now() + 60_000;
+		const databasePath = createDatabase([
+			account({
+				id: "cooldown",
+				rateLimitResetTime: cooldown,
+				isHealthy: false,
+				unhealthyReason: "temporary upstream failure",
+				recoveryTime: cooldown,
+				failCount: 10,
+				usedCount: 20,
+				limitCount: 100,
+				lastSync: 10,
+			}),
+		]);
+		const store = openStore(databasePath);
+
+		const updated = store.updateQuotaUsage(
+			"cooldown",
+			{
+				usedCount: 25,
+				limitCount: 100,
+				overageCount: 0,
+				lastSync: 20,
+			},
+			0,
+		);
+
+		expect(updated).toMatchObject({
+			rateLimitResetTime: cooldown,
+			isHealthy: false,
+			unhealthyReason: "temporary upstream failure",
+			recoveryTime: cooldown,
+			failCount: 10,
+			usedCount: 25,
+			lastSync: 20,
+		});
+	});
+
 	test("cancels while waiting for another process refresh lock", async () => {
 		const databasePath = createDatabase();
 		const lockDirectory = openCodePluginDirForDatabase(databasePath);

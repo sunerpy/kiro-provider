@@ -5,6 +5,8 @@ import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineModelCapabilities,
+  type PipelineQuotaRechecker,
   type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
@@ -29,6 +31,7 @@ import type {
   ResponseOutputItem,
   ResponseUsage,
 } from "../responses/events.js";
+import { isGptSolReasoningPlaceholder } from "../responses/reasoning.js";
 import { adaptResponsesRequest } from "../responses/request-adapter.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
 import {
@@ -37,14 +40,19 @@ import {
   responseState,
 } from "../responses/state.js";
 import type { ResponsesToolBridge } from "../responses/tool-bridge.js";
-import { responsesSessionAffinity } from "../session-affinity.js";
+import {
+  canonicalSessionLineage,
+  responsesSessionAffinity,
+} from "../session-affinity.js";
 
 export type ResponsesDependencies = {
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
+  readonly quotaRechecker?: PipelineQuotaRechecker;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
+  readonly modelCapabilities?: PipelineModelCapabilities;
   readonly makeClient?: PipelineClientFactory;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
@@ -156,14 +164,18 @@ function completedResponse(
     return openAiError(502, restored.message, "upstream_error", "upstream_protocol_error");
   }
   const output: ResponseOutputItem[] = [];
-  if (payload.reasoning?.text || payload.reasoning?.encryptedContent) {
+  const reasoningText = payload.reasoning?.text;
+  const reasoningSummary =
+    reasoningText !== undefined &&
+    !isGptSolReasoningPlaceholder(model, reasoningText)
+      ? [{ type: "summary_text" as const, text: reasoningText }]
+      : [];
+  if (reasoningSummary.length > 0 || payload.reasoning?.encryptedContent) {
     const reasoning: ReasoningOutputItem = {
       id: `rs_${randomUUID()}`,
       type: "reasoning",
-      summary: payload.reasoning.text
-        ? [{ type: "summary_text", text: payload.reasoning.text }]
-        : [],
-      ...(payload.reasoning.encryptedContent
+      summary: reasoningSummary,
+      ...(payload.reasoning?.encryptedContent
         ? { encrypted_content: payload.reasoning.encryptedContent }
         : {}),
     };
@@ -266,6 +278,7 @@ export async function handleResponses(
     );
   }
   const responseConfiguration = responseConfigurationFromCanonical(adapted.body);
+  const lineage = canonicalSessionLineage(adapted.body, dependencies.tenantId);
 
   const stream = parsed.value.stream;
   let lease: RequestIdleTimeoutLease | undefined;
@@ -288,13 +301,20 @@ export async function handleResponses(
       config,
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
+      ...(dependencies.quotaRechecker
+        ? { quotaRechecker: dependencies.quotaRechecker }
+        : {}),
       ...(affinity ? { affinity } : {}),
+      ...(lineage ? { lineage } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
         : {}),
       tenantId: dependencies.tenantId,
       ...(dependencies.reasoningReplayStore
         ? { reasoningReplayStore: dependencies.reasoningReplayStore }
+        : {}),
+      ...(dependencies.modelCapabilities
+        ? { modelCapabilities: dependencies.modelCapabilities }
         : {}),
       deadlineSignal: combinedSignal,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
@@ -322,6 +342,7 @@ export async function handleResponses(
         finalize: routeFinalize,
         bridge: adapted.bridge,
         configuration: responseConfiguration,
+        includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
       });
       streamOwnsRouteResources = true;
       return streaming;

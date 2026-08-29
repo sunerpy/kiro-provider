@@ -76,6 +76,8 @@ function getEnvOverrides(
 		KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "account_selection_strategy",
 		KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE: "protocol_projection_mode",
 		KIRO_PROVIDER_SESSION_AFFINITY_MODE: "session_affinity_mode",
+		KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE: "runtime_endpoint_mode",
+		KIRO_PROVIDER_INSTANCE_LOCK_PATH: "instance_lock_path",
 		KIRO_PROVIDER_EFFORT: "effort",
 		KIRO_PROVIDER_LOG_LEVEL: "log_level",
 		KIRO_PROVIDER_TEST_UPSTREAM: "test_upstream_endpoint",
@@ -91,9 +93,24 @@ function getEnvOverrides(
 		KIRO_PROVIDER_PORT: "port",
 		KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES: "rate_limit_max_retries",
 		KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS: "rate_limit_retry_delay_ms",
-		KIRO_PROVIDER_MAX_REQUEST_ITERATIONS: "max_request_iterations",
+		KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS: "quota_recheck_interval_ms",
+			KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS: "quota_recheck_timeout_ms",
+			KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY: "quota_recheck_concurrency",
+			KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS:
+				"account_maintenance_interval_ms",
+			KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS:
+				"account_maintenance_timeout_ms",
+			KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY:
+				"account_maintenance_concurrency",
+			KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS:
+				"usage_refresh_interval_ms",
+			KIRO_PROVIDER_MAX_REQUEST_ITERATIONS: "max_request_iterations",
 		KIRO_PROVIDER_REQUEST_TIMEOUT_MS: "request_timeout_ms",
 		KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "stream_idle_timeout_ms",
+		KIRO_PROVIDER_MODEL_CATALOG_TTL_MS: "model_catalog_ttl_ms",
+		KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS: "model_catalog_stale_ttl_ms",
+		KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS:
+			"model_catalog_request_timeout_ms",
 			KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES: "max_request_body_bytes",
 			KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "token_expiry_buffer_ms",
 			KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS: "session_affinity_ttl_ms",
@@ -142,7 +159,11 @@ function getEnvOverrides(
 		KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS:
 			"enable_legacy_chat_completions",
 		KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE: "sdk_http_keep_alive",
-		KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "auto_effort_mapping",
+			KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE: "enforce_single_instance",
+			KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG: "dynamic_model_catalog",
+			KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED:
+				"account_maintenance_enabled",
+			KIRO_PROVIDER_AUTO_EFFORT_MAPPING: "auto_effort_mapping",
 	} as const;
 	for (const [envName, field] of Object.entries(booleanFields)) {
 		const value = env[envName];

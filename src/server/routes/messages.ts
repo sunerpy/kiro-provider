@@ -4,6 +4,8 @@ import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineModelCapabilities,
+  type PipelineQuotaRechecker,
   type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
@@ -26,14 +28,19 @@ import type {
   IngressSignals,
   RequestIdleTimeoutLease,
 } from "../request-lifecycle.js";
-import { anthropicSessionAffinity } from "../session-affinity.js";
+import {
+  anthropicSessionAffinity,
+  canonicalSessionLineage,
+} from "../session-affinity.js";
 
 export type MessagesDependencies = {
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
+  readonly quotaRechecker?: PipelineQuotaRechecker;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
+  readonly modelCapabilities?: PipelineModelCapabilities;
   readonly makeClient?: PipelineClientFactory;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
@@ -232,6 +239,10 @@ export async function handleMessages(
     dependencies.tenantId,
     config.session_affinity_mode,
   );
+  const lineage = canonicalSessionLineage(
+    adapted.value.body,
+    dependencies.tenantId,
+  );
 
   let lease: RequestIdleTimeoutLease | undefined;
   let streamOwnsRouteResources = false;
@@ -252,13 +263,20 @@ export async function handleMessages(
       config,
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
+      ...(dependencies.quotaRechecker
+        ? { quotaRechecker: dependencies.quotaRechecker }
+        : {}),
       ...(affinity ? { affinity } : {}),
+      ...(lineage ? { lineage } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
         : {}),
       tenantId: dependencies.tenantId,
       ...(dependencies.reasoningReplayStore
         ? { reasoningReplayStore: dependencies.reasoningReplayStore }
+        : {}),
+      ...(dependencies.modelCapabilities
+        ? { modelCapabilities: dependencies.modelCapabilities }
         : {}),
       deadlineSignal: ingress.signals.combined,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),

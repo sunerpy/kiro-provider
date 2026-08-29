@@ -1,5 +1,6 @@
-import { resolveModelVariant } from "../../kiro/models.js";
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { resolveInlineDocument } from "../../kiro/transform/document-handler.js";
+import { RequestTransformError } from "../../kiro/transform/errors.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -234,6 +235,56 @@ function mapContentParts(
         );
       }
       mapped.push({ type: "image", url: part.image_url, path: partPath });
+      continue;
+    }
+    if (part.type === "input_file") {
+      const keys = validateAllowedKeys(
+        part,
+        partPath,
+        new Set(["type", "file_data", "file_id", "filename"]),
+      );
+      if (!keys.ok) return keys;
+      if ("file_id" in part && part.file_id !== undefined) {
+        return protocolFailure(
+          "unsupported_file_reference",
+          "Responses file_id references cannot be resolved by this stateless provider; send file_data and filename",
+          `${partPath}.file_id`,
+        );
+      }
+      if (
+        !("file_data" in part) ||
+        typeof part.file_data !== "string" ||
+        !("filename" in part) ||
+        typeof part.filename !== "string"
+      ) {
+        return protocolFailure(
+          "invalid_file_data",
+          "Responses input_file requires inline file_data and filename",
+          partPath,
+        );
+      }
+      try {
+        const document = resolveInlineDocument(
+          part.filename,
+          part.file_data,
+          `${partPath}.file_data`,
+          `${partPath}.filename`,
+        );
+        mapped.push({
+          type: "document",
+          name: document.name,
+          format: document.format,
+          data: document.data,
+          path: partPath,
+        });
+      } catch (error) {
+        if (!(error instanceof RequestTransformError)) throw error;
+        return protocolFailure(
+          error.code,
+          error.message,
+          error.param ?? `${partPath}.file_data`,
+        );
+      }
       continue;
     }
     return protocolFailure(
@@ -542,15 +593,6 @@ export function adaptResponsesRequest(
   request: ResponsesRequest,
   projectionMode: ProtocolProjectionMode = "safe",
 ): ResponsesRequestAdaptationResult {
-  try {
-    resolveModelVariant(request.model);
-  } catch {
-    return protocolFailure(
-      "unsupported_model",
-      `Responses model ${request.model} is not supported`,
-      "model",
-    );
-  }
   for (const key of Object.keys(request)) {
     if (!RESPONSES_REQUEST_KEYS.has(key)) {
       return protocolFailure(

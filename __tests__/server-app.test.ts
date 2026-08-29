@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
+import type { PipelineAccountMaintenance } from "../src/core/account-maintenance.js";
 import type {
 	PipelineAccountManager,
+	PipelineQuotaRechecker,
 	PipelineTokenRefresher,
 } from "../src/core/pipeline.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
@@ -20,6 +22,9 @@ function config(
 		api_keys: ["sk-test"],
 		proxy_url: proxyUrl,
 		auth_source: "local",
+		reasoning_replay_keys: [
+			"test:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		],
 		...overrides,
 	});
 }
@@ -73,6 +78,107 @@ describe("buildServerDeps", () => {
 			});
 
 			expect(dependencies.tokenRefresher.constructor.name).toBe("TokenRefresher");
+			expect(dependencies.quotaRechecker?.constructor.name).toBe("QuotaRechecker");
+			expect(dependencies.accountMaintenance?.constructor.name).toBe(
+				"AccountMaintenanceService",
+			);
+		} finally {
+			database.close();
+		}
+	});
+
+	test("passes quota probe tuning and the resolved proxy to its production assembly", () => {
+		const database = new AccountsDatabase(":memory:");
+		try {
+			let captured:
+				| {
+						readonly intervalMs: number;
+						readonly usageRefreshIntervalMs: number;
+						readonly timeoutMs: number;
+						readonly concurrency: number;
+						readonly proxyUrl?: string;
+				  }
+				| undefined;
+			let maintenanceConfig:
+				| {
+						readonly enabled: boolean;
+						readonly intervalMs: number;
+						readonly timeoutMs: number;
+						readonly concurrency: number;
+				  }
+				| undefined;
+			const quotaRechecker: PipelineQuotaRechecker = {
+				async recheckDueAccounts() {},
+				async syncDueAccounts() {},
+			};
+			const accountMaintenance: PipelineAccountMaintenance = {
+				start() {},
+				stop() {},
+				async runOnce() {},
+			};
+			const dependencies = buildServerDeps(
+				config("http://p:1080", {
+					quota_recheck_interval_ms: 123_000,
+					quota_recheck_timeout_ms: 4_000,
+					quota_recheck_concurrency: 7,
+					usage_refresh_interval_ms: 456_000,
+					account_maintenance_enabled: false,
+					account_maintenance_interval_ms: 234_000,
+					account_maintenance_timeout_ms: 345_000,
+					account_maintenance_concurrency: 8,
+				}),
+				{
+					createDatabase: () => database,
+					createQuotaRechecker: (
+						_accountManager,
+						_tokenRefresher,
+						resolvedConfig,
+						proxyUrl,
+					) => {
+						captured = {
+							intervalMs: resolvedConfig.quota_recheck_interval_ms,
+							usageRefreshIntervalMs:
+								resolvedConfig.usage_refresh_interval_ms,
+							timeoutMs: resolvedConfig.quota_recheck_timeout_ms,
+							concurrency: resolvedConfig.quota_recheck_concurrency,
+							...(proxyUrl ? { proxyUrl } : {}),
+						};
+						return quotaRechecker;
+					},
+					createAccountMaintenance: (
+						_accountManager,
+						_tokenRefresher,
+						_quotaRechecker,
+						resolvedConfig,
+					) => {
+						maintenanceConfig = {
+							enabled: resolvedConfig.account_maintenance_enabled,
+							intervalMs:
+								resolvedConfig.account_maintenance_interval_ms,
+							timeoutMs: resolvedConfig.account_maintenance_timeout_ms,
+							concurrency:
+								resolvedConfig.account_maintenance_concurrency,
+						};
+						return accountMaintenance;
+					},
+				},
+			);
+
+			expect(captured).toEqual({
+				intervalMs: 123_000,
+				usageRefreshIntervalMs: 456_000,
+				timeoutMs: 4_000,
+				concurrency: 7,
+				proxyUrl: "http://p:1080",
+			});
+			expect(maintenanceConfig).toEqual({
+				enabled: false,
+				intervalMs: 234_000,
+				timeoutMs: 345_000,
+				concurrency: 8,
+			});
+			expect(dependencies.quotaRechecker).toBe(quotaRechecker);
+			expect(dependencies.accountMaintenance).toBe(accountMaintenance);
 		} finally {
 			database.close();
 		}

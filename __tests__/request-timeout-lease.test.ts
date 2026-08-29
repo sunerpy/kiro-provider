@@ -178,7 +178,14 @@ function localClientFactory(events?: string[]): PipelineClientFactory {
   return () => ({
     async send(): Promise<SdkStreamResponse> {
       events?.push("pipeline");
-      return sdkResponse([{ assistantResponseEvent: { content: "local deterministic answer" } }]);
+      return sdkResponse([
+        { assistantResponseEvent: { content: "local deterministic answer" } },
+        {
+          metadataEvent: {
+            tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          },
+        },
+      ]);
     },
   });
 }

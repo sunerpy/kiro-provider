@@ -250,7 +250,7 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
   })
 
-  test('reuses one client and observes a refreshed token for the same account', async () => {
+  test('rebuilds the SDK client after a token change while reusing its transport', async () => {
     clearSdkClientCache()
     const firstAuth = makeAuth()
     const first = createSdkClient(firstAuth, 'us-east-1', 'high', undefined, undefined, 'account-a')
@@ -263,11 +263,74 @@ describe('createSdkClient', () => {
       'account-a'
     )
 
-    expect(refreshed).toBe(first)
-    const token = first.config.token
-    if (!token) throw new TypeError('SDK client token provider is required')
-    expect(await token()).toEqual({ token: 'refreshed-access-token' })
+    expect(refreshed).not.toBe(first)
+    expect(refreshed.config.requestHandler).toBe(first.config.requestHandler)
+    const firstToken = first.config.token
+    const refreshedToken = refreshed.config.token
+    if (!firstToken || !refreshedToken) {
+      throw new TypeError('SDK client token provider is required')
+    }
+    expect(await firstToken()).toEqual({ token: 'access-token' })
+    expect(await refreshedToken()).toEqual({ token: 'refreshed-access-token' })
     clearSdkClientCache()
+  })
+
+  test('sends the refreshed bearer token on the next real HTTP request', async () => {
+    clearSdkClientCache()
+    const authorizationHeaders: string[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        authorizationHeaders.push(request.headers.get('authorization') ?? '')
+        return Response.json({ message: 'intentional test rejection' }, { status: 400 })
+      }
+    })
+    const endpoint = `http://127.0.0.1:${server.port}`
+    const command = () =>
+      new GenerateAssistantResponseCommand({
+        conversationState: {
+          chatTriggerType: 'MANUAL',
+          conversationId: 'sdk-client-token-refresh-test',
+          currentMessage: {
+            userInputMessage: {
+              content: 'hello',
+              modelId: 'claude-sonnet-4.6',
+              origin: 'AI_EDITOR'
+            }
+          }
+        }
+      })
+
+    try {
+      const firstAuth = makeAuth()
+      const first = createSdkClient(
+        firstAuth,
+        'us-east-1',
+        undefined,
+        endpoint,
+        undefined,
+        'account-a'
+      )
+      await expect(first.send(command())).rejects.toBeDefined()
+
+      const refreshed = createSdkClient(
+        { ...firstAuth, access: 'refreshed-access-token' },
+        'us-east-1',
+        undefined,
+        endpoint,
+        undefined,
+        'account-a'
+      )
+      await expect(refreshed.send(command())).rejects.toBeDefined()
+
+      expect(authorizationHeaders).toHaveLength(2)
+      expect(authorizationHeaders[0]).toBe('Bearer access-token')
+      expect(authorizationHeaders[1]).toBe('Bearer refreshed-access-token')
+    } finally {
+      server.stop(true)
+      clearSdkClientCache()
+    }
   })
 
   test('emits content-free connection-pool hit and miss evidence', () => {
@@ -293,7 +356,8 @@ describe('createSdkClient', () => {
         event: 'sdk_connection_pool_selected',
         account_hash: events[0].account_hash,
         transport_pool_hit: true,
-        sdk_client_pool_hit: true
+        sdk_client_pool_hit: true,
+        sdk_client_rebuilt_for_token_change: false
       })
       const serialized = JSON.stringify(events)
       expect(serialized).not.toContain('account-a')

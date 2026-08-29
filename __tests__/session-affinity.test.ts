@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { assistantLineageFingerprint } from "../src/protocol/canonical.js";
 import { adaptAnthropicMessagesRequest } from "../src/server/anthropic/request-adapter.js";
 import {
 	ChatCompletionRequestSchema,
@@ -6,9 +7,11 @@ import {
 } from "../src/server/request-schema.js";
 import {
 	anthropicSessionAffinity,
+	canonicalSessionLineage,
 	chatSessionAffinity,
 	responsesSessionAffinity,
 } from "../src/server/session-affinity.js";
+import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
 const TENANT = "tenant-a";
 
@@ -163,5 +166,35 @@ describe("standard-field session affinity", () => {
 			responsesSessionAffinity(request, "tenant-b")?.keyHash,
 		);
 		expect(responsesSessionAffinity(request, undefined)).toBeUndefined();
+	});
+
+	test("derives standard-client continuation affinity from the latest assistant output", () => {
+		const first = canonicalRequest([message("user", "first turn")], {
+			protocol: "responses",
+			model: "gpt-5.6-sol",
+		});
+		const second = canonicalRequest(
+			[
+				message("user", "first turn"),
+				message("assistant", "first answer"),
+				message("user", "follow-up"),
+			],
+			{ protocol: "responses", model: "gpt-5.6-sol" },
+		);
+		const firstLineage = canonicalSessionLineage(first, TENANT);
+		const secondLineage = canonicalSessionLineage(second, TENANT);
+		if (!firstLineage || !secondLineage) {
+			throw new TypeError("lineage fixtures must resolve");
+		}
+
+		expect(firstLineage.lookupKeyHash).toBeUndefined();
+		expect(secondLineage.lookupKeyHash).toBe(
+			firstLineage.outputKeyHash(
+				assistantLineageFingerprint(first, {
+					text: "first answer",
+					toolCalls: [],
+				}),
+			),
+		);
 	});
 });

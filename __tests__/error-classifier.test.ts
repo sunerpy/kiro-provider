@@ -110,20 +110,32 @@ describe("normalizeSdkError", () => {
 });
 
 describe("classifyError HTTP decisions", () => {
-	test("retries 401 responses until the retry cap", () => {
-		expect(
-			classifyError(error({ status: 401 }), context({ retryCount: 2 })),
-		).toEqual({
-			action: "retry",
-			status: 401,
-		});
-		expect(
-			classifyError(error({ status: 401 }), context({ retryCount: 3 })),
-		).toEqual({
+	test("force-refreshes a 401 once, then switches or fails explicitly", () => {
+		const forcedRefreshAccountIds = new Set<string>();
+		const first = classifyError(
+			error({ status: 401 }),
+			context({ accountCount: 2, forcedRefreshAccountIds }),
+		);
+		const second = classifyError(
+			error({ status: 401 }),
+			context({ accountCount: 2, forcedRefreshAccountIds }),
+		);
+		const terminal = classifyError(
+			error({ status: 401 }),
+			context({
+				accountCount: 1,
+				forcedRefreshAccountIds: new Set(["account-a"]),
+			}),
+		);
+
+		expect(first).toEqual({ action: "refresh-then-retry", status: 401 });
+		expect(second).toEqual({ action: "switch", status: 401 });
+		expect(terminal).toEqual({
 			action: "fail",
 			status: 401,
 			terminalStatus: 401,
 		});
+		expect(forcedRefreshAccountIds).toEqual(new Set(["account-a"]));
 	});
 
 	test("force-refreshes an invalid bearer only once per account", () => {
@@ -148,7 +160,13 @@ describe("classifyError HTTP decisions", () => {
 		expect(forcedRefreshAccountIds).toEqual(new Set(["account-a"]));
 	});
 
-	test("fails quota responses without retrying", () => {
+	test("switches quota responses when possible and otherwise fails without retrying", () => {
+		expect(
+			classifyError(error({ status: 402 }), context({ accountCount: 2 })),
+		).toEqual({
+			action: "switch",
+			status: 402,
+		});
 		expect(classifyError(error({ status: 402 }), context())).toEqual({
 			action: "fail",
 			status: 402,

@@ -1,11 +1,17 @@
 import { describe, expect, test } from 'bun:test'
+import type {
+  PipelineAccountManager,
+  PipelineModelCapabilities,
+  PipelineTokenRefresher
+} from '../src/core/pipeline.js'
 import { EXPECTED_PUBLIC_MODEL_IDS } from '../src/kiro/model-catalog.js'
+import type { KiroAuthDetails, ManagedAccount } from '../src/kiro/types.js'
 import { handleHealth } from '../src/server/routes/health.js'
 import { handleModels } from '../src/server/routes/models.js'
 
 describe('GET /v1/models', () => {
   test('returns OpenAI and Codex catalogs from the same source without provider instructions', async () => {
-    const response = handleModels()
+    const response = await handleModels()
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/json')
 
@@ -65,6 +71,96 @@ describe('GET /v1/models', () => {
         { effort: 'max' }
       ]
     })
+  })
+
+  test('runs due quota recovery before excluding still-exhausted accounts from catalog refresh', async () => {
+    const exhausted: ManagedAccount = {
+      id: 'exhausted',
+      email: 'exhausted@example.com',
+      authMethod: 'desktop',
+      region: 'us-east-1',
+      refreshToken: 'refresh-exhausted',
+      accessToken: 'access-exhausted',
+      expiresAt: Date.now() + 60_000,
+      rateLimitResetTime: 0,
+      isHealthy: true,
+      failCount: 0,
+      usedCount: 100,
+      limitCount: 100
+    }
+    const available: ManagedAccount = {
+      ...exhausted,
+      id: 'available',
+      email: 'available@example.com',
+      refreshToken: 'refresh-available',
+      accessToken: 'access-available',
+      usedCount: 1
+    }
+    const accounts = [exhausted, available]
+    const refreshed: string[] = []
+    const catalogAccounts: string[] = []
+    let quotaCalls = 0
+    const accountManager: PipelineAccountManager = {
+      reconcileFromDb: () => accounts,
+      selectHealthyAccount: () => available,
+      getAccountCount: () => accounts.length,
+      toAuthDetails: (account): KiroAuthDetails => ({
+        refresh: account.refreshToken,
+        access: account.accessToken,
+        expires: account.expiresAt,
+        authMethod: account.authMethod,
+        region: account.region,
+        email: account.email
+      }),
+      markRateLimited: () => undefined,
+      markUnhealthy: () => undefined
+    }
+    const tokenRefresher: PipelineTokenRefresher = {
+      async refreshIfNeeded(account) {
+        refreshed.push(account.id)
+        return account
+      },
+      async forceRefresh(account) {
+        return account
+      }
+    }
+    const modelCapabilities: PipelineModelCapabilities = {
+      async ensureAccountModel() {
+        return { supported: true, source: 'static' }
+      },
+      eligibleAccountIds: () => undefined,
+      isKnownModel: () => true,
+      catalog: () => [],
+      readiness: () => ({
+        enabled: true,
+        usable: true,
+        source: 'static',
+        freshAccounts: 0,
+        staleAccounts: 0
+      }),
+      async refreshAccounts(selected) {
+        catalogAccounts.push(...selected.map(({ id }) => id))
+      }
+    }
+
+    const response = await handleModels(
+      modelCapabilities,
+      accountManager,
+      tokenRefresher,
+      undefined,
+      {
+        async recheckDueAccounts(selected) {
+          quotaCalls += 1
+          expect(selected.map(({ id }) => id)).toEqual(['exhausted', 'available'])
+        },
+        async syncDueAccounts() {}
+      }
+    )
+
+    expect(response.status).toBe(200)
+    expect(quotaCalls).toBe(1)
+    expect(refreshed).toEqual(['available'])
+    expect(catalogAccounts).toEqual(['available'])
   })
 })
 

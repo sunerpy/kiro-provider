@@ -6,9 +6,19 @@ import type {
 import type { CanonicalOutputEvent } from '../src/protocol/output.js'
 
 export function makeSdkResponse(events: readonly SdkStreamEvent[]): SdkStreamResponse {
+  const hasCompletion = events.some(
+    (event) => event.metadataEvent?.tokenUsage !== undefined
+  )
   return {
     generateAssistantResponseResponse: (async function* () {
       for (const event of events) yield event
+      if (!hasCompletion) {
+        yield {
+          metadataEvent: {
+            tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+          }
+        }
+      }
     })()
   }
 }

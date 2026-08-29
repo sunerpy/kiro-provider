@@ -1,10 +1,38 @@
 import { getModelContextLimit, MODEL_MAPPING, SUPPORTED_MODELS } from './constants.js'
 import type { Effort } from './types.js'
 
+const dynamicModelMapping = new Map<string, string>()
+
+function modelMapping(model: string): string | undefined {
+  return MODEL_MAPPING[model] ?? dynamicModelMapping.get(model)
+}
+
+export function registerDynamicWireModels(modelIds: Iterable<string>): void {
+  for (const modelId of modelIds) {
+    const normalized = modelId.trim()
+    if (normalized.length === 0) continue
+    dynamicModelMapping.set(normalized, normalized)
+  }
+}
+
+export function clearDynamicModelRegistry(): void {
+  dynamicModelMapping.clear()
+}
+
+export function isKnownModel(model: string): boolean {
+  try {
+    resolveModelVariant(model)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function resolveKiroModel(model: string): string {
-  const resolved = MODEL_MAPPING[model]
+  const resolved = modelMapping(model)
   if (!resolved) {
-    throw new Error(`Unsupported model: ${model}. Supported models: ${SUPPORTED_MODELS.join(', ')}`)
+    const supported = [...SUPPORTED_MODELS, ...dynamicModelMapping.keys()]
+    throw new Error(`Unsupported model: ${model}. Supported models: ${supported.join(', ')}`)
   }
   return resolved
 }
@@ -67,7 +95,7 @@ export function stripModelSuffix(model: string): string {
   }
   if (model.endsWith('-thinking')) {
     const base = model.slice(0, -'-thinking'.length)
-    if (MODEL_MAPPING[base]) {
+    if (modelMapping(base)) {
       return base
     }
   }

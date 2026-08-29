@@ -13,7 +13,7 @@ For every field, the effective value is the first one found, in this order:
 3. **Configuration file** — JSON at the resolved config path.
 4. **Schema default** — the zod schema default in `src/config/schema.ts`.
 
-The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG_CONFIG_HOME/kiro-provider/config.json` when `XDG_CONFIG_HOME` is set. Account-management subcommands (`accounts list|import|remove`) target the local compatibility store; they do not load gateway configuration and do not require `api_keys`.
+The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG_CONFIG_HOME/kiro-provider/config.json` when `XDG_CONFIG_HOME` is set. Account-management subcommands (`accounts list|import|remove`) target the provider-owned local authentication store; they do not load gateway configuration and do not require `api_keys`.
 
 ## Field reference
 
@@ -25,14 +25,29 @@ The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG
 | `enable_legacy_chat_completions` | `boolean`, default `false`                                            | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | Exposes `POST /v1/chat/completions`. Keep this disabled unless a client cannot use Responses or Anthropic Messages. Environment values accept `true`, `false`, `1`, `0`.                                                                                                             |
 | `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is an instruction-only migration mode scheduled for removal in v0.7.0.                                                                                              |
 | `session_affinity_mode`      | `"explicit-only" \| "legacy-initial-input"`, default `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` never derives a logical session from prompt text. `legacy-initial-input` temporarily restores the old initial-input fingerprint heuristics without changing model-visible content.                                                                                     |
-| `auth_source`                | `"opencode-shared" \| "local"`, default `"opencode-shared"`              | `KIRO_PROVIDER_AUTH_SOURCE`                | Authentication authority. Shared mode uses OpenCode's live Kiro database and compatible refresh lock. Local mode uses the provider-owned account database and enables `kiro-provider login`.                                                                                         |
+| `auth_source`                | `"local" \| "opencode-shared"`, default `"local"`                        | `KIRO_PROVIDER_AUTH_SOURCE`                | Authentication authority. Local mode makes the provider-owned account database authoritative and supports one-time OpenCode import or direct login. Shared mode remains an explicit compatibility option.                                                                          |
 | `opencode_auth_db_path`      | `string \| null`, default `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | Optional override for the shared OpenCode Kiro database. `null` uses `$XDG_CONFIG_HOME/opencode/kiro.db` or `~/.config/opencode/kiro.db`. Ignored by local mode.                                                                                                                       |
-| `proxy_url`                  | `string \| null`, default `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | Optional global HTTP(S) proxy for **all** upstream egress (model requests, token refresh, device-code login). Must be a valid `http://` or `https://` URL; other schemes (e.g. SOCKS) are rejected. `null` or an empty string means direct connections.                               |
+| `proxy_url`                  | `string \| null`, default `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | Optional global HTTP(S) proxy for **all** upstream egress (model requests, token refresh, quota probes, device-code login). Must be a valid `http://` or `https://` URL; other schemes (e.g. SOCKS) are rejected. `null` or an empty string means direct connections.                 |
 | `default_region`             | `string`, default `"us-east-1"`                                           | `KIRO_PROVIDER_DEFAULT_REGION`             | Region used by `login` and for accounts without a profile ARN override.                                                                                                                                                                                                               |
-| `sdk_http_keep_alive`        | `boolean`, default `false`                                                | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | Controls Kiro model-call sockets only; SDK clients and transport objects stay cached in either mode. `false` uses fresh direct/proxy SDK sockets; `true` opts into pooling after deployment-specific validation. Token refresh and device login keep their independent transport policy. |
+| `sdk_http_keep_alive`        | `boolean`, default `false`                                                | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | Controls Kiro model-call sockets only. The transport object stays cached in either mode; an SDK client is reused only while its access token is unchanged and is rebuilt immediately after token rotation. `false` uses fresh direct/proxy SDK sockets; `true` opts into pooling after deployment-specific validation. Token refresh and device login keep their independent transport policy. |
+| `enforce_single_instance`    | `boolean`, default `true`                                                 | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`    | Acquires one service-process lock before binding the HTTP listener, keeping account/session queues and SDK pools single-owner. Disable only with independent credentials/state or an external serializer.                                                                              |
+| `instance_lock_path`         | `string \| null`, default `null`                                          | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`         | Optional service-lock target. `null` uses the platform config directory at `kiro-provider/service.instance`. POSIX mode is `0600`; different paths deliberately create independent process domains.                                                                                    |
+| `runtime_endpoint_mode`      | `"kiro-runtime" \| "legacy-q"`, default `"kiro-runtime"`                 | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE`      | Uses the live-probe-confirmed Kiro runtime endpoint by default. Successful current-runtime streams end with token-usage metadata or valid metering followed by clean EOF. `legacy-q` is retained for diagnosis/migration only and may not provide either authoritative witness.                                                                          |
+| `dynamic_model_catalog`      | `boolean`, default `true`                                                 | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG`      | Discovers models per usable account through Kiro management, routes only to accounts exposing the requested wire model, and uses the checked-in bounded catalog when management is unavailable.                                                                                        |
+| `model_catalog_ttl_ms`       | integer, `1`-`2147483647`, default `900000` (15 min)                      | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS`       | Fresh lifetime of a successful per-account model catalog.                                                                                                                                                                                                                             |
+| `model_catalog_stale_ttl_ms` | integer, `1`-`2147483647`, default `86400000` (24 h)                      | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` | Maximum lifetime of a last-known-good account catalog after refresh failures.                                                                                                                                                                                                          |
+| `model_catalog_request_timeout_ms` | integer, `1`-`2147483647`, default `10000`                         | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` | Deadline for one Kiro management model-list request.                                                                                                                                                                                                                            |
 | `account_selection_strategy` | `"sticky" \| "round-robin" \| "lowest-usage"`, default `"lowest-usage"`   | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` | How the gateway picks an account per request: `sticky` favors the same account, `round-robin` cycles, `lowest-usage` prefers the account with the most remaining quota.                                                                                                               |
 | `rate_limit_max_retries`     | `number`, default `3`                                                     | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | Maximum retry count for retryable rate-limit responses.                                                                                                                                                                                                                               |
 | `rate_limit_retry_delay_ms`  | `number`, default `5000`                                                  | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | Base retry delay in milliseconds before a rate-limit retry.                                                                                                                                                                                                                           |
+| `quota_recheck_interval_ms`  | integer, `1`-`2147483647`, default `900000` (15 min)                      | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`  | Delay before an exhausted account is eligible for another authoritative Kiro usage probe. An HTTP 402, a still-exhausted snapshot, or a failed probe advances this timestamp; it does not create a model retry.                                                                       |
+| `quota_recheck_timeout_ms`   | integer, `1`-`2147483647`, default `10000`                                | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`   | Bounds both the request preflight quota-recheck batch and each started account probe. A timed-out probe keeps the account excluded and schedules the next check.                                                                                                                       |
+| `quota_recheck_concurrency`  | integer, `1`-`32`, default `4`                                            | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`  | Maximum number of due exhausted accounts probed concurrently. Concurrent requests join the same per-account in-flight probe.                                                                                                                                                          |
+| `account_maintenance_enabled` | `boolean`, default `true`                                                | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` | Enables provider-owned background token and usage maintenance. Disable only when an external operator deliberately owns that lifecycle.                                                                                                                                              |
+| `account_maintenance_interval_ms` | integer, `1000`-`2147483647`, default `60000`                      | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` | Interval between background maintenance passes. The first pass is scheduled shortly after startup.                                                                                                                                                                           |
+| `account_maintenance_timeout_ms` | integer, `1000`-`2147483647`, default `120000`                       | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` | Absolute deadline for one maintenance pass across all accounts.                                                                                                                                                                                                               |
+| `account_maintenance_concurrency` | integer, `1`-`32`, default `4`                                      | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` | Maximum concurrent proactive access-token refreshes.                                                                                                                                                                                                                          |
+| `usage_refresh_interval_ms`  | integer, `1000`-`2147483647`, default `900000` (15 min)                    | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`  | Maximum age of a normal account usage snapshot before background maintenance calls Kiro `getUsageLimits`. Exhausted accounts continue to use the separate quota-recheck schedule.                                                                                                |
 | `max_request_iterations`     | `number`, default `20`                                                    | `KIRO_PROVIDER_MAX_REQUEST_ITERATIONS`     | Global cap on account-switching and retry-loop iterations for a single request.                                                                                                                                                                                                       |
 | `request_timeout_ms`         | integer, `1`-`2147483647`, default `120000`                               | `KIRO_PROVIDER_REQUEST_TIMEOUT_MS`         | Absolute deadline for a request, in milliseconds. See [Timeout limits](#timeout-limits) for the accepted range and a known limitation.                                                                                                                                                |
 | `stream_idle_timeout_ms`     | integer, `1`-`2147483647`, default `60000`                                | `KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS`     | Maximum idle interval between upstream streaming events before the stream is aborted, in milliseconds. See [Timeout limits](#timeout-limits) for the accepted range.                                                                                                                  |
@@ -51,29 +66,43 @@ The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG
 
 ## Authentication source
 
-`auth_source: "opencode-shared"` is the production default. The provider:
+`auth_source: "local"` is the production default. It uses
+`~/.config/kiro-provider/accounts.db` as the sole authentication authority.
+Populate it either with direct device-code login or a one-time import:
 
-- Opens the same Kiro database used by OpenCode at
-  `opencode_auth_db_path` or the platform default.
-- Requires the v0.20.7 account/tombstone schema and fails closed when required
-  columns are missing. It does not migrate or rewrite the schema.
-- Reconciles account additions, re-logins, token rotation, tombstones, health,
-  and usage from that live database for each pipeline selection.
-- Uses the same per-account lock-file convention and bounded lock behavior as
-  `opencode-kiro-auth`, then re-reads the current token inside the lock.
-- Persists a refreshed token before publishing it to requests and uses a
-  compare-and-swap snapshot so a stale in-flight refresh cannot overwrite a
-  newer login.
+```bash
+kiro-provider login
+# or, after authenticating with OpenCode plus opencode-kiro-auth:
+kiro-provider accounts import
+# optional non-default source:
+kiro-provider accounts import --from /path/to/kiro.db
+```
 
-Authenticate with `opencode auth login` and select Kiro. In this mode,
-`kiro-provider login` exits with an explanation instead of creating a second
-authentication owner.
+Import copies active account credentials and usage into the provider database;
+it does not retain a live link, shared lock, or runtime dependency on OpenCode.
+After import, kiro-provider independently:
 
-`auth_source: "local"` is retained for isolated compatibility deployments.
-It uses `~/.config/kiro-provider/accounts.db`; `kiro-provider login`,
-`accounts list|import|remove`, and snapshot imports apply only to that store.
-Do not run a local snapshot and OpenCode against the same rotating refresh
-token unless you intentionally accept split ownership.
+- refreshes near-expiry access tokens and persists them before use;
+- rebuilds the credential-bound SDK client when the access token changes while
+  preserving the account transport;
+- refreshes stale normal usage snapshots in the background;
+- excludes exhausted accounts before token refresh or SDK construction;
+- probes exhausted accounts only when their persisted recheck time is due and
+  returns them to selection only after an authoritative non-exhausted snapshot;
+- marks permanently invalid refresh credentials unhealthy instead of retrying
+  them in model loops;
+- deduplicates per-account probes and bounds maintenance concurrency.
+
+Run only one authentication owner for an imported rotating refresh token.
+Continuing to use the same imported account through an independently running
+OpenCode plugin can race token rotation; re-import only as an intentional
+operator action.
+
+`auth_source: "opencode-shared"` remains available for compatibility. It reads
+OpenCode's live database, validates the v0.20.7 account/tombstone schema,
+honors the compatible refresh lock, and never runs provider migrations against
+that database. This mode intentionally reintroduces cross-process ownership and
+is not required for the default deployment.
 
 ## Proxy
 
@@ -81,7 +110,8 @@ token unless you intentionally accept split ownership.
 
 - Model requests (chat completions).
 - Access-token refresh.
-- Device-code login in local compatibility mode (`login`).
+- Authoritative quota rechecks and periodic usage refreshes (`getUsageLimits`).
+- Device-code login into the provider-owned local store (`login`).
 
 A proxy may be required when a network reaches some model families directly but not others — for example, GPT requests succeed direct while Claude requests need an approved proxy egress and otherwise return HTTP 401/403.
 
@@ -91,9 +121,9 @@ Setting it, in order of precedence for `serve`:
 2. `KIRO_PROVIDER_PROXY_URL` (environment variable).
 3. `proxy_url` in the config file.
 
-`login` has no `--proxy` flag, so local-mode device-code login only picks up
-the environment variable or the config file value. Shared-mode authentication
-is initiated by OpenCode; provider-side refresh still honors `proxy_url`.
+`login` has no `--proxy` flag, so device-code login picks up the environment
+variable or config-file value. One-time import is local SQLite work and does
+not contact the network.
 
 ```bash
 KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
@@ -118,13 +148,17 @@ Only `http://` and `https://` schemes are accepted; an invalid or non-HTTP(S) UR
 - Authenticated `GET /ready` returns HTTP 200 only when the configured
   authentication source is readable, at least one active account exists, the
   provider database is writable, the reasoning keyring is available, and all
-  key IDs used by unexpired replay rows are present.
+  key IDs used by unexpired replay rows are present. Its `model_catalog`
+  object reports whether model metadata currently comes from live, stale,
+  static-fallback, or disabled discovery.
 
-`protocol_projection_mode: "safe"` is the production default. Because the
-live Kiro probe rejected the tested empty-label `additionalContext`, safe mode
-returns `unsupported_instruction_projection` for Responses `instructions`,
-OpenAI `system`/`developer`, and Anthropic `system`. It never falls back to a
-user prefix.
+`protocol_projection_mode: "safe"` is the production default. Live GPT and
+Claude probes showed that Kiro accepts a valid required-label
+`additionalContext` shape but does not preserve its instruction content or
+instruction-over-user priority. Safe mode therefore returns
+`unsupported_instruction_projection` for Responses `instructions`, OpenAI
+`system`/`developer`, and Anthropic `system`. It never falls back to a user
+prefix.
 
 `legacy-user-prefix` joins only the original instruction text with exactly
 `\n\n` and prefixes the first user turn. Startup emits a content-free
@@ -139,6 +173,26 @@ The exact accepted/rejected API subset is documented in
 The token-count endpoint uses the provider's fallback estimator because Kiro
 does not expose a standalone tokenizer. Its successful response includes
 `x-kiro-token-count-mode: estimate`.
+
+## Kiro runtime and model catalog
+
+Production requests default to `runtime_endpoint_mode: "kiro-runtime"`.
+Live A/B capture showed that `runtime.<region>.kiro.dev` emits authoritative
+completion witnesses required to distinguish a complete response from a clean
+but truncated stream: token-usage metadata completes immediately, while valid
+metering completes only when followed by clean EOF. The old SDK `q` endpoint
+may provide neither witness, so `legacy-q` is an explicit
+diagnostic/migration option rather than an automatic fallback.
+
+With `dynamic_model_catalog: true`, the provider calls Kiro's management
+`ListAvailableModels` operation using the selected account's current token and
+the truthful `AI_EDITOR` origin. Responses are cached per account, concurrent
+refreshes are deduplicated, and a last-known-good response may be used through
+`model_catalog_stale_ttl_ms`. A requested model is sent only to an account
+whose live/stale catalog contains its exact wire ID. If management is
+temporarily unreachable and no cached response exists, the checked-in catalog
+is used as a bounded fallback; unknown models are still rejected before SDK
+generation.
 
 ## Session affinity and connection reuse
 
@@ -160,16 +214,35 @@ With an explicit key, the provider stores only its tenant-isolated hash, the
 selected account ID, Kiro `conversationId`, and timestamps—not the original
 session value or prompt. One logical session is serialized in-process.
 Different accounts can execute concurrently, while requests sharing an
-account use one account queue. SDK clients and transport objects are cached
-per account. A rate-limit or unhealthy-account failover rebinds the session
-to the replacement account and rotates the Kiro conversation ID.
+account use one account queue. Transport objects are cached per account, and
+SDK clients are cached only while the account access token is unchanged. A
+token refresh rebuilds the SDK client against the new immutable credential
+while preserving the transport.
 
-Without an explicit key, no session binding is stored and every request gets
-a fresh Kiro conversation. Account selection and account-scoped SDK/transport
-object reuse still apply, so reuse does not depend on unsafe prompt
-fingerprinting. The Kiro SDK's direct/proxy agents use fresh sockets by default;
-`sdk_http_keep_alive: true` is an explicit opt-in for deployments that have
-validated pooled socket behavior.
+Accounts with `overage_count > 0`, or with a positive known limit where
+`used_count >= limit_count`, are excluded before refresh and SDK construction.
+An upstream HTTP 402 marks the account exhausted and excludes it from the
+current request without retrying it. A 401 or invalid-bearer 403 gets at most
+one forced refresh per account; if authentication still fails, that account is
+excluded for the rest of the request and the final response preserves HTTP
+401/403 instead of becoming `max_request_iterations` HTTP 500. A rate-limit,
+quota, authentication, or unhealthy-account failover rebinds the session to
+the replacement account and rotates the Kiro conversation ID.
+
+Standard clients that cannot send a stable metadata key still get a safe
+continuation path when they resend full history. After a completed assistant
+or tool output, the provider stores only a tenant-isolated fingerprint of that
+exact output lineage with its account and Kiro conversation. A later request
+whose latest assistant output matches that lineage reuses both. The first
+turn, a request without assistant history, or unmatched history starts a fresh
+Kiro conversation. User text, tool arguments, and initial prompts are never
+fingerprinted to guess identity.
+
+Account selection and account-scoped SDK/transport object reuse still apply
+when neither explicit nor history lineage is available. The Kiro SDK's
+direct/proxy agents use fresh sockets by default; `sdk_http_keep_alive: true`
+is an explicit opt-in for deployments that have validated pooled socket
+behavior.
 
 `legacy-initial-input` is migration-only. It restores the previous Responses
 initial-input, Chat `user`/initial-turn, and Anthropic
@@ -180,10 +253,12 @@ prepend, merge, delete, or otherwise modify model-visible request content.
 This maximizes logical-session and SDK-object reuse without tying a session to
 one physical TCP socket. Even when keep-alive is enabled, the Node/Smithy
 agent, proxy, remote server, idle timeout, and network can open a new socket.
-Across multiple provider processes, the provider SQLite database
-preserves the logical account/conversation binding, while the OpenCode
-database and refresh lock preserve authentication coordination. Queue
-serialization and socket pools remain per process.
+`enforce_single_instance: true` is therefore the production default: a second
+provider using the same service lock fails before binding, so account/session
+queues and socket pools cannot silently split across processes. If this guard
+is disabled or different lock paths are used, queue serialization becomes
+per-process; that is safe only with independent credentials/state or an
+external cross-process serializer.
 
 The gateway is stateless with respect to OpenAI response objects.
 `previous_response_id` and `conversation` therefore return
@@ -241,14 +316,29 @@ If you need a hard upper bound on connection lifetime regardless of client read 
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "safe",
   "session_affinity_mode": "explicit-only",
-  "auth_source": "opencode-shared",
+  "auth_source": "local",
   "opencode_auth_db_path": null,
   "proxy_url": null,
   "default_region": "us-east-1",
+  "enforce_single_instance": true,
+  "instance_lock_path": null,
+  "runtime_endpoint_mode": "kiro-runtime",
+  "dynamic_model_catalog": true,
+  "model_catalog_ttl_ms": 900000,
+  "model_catalog_stale_ttl_ms": 86400000,
+  "model_catalog_request_timeout_ms": 10000,
   "account_selection_strategy": "lowest-usage",
   "rate_limit_max_retries": 3,
   "sdk_http_keep_alive": false,
   "rate_limit_retry_delay_ms": 5000,
+  "quota_recheck_interval_ms": 900000,
+  "quota_recheck_timeout_ms": 10000,
+  "quota_recheck_concurrency": 4,
+  "account_maintenance_enabled": true,
+  "account_maintenance_interval_ms": 60000,
+  "account_maintenance_timeout_ms": 120000,
+  "account_maintenance_concurrency": 4,
+  "usage_refresh_interval_ms": 900000,
   "max_request_iterations": 20,
   "request_timeout_ms": 120000,
   "stream_idle_timeout_ms": 60000,

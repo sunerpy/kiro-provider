@@ -2,7 +2,11 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ManagedAccount } from "../kiro/types.js";
+import { isQuotaExhausted } from "../kiro/health.js";
+import type {
+	KiroUsageSnapshot,
+	ManagedAccount,
+} from "../kiro/types.js";
 
 const DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const WRITE_LOCK_DEADLINE_MS = 30_000;
@@ -214,6 +218,91 @@ export class OpenCodeAuthStore {
 				.run(resetTime, id);
 			const row = this.selectById(id);
 			return row === undefined ? undefined : rowToAccount(row);
+		});
+	}
+
+	markQuotaExhausted(
+		id: string,
+		recheckAfter: number,
+	): ManagedAccount | undefined {
+		return this.withImmediateTransaction(() => {
+			this.db
+				.query(`
+					UPDATE accounts
+					SET used_count = CASE
+							WHEN COALESCE(limit_count, 0) > 0
+							THEN MAX(COALESCE(used_count, 0), limit_count)
+							ELSE used_count
+						END,
+						rate_limit_reset = MAX(COALESCE(rate_limit_reset, 0), ?)
+					WHERE id = ?
+				`)
+				.run(recheckAfter, id);
+			const row = this.selectById(id);
+			return row === undefined ? undefined : rowToAccount(row);
+		});
+	}
+
+	scheduleQuotaRecheck(
+		id: string,
+		recheckAfter: number,
+	): ManagedAccount | undefined {
+		return this.withImmediateTransaction(() => {
+			const currentRow = this.selectById(id);
+			if (currentRow === undefined) return undefined;
+			const current = rowToAccount(currentRow);
+			if (!isQuotaExhausted(current)) return current;
+			this.db
+				.query(`
+					UPDATE accounts
+					SET rate_limit_reset = MAX(COALESCE(rate_limit_reset, 0), ?)
+					WHERE id = ?
+				`)
+				.run(recheckAfter, id);
+			const persisted = this.selectById(id);
+			return persisted === undefined ? undefined : rowToAccount(persisted);
+		});
+	}
+
+	updateQuotaUsage(
+		id: string,
+		usage: KiroUsageSnapshot & { readonly lastSync: number },
+		nextRecheckAt: number,
+	): ManagedAccount | undefined {
+		return this.withImmediateTransaction(() => {
+			const currentRow = this.selectById(id);
+			if (currentRow === undefined) return undefined;
+			const current = rowToAccount(currentRow);
+			if ((current.lastSync ?? 0) > usage.lastSync) return current;
+			const wasExhausted = isQuotaExhausted(current);
+			const snapshotExhausted = isQuotaExhausted(usage);
+			const rateLimitResetTime = snapshotExhausted
+				? Math.max(current.rateLimitResetTime, nextRecheckAt)
+				: wasExhausted
+					? 0
+					: current.rateLimitResetTime;
+			this.db
+				.query(`
+					UPDATE accounts
+					SET email = COALESCE(?, email),
+						used_count = ?,
+						limit_count = ?,
+						overage_count = ?,
+						last_sync = ?,
+						rate_limit_reset = ?
+					WHERE id = ?
+				`)
+				.run(
+					usage.email ?? null,
+					usage.usedCount,
+					usage.limitCount,
+					usage.overageCount,
+					usage.lastSync,
+					rateLimitResetTime,
+					id,
+				);
+			const persisted = this.selectById(id);
+			return persisted === undefined ? undefined : rowToAccount(persisted);
 		});
 	}
 

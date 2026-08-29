@@ -73,6 +73,8 @@ describe("transformToSdkRequest canonical boundary", () => {
 		});
 		expect(prepared.conversationState.chatTriggerType).toBe("MANUAL");
 		expect(typeof prepared.conversationState.conversationId).toBe("string");
+		expect(typeof prepared.conversationState.agentContinuationId).toBe("string");
+		expect(prepared.conversationState.agentTaskType).toBe("vibe");
 		expect(prepared.streaming).toBe(true);
 		expect(prepared.effectiveModel).toBe("claude-sonnet-4.5");
 	});
@@ -89,6 +91,25 @@ describe("transformToSdkRequest canonical boundary", () => {
 		expect(() =>
 			transformToSdkRequest(request([message("user", "q")]), "gpt-5.6-sol", auth),
 		).toThrow("does not match pipeline model");
+	});
+
+	test("reports an unknown static model as a field-level transform error", () => {
+		try {
+			transformToSdkRequest(
+				canonicalRequest([message("user", "q")], {
+					model: "not-a-real-model",
+				}),
+				"not-a-real-model",
+				auth,
+			);
+			throw new TypeError("Expected unsupported model rejection");
+		} catch (error) {
+			expect(error).toBeInstanceOf(RequestTransformError);
+			expect(error).toMatchObject({
+				code: "unsupported_model",
+				param: "model",
+			});
+		}
 	});
 
 	test("keeps consecutive user messages separate", () => {
@@ -143,7 +164,26 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
 		expect(JSON.stringify(prepared)).not.toContain("<thinking_mode>");
 	});
 
-	test("rejects multiple top-level text blocks instead of erasing their boundary", () => {
+	test("projects plain-text-only blocks by exact concatenation without separators", () => {
+		const prepared = transformToSdkRequest(
+			request([
+				message(
+					"user",
+					[
+						textPart("first\r\n", "messages.0.content.0"),
+						textPart("{second", "messages.0.content.1"),
+					],
+					"messages.0",
+				),
+			]),
+			MODEL,
+			auth,
+		);
+
+		expect(currentUserInput(prepared).content).toBe("first\r\n{second");
+	});
+
+	test("rejects multiple text blocks interleaved with non-text content", () => {
 		let caught: unknown;
 		try {
 			transformToSdkRequest(
@@ -152,7 +192,12 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
 						"user",
 						[
 							textPart("first", "messages.0.content.0"),
-							textPart("second", "messages.0.content.1"),
+							{
+								type: "image",
+								url: "data:image/png;base64,AQID",
+								path: "messages.0.content.1",
+							},
+							textPart("second", "messages.0.content.2"),
 						],
 						"messages.0",
 					),
@@ -168,7 +213,39 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
 		expect((caught as RequestTransformError).code).toBe(
 			"unsupported_content_block_projection",
 		);
-		expect((caught as RequestTransformError).param).toBe("messages.0.content.1");
+		expect((caught as RequestTransformError).param).toBe("messages.0.content.2");
+	});
+
+	test("projects inline files through Kiro native documents without prompt text", () => {
+		const prepared = transformToSdkRequest(
+			request([
+				message(
+					"user",
+					[
+						{
+							type: "document",
+							name: "notes.txt",
+							format: "txt",
+							data: "SGVsbG8=",
+							path: "messages.0.content.0",
+						},
+						textPart("Summarize.", "messages.0.content.1"),
+					],
+					"messages.0",
+				),
+			]),
+			MODEL,
+			auth,
+		);
+
+		expect(currentUserInput(prepared).content).toBe("Summarize.");
+		expect(currentUserInput(prepared).documents).toEqual([
+			{
+				name: "notes",
+				format: "txt",
+				source: { bytes: new Uint8Array([72, 101, 108, 108, 111]) },
+			},
+		]);
 	});
 
 	test("legacy mode separates every original instruction block with exact double newlines", () => {

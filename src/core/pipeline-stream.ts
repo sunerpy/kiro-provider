@@ -1,5 +1,6 @@
 import { transformSdkOutputStream } from "../kiro/transform/streaming/sdk-output-transformer.js";
 import type {
+  SdkOutputCaptureHandler,
   SdkOutputFingerprint,
   SdkReasoningCaptureHandler,
   SdkStreamResponse,
@@ -17,6 +18,7 @@ export interface PipelineStreamResult {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
+  readonly captureOutput?: SdkOutputCaptureHandler;
 }
 
 class StreamIdleTimeoutError extends Error {
@@ -70,10 +72,12 @@ export function createPipelineStreamResponse(
       ...(result.fingerprintOutput
         ? { fingerprintOutput: result.fingerprintOutput }
         : {}),
-      onCompletionMetadata: () => {
-        auditLog("info", "sdk_stream_completion_metadata_terminal", {
+      ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
+      onCompletionWitness: (kind) => {
+        auditLog("info", "sdk_stream_completion_witness", {
           model: result.model,
           conversation_hash: auditHash(result.conversationId),
+          witness_kind: kind,
         });
       },
       onRawEvent: (eventTypes) => {

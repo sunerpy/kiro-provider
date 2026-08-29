@@ -1,17 +1,29 @@
 import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-streaming-client";
 import type { Config } from "../config/schema.js";
+import type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
 import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
+import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
+
+export type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
+export type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 export interface PipelineAccountManager {
 	reconcileFromDb(): readonly ManagedAccount[];
-	selectHealthyAccount(preferredAccountId?: string): ManagedAccount | null;
+	selectHealthyAccount(
+		preferredAccountId?: string,
+		eligibleAccountIds?: ReadonlySet<string>,
+	): ManagedAccount | null;
 	getAccountCount(): number;
 	toAuthDetails(account: ManagedAccount): KiroAuthDetails;
 	markRateLimited(account: ManagedAccount, resetTime: number): unknown;
+	markQuotaExhausted?(
+		account: ManagedAccount,
+		recheckAfter: number,
+	): unknown;
 	markUnhealthy(
 		account: ManagedAccount,
 		reason: string,
@@ -78,11 +90,29 @@ export interface PipelineAffinityStore {
 		ttlMs: number,
 		maxEntries: number,
 	): PipelineAffinityBinding;
+	resolveOutputLineage(
+		keyHash: string,
+		now?: number,
+	): PipelineAffinityBinding | undefined;
+	recordOutputLineage(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): void;
 }
 
 export interface PipelineSessionAffinity {
 	readonly keyHash: string;
 	readonly source: string;
+}
+
+export interface PipelineLineageAffinity {
+	readonly lookupKeyHash?: string;
+	readonly source: string;
+	readonly outputKeyHash: (outputFingerprint: string) => string;
 }
 
 export type PipelineReasoningReplayStore = Pick<
@@ -97,11 +127,14 @@ export interface RunChatCompletionOptions {
 	readonly config: Config;
 	readonly accountManager: PipelineAccountManager;
 	readonly tokenRefresher: PipelineTokenRefresher;
-	readonly affinity?: PipelineSessionAffinity;
+	readonly quotaRechecker?: PipelineQuotaRechecker;
+		readonly affinity?: PipelineSessionAffinity;
+		readonly lineage?: PipelineLineageAffinity;
 	readonly affinityStore?: PipelineAffinityStore;
 	readonly tenantId?: string;
-	readonly reasoningReplayStore?: PipelineReasoningReplayStore;
-	readonly makeClient?: PipelineClientFactory;
+		readonly reasoningReplayStore?: PipelineReasoningReplayStore;
+		readonly modelCapabilities?: PipelineModelCapabilities;
+		readonly makeClient?: PipelineClientFactory;
 	readonly deadlineSignal?: AbortSignal;
 	readonly createStreamResponse?: typeof createPipelineStreamResponse;
 }

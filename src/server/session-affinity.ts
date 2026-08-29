@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../config/schema.js";
+import {
+	type CanonicalRequest,
+	latestAssistantLineageFingerprint,
+} from "../protocol/canonical.js";
 import type { AnthropicMessagesRequest } from "./anthropic/request-adapter.js";
 import type {
 	ChatCompletionRequest,
@@ -25,6 +29,15 @@ export interface SessionAffinityHint {
 }
 
 export type SessionAffinityMode = Config["session_affinity_mode"];
+
+export interface SessionLineageHint {
+	readonly lookupKeyHash?: string;
+	readonly source:
+		| "responses.history_lineage"
+		| "chat.history_lineage"
+		| "anthropic.history_lineage";
+	readonly outputKeyHash: (outputFingerprint: string) => string;
+}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -59,6 +72,54 @@ function affinityHash(
 			.update(stableJson(value))
 			.digest("hex"),
 		source,
+	};
+}
+
+function lineageHash(
+	tenantId: string,
+	protocol: "responses" | "chat" | "anthropic",
+	model: string,
+	outputFingerprint: string,
+): string {
+	return createHash("sha256")
+		.update("kiro-provider-output-lineage-v1\0")
+		.update(tenantId)
+		.update("\0")
+		.update(protocol)
+		.update("\0")
+		.update(model)
+		.update("\0")
+		.update(outputFingerprint)
+		.digest("hex");
+}
+
+export function canonicalSessionLineage(
+	request: CanonicalRequest,
+	tenantId: string | undefined,
+): SessionLineageHint | undefined {
+	if (!tenantId) return undefined;
+	const protocol =
+		request.protocol === "chat-completions"
+			? "chat"
+			: request.protocol === "anthropic-messages"
+				? "anthropic"
+				: "responses";
+	const source = `${protocol}.history_lineage` as SessionLineageHint["source"];
+	const previousOutput = latestAssistantLineageFingerprint(request);
+	return {
+		...(previousOutput !== undefined
+			? {
+					lookupKeyHash: lineageHash(
+						tenantId,
+						protocol,
+						request.model,
+						previousOutput,
+					),
+				}
+			: {}),
+		source,
+		outputKeyHash: (outputFingerprint) =>
+			lineageHash(tenantId, protocol, request.model, outputFingerprint),
 	};
 }
 

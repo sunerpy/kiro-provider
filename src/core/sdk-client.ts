@@ -15,7 +15,7 @@ import { auditHash, auditLog } from './audit-log.js'
 
 interface ClientCacheEntry {
   readonly client: CodeWhispererStreamingClient
-  readonly tokenState: { value: string }
+  readonly accessTokenHash: string
 }
 
 interface TransportCacheEntry {
@@ -62,13 +62,12 @@ export function buildClientConfig(
   region: string,
   resolvedEndpoint: string,
   proxyUrl?: string,
-  requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl, false),
-  tokenState: { value: string } = { value: auth.access }
+  requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl, false)
 ): CodeWhispererStreamingClientConfig {
   return {
     region,
     endpoint: resolvedEndpoint,
-    token: () => Promise.resolve({ token: tokenState.value }),
+    token: () => Promise.resolve({ token: auth.access }),
     maxAttempts: KIRO_CLI_MAX_ATTEMPTS,
     retryMode: 'standard',
     customUserAgent: [[KIRO_CONSTANTS.USER_AGENT]],
@@ -100,6 +99,13 @@ function fallbackAccountKey(auth: KiroAuthDetails): string {
     .digest('hex')
 }
 
+function accessTokenHash(accessToken: string): string {
+  return createHash('sha256')
+    .update('kiro-provider-sdk-access-token-v1\0')
+    .update(accessToken)
+    .digest('hex')
+}
+
 export function createSdkClient(
   auth: KiroAuthDetails,
   region: string,
@@ -124,7 +130,12 @@ export function createSdkClient(
     transportCache.set(transportKey, transport)
   }
   const cacheKey = JSON.stringify([transportKey, effort ?? null])
-  const cached = clientCache.get(cacheKey)
+  const cachedEntry = clientCache.get(cacheKey)
+  const currentAccessTokenHash = accessTokenHash(auth.access)
+  const tokenChanged =
+    cachedEntry !== undefined && cachedEntry.accessTokenHash !== currentAccessTokenHash
+  if (tokenChanged) clientCache.delete(cacheKey)
+  const cached = tokenChanged ? undefined : cachedEntry
   if (accountId !== undefined) {
     auditLog('info', 'sdk_connection_pool_selected', {
       account_hash: auditHash(accountId),
@@ -132,24 +143,14 @@ export function createSdkClient(
       effort: effort ?? null,
       http_keep_alive: httpKeepAlive,
       transport_pool_hit: transportPoolHit,
-      sdk_client_pool_hit: cached !== undefined
+      sdk_client_pool_hit: cached !== undefined,
+      sdk_client_rebuilt_for_token_change: tokenChanged
     })
   }
-  if (cached) {
-    cached.tokenState.value = auth.access
-    return cached.client
-  }
+  if (cached) return cached.client
 
-  const tokenState = { value: auth.access }
   const client = new CodeWhispererStreamingClient(
-    buildClientConfig(
-      auth,
-      region,
-      resolvedEndpoint,
-      proxyUrl,
-      transport.handler,
-      tokenState
-    )
+    buildClientConfig(auth, region, resolvedEndpoint, proxyUrl, transport.handler)
   )
 
   client.middlewareStack.add(
@@ -188,7 +189,10 @@ export function createSdkClient(
     )
   }
 
-  clientCache.set(cacheKey, { client, tokenState })
+  clientCache.set(cacheKey, {
+    client,
+    accessTokenHash: currentAccessTokenHash
+  })
   return client
 }
 

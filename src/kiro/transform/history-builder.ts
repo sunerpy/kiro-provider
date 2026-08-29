@@ -6,6 +6,7 @@ import type {
 import { textFromParts } from "../../protocol/canonical.js";
 import { KIRO_CONSTANTS } from "../constants.js";
 import type { CodeWhispererMessage } from "../types.js";
+import { toKiroDocument } from "./document-handler.js";
 import { RequestTransformError } from "./errors.js";
 import { convertImagesToKiroFormat, type UnifiedImage } from "./image-handler.js";
 
@@ -46,6 +47,23 @@ function canonicalImages(parts: readonly CanonicalContentPart[]): UnifiedImage[]
   return images;
 }
 
+function canonicalDocuments(
+  parts: readonly CanonicalContentPart[],
+): NonNullable<UserInput["documents"]> {
+  return parts.flatMap((part) =>
+    part.type === "document"
+      ? [
+          toKiroDocument({
+            name: part.name,
+            format: part.format,
+            data: part.data,
+            path: part.path,
+          }),
+        ]
+      : [],
+  );
+}
+
 function toolResults(parts: readonly CanonicalContentPart[]): ToolResult[] {
   return parts.flatMap((part) =>
     part.type === "tool_result"
@@ -83,6 +101,8 @@ function asUserInput(message: CanonicalMessage, resolved: string): UserInput {
     }
     userInput.images = converted.images;
   }
+  const documents = canonicalDocuments(message.content);
+  if (documents.length > 0) userInput.documents = documents;
   return userInput;
 }
 

@@ -497,7 +497,7 @@ describe("main", () => {
 		expect(harness.loaded).toHaveLength(0);
 		expect(harness.imports).toEqual([{ from: "/tmp/opencode.db" }]);
 		expect(harness.stderr).toEqual([
-			"WARNING: accounts import creates a snapshot; it does not share refresh-token state with opencode-kiro-auth.",
+			"Accounts imported into the provider-owned local database. kiro-provider will now refresh access tokens, usage, and account health independently.",
 		]);
 	});
 

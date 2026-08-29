@@ -52,6 +52,24 @@ export function isAccessTokenError(reason?: string): boolean {
   )
 }
 
+export function isQuotaExhausted(account: {
+  readonly usedCount?: number
+  readonly limitCount?: number
+  readonly overageCount?: number
+}): boolean {
+  const overageCount = account.overageCount ?? 0
+  if (Number.isFinite(overageCount) && overageCount > 0) return true
+
+  const usedCount = account.usedCount ?? 0
+  const limitCount = account.limitCount ?? 0
+  return (
+    Number.isFinite(usedCount) &&
+    Number.isFinite(limitCount) &&
+    limitCount > 0 &&
+    usedCount >= limitCount
+  )
+}
+
 /**
  * Back-compat alias. Semantics == refresh-token-dead == permanent (needs
  * re-auth). Preserved so callers that gate exclude/auto-heal/needs-reauth on

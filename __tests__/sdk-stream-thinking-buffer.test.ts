@@ -154,7 +154,7 @@ describe("SDK stream usage and finalization", () => {
 
 	test("treats token-usage metadata as terminal without waiting for transport EOF", async () => {
 		let closed = false;
-		let completions = 0;
+		const completions: string[] = [];
 		const response = {
 			generateAssistantResponseResponse: (async function* () {
 				try {
@@ -174,8 +174,8 @@ describe("SDK stream usage and finalization", () => {
 			"completion-metadata",
 			undefined,
 			{
-				onCompletionMetadata: () => {
-					completions += 1;
+				onCompletionWitness: (kind) => {
+					completions.push(kind);
 				},
 			},
 		)) {
@@ -186,8 +186,44 @@ describe("SDK stream usage and finalization", () => {
 
 		expect(contentOf(chunks)).toBe("answer");
 		expect(completionOf(chunks)?.finishReason).toBe("stop");
-		expect(completions).toBe(1);
+		expect(completions).toEqual(["token-usage-metadata"]);
 		expect(closed).toBe(true);
+	});
+
+	test("requires clean EOF after a valid metering completion witness", async () => {
+		const completions: string[] = [];
+		const response = {
+			generateAssistantResponseResponse: (async function* () {
+				yield { assistantResponseEvent: { content: "answer" } };
+				yield { metadataEvent: {} };
+				yield { contextUsageEvent: { contextUsagePercentage: 0.01 } };
+				yield {
+					meteringEvent: {
+						usage: 0.03,
+						unit: "credit",
+						unitPlural: "credits",
+					},
+				};
+			})(),
+		};
+		const chunks = [];
+		for await (const chunk of transformSdkOutputStream(
+			response,
+			"auto",
+			"completion-metering",
+			undefined,
+			{
+				onCompletionWitness: (kind) => {
+					completions.push(kind);
+				},
+			},
+		)) {
+			chunks.push(chunk);
+		}
+
+		expect(contentOf(chunks)).toBe("answer");
+		expect(completionOf(chunks)?.finishReason).toBe("stop");
+		expect(completions).toEqual(["metering-clean-eof"]);
 	});
 
 	test("does not treat context-only metadata as completion", async () => {

@@ -1,5 +1,11 @@
 # Kiro 协议投影、reasoning 与输出上限探针（2026-08-26）
 
+> 指令投影部分已被
+> [2026-08-27 合法 `additionalContext` 复探](kiro-protocol-projection-reprobe-2026-08-27.md)
+> 取代。本文空标签请求的 HTTP 400 仍是有效负控，但不能证明合法
+> `additionalContext` 结构会被拒绝；reasoning、输出上限和同角色消息结论不受
+> 影响。
+
 ## 结论
 
 - Kiro 当前链路不接受空 `name`/`description` 的 `additionalContext`；文本、

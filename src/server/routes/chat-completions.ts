@@ -4,6 +4,8 @@ import {
   type PipelineAccountManager,
   type PipelineAffinityStore,
   type PipelineClientFactory,
+  type PipelineModelCapabilities,
+  type PipelineQuotaRechecker,
   type PipelineReasoningReplayStore,
   type PipelineTokenRefresher,
   type RunChatCompletionOptions,
@@ -27,14 +29,19 @@ import type {
   RequestIdleTimeoutLease,
 } from "../request-lifecycle.js";
 import { parseChatCompletionRequest } from "../request-schema.js";
-import { chatSessionAffinity } from "../session-affinity.js";
+import {
+  canonicalSessionLineage,
+  chatSessionAffinity,
+} from "../session-affinity.js";
 
 export type ChatCompletionDependencies = {
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
+  readonly quotaRechecker?: PipelineQuotaRechecker;
   readonly tenantId?: string;
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
+  readonly modelCapabilities?: PipelineModelCapabilities;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
@@ -194,6 +201,7 @@ export async function handleChatCompletions(
       canonical.param,
     );
   }
+  const lineage = canonicalSessionLineage(canonical.value, dependencies.tenantId);
 
   let lease: RequestIdleTimeoutLease | undefined;
   let streamOwnsRouteResources = false;
@@ -215,13 +223,20 @@ export async function handleChatCompletions(
       config,
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
+      ...(dependencies.quotaRechecker
+        ? { quotaRechecker: dependencies.quotaRechecker }
+        : {}),
       ...(affinity ? { affinity } : {}),
+      ...(lineage ? { lineage } : {}),
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
         : {}),
       tenantId: dependencies.tenantId,
       ...(dependencies.reasoningReplayStore
         ? { reasoningReplayStore: dependencies.reasoningReplayStore }
+        : {}),
+      ...(dependencies.modelCapabilities
+        ? { modelCapabilities: dependencies.modelCapabilities }
         : {}),
       deadlineSignal: combinedSignal,
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),

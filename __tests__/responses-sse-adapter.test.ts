@@ -38,6 +38,7 @@ type ResponsesSseAdapterWithSignals = (
     readonly finalize: () => void;
     readonly bridge?: ResponsesToolBridge;
     readonly configuration: typeof DEFAULT_RESPONSE_CONFIGURATION;
+    readonly includeEncryptedReasoning: boolean;
   },
 ) => Response;
 
@@ -192,12 +193,12 @@ function chunk(
   return events.map((event) => JSON.stringify(event)).join("\n");
 }
 
-function startedEvent(): string {
+function startedEvent(model = "gpt-5.6-sol"): string {
   return JSON.stringify({
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     type: "started",
     conversationId: "conversation_test",
-    model: "gpt-5.6-sol",
+    model,
     createdAt: 1_700_000_000,
   });
 }
@@ -205,6 +206,7 @@ function startedEvent(): string {
 function makeHarness(
   parts: readonly Uint8Array[],
   end: "abort" | "close" | "stall" | "error" = "close",
+  model = "gpt-5.6-sol",
 ): {
   readonly response: Response;
   readonly state: HarnessState;
@@ -215,7 +217,7 @@ function makeHarness(
   const finalized = deferred();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(encoder.encode(`${startedEvent()}\n`));
+      controller.enqueue(encoder.encode(`${startedEvent(model)}\n`));
       for (const part of parts) controller.enqueue(part);
       if (end === "close") controller.close();
       if (end === "error") controller.error(new TypeError("upstream read failed"));
@@ -446,6 +448,7 @@ function adaptControlled(
     signals,
     finalize: harness.finalize,
     configuration: DEFAULT_RESPONSE_CONFIGURATION,
+    includeEncryptedReasoning: false,
   });
 }
 
@@ -491,12 +494,15 @@ async function adaptFull(
   bridge?: ResponsesToolBridge,
   configuration: typeof DEFAULT_RESPONSE_CONFIGURATION | typeof RICH_RESPONSE_CONFIGURATION =
     DEFAULT_RESPONSE_CONFIGURATION,
+  model = "gpt-5.6-sol",
+  includeEncryptedReasoning = false,
 ): Promise<ParsedEvent[]> {
   const response = responsesSseAdapter(harness.response, {
-    model: "gpt-5.6-sol",
+    model,
     signals: activeIngressSignals(),
     finalize: harness.finalize,
     configuration,
+    includeEncryptedReasoning,
     ...(bridge ? { bridge } : {}),
   });
   expect(response.headers.get("Content-Type")).toStartWith("text/event-stream");
@@ -515,8 +521,9 @@ const EXTENDED_LIFECYCLE_TYPES = new Set([
 async function adapt(
   harness: ReturnType<typeof makeHarness>,
   bridge?: ResponsesToolBridge,
+  model = "gpt-5.6-sol",
 ): Promise<ParsedEvent[]> {
-  return (await adaptFull(harness, bridge))
+  return (await adaptFull(harness, bridge, DEFAULT_RESPONSE_CONFIGURATION, model))
     .filter((event) => !EXTENDED_LIFECYCLE_TYPES.has(event.type))
     .map((event, sequenceNumber) => ({ ...event, sequenceNumber }));
 }
@@ -863,6 +870,106 @@ describe("responsesSseAdapter", () => {
     });
   });
 
+  test.each(["gpt-5.6-sol", "gpt-5.6-sol-max"])(
+    "omits the exact GPT Sol ellipsis reasoning placeholder for %s",
+    async (model) => {
+      const input = `${chunk({ reasoning_content: "." })}\n${chunk({ reasoning_content: ".." })}\n${chunk({ content: "answer" })}\n${chunk({}, "stop")}\n`;
+
+      const events = await adapt(
+        makeHarness([encoder.encode(input)], "stall", model),
+        undefined,
+        model,
+      );
+
+      expect(events.some((event) => event.type.startsWith("response.reasoning_"))).toBe(false);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "response.output_item.done" &&
+            isRecord(event.body.item) &&
+            event.body.item.type === "reasoning",
+        ),
+      ).toBe(false);
+      expect(events.at(-1)?.body).toMatchObject({
+        response: {
+          output: [{ type: "message", content: [{ text: "answer" }] }],
+        },
+      });
+    },
+  );
+
+  test("keeps an Opus ellipsis reasoning block unchanged", async () => {
+    const input = `${chunk({ reasoning_content: "..." })}\n${chunk({}, "stop")}\n`;
+
+    const events = await adapt(
+      makeHarness([encoder.encode(input)], "stall", "claude-opus-5"),
+      undefined,
+      "claude-opus-5",
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.reasoning_summary_text.delta",
+      "response.reasoning_summary_text.done",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    expect(events[4]?.body).toMatchObject({
+      item: { type: "reasoning", summary: [{ type: "summary_text", text: "..." }] },
+    });
+  });
+
+  test("keeps encrypted replay output while hiding the GPT Sol ellipsis summary", async () => {
+    const encrypted = JSON.stringify({
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      type: "reasoning_encrypted",
+      encryptedContent: "kr1_test-token",
+    });
+    const input = [
+      chunk({ reasoning_content: "..." }),
+      encrypted,
+      chunk({}, "stop"),
+    ].join("\n");
+
+    const events = await adaptFull(
+      makeHarness([encoder.encode(`${input}\n`)], "stall"),
+      undefined,
+      DEFAULT_RESPONSE_CONFIGURATION,
+      "gpt-5.6-sol",
+      true,
+    );
+
+    expect(
+      events.some((event) => event.type.startsWith("response.reasoning_summary_")),
+    ).toBe(false);
+    expect(
+      events.find(
+        (event) =>
+          event.type === "response.output_item.done" &&
+          isRecord(event.body.item) &&
+          event.body.item.type === "reasoning",
+      )?.body,
+    ).toMatchObject({
+      item: {
+        type: "reasoning",
+        summary: [],
+        encrypted_content: "kr1_test-token",
+      },
+    });
+    expect(events.at(-1)?.body).toMatchObject({
+      response: {
+        output: [
+          {
+            type: "reasoning",
+            summary: [],
+            encrypted_content: "kr1_test-token",
+          },
+        ],
+      },
+    });
+  });
+
   test("fails and cancels upstream on malformed NDJSON", async () => {
     const harness = makeHarness([encoder.encode("{not-json}\n")], "stall");
 
@@ -902,6 +1009,7 @@ describe("responsesSseAdapter", () => {
       signals: activeIngressSignals(),
       finalize: harness.finalize,
       configuration: DEFAULT_RESPONSE_CONFIGURATION,
+      includeEncryptedReasoning: false,
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("adapter response has no body");
@@ -1133,6 +1241,7 @@ describe("responsesSseAdapter", () => {
       signals: activeIngressSignals(),
       finalize: harness.finalize,
       configuration: DEFAULT_RESPONSE_CONFIGURATION,
+      includeEncryptedReasoning: false,
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("adapter response has no body");

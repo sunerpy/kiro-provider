@@ -1,11 +1,13 @@
 import type {
 	PipelineAccountManager,
+	PipelineModelCapabilities,
 	PipelineReasoningReplayStore,
 } from "../../core/pipeline.js";
 
 export function handleReadiness(
 	accountManager: PipelineAccountManager,
 	reasoningReplayStore?: PipelineReasoningReplayStore,
+	modelCapabilities?: PipelineModelCapabilities,
 ): Response {
 	try {
 		accountManager.reconcileFromDb();
@@ -41,7 +43,12 @@ export function handleReadiness(
 				);
 			}
 		}
-		return Response.json({ status: "ready" });
+		return Response.json({
+			status: "ready",
+			...(modelCapabilities
+				? { model_catalog: modelCapabilities.readiness() }
+				: {}),
+		});
 	} catch {
 		return Response.json(
 			{ status: "not_ready", reason: "authentication_store_unavailable" },

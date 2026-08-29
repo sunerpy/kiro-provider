@@ -3,9 +3,10 @@
 kiro-provider exposes `POST /v1/responses`, which is the wire API used by a
 Codex custom `model_provider` when `wire_api = "responses"` is selected.
 
-## Current v0.5.0-rc.3 status
+## Current v0.5.0-rc.4 status
 
-The compiled-service gate on 2026-08-27 used Codex CLI
+RC.4 changes local authentication ownership and maintenance, not this protocol
+projection boundary. The latest compiled-service Codex gate on 2026-08-27 used Codex CLI
 **0.150.0-alpha.9** with only a standard base URL, API key, model, and
 reasoning-effort setting. `claude-opus-5-max` passes provider model validation.
 The first field-level rejection before Kiro is:
@@ -52,17 +53,20 @@ EOF
 codex exec --skip-git-repo-check "Reply with exactly: CODEX_OK"
 ```
 
-For Codex 0.150.0-alpha.9, the expected RC.3 result is a non-zero exit with
+For Codex 0.150.0-alpha.9, the expected result is a non-zero exit with
 `unsupported_reasoning_summary` at `reasoning.summary`. A supported future request shape
 must then pass a real shell/custom-tool round trip, continuation, and reasoning
 replay across a provider restart before Codex can be marked supported.
 
-The gateway must already be running. In the default shared-auth mode, first
-authenticate Kiro with `opencode auth login` and require authenticated
-`GET /ready` to return 200. No private header or request-rewrite proxy is part
-of the acceptance contract.
+The gateway must already be running with its provider-owned local auth store
+populated by `kiro-provider login` or a one-time
+`kiro-provider accounts import`. Require authenticated `GET /ready` to return
+200. No private header or request-rewrite proxy is part of the acceptance
+contract.
 
-See the current evidence in
+See the RC.4 authentication lifecycle evidence in
+[`audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
+The latest Codex protocol evidence remains
 [`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
 The older [`E2E_VALIDATION_2026-08-22.md`](E2E_VALIDATION_2026-08-22.md) is a
 historical v0.4 record only.

@@ -3,9 +3,11 @@
 kiro-provider 为 Anthropic 兼容客户端提供 `POST /v1/messages` 和
 `POST /v1/messages/count_tokens`。
 
-## v0.5.0-rc.3 当前状态
+## v0.5.0-rc.4 当前状态
 
-2026-08-27 使用编译后二进制和 **Claude Code 2.1.209** 进行门禁；客户端只
+RC.4 修改的是本地认证权威与维护，不改变这里的协议投影边界。最近一次
+Claude Code 门禁于 2026-08-27 使用编译后二进制和 **Claude Code 2.1.209**；
+客户端只
 配置标准 `ANTHROPIC_BASE_URL`、API key、`claude-opus-5` 与 max effort。
 模型现在已通过 Provider 校验，随后请求会在调用 Kiro 前以
 `unsupported_parameter` 阻塞于 `context_management`。
@@ -31,14 +33,17 @@ claude --bare --safe-mode --model claude-opus-5 --effort max \
   -p "Reply with exactly: CLAUDE_CODE_OK"
 ```
 
-Claude Code 2.1.209 的 RC.3 预期结果是非零退出，并指出
+Claude Code 2.1.209 的预期结果是非零退出，并指出
 `context_management`。不要增加剥离字段的请求代理；真正支持该客户端需要
 等价原生实现，或客户端版本/配置发送已支持的请求形态。
 
-共享认证模式下先执行 `opencode auth login`，并要求带鉴权的 `GET /ready`
-返回 200。base URL 使用网关根地址，不追加 `/v1`。
+先通过 `kiro-provider login` 或一次性的 `kiro-provider accounts import`
+填充 provider 自有本地认证库，并要求带鉴权的 `GET /ready` 返回 200。
+base URL 使用网关根地址，不追加 `/v1`。
 
-当前证据见
+RC.4 认证生命周期证据见
+[`../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
+最近一次 Claude Code 协议证据仍为
 [`../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
 旧的 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
 仅是历史 v0.4 记录。
