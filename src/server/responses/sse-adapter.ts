@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
+  normalizeStreamFailure,
+  type StreamFailure,
+  type StreamFailureCode,
+  streamFailure,
+} from "../../core/stream-error.js";
+import {
   type CanonicalOutputEvent,
   type CanonicalOutputUsage,
   parseCanonicalOutputEventLine,
@@ -63,6 +69,10 @@ type TerminalFailure = {
   readonly code: string;
   readonly message: string;
 };
+
+function toTerminalFailure(failure: StreamFailure): TerminalFailure {
+  return { code: failure.code, message: failure.message };
+}
 
 type ToolCallAccumulator = {
   readonly itemId: string;
@@ -194,7 +204,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           outcome === "upstream-protocol-error"
         ) {
           const details = terminalFailure ?? {
-            code: "upstream_error",
+            code: "upstream_stream_error",
             message: "Upstream stream error",
           };
           emit(streamController, (sequence) =>
@@ -216,8 +226,18 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     );
     void boundedCleanup(() => reader.cancel(reason));
   };
-  const failProtocol = (message: string, code = "upstream_error"): void => {
+  const failProtocol = (
+    message: string,
+    code: StreamFailureCode = "upstream_protocol_error",
+  ): void => {
     beginTerminal("upstream-protocol-error", undefined, { code, message });
+  };
+  const failIncomplete = (): void => {
+    beginTerminal(
+      "upstream-error",
+      undefined,
+      toTerminalFailure(streamFailure("upstream_stream_incomplete")),
+    );
   };
   const onDeadlineAbort = (): void => {
     const reason =
@@ -225,7 +245,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         ? signals.deadline.reason
         : new DOMException("Request deadline exceeded", "TimeoutError");
     beginTerminal("deadline", reason, {
-      code: "upstream_error",
+      code: "request_deadline_exceeded",
       message: "Request deadline exceeded",
     });
   };
@@ -721,15 +741,19 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 addEvent(controller, event);
               }
             }
-            failProtocol("Upstream stream ended before completion");
+            failIncomplete();
             return;
           }
         } catch (error) {
           if (terminalOutcome !== undefined) return;
-          beginTerminal("upstream-error", error, {
-            code: "upstream_error",
-            message: "Upstream stream error",
-          });
+          const failure = normalizeStreamFailure(error);
+          beginTerminal(
+            failure.disposition === "fatal"
+              ? "upstream-protocol-error"
+              : "upstream-error",
+            error,
+            toTerminalFailure(failure),
+          );
         }
       },
       cancel(reason) {

@@ -120,6 +120,28 @@ describe("SDK stream protocol fidelity", () => {
 			signatureOnly.some((event) => event.type === "reasoning_signature"),
 		).toBe(false);
 	});
+
+	test("classifies contradictory reasoning metadata as a protocol error", async () => {
+		const drain = async (): Promise<void> => {
+			for await (const _event of transformSdkOutputStream(
+				makeSdkResponse([
+					{ reasoningContentEvent: { text: "reason", signature: "sig-a" } },
+					{ reasoningContentEvent: { signature: "sig-b" } },
+				]),
+				"claude-opus-5",
+				"conversation",
+				undefined,
+				{ emitAnthropicReasoningMetadata: true },
+			)) {
+				// Drain until the structural protocol error is raised.
+			}
+		};
+
+		await expect(drain()).rejects.toMatchObject({
+			name: "SdkStreamProtocolError",
+			code: "invalid_upstream_reasoning",
+		});
+	});
 });
 
 describe("SDK stream structural tool events", () => {

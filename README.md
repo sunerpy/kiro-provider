@@ -711,6 +711,9 @@ an explicit estimate. See
 
 The current account-management and live-usage validation record is in
 [`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
+The v0.5.0 typed stream-error contract and downstream Zuno handoff are in
+[`docs/STREAM_ERROR_CONTRACT.md`](docs/STREAM_ERROR_CONTRACT.md) and
+[`docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md`](docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md).
 The preceding local-auth lifecycle record is retained in
 [`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
 The preceding protocol/client matrix is retained in

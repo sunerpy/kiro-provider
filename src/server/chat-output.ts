@@ -1,5 +1,10 @@
 import { boundedCleanup, runCleanupSteps } from "../core/stream-cleanup.js";
 import {
+  normalizeStreamFailure,
+  type StreamFailure,
+  streamFailure,
+} from "../core/stream-error.js";
+import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
   parseCanonicalOutputEventLine,
@@ -251,6 +256,7 @@ export function canonicalOutputToChatSse(
   const beginTerminal = (
     outcome: ChatAdapterOutcome,
     reason?: unknown,
+    explicitFailure?: StreamFailure,
   ): void => {
     if (!claimTerminal(outcome)) return;
     if (outcome === "consumer-cancel") pendingFrames.length = 0;
@@ -265,17 +271,22 @@ export function canonicalOutputToChatSse(
           outcome === "upstream-error" ||
           outcome === "upstream-protocol-error"
         ) {
+          const failure =
+            explicitFailure ??
+            (outcome === "deadline"
+              ? streamFailure("request_deadline_exceeded")
+              : outcome === "upstream-protocol-error"
+                ? streamFailure("upstream_protocol_error")
+                : normalizeStreamFailure(reason));
           enqueueFrame(
             JSON.stringify({
               error: {
-                message:
-                  outcome === "deadline"
-                    ? "Request deadline exceeded"
-                    : "Upstream stream error",
+                message: failure.message,
                 type:
-                  outcome === "upstream-protocol-error"
+                  failure.disposition === "fatal"
                     ? "upstream_protocol_error"
                     : "upstream_error",
+                code: failure.code,
               },
             }),
           );
@@ -302,6 +313,20 @@ export function canonicalOutputToChatSse(
       signals.client.reason instanceof Error
         ? signals.client.reason
         : new DOMException("Client closed request", "AbortError"),
+    );
+  };
+  const failProtocol = (): void => {
+    beginTerminal(
+      "upstream-protocol-error",
+      undefined,
+      streamFailure("upstream_protocol_error"),
+    );
+  };
+  const failIncomplete = (): void => {
+    beginTerminal(
+      "upstream-error",
+      undefined,
+      streamFailure("upstream_stream_incomplete"),
     );
   };
   const acceptEvent = (event: CanonicalOutputEvent): boolean => {
@@ -382,7 +407,7 @@ export function canonicalOutputToChatSse(
               if (line.length === 0) continue;
               const event = parseCanonicalOutputEventLine(line);
               if (!event || !acceptEvent(event)) {
-                beginTerminal("upstream-protocol-error");
+                failProtocol();
                 return;
               }
               if (flushOne(controller)) return;
@@ -400,12 +425,12 @@ export function canonicalOutputToChatSse(
             if (finalLine.length > 0) {
               const event = parseCanonicalOutputEventLine(finalLine);
               if (!event || !acceptEvent(event)) {
-                beginTerminal("upstream-protocol-error");
+                failProtocol();
                 return;
               }
             }
             if (!completed) {
-              beginTerminal("upstream-protocol-error");
+              failIncomplete();
               return;
             }
             beginTerminal("normal-complete");

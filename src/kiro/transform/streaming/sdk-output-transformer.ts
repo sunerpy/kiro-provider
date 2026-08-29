@@ -17,6 +17,7 @@ import {
   type SdkOutputFingerprint,
   type SdkReasoningCaptureHandler,
   type SdkStreamEvent,
+  SdkStreamProtocolError,
   type SdkStreamResponse,
   SemanticStreamTruncationError,
   sdkEventTypes,
@@ -42,6 +43,7 @@ export interface TransformSdkOutputOptions {
 
 export class MissingSdkOutputStreamError extends Error {
   readonly name = "MissingSdkOutputStreamError";
+  readonly code = "missing_upstream_stream";
 
   constructor() {
     super("SDK response has no event stream");
@@ -125,10 +127,16 @@ export async function* transformSdkOutputStream(
 
       if (options.emitAnthropicReasoningMetadata) {
         if (reasoning.signatureConflict) {
-          throw new TypeError("Kiro emitted conflicting reasoning signatures");
+          throw new SdkStreamProtocolError(
+            "Kiro emitted conflicting reasoning signatures",
+            "invalid_upstream_reasoning",
+          );
         }
         if (reasoning.text.length > 0 && reasoning.redactedChunks.length > 0) {
-          throw new TypeError("Kiro mixed visible and redacted reasoning payloads");
+          throw new SdkStreamProtocolError(
+            "Kiro mixed visible and redacted reasoning payloads",
+            "invalid_upstream_reasoning",
+          );
         }
         if (
           assistantOutputStarted &&
@@ -136,8 +144,9 @@ export async function* transformSdkOutputStream(
           event.reasoningContentEvent?.signature !== undefined &&
           event.reasoningContentEvent.signature.length > 0
         ) {
-          throw new TypeError(
+          throw new SdkStreamProtocolError(
             "Kiro emitted a reasoning signature after assistant output began",
+            "invalid_upstream_reasoning",
           );
         }
       }

@@ -3,10 +3,11 @@
 kiro-provider exposes `POST /v1/messages` and
 `POST /v1/messages/count_tokens` for Anthropic-compatible clients.
 
-## Current v0.5.0-rc.5 status
+## v0.5.0 support boundary
 
-RC.5 adds provider-owned account operations and live usage refresh, not this protocol
-projection boundary. The latest compiled-service Claude Code gate on 2026-08-27 used
+v0.5.0 includes provider-owned account operations, live usage refresh, and
+typed stream failures. These do not change this protocol projection boundary.
+The latest compiled-service Claude Code gate on 2026-08-27 used
 **Claude Code 2.1.209** with only
 the standard `ANTHROPIC_BASE_URL`, API key, `claude-opus-5`, and max effort.
 The model now passes provider validation. The request is then rejected before

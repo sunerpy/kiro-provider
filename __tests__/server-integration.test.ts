@@ -368,6 +368,7 @@ describe("POST /v1/chat/completions", () => {
     expect(errorFrames).toEqual([
       {
         error: {
+          code: "upstream_stream_error",
           message: "Upstream stream error",
           type: "upstream_error",
         },

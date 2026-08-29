@@ -1322,7 +1322,11 @@ describe("runChatCompletion cancellation", () => {
     const first = await reader.read();
 
     // When / Then
-    await expect(reader.read()).rejects.toThrow(/idle timeout/i);
+    await expect(reader.read()).rejects.toMatchObject({
+      name: "StreamIdleTimeoutError",
+      code: "upstream_stream_idle_timeout",
+      message: expect.stringMatching(/idle timeout/i),
+    });
     expect(new TextDecoder().decode(first.value)).not.toContain("[DONE]");
   });
 

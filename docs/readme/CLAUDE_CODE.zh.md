@@ -3,9 +3,10 @@
 kiro-provider 为 Anthropic 兼容客户端提供 `POST /v1/messages` 和
 `POST /v1/messages/count_tokens`。
 
-## v0.5.0-rc.5 当前状态
+## v0.5.0 支持边界
 
-RC.5 增加的是 provider 自有账号运维与真实用量刷新，不改变这里的协议投影边界。最近一次
+v0.5.0 包含 provider 自有账号运维、真实用量刷新和类型化流错误；这些能力
+不改变这里的协议投影边界。最近一次
 Claude Code 门禁于 2026-08-27 使用编译后二进制和 **Claude Code 2.1.209**；
 客户端只
 配置标准 `ANTHROPIC_BASE_URL`、API key、`claude-opus-5` 与 max effort。
