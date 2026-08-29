@@ -122,7 +122,7 @@ async function dispatch(
 					{ database, stdout: dependencies.stdout },
 				);
 				dependencies.stderr(
-					"WARNING: accounts import creates a snapshot; it does not share refresh-token state with opencode-kiro-auth.",
+					"Accounts imported into the provider-owned local database. kiro-provider will now refresh access tokens, usage, and account health independently.",
 				);
 			} finally {
 				database.close();

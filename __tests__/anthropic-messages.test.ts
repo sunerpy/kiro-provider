@@ -766,7 +766,7 @@ describe("POST /v1/messages", () => {
       type: "error",
       error: {
         type: "invalid_request_error",
-        message: expect.stringContaining("model is not supported"),
+        message: expect.stringContaining("Output-token limiting is not available"),
       },
     });
   });

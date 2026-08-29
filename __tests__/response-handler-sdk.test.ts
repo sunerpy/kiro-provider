@@ -27,6 +27,31 @@ describe('transformSdkOutputStream direct SDK streaming contract', () => {
     expect(contentOf(chunks)).toBe('answer')
   })
 
+  test('does not emit completed when the upstream ends before metadata', async () => {
+    const transformed = transformSdkOutputStream(
+      {
+        generateAssistantResponseResponse: (async function* () {
+          yield { assistantResponseEvent: { content: 'partial' } }
+        })()
+      },
+      'auto',
+      'truncated'
+    )
+    const emitted: string[] = []
+    let caught: unknown
+    try {
+      for await (const event of transformed) emitted.push(event.type)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(emitted).toEqual(['started', 'text_delta'])
+    expect(caught).toMatchObject({
+      name: 'SemanticStreamTruncationError',
+      code: 'upstream_stream_incomplete'
+    })
+  })
+
   test('aborting mid-stream stops iteration and calls the source iterator return method', async () => {
     const controller = new AbortController()
     let returnCalled = false

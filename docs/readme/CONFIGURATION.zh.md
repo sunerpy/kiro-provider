@@ -13,7 +13,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为 `~/.config/kiro-provider/config.json`，若设置了 `XDG_CONFIG_HOME`，则为 `$XDG_CONFIG_HOME/kiro-provider/config.json`。账号管理子命令（`accounts list|import|remove`）只操作本地兼容存储，不加载网关配置，也不要求 `api_keys`。
+配置文件默认路径为 `~/.config/kiro-provider/config.json`，若设置了 `XDG_CONFIG_HOME`，则为 `$XDG_CONFIG_HOME/kiro-provider/config.json`。账号管理子命令（`accounts list|import|remove`）只操作 provider 自有本地认证库，不加载网关配置，也不要求 `api_keys`。
 
 ## 字段参考
 
@@ -25,14 +25,29 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
 | `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
 | `session_affinity_mode`     | `"explicit-only" \| "legacy-initial-input"`，默认 `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` 绝不从提示词推导逻辑会话；`legacy-initial-input` 临时恢复旧版初始输入指纹，但不会改变模型可见内容。                                                                                  |
-| `auth_source`                | `"opencode-shared" \| "local"`，默认 `"opencode-shared"`              | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。共享模式实时使用 OpenCode 的 Kiro 数据库和兼容刷新锁；本地模式使用 provider 自有账号库，并允许 `kiro-provider login`。                                                               |
+| `auth_source`                | `"local" \| "opencode-shared"`，默认 `"local"`                        | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。本地模式以 provider 自有账号库为权威，支持一次性导入 OpenCode 凭证或直接登录；共享模式仅作为显式兼容选项。                                                                             |
 | `opencode_auth_db_path`      | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | OpenCode Kiro 共享数据库的可选覆盖路径。`null` 使用 `$XDG_CONFIG_HOME/opencode/kiro.db` 或 `~/.config/opencode/kiro.db`；本地模式忽略此字段。                                                      |
-| `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。           |
+| `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、额度探测、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。 |
 | `default_region`             | `string`，默认 `"us-east-1"`                                           | `KIRO_PROVIDER_DEFAULT_REGION`             | `login` 使用的区域，以及没有单独 profile ARN 覆盖的账号所使用的区域。                                                                                                                              |
-| `sdk_http_keep_alive`       | `boolean`，默认 `false`                                               | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | 只控制 Kiro 模型调用 socket；两种模式都会缓存 SDK 客户端和 transport 对象。`false` 使用新的直连/代理 SDK socket，`true` 在部署验证后启用池化。令牌刷新与设备登录保持各自独立的传输策略。       |
+| `sdk_http_keep_alive`       | `boolean`，默认 `false`                                               | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | 只控制 Kiro 模型调用 socket。两种模式都会缓存 transport 对象；SDK 客户端只在 access token 未变化时复用，token 轮换后立即重建。`false` 使用新的直连/代理 SDK socket，`true` 在部署验证后启用池化。令牌刷新与设备登录保持各自独立的传输策略。       |
+| `enforce_single_instance`   | `boolean`，默认 `true`                                                | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`    | 绑定 HTTP 监听前取得服务进程锁，使账号/会话队列与 SDK 池只有一个所有者。只有各进程使用独立凭证/状态，或已有外部串行器时才应关闭。                                                                                              |
+| `instance_lock_path`        | `string \| null`，默认 `null`                                        | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`         | 可选服务锁目标。`null` 使用平台配置目录下的 `kiro-provider/service.instance`；POSIX 权限为 `0600`。不同路径会有意创建相互独立的进程域。                                                                                     |
+| `runtime_endpoint_mode`     | `"kiro-runtime" \| "legacy-q"`，默认 `"kiro-runtime"`               | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE`      | 默认使用实测确认的 Kiro runtime 端点。当前 runtime 的成功流以 token usage metadata，或合法 metering 后的 clean EOF 作为权威完成证据；`legacy-q` 仅保留用于诊断/迁移，且可能两者都不提供。                                                                                                  |
+| `dynamic_model_catalog`     | `boolean`，默认 `true`                                                | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG`      | 按可用账号分别调用 Kiro 管理面发现模型，只把请求路由到公开对应 wire model 的账号；管理面不可用时使用仓库内受限静态目录兜底。                                                                                                 |
+| `model_catalog_ttl_ms`      | 整数 `1`-`2147483647`，默认 `900000`（15 分钟）                       | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS`       | 每账号模型目录成功响应的新鲜期。                                                                                                                                                                                         |
+| `model_catalog_stale_ttl_ms` | 整数 `1`-`2147483647`，默认 `86400000`（24 小时）                    | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` | 刷新失败后允许继续使用最后一次成功目录的最长时间。                                                                                                                                                                       |
+| `model_catalog_request_timeout_ms` | 整数 `1`-`2147483647`，默认 `10000`                           | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` | 单次 Kiro 管理模型列表请求的超时。                                                                                                                                                                                |
 | `account_selection_strategy` | `"sticky" \| "round-robin" \| "lowest-usage"`，默认 `"lowest-usage"`   | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` | 每次请求如何选择账号：`sticky` 倾向复用同一账号，`round-robin` 轮询，`lowest-usage` 优先选剩余额度最多的账号。                                                                                     |
 | `rate_limit_max_retries`     | `number`，默认 `3`                                                     | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | 对可重试限流响应的最大重试次数。                                                                                                                                                                   |
 | `rate_limit_retry_delay_ms`  | `number`，默认 `5000`                                                  | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | 限流重试的基础延迟（毫秒）。                                                                                                                                                                       |
+| `quota_recheck_interval_ms`  | 整数 `1`-`2147483647`，默认 `900000`（15 分钟）                       | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`  | 已耗尽账号再次进入 Kiro 权威用量探测前的等待时间。HTTP 402、仍耗尽的快照或探测失败只会推进该时间，不会形成模型请求重试。                                                                            |
+| `quota_recheck_timeout_ms`   | 整数 `1`-`2147483647`，默认 `10000`                                   | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`   | 同时限制请求前置额度探测批次与每个已启动账号探测。超时后账号继续排除，并安排下一次探测。                                                                                                           |
+| `quota_recheck_concurrency`  | 整数 `1`-`32`，默认 `4`                                               | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`  | 同时探测的到期耗尽账号上限；并发请求会加入同一个账号的在途探测。                                                                                                                                   |
+| `account_maintenance_enabled` | `boolean`，默认 `true`                                               | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` | 启用 provider 自有的后台令牌与用量维护。只有明确由外部运维系统接管该生命周期时才应关闭。                                                                                                           |
+| `account_maintenance_interval_ms` | 整数 `1000`-`2147483647`，默认 `60000`                          | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` | 后台维护批次间隔；服务启动后会很快安排首个批次。                                                                                                                                               |
+| `account_maintenance_timeout_ms` | 整数 `1000`-`2147483647`，默认 `120000`                           | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` | 单个全账号维护批次的绝对截止时间。                                                                                                                                                              |
+| `account_maintenance_concurrency` | 整数 `1`-`32`，默认 `4`                                          | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` | 主动刷新 access token 的最大并发数。                                                                                                                                                            |
+| `usage_refresh_interval_ms`  | 整数 `1000`-`2147483647`，默认 `900000`（15 分钟）                    | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`  | 普通账号用量快照允许的最大陈旧时间；超过后后台调用 Kiro `getUsageLimits`。已耗尽账号继续使用独立的额度复查周期。                                                                                  |
 | `max_request_iterations`     | `number`，默认 `20`                                                    | `KIRO_PROVIDER_MAX_REQUEST_ITERATIONS`     | 单次请求内账号切换与重试循环的总迭代次数上限。                                                                                                                                                     |
 | `request_timeout_ms`         | 整数，`1`-`2147483647`，默认 `120000`                                  | `KIRO_PROVIDER_REQUEST_TIMEOUT_MS`         | 单次请求的绝对超时时间（毫秒）。取值范围与已知限制见[超时字段的取值范围](#超时字段的取值范围)。                                                                                                    |
 | `stream_idle_timeout_ms`     | 整数，`1`-`2147483647`，默认 `60000`                                   | `KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS`     | 流式响应中两次上游事件之间允许的最大空闲间隔（毫秒），超过则中止流。取值范围见[超时字段的取值范围](#超时字段的取值范围)。                                                                          |
@@ -51,28 +66,36 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 
 ## 认证事实源
 
-`auth_source: "opencode-shared"` 是生产默认值。Provider 会：
+`auth_source: "local"` 是生产默认值，以
+`~/.config/kiro-provider/accounts.db` 作为唯一认证事实源。可直接设备码登录，
+也可从已有 OpenCode + `opencode-kiro-auth` 数据库一次性导入：
 
-- 打开 `opencode_auth_db_path` 指定的数据库，或 OpenCode 的平台默认 Kiro
-  数据库。
-- 要求符合 v0.20.7 的账号/墓碑 schema；缺少必要列时默认拒绝启动，不会迁移
-  或改写上游 schema。
-- 每次进入账号选择流程时同步账号新增、重新登录、token 轮换、墓碑、健康与
-  用量状态。
-- 使用与 `opencode-kiro-auth` 相同的每账号锁文件约定和有界等待策略，并在
-  获得锁后重新读取最新 token。
-- 先持久化刷新结果，再对请求发布；使用完整 token/login 快照做
-  compare-and-swap，防止旧的在途刷新覆盖更新的重新登录。
+```bash
+kiro-provider login
+# 或：
+kiro-provider accounts import
+# 非默认源：
+kiro-provider accounts import --from /path/to/kiro.db
+```
 
-请运行 `opencode auth login` 并选择 Kiro。共享模式下执行
-`kiro-provider login` 会明确提示改用 OpenCode，不会悄悄创建第二个认证
-所有者。
+导入会复制活跃账号凭证与用量，不会保留实时链接、共享锁或 OpenCode 运行期
+依赖。导入完成后，kiro-provider 会独立完成：
 
-`auth_source: "local"` 只用于隔离兼容部署，使用
-`~/.config/kiro-provider/accounts.db`。`kiro-provider login`、
-`accounts list|import|remove` 与快照导入都只作用于该存储。不要让本地快照与
-OpenCode 同时持有同一个会轮换的 refresh token，除非你明确接受认证所有权
-分裂的风险。
+- 主动刷新临近过期的 access token，并先持久化再使用；
+- token 变化时重建绑定凭据的 SDK client，同时保留账号 transport；
+- 后台刷新普通账号的陈旧用量；
+- 在 token 刷新和 SDK 构建前排除已耗尽账号；
+- 只在持久化复查时间到期时探测耗尽账号，并仅在权威快照确认额度恢复后回池；
+- 将永久失效的 refresh credential 标记为不健康，不让其进入模型重试循环；
+- 去重同账号探测，并限制后台维护并发。
+
+一个会轮换的 refresh token 只应由一个认证所有者维护。导入后继续让独立运行
+的 OpenCode 插件使用同一账号可能产生 token 轮换竞争；再次导入应是明确的
+运维动作，而不是运行期同步方式。
+
+`auth_source: "opencode-shared"` 仍保留为兼容选项：它实时读取 OpenCode
+数据库、校验 v0.20.7 账号/墓碑 schema、遵守兼容刷新锁，且绝不对该数据库
+执行 provider 迁移。该模式会重新引入跨进程所有权，默认部署不需要它。
 
 ## 代理
 
@@ -80,7 +103,8 @@ OpenCode 同时持有同一个会轮换的 refresh token，除非你明确接受
 
 - 模型请求（chat completions）。
 - 访问令牌刷新。
-- 本地兼容模式的设备码登录（`login`）。
+- 权威额度复查与周期用量刷新（`getUsageLimits`）。
+- 登录到 provider 自有本地认证库的设备码流程（`login`）。
 
 某些网络环境下，一部分模型系列可以直连，另一部分不能 —— 例如 GPT 请求直连成功，而 Claude 请求需要走审批过的代理出网，否则会返回 HTTP 401/403。
 
@@ -90,9 +114,8 @@ OpenCode 同时持有同一个会轮换的 refresh token，除非你明确接受
 2. `KIRO_PROVIDER_PROXY_URL`（环境变量）。
 3. 配置文件中的 `proxy_url`。
 
-`login` 没有 `--proxy` 参数，因此本地模式的设备码登录只会读取环境变量或
-配置文件中的值。共享模式的首次认证由 OpenCode 发起；provider 自身的 token
-刷新仍会遵守 `proxy_url`。
+`login` 没有 `--proxy` 参数，因此设备码登录只会读取环境变量或配置文件中的
+值。一次性导入只是本地 SQLite 操作，不访问网络。
 
 ```bash
 KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
@@ -114,11 +137,13 @@ KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
   `enable_legacy_chat_completions: true` 后才开放。
 - 需鉴权的 `GET /ready` 只有在认证事实源可读、至少存在一个活跃账号、Provider
   数据库可写、reasoning 密钥环可用，并且所有未过期回放记录引用的 key ID 都已
-  覆盖时才返回 HTTP 200。
+  覆盖时才返回 HTTP 200。其 `model_catalog` 对象还会说明当前模型信息来自
+  实时、陈旧缓存、静态兜底或已禁用的动态发现。
 
-`protocol_projection_mode: "safe"` 是生产默认值。实时 Kiro 探针已经证明，
-被测试的空标签 `additionalContext` 会遭到拒绝；因此 safe 模式对 Responses
-`instructions`、OpenAI `system`/`developer` 与 Anthropic `system` 返回
+`protocol_projection_mode: "safe"` 是生产默认值。GPT 与 Claude 实时探针已经
+证明，Kiro 会接受合法非空标签的 `additionalContext` 结构，但不会保留其中的
+指令内容或指令高于 user 的优先级。因此 safe 模式对 Responses `instructions`、
+OpenAI `system`/`developer` 与 Anthropic `system` 返回
 `unsupported_instruction_projection`，不会自动回退到 user 前缀。
 
 `legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本，并前置到首个 user
@@ -132,6 +157,21 @@ v0.6.x 保留，计划在 v0.7.0 删除。
 Kiro 没有提供独立 tokenizer，因此 count-tokens 接口使用 provider
 现有的回退估算器；成功响应会携带
 `x-kiro-token-count-mode: estimate`。
+
+## Kiro runtime 与模型目录
+
+生产请求默认使用 `runtime_endpoint_mode: "kiro-runtime"`。实时 A/B 抓包表明，
+`runtime.<region>.kiro.dev` 会给出区分“完整响应”和“干净但被截断流”所需的
+权威完成证据：token usage metadata 可立即完成，合法 metering 只有随后为
+clean EOF 时才完成。旧 SDK `q` 端点可能两者都不提供。因此 `legacy-q`
+只是显式诊断/迁移选项，不会作为自动回退。
+
+启用 `dynamic_model_catalog` 后，Provider 使用所选账号的当前令牌和真实
+`AI_EDITOR` origin 调用 Kiro 管理面的 `ListAvailableModels`。响应按账号缓存，
+并发刷新会合并；刷新失败时可在 `model_catalog_stale_ttl_ms` 内使用最后一次
+成功结果。请求只会发送给实时/缓存目录中包含精确 wire ID 的账号。若管理面
+暂不可达且没有缓存，则使用仓库内目录做受限兜底；未知模型仍会在调用 SDK
+前被拒绝。
 
 ## 会话亲和与连接复用
 
@@ -149,14 +189,28 @@ Kiro 没有提供独立 tokenizer，因此 count-tokens 接口使用 provider
 
 存在显式键时，Provider SQLite 只保存按租户隔离的键哈希、选中的账号 ID、
 Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同一逻辑会话在
-单进程内串行；不同账号可并行；共享同一账号的请求经过账号队列。SDK 客户端和
-transport 对象按账号缓存。遇到限流或不健康账号时，会话会重绑到替代账号并
-更换 Kiro `conversationId`。
+单进程内串行；不同账号可并行；共享同一账号的请求经过账号队列。transport
+对象按账号缓存；SDK 客户端只在该账号 access token 未变化时缓存。token 刷新
+后会用新的不可变凭据重建 SDK 客户端，同时保留 transport。
 
-缺少显式键时，不保存会话绑定，每个请求都创建新的 Kiro conversation。
-账号选择和账号级 SDK/transport 对象复用仍然生效，因此复用不依赖不安全的
-prompt 指纹。Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境已经
-验证池化 socket 行为时，才显式设置 `sdk_http_keep_alive: true`。
+`overage_count > 0`，或已知正数上限且 `used_count >= limit_count` 的账号，会在
+刷新 token 和创建 SDK 前直接排除。上游 HTTP 402 会把账号标记为额度耗尽，并
+从当前请求排除，不会重试同一账号。HTTP 401 或 invalid-bearer 403 对每个账号
+最多强制刷新一次；刷新后仍失败时，该账号在本请求剩余阶段保持排除，最终响应
+保留 HTTP 401/403，不再变成 `max_request_iterations` HTTP 500。遇到限流、额度
+耗尽、认证失败或不健康账号时，会话会重绑到替代账号并更换 Kiro
+`conversationId`。
+
+无法发送稳定 metadata 的标准客户端，在重传完整历史时仍有安全续轮路径。
+一次完整 assistant/tool 输出结束后，Provider 只保存该精确输出 lineage 的
+租户隔离指纹、账号与 Kiro conversation；后续请求最新 assistant 输出命中时，
+复用同一账号和 conversation。首轮、没有 assistant 历史或未命中的历史会创建
+新 conversation。Provider 不会对 user 文本、工具参数或初始 prompt 做指纹来
+猜测会话。
+
+既没有显式键也没有历史 lineage 时，账号选择与账号级 SDK/transport 对象
+复用仍然生效。Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境
+已经验证池化 socket 行为时，才显式设置 `sdk_http_keep_alive: true`。
 
 `legacy-initial-input` 仅用于迁移，会恢复旧版 Responses 初始输入、Chat
 `user`/首回合，以及 Anthropic `metadata.user_id`/首回合推导。启动时输出
@@ -165,9 +219,10 @@ prompt 指纹。Kiro SDK 的直连/代理 agent 默认使用新 socket；只有�
 
 这里复用的是逻辑会话与 SDK 对象，不把会话绑定到固定物理 TCP socket。即使
 开启 keep-alive，Node/Smithy Agent、代理、远端服务、空闲超时与网络仍可能
-创建新 socket。多进程部署时，provider SQLite 共享逻辑账号/会话绑定，
-OpenCode 数据库和刷新锁协调认证；
-排队串行和 socket 池仍是每进程独立。
+创建新 socket。因此生产默认 `enforce_single_instance: true`：第二个使用
+同一服务锁的 Provider 会在绑定端口前失败，避免账号/会话队列与 socket 池被
+静默拆到多个进程。若关闭该保护或使用不同锁路径，队列只在各自进程内串行；
+只有凭证/状态彼此独立，或已有外部跨进程串行器时才安全。
 
 本网关不保存 OpenAI response 对象状态，因此 `previous_response_id` 与
 `conversation` 会返回 `unsupported_stateful_responses`，不会被静默忽略；
@@ -218,14 +273,29 @@ export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "safe",
   "session_affinity_mode": "explicit-only",
-  "auth_source": "opencode-shared",
+  "auth_source": "local",
   "opencode_auth_db_path": null,
   "proxy_url": null,
   "default_region": "us-east-1",
   "sdk_http_keep_alive": false,
+  "enforce_single_instance": true,
+  "instance_lock_path": null,
+  "runtime_endpoint_mode": "kiro-runtime",
+  "dynamic_model_catalog": true,
+  "model_catalog_ttl_ms": 900000,
+  "model_catalog_stale_ttl_ms": 86400000,
+  "model_catalog_request_timeout_ms": 10000,
   "account_selection_strategy": "lowest-usage",
   "rate_limit_max_retries": 3,
   "rate_limit_retry_delay_ms": 5000,
+  "quota_recheck_interval_ms": 900000,
+  "quota_recheck_timeout_ms": 10000,
+  "quota_recheck_concurrency": 4,
+  "account_maintenance_enabled": true,
+  "account_maintenance_interval_ms": 60000,
+  "account_maintenance_timeout_ms": 120000,
+  "account_maintenance_concurrency": 4,
+  "usage_refresh_interval_ms": 900000,
   "max_request_iterations": 20,
   "request_timeout_ms": 120000,
   "stream_idle_timeout_ms": 60000,

@@ -2,10 +2,17 @@
  * `GET /v1/models` handler.
  *
  * Returns both the standard OpenAI models-list envelope and the provider-owned
- * Codex model catalog envelope. Both are sourced from the frozen T10 model
- * catalog SSOT (`MODEL_CATALOG`).
+ * Codex model catalog envelope. Live per-account Kiro management data is used
+ * when available; the checked-in catalog is the bounded last-resort fallback.
  */
+import type {
+  PipelineAccountManager,
+  PipelineModelCapabilities,
+  PipelineQuotaRechecker,
+  PipelineTokenRefresher
+} from '../../core/pipeline.js'
 import { supportsEffort, supportsXHighEffort } from '../../kiro/effort.js'
+import { isQuotaExhausted } from '../../kiro/health.js'
 import { MODEL_CATALOG, type ModelCatalogEntry } from '../../kiro/model-catalog.js'
 
 const CATALOG_CREATED_AT = 1_700_000_000
@@ -40,17 +47,21 @@ function codexInputModalities(entry: ModelCatalogEntry): Array<'text' | 'image'>
   return entry.modalities.input.includes('image') ? ['text', 'image'] : ['text']
 }
 
-function codexModel(entry: ModelCatalogEntry, index: number): Readonly<Record<string, unknown>> {
+function codexModel(
+  entry: ModelCatalogEntry,
+  index: number,
+  catalogSize: number
+): Readonly<Record<string, unknown>> {
   return {
     slug: entry.id,
     display_name: entry.name,
-    description: null,
+    description: entry.description ?? null,
     default_reasoning_level: codexDefaultReasoningLevel(entry),
     supported_reasoning_levels: codexReasoningLevels(entry.wireId),
     shell_type: 'unified_exec',
     visibility: 'list',
     supported_in_api: true,
-    priority: MODEL_CATALOG.length - index,
+    priority: catalogSize - index,
     upgrade: null,
     // The provider never injects or owns a hidden client prompt.
     base_instructions: '',
@@ -77,8 +88,42 @@ function codexModel(entry: ModelCatalogEntry, index: number): Readonly<Record<st
   }
 }
 
-export function handleModels(): Response {
-  const data = MODEL_CATALOG.map((entry) => ({
+export async function handleModels(
+  modelCapabilities?: PipelineModelCapabilities,
+  accountManager?: PipelineAccountManager,
+  tokenRefresher?: PipelineTokenRefresher,
+  signal?: AbortSignal,
+  quotaRechecker?: PipelineQuotaRechecker
+): Promise<Response> {
+  if (modelCapabilities && accountManager && tokenRefresher) {
+    const requestSignal = signal ?? new AbortController().signal
+    let accounts = accountManager.reconcileFromDb()
+    if (quotaRechecker) {
+      await quotaRechecker.recheckDueAccounts(accounts, requestSignal)
+      accounts = accountManager.reconcileFromDb()
+    }
+    accounts = accounts.filter((account) => !isQuotaExhausted(account))
+    const refreshed = await Promise.allSettled(
+      accounts.map(async (account) => {
+        const current = await tokenRefresher.refreshIfNeeded(
+          account,
+          accountManager.toAuthDetails(account),
+          requestSignal
+        )
+        return current
+      })
+    )
+    const available = refreshed.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : []
+    )
+    await modelCapabilities.refreshAccounts(
+      available,
+      (account) => accountManager.toAuthDetails(account),
+      requestSignal
+    )
+  }
+  const catalog = modelCapabilities?.catalog() ?? MODEL_CATALOG
+  const data = catalog.map((entry) => ({
     id: entry.id,
     object: 'model' as const,
     created: CATALOG_CREATED_AT,
@@ -86,9 +131,15 @@ export function handleModels(): Response {
     name: entry.name,
     context_limit: entry.contextLimit,
     output_limit: entry.outputLimit,
-    modalities: entry.modalities
+    modalities: entry.modalities,
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+    ...(entry.rateMultiplier !== undefined
+      ? { rate_multiplier: entry.rateMultiplier }
+      : {})
   }))
-  const models = MODEL_CATALOG.map(codexModel)
+  const models = catalog.map((entry, index) =>
+    codexModel(entry, index, catalog.length)
+  )
 
   return new Response(JSON.stringify({ object: 'list', data, models }), {
     status: 200,

@@ -3,6 +3,11 @@ import {
 	OpenCodeAuthStore,
 } from "../auth/opencode-auth-store.js";
 import type { Config } from "../config/schema.js";
+import {
+	AccountMaintenanceService,
+	bindAccountMaintenanceLifecycle,
+	type PipelineAccountMaintenance,
+} from "../core/account-maintenance.js";
 import { AccountManager } from "../core/account-manager.js";
 import { auditLog } from "../core/audit-log.js";
 import {
@@ -13,10 +18,12 @@ import type {
   PipelineAccountManager,
   PipelineAffinityStore,
   PipelineClientFactory,
+  PipelineQuotaRechecker,
   PipelineReasoningReplayStore,
   PipelineTokenRefresher,
 } from "../core/pipeline.js";
 import { resolveProxyUrl } from "../core/proxy.js";
+import { QuotaRechecker } from "../core/quota-rechecker.js";
 import {
   boundedCleanup,
   CLEANUP_GRACE_MS,
@@ -24,6 +31,10 @@ import {
   safeStep,
 } from "../core/stream-cleanup.js";
 import { TokenRefresher } from "../core/token-refresher.js";
+import {
+	ModelCapabilityService,
+	type PipelineModelCapabilities,
+} from "../kiro/model-capabilities.js";
 import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
 import { anthropicError } from "./anthropic/errors.js";
@@ -42,6 +53,10 @@ import {
 import { handleModels } from "./routes/models.js";
 import { handleReadiness } from "./routes/readiness.js";
 import { handleResponses } from "./routes/responses.js";
+import {
+	acquireServiceInstanceLock,
+	bindServiceInstanceLease,
+} from "./single-instance.js";
 
 export type {
   RequestIdleTimeoutLease,
@@ -51,8 +66,11 @@ export type {
 export type AppDependencies = {
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
+  readonly quotaRechecker?: PipelineQuotaRechecker;
+  readonly accountMaintenance?: PipelineAccountMaintenance;
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
+  readonly modelCapabilities?: PipelineModelCapabilities;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: RequestIdleTimeoutLeaseMaker;
 };
@@ -99,10 +117,25 @@ export type ServerDependencyFactories = {
 		tokenExpiryBufferMs: number,
 		proxyUrl?: string,
 	) => PipelineTokenRefresher;
+	readonly createQuotaRechecker?: (
+		accountManager: AccountManager | OpenCodeAccountManager,
+		tokenRefresher: PipelineTokenRefresher,
+		config: Config,
+		proxyUrl?: string,
+	) => PipelineQuotaRechecker;
+	readonly createAccountMaintenance?: (
+		accountManager: AccountManager | OpenCodeAccountManager,
+		tokenRefresher: PipelineTokenRefresher,
+		quotaRechecker: PipelineQuotaRechecker,
+		config: Config,
+	) => PipelineAccountMaintenance;
 	readonly createReasoningReplayStore?: (
 		database: AccountsDatabase,
 		config: Config,
 	) => PipelineReasoningReplayStore;
+	readonly createModelCapabilityService?: (
+		config: Config,
+	) => PipelineModelCapabilities;
 };
 
 export function createApp(config: Config, dependencies: AppDependencies): AppFetchHandler {
@@ -129,12 +162,18 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
     const routeDependencies = {
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
+      ...(dependencies.quotaRechecker
+        ? { quotaRechecker: dependencies.quotaRechecker }
+        : {}),
       tenantId: auth.tenantId,
       ...(dependencies.affinityStore
         ? { affinityStore: dependencies.affinityStore }
         : {}),
       ...(dependencies.reasoningReplayStore
         ? { reasoningReplayStore: dependencies.reasoningReplayStore }
+        : {}),
+      ...(dependencies.modelCapabilities
+        ? { modelCapabilities: dependencies.modelCapabilities }
         : {}),
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
       ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
@@ -164,12 +203,19 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
         return await handleMessageTokenCount(request, config);
       }
       if (request.method === "GET" && url.pathname === "/v1/models") {
-        return handleModels();
+        return await handleModels(
+          dependencies.modelCapabilities,
+          dependencies.accountManager,
+          dependencies.tokenRefresher,
+          request.signal,
+          dependencies.quotaRechecker,
+        );
       }
       if (request.method === "GET" && url.pathname === "/ready") {
         return handleReadiness(
           dependencies.accountManager,
           dependencies.reasoningReplayStore,
+          dependencies.modelCapabilities,
         );
       }
       return openAiError(404, "Route not found", "invalid_request_error", "not_found");
@@ -204,6 +250,9 @@ export function buildServerDeps(
 	const reasoningReplayStore =
 		factories.createReasoningReplayStore?.(database, config) ??
 		new ReasoningReplayStore(database, config);
+	const modelCapabilities =
+		factories.createModelCapabilityService?.(config) ??
+		new ModelCapabilityService(config);
 	const proxyUrl = resolveProxyUrl(config);
 	if (config.auth_source === "opencode-shared") {
 		const authStorePath =
@@ -228,11 +277,47 @@ export function buildServerDeps(
 					config.token_expiry_buffer_ms,
 					proxyUrl,
 				);
+		const quotaRechecker =
+			factories.createQuotaRechecker?.(
+				accountManager,
+				tokenRefresher,
+				config,
+				proxyUrl,
+			) ??
+				new QuotaRechecker({
+					accountManager,
+					tokenRefresher,
+					intervalMs: config.quota_recheck_interval_ms,
+					usageRefreshIntervalMs: config.usage_refresh_interval_ms,
+					timeoutMs: config.quota_recheck_timeout_ms,
+				concurrency: config.quota_recheck_concurrency,
+					proxyUrl,
+				});
+		const accountMaintenance =
+			factories.createAccountMaintenance?.(
+				accountManager,
+				tokenRefresher,
+				quotaRechecker,
+				config,
+			) ??
+			new AccountMaintenanceService({
+				enabled: config.account_maintenance_enabled,
+				intervalMs: config.account_maintenance_interval_ms,
+				timeoutMs: config.account_maintenance_timeout_ms,
+				concurrency: config.account_maintenance_concurrency,
+				tokenExpiryBufferMs: config.token_expiry_buffer_ms,
+				accountManager,
+				tokenRefresher,
+				usageRefresher: quotaRechecker,
+			});
 		return {
 			accountManager,
 			tokenRefresher,
+			quotaRechecker,
+			accountMaintenance,
 			affinityStore: database,
 			reasoningReplayStore,
+			modelCapabilities,
 		};
 	}
 
@@ -244,11 +329,42 @@ export function buildServerDeps(
 	const tokenRefresher = factories.createTokenRefresher
     ? factories.createTokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl)
     : new TokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl);
+  const quotaRechecker =
+    factories.createQuotaRechecker?.(accountManager, tokenRefresher, config, proxyUrl) ??
+    new QuotaRechecker({
+      accountManager,
+      tokenRefresher,
+      intervalMs: config.quota_recheck_interval_ms,
+      usageRefreshIntervalMs: config.usage_refresh_interval_ms,
+      timeoutMs: config.quota_recheck_timeout_ms,
+      concurrency: config.quota_recheck_concurrency,
+      proxyUrl,
+    });
+  const accountMaintenance =
+    factories.createAccountMaintenance?.(
+      accountManager,
+      tokenRefresher,
+      quotaRechecker,
+      config,
+    ) ??
+    new AccountMaintenanceService({
+      enabled: config.account_maintenance_enabled,
+      intervalMs: config.account_maintenance_interval_ms,
+      timeoutMs: config.account_maintenance_timeout_ms,
+      concurrency: config.account_maintenance_concurrency,
+      tokenExpiryBufferMs: config.token_expiry_buffer_ms,
+      accountManager,
+      tokenRefresher,
+      usageRefresher: quotaRechecker,
+    });
   return {
     accountManager,
     tokenRefresher,
+    quotaRechecker,
+    accountMaintenance,
     affinityStore: database,
     reasoningReplayStore,
+    modelCapabilities,
   };
 }
 
@@ -264,5 +380,17 @@ export function buildServeOptions(
 }
 
 export function startServer(config: Config): ReturnType<typeof Bun.serve> {
-  return Bun.serve(buildServeOptions(config, buildServerDeps(config)));
+	const lease = acquireServiceInstanceLock(config);
+	try {
+		const dependencies = buildServerDeps(config);
+		const server = Bun.serve(buildServeOptions(config, dependencies));
+		const leasedServer = bindServiceInstanceLease(server, lease);
+		return bindAccountMaintenanceLifecycle(
+			leasedServer,
+			dependencies.accountMaintenance,
+		);
+	} catch (error) {
+		lease?.release();
+		throw error;
+	}
 }

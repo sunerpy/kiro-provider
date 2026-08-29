@@ -396,6 +396,43 @@ describe("POST /v1/responses", () => {
     });
   });
 
+  test("omits the GPT Sol ellipsis reasoning placeholder from a streamed response", async () => {
+    const server = scriptedServer([eventsWith({ reasoning: "...", text: "visible answer" })]);
+
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      stream: true,
+    });
+    const frames = parseSseFrames(await response.text());
+
+    expect(response.status).toBe(200);
+    expect(
+      frames.some(
+        (frame) =>
+          typeof frame.type === "string" &&
+          frame.type.startsWith("response.reasoning_"),
+      ),
+    ).toBe(false);
+    expect(
+      frames.some(
+        (frame) =>
+          frame.type === "response.output_item.done" &&
+          typeOfNested(frame, "item") === "reasoning",
+      ),
+    ).toBe(false);
+    expect(frames.find((frame) => frame.type === "response.completed")).toMatchObject({
+      response: {
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "visible answer" }],
+          },
+        ],
+      },
+    });
+  });
+
   test("uses the schema default when stream is omitted", async () => {
     // Given
     const server = scriptedServer([eventsWith({ text: "default JSON" })]);
@@ -421,6 +458,37 @@ describe("POST /v1/responses", () => {
       role: "assistant",
       status: "completed",
       content: [{ type: "output_text", text: "default JSON", annotations: [] }],
+    });
+  });
+
+  test("accepts Zed-style multiple input_text blocks and projects exact concatenated bytes", async () => {
+    const server = scriptedServer([eventsWith({ text: "accepted" })]);
+
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "file context\r\n" },
+            { type: "input_text", text: "{user request" },
+          ],
+        },
+      ],
+      stream: false,
+    });
+
+    expect(response.status).toBe(200);
+    expect(server.capturedCommandInputs).toHaveLength(1);
+    expect(server.capturedCommandInputs[0]).toMatchObject({
+      conversationState: {
+        currentMessage: {
+          userInputMessage: {
+            content: "file context\r\n{user request",
+          },
+        },
+      },
     });
   });
 
@@ -689,6 +757,53 @@ describe("POST /v1/responses", () => {
     });
   });
 
+  test("omits only the GPT Sol ellipsis placeholder from a non-stream response", async () => {
+    const server = scriptedServer([eventsWith({ reasoning: "...", text: "json answer" })]);
+
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      stream: false,
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      output: [
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "json answer" }],
+        },
+      ],
+    });
+    if (!isReadonlyRecord(body) || !Array.isArray(body.output)) {
+      throw new TypeError("Responses body must contain output items");
+    }
+    expect(body.output).toHaveLength(1);
+  });
+
+  test("keeps an Opus ellipsis reasoning block in a non-stream response", async () => {
+    const server = scriptedServer([eventsWith({ reasoning: "...", text: "json answer" })]);
+
+    const response = await postResponse(server, {
+      model: "claude-opus-5",
+      input: "hello",
+      stream: false,
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      output: [
+        { type: "reasoning", summary: [{ type: "summary_text", text: "..." }] },
+        {
+          type: "message",
+          content: [{ type: "output_text", text: "json answer" }],
+        },
+      ],
+    });
+  });
+
   test("echoes accepted request configuration and sends the native Claude output limit", async () => {
     const server = scriptedServer(
       [eventsWith({ text: "configured answer" })],
@@ -830,7 +945,7 @@ describe("POST /v1/responses", () => {
             name: "kiro_custom_0",
             toolUseId: "call_exec",
             input: JSON.stringify({ input: "printf ok" }),
-            stop: false,
+            stop: true,
           },
         },
         {
@@ -1006,7 +1121,7 @@ describe("POST /v1/responses", () => {
             name: "plain",
             toolUseId: "call_plain",
             input: "{}",
-            stop: false,
+            stop: true,
           },
         },
         {

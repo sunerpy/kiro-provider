@@ -7,16 +7,22 @@ import {
 import {
   appendReasoningCapture,
   appendToolFragment,
+  assertSupportedSdkEvent,
   createReasoningCaptureState,
+  isCompletionMetadataEvent,
+  isCompletionMeteringEvent,
   nextSdkEvent,
   resolveReasoningCapture,
   resolveUsage,
+  type SdkOutputCaptureHandler,
   type SdkOutputFingerprint,
   type SdkReasoningCaptureHandler,
   type SdkStreamResponse,
+  SemanticStreamTruncationError,
   type ToolCallState,
   type UsageState,
-  updateUsageState
+  updateUsageState,
+  validateCompletedToolCalls
 } from './streaming/sdk-stream-runtime.js'
 
 export interface CollectSdkResponseOptions {
@@ -24,6 +30,7 @@ export interface CollectSdkResponseOptions {
   readonly emitEncryptedReasoning?: boolean
   readonly emitAnthropicReasoningMetadata?: boolean
   readonly fingerprintOutput?: SdkOutputFingerprint
+  readonly captureOutput?: SdkOutputCaptureHandler
 }
 
 export class MissingSdkEventStreamError extends Error {
@@ -51,6 +58,7 @@ export async function collectSdkResponse(
   const reasoning = createReasoningCaptureState()
   let iteratorFinished = false
   let iteratorClosed = false
+  let completionWitnessSeen = false
 
   try {
     while (true) {
@@ -66,14 +74,31 @@ export async function collectSdkResponse(
       }
 
       const event = next.result.value
+      assertSupportedSdkEvent(event)
       updateUsageState(usage, event)
       appendReasoningCapture(reasoning, event.reasoningContentEvent)
+      if (isCompletionMetadataEvent(event)) {
+        completionWitnessSeen = true
+        iteratorClosed = true
+        try {
+          const closing = iterator.return?.()
+          if (closing) void Promise.resolve(closing).catch(() => undefined)
+        } catch {
+          // Completion metadata is authoritative; cleanup failures must not erase it.
+        }
+        break
+      }
+      if (isCompletionMeteringEvent(event)) completionWitnessSeen = true
       content += event.assistantResponseEvent?.content ?? ''
       appendToolFragment(toolCalls, event.toolUseEvent)
     }
   } finally {
     if (!iteratorFinished && !iteratorClosed && iterator.return) await iterator.return()
   }
+
+  if (signal?.aborted) throw signal.reason
+  if (!completionWitnessSeen) throw new SemanticStreamTruncationError()
+  validateCompletedToolCalls(toolCalls)
 
   const resolvedUsage = resolveUsage(usage, content, model)
   const captured = resolveReasoningCapture(reasoning)
@@ -87,6 +112,7 @@ export async function collectSdkResponse(
   }
   const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output)
   const encryptedContent = options.captureReasoning?.(captured, outputFingerprint)
+  options.captureOutput?.(output, outputFingerprint)
   const canonicalReasoning: CanonicalOutputReasoning = {
     ...(captured.text ? { text: captured.text } : {}),
     ...(options.emitAnthropicReasoningMetadata && captured.signature !== undefined

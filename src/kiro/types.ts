@@ -18,6 +18,13 @@ export interface KiroAuthDetails {
   profileArn?: string
 }
 
+export interface KiroUsageSnapshot {
+  usedCount: number
+  limitCount: number
+  overageCount: number
+  email?: string
+}
+
 export interface RefreshParts {
   refreshToken: string
   clientId?: string
@@ -57,6 +64,11 @@ export interface CodeWhispererMessage {
     modelId: string
     origin: string
     images?: Array<{ format: string; source: { bytes: Uint8Array } }>
+    documents?: Array<{
+      name: string
+      format: 'csv' | 'doc' | 'docx' | 'html' | 'md' | 'pdf' | 'txt' | 'xls' | 'xlsx'
+      source: { bytes: Uint8Array }
+    }>
     userInputMessageContext?: {
       toolResults?: Array<{
         toolUseId: string
@@ -89,6 +101,8 @@ export interface CodeWhispererRequest {
   conversationState: {
     chatTriggerType: string
     conversationId: string
+    agentContinuationId?: string
+    agentTaskType?: 'vibe' | 'spectask'
     history?: CodeWhispererMessage[]
     currentMessage: CodeWhispererMessage
   }

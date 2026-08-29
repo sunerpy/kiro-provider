@@ -83,6 +83,136 @@ describe('AccountManager health persistence', () => {
     expect(manager.getCurrentOrNext()?.id).toBe('B')
   })
 
+  test('persists an authoritative quota exhaustion signal and skips the account', () => {
+    const [db] = createDatabasePair()
+    const first = db.insertAccount(account('A', { usedCount: 90, limitCount: 100 }))
+    const second = db.insertAccount(account('B', { usedCount: 20, limitCount: 100 }))
+    const manager = new AccountManager([first, second], 'sticky', db)
+    const recheckAfter = Date.now() + 60_000
+
+    const updated = manager.markQuotaExhausted(first, recheckAfter)
+
+    expect(updated).toMatchObject({
+      usedCount: 100,
+      limitCount: 100,
+      rateLimitResetTime: recheckAfter
+    })
+    expect(db.getById('A')).toMatchObject({
+      usedCount: 100,
+      rateLimitResetTime: recheckAfter
+    })
+    expect(manager.selectHealthyAccount()?.id).toBe('B')
+  })
+
+  test('restores exact quota usage without overwriting a concurrent token update', () => {
+    const [managerDb, externalDb] = createDatabasePair()
+    const stale = managerDb.insertAccount(
+      account('A', {
+        usedCount: 100,
+        limitCount: 100,
+        rateLimitResetTime: Date.now() - 1,
+        lastSync: 10
+      })
+    )
+    const manager = new AccountManager([stale], 'sticky', managerDb)
+    externalDb.updateExistingAccounts([{ ...stale, accessToken: 'external-access' }])
+
+    const updated = manager.updateQuotaUsage(
+      stale,
+      {
+        usedCount: 0,
+        limitCount: 100,
+        overageCount: 0,
+        lastSync: 20
+      },
+      0
+    )
+
+    expect(updated).toMatchObject({
+      accessToken: 'external-access',
+      usedCount: 0,
+      limitCount: 100,
+      overageCount: 0,
+      lastSync: 20,
+      rateLimitResetTime: 0
+    })
+    expect(manager.selectHealthyAccount()?.id).toBe('A')
+  })
+
+  test('does not overwrite a newer external quota snapshot', () => {
+    const [managerDb, externalDb] = createDatabasePair()
+    const stale = managerDb.insertAccount(
+      account('A', { usedCount: 100, limitCount: 100, lastSync: 10 })
+    )
+    const manager = new AccountManager([stale], 'sticky', managerDb)
+    externalDb.updateExistingAccounts([
+      {
+        ...stale,
+        usedCount: 5,
+        limitCount: 100,
+        lastSync: 30,
+        rateLimitResetTime: 0
+      }
+    ])
+
+    const updated = manager.updateQuotaUsage(
+      stale,
+      {
+        usedCount: 100,
+        limitCount: 100,
+        overageCount: 0,
+        lastSync: 20
+      },
+      Date.now() + 60_000
+    )
+
+    expect(updated).toMatchObject({
+      usedCount: 5,
+      limitCount: 100,
+      lastSync: 30,
+      rateLimitResetTime: 0
+    })
+  })
+
+  test('usage refresh preserves a non-quota cooldown and health state', () => {
+    const [db] = createDatabasePair()
+    const cooldown = Date.now() + 60_000
+    const stored = db.insertAccount(
+      account('A', {
+        rateLimitResetTime: cooldown,
+        isHealthy: false,
+        unhealthyReason: 'temporary upstream failure',
+        recoveryTime: cooldown,
+        failCount: 10,
+        usedCount: 20,
+        limitCount: 100,
+        lastSync: 10
+      })
+    )
+    const manager = new AccountManager([stored], 'sticky', db)
+
+    const updated = manager.updateQuotaUsage(
+      stored,
+      {
+        usedCount: 25,
+        limitCount: 100,
+        overageCount: 0,
+        lastSync: 20
+      },
+      0
+    )
+
+    expect(updated).toMatchObject({
+      rateLimitResetTime: cooldown,
+      isHealthy: false,
+      unhealthyReason: 'temporary upstream failure',
+      recoveryTime: cooldown,
+      failCount: 10,
+      usedCount: 25,
+      lastSync: 20
+    })
+  })
+
   test('patches health onto the latest row without overwriting a concurrent token update', () => {
     // Given
     const [managerDb, externalDb] = createDatabasePair()
@@ -141,10 +271,20 @@ describe('AccountManager selection metrics', () => {
   test('honors a selectable session-preferred account before the global strategy', () => {
     const [db] = createDatabasePair()
     const first = db.insertAccount(account('A', { usedCount: 0 }))
-    const second = db.insertAccount(account('B', { usedCount: 100 }))
+    const second = db.insertAccount(account('B', { usedCount: 99 }))
     const manager = new AccountManager([first, second], 'lowest-usage', db)
 
     expect(manager.selectHealthyAccount('B')?.id).toBe('B')
+  })
+
+  test('does not select a preferred account whose quota is exhausted', () => {
+    const [db] = createDatabasePair()
+    const available = db.insertAccount(account('A', { usedCount: 50, limitCount: 100 }))
+    const exhausted = db.insertAccount(account('B', { usedCount: 100, limitCount: 100 }))
+    const manager = new AccountManager([available, exhausted], 'lowest-usage', db)
+
+    expect(manager.selectHealthyAccount('B')?.id).toBe('A')
+    expect(db.getById('B')?.usedCount).toBe(100)
   })
 
   test('reports account count and the shortest active rate-limit wait', () => {

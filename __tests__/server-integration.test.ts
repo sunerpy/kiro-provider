@@ -156,10 +156,24 @@ function makeClientFor(body: Record<string, unknown>): PipelineClientFactory {
               stop: true,
             },
           },
+          {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 7, outputTokens: 5, totalTokens: 12 },
+            },
+          },
         ]),
       );
     }
-    return client(sdkResponse([{ assistantResponseEvent: { content: "json answer" } }]));
+    return client(
+      sdkResponse([
+        { assistantResponseEvent: { content: "json answer" } },
+        {
+          metadataEvent: {
+            tokenUsage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+          },
+        },
+      ]),
+    );
   };
 }
 

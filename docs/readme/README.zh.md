@@ -31,16 +31,17 @@
 - OpenAI Responses `POST /v1/responses` 与 Anthropic Messages `POST /v1/messages`（均支持流式和非流式），以及 `POST /v1/messages/count_tokens`、`GET /v1/models`、`GET /health` 和需鉴权的 `GET /ready`。
 - 旧版 OpenAI Chat Completions 位于 `POST /v1/chat/completions`，默认关闭，必须通过 `enable_legacy_chat_completions` 显式开启。
 - Bearer API Key 校验，且默认拒绝启动：未配置任何 Key 时服务不会启动，默认绑定地址为 `127.0.0.1`。
-- 默认实时复用 OpenCode 认证：`auth_source: "opencode-shared"` 直接读取同一个 `~/.config/opencode/kiro.db`，遵守墓碑、更新共享健康/用量状态，并复用 `opencode-kiro-auth` v0.20.7 的账号 schema 与刷新锁行为。
-- 默认只使用显式会话亲和：Responses 可通过标准 `metadata`、兼容 `client_metadata` 或 `prompt_cache_key` 选择加入；没有显式键时绝不从提示词推导会话身份。配套的 Zuno 原生 OpenAI transport 会自动发送 `metadata.zuno_session_id`。
-- 账号级调度与缓存的 SDK/transport 对象：不同账号可以并行，同一账号上的 Kiro 流不会重叠；访问令牌刷新只更新缓存客户端。Kiro 模型调用的 HTTP keep-alive 默认关闭，必须显式选择开启。
+- 默认使用 provider 自有认证库：`auth_source: "local"` 将凭证保存在 `~/.config/kiro-provider/accounts.db`。已有 `opencode-kiro-auth` 账号可通过 `kiro-provider accounts import` 一次性导入；之后 token、用量、额度恢复和账号健康均由 kiro-provider 独立维护，不再读取或锁定 OpenCode 数据库。
+- 默认只使用显式会话亲和：Responses 可通过标准 `metadata`、兼容 `client_metadata` 或 `prompt_cache_key` 选择加入；重传完整历史的标准客户端也能通过精确的上轮 assistant 输出 lineage 续轮。Provider 绝不会对 user prompt 做指纹来猜会话。配套的 Zuno 原生 OpenAI transport 会自动发送 `metadata.zuno_session_id`。
+- 账号级调度与缓存的 SDK/transport 对象：不同账号可以并行，同一账号上的 Kiro 流不会重叠；access token 轮换时重建绑定凭据的 SDK client，但保留账号 transport。生产默认服务锁会阻止多个进程静默拆分队列和池。Kiro 模型调用的 HTTP keep-alive 默认关闭，必须显式选择开启。
+- 通过 Kiro 管理面实时按账号发现模型并做账号感知路由，提供受限的陈旧缓存/静态兜底；生产调用使用实测确认的 `runtime.<region>.kiro.dev` 方言。带 token usage 的 metadata 是立即完成证据；当前 runtime 的合法 metering 只有后续为 clean EOF 时才被接受。
 - 默认 `safe` 模式零 provider 自有提示词注入：统一输入 IR 保留客户端文本、
   角色、内容块边界、工具身份、顺序与来源路径；Kiro 输出先进入独立的统一
   completion/event IR，再编码为各外部协议。
 - 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
-- 多账号轮询、自动令牌刷新与故障切换。共享模式以 OpenCode 数据库为认证事实源，provider 数据库只保存会话亲和等状态。
-- 显式设置 `auth_source: "local"` 后仍可使用 `kiro-provider login` 与 `accounts import`；导入结果只是快照，不能与实时共享认证混为一谈。
-- 单一全局 `proxy_url`：一旦设置，所有上游出网流量（模型请求、令牌刷新、设备码登录）都会走同一个 HTTP(S) 代理。
+- 多账号轮询、自动令牌刷新与故障切换。耗尽账号不会进入模型尝试，只有经过有界、去重的 Kiro 用量探测确认新额度周期后才自动回池；后台维护循环还会在服务空闲时刷新临近过期的 token 和陈旧用量。
+- `kiro-provider login` 与 `accounts import` 直接写入 provider 自有本地认证库。`auth_source: "opencode-shared"` 仅保留为显式兼容选项；一次导入后不再需要它。
+- 单一全局 `proxy_url`：一旦设置，所有上游出网流量（模型请求、令牌刷新、额度探测、设备码登录）都会走同一个 HTTP(S) 代理。
 - 通过 `bun build --compile` 打包为单文件可执行文件，目标机器无需额外运行时依赖。
 
 ## 协议兼容范围
@@ -54,33 +55,40 @@ v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静�
 
 - 普通文本、连续同角色回合、function/custom 工具声明、调用和结果保持原始
   结构与顺序；
-- 同一消息包含多个顶层文本块时返回
-  `unsupported_content_block_projection`；Kiro 只有一个文本字段，直接拼接
-  会抹掉块边界；
+- 纯文本顶层块在统一 IR 中仍保持独立，只在 Kiro 单文本字段边界按原字节
+  无分隔拼接；若多个文本块与图片或工具内容交错，仍返回
+  `unsupported_content_block_projection`；
 - safe 模式下 `instructions`、`system`、`developer` 返回
-  `unsupported_instruction_projection`，因为实测 Kiro 的
-  `additionalContext` 通道被拒绝；
+  `unsupported_instruction_projection`，因为实测 Kiro 虽接受合法的
+  `additionalContext` 结构，却没有保留其中的指令内容或优先级；
 - 支持 `tool_choice: auto`；`parallel_tool_calls: false` 只在没有可调用工具
   （包括 `tool_choice: none`）时作为无副作用字段接受，否则返回
   `unsupported_parallel_tool_calls`；required/指定工具、strict schema、
   custom grammar 和 namespace 工具会被拒绝，不会被弱化；
 - 支持 base64/data URL 图片；远程图片 URL 与 detail 控制会被拒绝；
+- Responses `input_file` 支持 Kiro 原生格式的内联 base64/data URL 文档。
+  Canonical 请求保留原始文件名；降级时把已识别扩展名放入独立 `format`
+  字段，并在 SDK 调用前校验去扩展名后的 ASCII 名称。任何需要有损改名的
+  输入返回 `invalid_file_name`；因 Provider 没有 OpenAI 文件存储，
+  `file_id` 引用会被拒绝；
 - 输出 token 上限已对 `claude-sonnet-5` 与 `claude-opus-5` 变体的
   1,024–128,000 范围完成探针确认；
+- Responses 只隐藏 GPT 5.6 Sol 返回的精确 `...`/`…` reasoning 占位块；
+  Opus reasoning、Sol 的非占位 reasoning、effort 映射与加密回放均不变；
 - Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
   搜索或引用事件。
 
-2026-08-27 编译后二进制的当前门禁：RC.3 公开
-`claude-opus-5` 与 `low/medium/high/xhigh/max`，上下文为 1,000,000，
-原生输出上限经探针确认支持 1,024–128,000。OpenAI JavaScript SDK 7.5.0
-已通过 Opus 5 Responses 流式/非流式、显式 Chat、function 工具，以及直接
-Anthropic Messages JSON/SSE。OpenCode 1.18.18 在显式
-`legacy-user-prefix` 下通过 Opus 5 Max 的真实 bash/read 工具循环，并复用
-同一账号和 Kiro conversation。Codex 0.150.0-alpha.9 已通过模型校验，但在
-调用 Kiro 前被 `reasoning.summary` 阻塞；Claude Code 2.1.209 同样已通过
-Opus 5 模型校验，但被 `context_management` 阻塞。Zuno 未修改也未重跑。
-这些是 RC 结论；稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃不支持字段换取
-“通过”。
+2026-08-29 的 RC.4 编译后二进制门禁保留 RC.3 协议矩阵，并新增 Provider
+自有认证生命周期验证。隔离本地账号库从一次性导入开始，随后故意设置过期
+access token、陈旧 usage 和不存在的 OpenCode 数据库路径；编译服务仍独立
+完成 token 与 usage 刷新。OpenAI JavaScript SDK 7.5.0 随后完成两轮标准
+Responses，OpenCode 1.18.18 完成真实 bash/write/read 工具循环，全程没有
+实时共享数据库或跨进程锁。因为 OpenCode 会发送 Kiro 无法保真投影的
+developer instructions，它仍需显式 `legacy-user-prefix`。RC.3 已知协议阻塞
+不变：Codex 在调用 Kiro 前被 `reasoning.summary` 阻塞，Claude Code 2.1.209
+被 `context_management` 阻塞，OpenCode Chat 被客户端的非标准
+`messages.0.cache_control` 阻塞。Zuno 未修改也未重跑。这些是 RC 结论；
+稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃不支持字段换取“通过”。
 
 完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
 [`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
@@ -145,29 +153,32 @@ bun run src/cli/bin.ts --help
 
 ## 快速开始
 
-1. **先通过 OpenCode 登录 Kiro。** 默认共享认证模式直接使用 OpenCode
-   的实时账号数据库：
-
-   ```bash
-   opencode auth login
-   ```
-
-   选择 Kiro 并完成正常登录。如果你明确需要一份独立的兼容存储，则设置
-   `"auth_source": "local"`，再执行：
-
-   ```bash
-   ./dist/kiro-provider login
-   # 或创建一次性快照：
-   ./dist/kiro-provider accounts import
-   ```
-
-2. **创建配置文件并写入你自己的 API Key。**
+1. **创建配置文件并写入你自己的 API Key。**
 
    ```bash
    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
    cp config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
    # 编辑 config.json，把 "sk-REPLACE-ME" 换成一个私有的随机 Key
    ```
+
+   示例已经使用生产默认值 `"auth_source": "local"`。
+
+2. **填充 provider 自有认证库。** 如果此前通过 OpenCode 和
+   `opencode-kiro-auth` 完成认证，只需导入一次：
+
+   ```bash
+   ./dist/kiro-provider accounts import
+   ```
+
+   默认源为 `~/.config/opencode/kiro.db`，必要时使用 `--from <path>`。
+   导入是复制，不是实时链接；之后 token 与用量刷新都由 kiro-provider
+   独立负责。也可以直接登录：
+
+   ```bash
+   ./dist/kiro-provider login
+   ```
+
+   不要让两个独立认证所有者同时轮换同一批导入的 refresh token。
 
 3. **启动网关。**
 
@@ -226,10 +237,12 @@ bun run src/cli/bin.ts --help
 兼容性探针都连接这个本机端点。不要为每个
 Agent 或每段会话分别启动 provider。单一常驻进程可以让带显式亲和键的请求
 复用已持久化的账号/Kiro conversation 绑定，同时让所有请求复用进程内按账号
-划分的 SDK 客户端与 transport 对象。没有显式键的请求会创建新的 Kiro
-conversation。Kiro 模型调用 socket 默认新建（`sdk_http_keep_alive: false`）；即使显式
+划分的 SDK 客户端与 transport 对象。没有显式键的请求首轮会创建新的 Kiro
+conversation，后续完整历史可通过精确 assistant 输出 lineage 找回同一绑定。
+Kiro 模型调用 socket 默认新建（`sdk_http_keep_alive: false`）；即使显式
 开启 keep-alive，也只是尽可能优化传输，不代表一个会话独占一条物理 TCP
-连接。
+连接。默认 `enforce_single_instance: true` 还会阻止第二个服务进程拆分
+进程内队列和池。
 
 常驻部署建议使用固定版本的独立二进制，不要在每次启动时通过 `bunx` 临时
 拉取。以下示例采用发布安装脚本的默认路径：
@@ -239,11 +252,11 @@ conversation。Kiro 模型调用 socket 默认新建（`sdk_http_keep_alive: fal
 - 配置文件：`~/.config/kiro-provider/config.json`；
 - 服务/任务名称：`kiro-provider`。
 
-服务必须以执行过 `opencode auth login` 的**同一个系统用户**运行。默认的
-`auth_source: "opencode-shared"` 会根据该用户的 home/XDG 目录定位 OpenCode
-数据库；如果改成 `root`、`LocalSystem` 或其他用户，通常会读到另一套凭证。
-服务定义中应使用绝对路径；API Key 保存在受保护的配置文件中，不要写进服务
-参数。如果服务环境中的 XDG 配置不同，请显式设置 `opencode_auth_db_path`。
+一次性导入与常驻服务应由**同一个系统用户**执行，使服务读取同一份
+`~/.config/kiro-provider/accounts.db`、配置、密钥环和实例锁。改成 `root`、
+`LocalSystem` 或其他用户通常会选择另一套本地存储。服务定义中应使用绝对
+路径；API Key 保存在受保护的配置文件中，不要写进服务参数。导入完成后不会
+再次读取 OpenCode 数据库。
 
 ### Linux：systemd 用户服务
 
@@ -313,8 +326,8 @@ Manager 接口，因此不要直接用 `sc.exe` 注册。无需第三方依赖�
 创建一个[计划任务](https://learn.microsoft.com/powershell/module/scheduledtasks/register-scheduledtask)：
 当前用户登录时启动，进程失败后自动重启。
 
-请使用拥有 OpenCode 凭证的同一用户打开 PowerShell，执行以下命令。它会创建
-一个小型启动脚本，并把 stdout/stderr 保存在
+请使用拥有 provider 本地认证库与配置的同一用户打开 PowerShell，执行以下
+命令。它会创建一个小型启动脚本，并把 stdout/stderr 保存在
 `%LOCALAPPDATA%\kiro-provider`：
 
 ```powershell
@@ -398,9 +411,9 @@ Remove-Item "$HOME\.config\kiro-provider\service.ps1"
 ```
 
 这个任务有意只在当前用户的交互式会话中运行，因此无需保存 Windows 密码，
-并可直接使用该用户的网络权限与 OpenCode 凭证。如果必须在用户登录前运行，
-则需要 Windows 服务包装器和一个经过明确配置的用户账号；不要让
-`LocalSystem` 运行后仍假设它能读取原用户的 OpenCode 数据库。
+并可直接使用该用户的网络权限、provider 数据库与密钥环。如果必须在用户
+登录前运行，则需要 Windows 服务包装器和一个经过明确配置的用户账号；不要
+让 `LocalSystem` 运行后仍假设它能读取原用户的 provider 文件。
 
 ### 健康检查与自动化契约
 
@@ -445,12 +458,27 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
-| `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
+| `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null`（使用 OpenCode 默认路径） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
 | `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
+| `enforce_single_instance` | `true` | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE` |
+| `instance_lock_path` | 平台配置目录 | `KIRO_PROVIDER_INSTANCE_LOCK_PATH` |
+| `runtime_endpoint_mode` | `kiro-runtime` | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE` |
+| `dynamic_model_catalog` | `true` | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG` |
+| `model_catalog_ttl_ms` | `900000` | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS` |
+| `model_catalog_stale_ttl_ms` | `86400000` | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` |
+| `model_catalog_request_timeout_ms` | `10000` | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
+| `quota_recheck_interval_ms` | `900000` | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS` |
+| `quota_recheck_timeout_ms` | `10000` | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS` |
+| `quota_recheck_concurrency` | `4` | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY` |
+| `account_maintenance_enabled` | `true` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` |
+| `account_maintenance_interval_ms` | `60000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` |
+| `account_maintenance_timeout_ms` | `120000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` |
+| `account_maintenance_concurrency` | `4` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` |
+| `usage_refresh_interval_ms` | `900000` | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
 | `reasoning_replay_key_path` | 配置目录自动生成 | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
@@ -463,13 +491,14 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 
 ## 代理
 
-有些网络环境下某个模型系列可以直连，另一个系列却必须走代理（例如 GPT 直连、Claude 需要走审批过的出网代理）。设置 `proxy_url`（配置文件 / `KIRO_PROVIDER_PROXY_URL` / `serve --proxy`）即可让**所有**上游流量（模型调用、令牌刷新、设备码登录）都走同一个 HTTP(S) 代理；保持 `null` 则为直连。优先级与示例见 [`docs/readme/CONFIGURATION.zh.md`](CONFIGURATION.zh.md#代理)。
+有些网络环境下某个模型系列可以直连，另一个系列却必须走代理（例如 GPT 直连、Claude 需要走审批过的出网代理）。设置 `proxy_url`（配置文件 / `KIRO_PROVIDER_PROXY_URL` / `serve --proxy`）即可让**所有**上游流量（模型调用、令牌刷新、额度探测、设备码登录）都走同一个 HTTP(S) 代理；保持 `null` 则为直连。优先级与示例见 [`docs/readme/CONFIGURATION.zh.md`](CONFIGURATION.zh.md#代理)。
 
 ## 安全
 
 - **默认拒绝启动。** 未配置至少一个非空 `api_keys` 时服务不会启动。OpenAI 路由要求 `Authorization: Bearer <key>`；Anthropic 路由还接受 `x-api-key: <key>`。
 - **默认只监听本机。** `host` 默认为 `127.0.0.1`；只有在放在防火墙或带认证的反向代理之后时才应绑定 `0.0.0.0`。
 - **认证事实源唯一。** 共享模式读写 OpenCode 现有 Kiro 数据库；schema 不兼容时默认拒绝启动，不会对该数据库执行 provider 自有迁移。
+- **默认单一服务所有者。** 编译服务监听前会取得平台配置目录中的进程锁，避免进程内账号/会话队列与 SDK 池被意外拆分。
 - **Provider 状态权限收紧。** `accounts.db`（及其 WAL / SHM 文件）创建时权限为 `0600`；共享模式下它保存亲和状态，而不是权威凭据。
 - **Reasoning 回放带认证加密。** 数据库只保存令牌/指纹哈希和 AES-256-GCM 密文，不保存原始 `kr1_...`；缺少活动解密密钥时启动失败。
 - **日志不打印敏感正文。** 网关/账号密钥、回放令牌、签名、reasoning 与请求提示词不会写入日志；结构化审计只记录哈希和字段名。不要提交真实配置文件、账号数据库、密钥环或网关 Key。
@@ -496,9 +525,10 @@ v0.7.0 删除。
 `client_metadata.thread_id|session_id|conversation_id` 和
 `prompt_cache_key`；Chat 只检查 `prompt_cache_key`；Anthropic Messages
 目前没有经过验证的显式亲和字段。缺少显式键时，请求使用新的 Kiro
-conversation，但仍可复用账号级 SDK 客户端和 transport 对象。Kiro SDK 的
-直连/代理 agent 默认使用新 socket；只有部署环境验证过池化 socket 行为后，才应
-设置 `sdk_http_keep_alive: true`。临时的
+conversation 作为首轮；后续完整历史可通过精确的上轮 assistant 输出 lineage
+复用同一账号/conversation，并继续复用账号级 SDK 客户端和 transport 对象。
+Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境验证过池化 socket
+行为后，才应设置 `sdk_http_keep_alive: true`。临时的
 `legacy-initial-input` 只恢复旧版亲和推导并输出启动警告，不会修改请求正文。
 
 在真正的响应状态存储完成前，Responses 的 `previous_response_id` 和
@@ -508,10 +538,10 @@ conversation，但仍可复用账号级 SDK 客户端和 transport 对象。Kiro
 <summary>Agent 命令参考</summary>
 
 - `kiro-provider serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]` —— 启动网关。
-- `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` —— 仅用于本地兼容模式；共享模式会引导使用 `opencode auth login`。
-- `kiro-provider accounts list` —— 列出本地兼容存储中的账号。
-- `kiro-provider accounts import [--from <path>] [--config <path>]` —— 向本地兼容存储创建一次性快照。
-- `kiro-provider accounts remove <id|email>` —— 从本地兼容存储删除账号。
+- `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` —— 直接登录到 provider 自有本地认证库。
+- `kiro-provider accounts list` —— 列出 provider 自有本地认证库中的账号。
+- `kiro-provider accounts import [--from <path>] [--config <path>]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库，不保留实时数据库链接。
+- `kiro-provider accounts remove <id|email>` —— 从 provider 自有本地认证库删除账号。
 
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models`、`GET /health` 与需鉴权的 `GET /ready` 返回结构化 JSON。
 
@@ -568,8 +598,9 @@ Kiro conversation 绑定；不同会话即使首个 prompt 与上游工具别名
 该集成应保持 `surface: "responses"`。选择 `chat` 需要另行显式开启旧接口，
 且不会携带上述 Zuno Responses 会话元数据。
 
-当前 Zuno 会发送 Agent instructions，而 Kiro `additionalContext` 实时探针尚未
-证明存在无损指令投影。因此，已验证的功能路径目前要求 Provider 显式设置
+当前 Zuno 会发送 Agent instructions。合法的非空标签 `additionalContext`
+请求已在 GPT 与 Claude 实时探针中到达 Kiro，但模型没有收到其中的指令内容，
+也没有保持其优先级。因此，已验证的功能路径目前要求 Provider 显式设置
 `protocol_projection_mode: "legacy-user-prefix"`；`safe` 会正确返回
 `unsupported_instruction_projection`，绝不改写请求。还应按上例把 Zuno
 `options.maxTokens` 设为 `null`，避免通用层加入 Kiro 不支持的
@@ -578,7 +609,7 @@ legacy 模式只是计划在 v0.7.0 删除的显式迁移例外。
 
 ## 配合 Codex CLI 使用
 
-Codex 使用正确的 Responses 端点。编译后的 RC.3 使用 Codex
+Codex 使用正确的 Responses 端点。最近一次编译后二进制协议门禁使用 Codex
 0.150.0-alpha.9 与 `claude-opus-5-max` 时已通过 Provider 模型校验，但首个
 请求会在调用 Kiro 前被 `reasoning.summary` 阻塞；该字段没有经过证明的原生
 等价能力。Provider 不会剥离该字段，也不会用提示词模拟。以下隔离配置只用于
@@ -603,7 +634,7 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-Codex 0.150.0-alpha.9 的 RC.3 预期结果是非零退出，并在
+Codex 0.150.0-alpha.9 的预期结果是非零退出，并在
 `reasoning.summary` 返回 `unsupported_reasoning_summary`。未来出现受支持的
 请求形态后，还必须通过真实 shell/custom 工具循环、续轮和重启 reasoning
 回放，才能标记为支持。完整说明见
@@ -611,7 +642,7 @@ Codex 0.150.0-alpha.9 的 RC.3 预期结果是非零退出，并在
 
 ## 配合 Claude Code 使用
 
-Claude Code 使用 Anthropic Messages。编译后的 RC.3 使用 Claude Code
+Claude Code 使用 Anthropic Messages。最近一次编译后二进制协议门禁使用 Claude Code
 2.1.209、`claude-opus-5` 与 max effort 时已通过 Provider 模型校验，但会在
 调用 Kiro 前被 `context_management` 阻塞；该字段没有经过证明的原生等价
 能力，Provider 不会丢弃它。已验证子集内的直接 Opus 5 Messages JSON/SSE
@@ -628,7 +659,9 @@ Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
 和工具；`/v1/messages/count_tokens` 明确是估算值。详见
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
 
-当前编译服务验证记录见
+当前本地认证生命周期验证记录见
+[`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
+此前协议与客户端矩阵保留在
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
 旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
 仅保留为历史 v0.4 证据。

@@ -97,6 +97,69 @@ describe("Responses canonical adaptation", () => {
 		});
 	});
 
+	test("maps inline input_file to a native document without adding model-visible text", () => {
+		const result = adapt({
+			model: TEST_MODEL,
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [
+						{
+							type: "input_file",
+							filename: "notes.txt",
+							file_data: "data:text/plain;base64,SGVsbG8=",
+						},
+						{ type: "input_text", text: "Summarize the attachment." },
+					],
+				},
+			],
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.body.messages[0]?.content).toEqual([
+			{
+				type: "document",
+				name: "notes.txt",
+				format: "txt",
+				data: "SGVsbG8=",
+				path: "input.0.content.0",
+			},
+			{
+				type: "text",
+				text: "Summarize the attachment.",
+				path: "input.0.content.1.text",
+			},
+		]);
+	});
+
+	test("rejects filenames that cannot be structurally represented by Kiro", () => {
+		const result = adapt({
+			model: TEST_MODEL,
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [
+						{
+							type: "input_file",
+							filename: "notes.v1.txt",
+							file_data: "data:text/plain;base64,SGVsbG8=",
+						},
+					],
+				},
+			],
+		});
+
+		expect(result).toEqual({
+			ok: false,
+			message: expect.stringContaining("native document name field"),
+			code: "invalid_file_name",
+			param: "input.0.content.0.filename",
+		});
+	});
+
 	test("maps supported reasoning effort explicitly", () => {
 		for (const [input, expected] of [
 			["minimal", "low"],
@@ -484,8 +547,8 @@ describe("Responses fail-closed capability validation", () => {
 					},
 				],
 			},
-			"unsupported_content_part",
-			"input.0.content.0",
+			"unsupported_file_reference",
+			"input.0.content.0.file_id",
 		);
 		expectFailure(
 			{

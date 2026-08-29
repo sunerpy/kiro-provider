@@ -23,6 +23,13 @@ export interface CanonicalImagePart extends CanonicalSource {
   readonly url?: string;
 }
 
+export interface CanonicalDocumentPart extends CanonicalSource {
+  readonly type: "document";
+  readonly name: string;
+  readonly format: "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx";
+  readonly data: string;
+}
+
 export interface CanonicalToolUsePart extends CanonicalSource {
   readonly type: "tool_use";
   readonly id: string;
@@ -40,6 +47,7 @@ export interface CanonicalToolResultPart extends CanonicalSource {
 export type CanonicalContentPart =
   | CanonicalTextPart
   | CanonicalImagePart
+  | CanonicalDocumentPart
   | CanonicalToolUsePart
   | CanonicalToolResultPart;
 
@@ -156,6 +164,78 @@ export function assistantOutputFingerprint(output: CanonicalAssistantOutput): st
       name: call.name,
       input: call.input,
     })),
+  });
+}
+
+function lineageToolInput(input: string): unknown {
+  try {
+    return JSON.parse(input);
+  } catch {
+    return input;
+  }
+}
+
+function lineageOutputForRequest(
+  request: CanonicalRequest,
+  output: CanonicalAssistantOutput,
+): unknown {
+  const toolsByWireName = new Map(
+    request.tools.map((tool) => [tool.wireName, tool] as const),
+  );
+  return {
+    text: output.text,
+    toolCalls: output.toolCalls.map((call) => {
+      const declaration = toolsByWireName.get(call.name);
+      let input: unknown = lineageToolInput(call.input);
+      if (
+        declaration?.publicType === "custom" &&
+        typeof input === "object" &&
+        input !== null &&
+        !Array.isArray(input) &&
+        Object.keys(input).length === 1 &&
+        typeof (input as { readonly input?: unknown }).input === "string"
+      ) {
+        input = (input as { readonly input: string }).input;
+      }
+      return {
+        id: call.id,
+        name: declaration?.name ?? call.name,
+        input,
+      };
+    }),
+  };
+}
+
+export function assistantLineageFingerprint(
+  request: CanonicalRequest,
+  output: CanonicalAssistantOutput,
+): string {
+  return canonicalFingerprint(lineageOutputForRequest(request, output));
+}
+
+export function latestAssistantLineageFingerprint(
+  request: CanonicalRequest,
+): string | undefined {
+  let latest: CanonicalMessage[] = [];
+  let current: CanonicalMessage[] = [];
+  for (const message of request.messages) {
+    if (message.role === "assistant") {
+      current.push(message);
+      latest = current;
+      continue;
+    }
+    current = [];
+  }
+  if (latest.length === 0) return undefined;
+  return assistantLineageFingerprint(request, {
+    text: latest.map((message) => textFromParts(message.content)).join(""),
+    toolCalls: latest.flatMap((message) =>
+      message.toolCalls.map((call) => ({
+        id: call.id,
+        name: call.name,
+        input: JSON.stringify(call.input),
+      })),
+    ),
   });
 }
 

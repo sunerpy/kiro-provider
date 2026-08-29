@@ -6,17 +6,24 @@ import {
 import {
   appendReasoningCapture,
   appendToolFragment,
+  assertSupportedSdkEvent,
   createReasoningCaptureState,
+  isCompletionMetadataEvent,
+  isCompletionMeteringEvent,
   nextSdkEvent,
   resolveReasoningCapture,
   resolveUsage,
+  type SdkOutputCaptureHandler,
   type SdkOutputFingerprint,
   type SdkReasoningCaptureHandler,
   type SdkStreamEvent,
   type SdkStreamResponse,
+  SemanticStreamTruncationError,
+  sdkEventTypes,
   type ToolCallState,
   type UsageState,
   updateUsageState,
+  validateCompletedToolCalls,
 } from "./sdk-stream-runtime.js";
 
 export type { SdkStreamEvent, SdkStreamResponse } from "./sdk-stream-runtime.js";
@@ -26,7 +33,10 @@ export interface TransformSdkOutputOptions {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
-  readonly onCompletionMetadata?: () => void;
+  readonly captureOutput?: SdkOutputCaptureHandler;
+  readonly onCompletionWitness?: (
+    kind: "token-usage-metadata" | "metering-clean-eof",
+  ) => void;
   readonly onRawEvent?: (eventTypes: readonly string[]) => void;
 }
 
@@ -38,23 +48,6 @@ export class MissingSdkOutputStreamError extends Error {
   }
 }
 
-function isCompletionMetadataEvent(event: SdkStreamEvent): boolean {
-  const tokenUsage = event.metadataEvent?.tokenUsage;
-  return typeof tokenUsage === "object" && tokenUsage !== null;
-}
-
-function sdkEventTypes(event: SdkStreamEvent): readonly string[] {
-  const record = event as Readonly<Record<string, unknown>>;
-  const eventTypes = Object.keys(record)
-    .filter(
-      (key) =>
-        (key.endsWith("Event") || key === "error" || key === "$unknown") &&
-        record[key] !== undefined,
-    )
-    .sort();
-  return eventTypes.length > 0 ? eventTypes : ["unknown"];
-}
-
 function closeIteratorWithoutBlocking(
   iterator: AsyncIterator<SdkStreamEvent>,
 ): void {
@@ -63,14 +56,6 @@ function closeIteratorWithoutBlocking(
     if (closing) void Promise.resolve(closing).catch(() => undefined);
   } catch {
     // Completion metadata is authoritative; cleanup failures must not erase it.
-  }
-}
-
-function normalizedToolInput(input: string): string {
-  try {
-    return JSON.stringify(JSON.parse(input));
-  } catch {
-    return input;
   }
 }
 
@@ -95,6 +80,10 @@ export async function* transformSdkOutputStream(
   let anthropicRedactedEmitted = false;
   let iteratorFinished = false;
   let iteratorClosed = false;
+  let completionWitness:
+    | "token-usage-metadata"
+    | "metering-clean-eof"
+    | undefined;
 
   try {
     yield {
@@ -119,14 +108,19 @@ export async function* transformSdkOutputStream(
 
       const event = next.result.value;
       options.onRawEvent?.(sdkEventTypes(event));
+      assertSupportedSdkEvent(event);
       updateUsageState(usage, event);
       appendReasoningCapture(reasoning, event.reasoningContentEvent);
 
       if (isCompletionMetadataEvent(event)) {
-        options.onCompletionMetadata?.();
+        completionWitness = "token-usage-metadata";
+        options.onCompletionWitness?.(completionWitness);
         iteratorClosed = true;
         closeIteratorWithoutBlocking(iterator);
         break;
+      }
+      if (isCompletionMeteringEvent(event)) {
+        completionWitness = "metering-clean-eof";
       }
 
       if (options.emitAnthropicReasoningMetadata) {
@@ -208,6 +202,12 @@ export async function* transformSdkOutputStream(
     }
   }
 
+  if (completionWitness === undefined) throw new SemanticStreamTruncationError();
+  if (completionWitness === "metering-clean-eof") {
+    options.onCompletionWitness?.(completionWitness);
+  }
+  validateCompletedToolCalls(toolCalls);
+
   const captured = resolveReasoningCapture(reasoning);
   if (options.emitAnthropicReasoningMetadata) {
     if (
@@ -241,7 +241,7 @@ export async function* transformSdkOutputStream(
       index: ordinal,
       id: toolCall.toolUseId,
       name: toolCall.name,
-      arguments: normalizedToolInput(toolCall.input),
+      arguments: toolCall.input,
     };
     ordinal += 1;
   }
@@ -261,6 +261,7 @@ export async function* transformSdkOutputStream(
     captured,
     outputFingerprint,
   );
+  options.captureOutput?.(output, outputFingerprint);
   if (options.emitEncryptedReasoning && encryptedContent !== undefined) {
     yield {
       canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,

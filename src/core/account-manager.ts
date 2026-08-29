@@ -1,8 +1,9 @@
 import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth.js'
-import { isAccessTokenError, isPermanentError } from '../kiro/health.js'
+import { isAccessTokenError, isPermanentError, isQuotaExhausted } from '../kiro/health.js'
 import type {
   AccountSelectionStrategy,
   KiroAuthDetails,
+  KiroUsageSnapshot,
   ManagedAccount
 } from '../kiro/types.js'
 import type { AccountsDatabase, StoredAccount } from '../storage/accounts-db.js'
@@ -88,10 +89,14 @@ export class AccountManager {
     return this.getAccounts()
   }
 
-  selectHealthyAccount(preferredAccountId?: string): StoredAccount | null {
+  selectHealthyAccount(
+    preferredAccountId?: string,
+    eligibleAccountIds?: ReadonlySet<string>
+  ): StoredAccount | null {
     const now = Date.now()
     const candidates = this.accounts
       .filter((account) => this.isSelectable(account, now))
+      .filter((account) => eligibleAccountIds?.has(account.id) ?? true)
       .sort((left, right) => left.id.localeCompare(right.id))
     if (candidates.length === 0) return null
 
@@ -119,6 +124,74 @@ export class AccountManager {
       ...latest,
       rateLimitResetTime: resetTime
     }))
+  }
+
+  markQuotaExhausted(
+    account: ManagedAccount,
+    recheckAfter: number
+  ): StoredAccount | undefined {
+    return this.patchAccount(account.id, (latest) => ({
+      ...latest,
+      usedCount:
+        (latest.limitCount ?? 0) > 0
+          ? Math.max(latest.usedCount ?? 0, latest.limitCount ?? 0)
+          : latest.usedCount,
+      rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter)
+    }))
+  }
+
+  scheduleQuotaRecheck(
+    account: ManagedAccount,
+    recheckAfter: number
+  ): StoredAccount | undefined {
+    return this.patchAccount(account.id, (latest) =>
+      isQuotaExhausted(latest)
+        ? {
+            ...latest,
+            rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter)
+          }
+        : latest
+    )
+  }
+
+  updateQuotaUsage(
+    account: ManagedAccount,
+    usage: KiroUsageSnapshot & { readonly lastSync: number },
+    nextRecheckAt: number
+  ): StoredAccount | undefined {
+    for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+      const current = this.database.getById(account.id)
+      if (!current) {
+        this.accounts = this.accounts.filter((candidate) => candidate.id !== account.id)
+        return undefined
+      }
+      if ((current.lastSync ?? 0) > usage.lastSync) {
+        this.replaceAccount(current)
+        return cloneAccount(current)
+      }
+      const wasExhausted = isQuotaExhausted(current)
+      const snapshotExhausted = isQuotaExhausted(usage)
+      const updated: StoredAccount = {
+        ...current,
+        email: usage.email ?? current.email,
+        usedCount: usage.usedCount,
+        limitCount: usage.limitCount,
+        overageCount: usage.overageCount,
+        lastSync: usage.lastSync,
+        rateLimitResetTime: snapshotExhausted
+          ? Math.max(current.rateLimitResetTime, nextRecheckAt)
+          : wasExhausted
+            ? 0
+            : current.rateLimitResetTime
+      }
+      if (this.database.updateExistingAccounts([updated]) === 1) {
+        const persisted = { ...updated, generation: current.generation + 1 }
+        this.replaceAccount(persisted)
+        return cloneAccount(persisted)
+      }
+    }
+    this.reconcileFromDb()
+    throw new AccountConcurrentUpdateError(account.id)
   }
 
   markUnhealthy(
@@ -181,6 +254,7 @@ export class AccountManager {
 
   private isSelectable(account: StoredAccount, now: number): boolean {
     if (isPermanentError(account.unhealthyReason)) return false
+    if (isQuotaExhausted(account)) return false
     if (account.rateLimitResetTime > now) return false
     if (account.isHealthy || isAccessTokenError(account.unhealthyReason)) return true
     return account.recoveryTime !== undefined && account.recoveryTime <= now

@@ -55,10 +55,15 @@ function validateContentBlockProjection(messages: readonly CanonicalMessage[]): 
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
     const textParts = message.content.filter((part) => part.type === "text");
-    if (textParts.length <= 1) continue;
+    if (
+      textParts.length <= 1 ||
+      message.content.every((part) => part.type === "text")
+    ) {
+      continue;
+    }
     const firstUnprojectable = textParts[1];
     throw new RequestTransformError(
-      `Message ${message.path} contains multiple text content blocks, but Kiro exposes only one text field and cannot preserve their boundaries`,
+      `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
       "unsupported_content_block_projection",
       firstUnprojectable?.path ?? message.path,
     );
@@ -74,7 +79,7 @@ function projectMessages(request: CanonicalRequest): {
   );
   if (instructions.length > 0 && request.projectionMode === "safe") {
     throw new RequestTransformError(
-      "Kiro rejected the tested structured instruction channel; safe mode cannot project system/developer/instructions",
+      "Kiro accepted additionalContext structurally but did not preserve instruction content or priority; safe mode cannot project system/developer/instructions",
       "unsupported_instruction_projection",
     );
   }
@@ -212,7 +217,18 @@ export function buildCodeWhispererRequest(
     throw new RequestTransformError("No messages", "empty_input");
   }
   validateContentBlockProjection(canonical.messages);
-  const { wireId: resolved, effort: variantEffort } = resolveModelVariant(model);
+  let resolved: string;
+  let variantEffort: ReturnType<typeof resolveModelVariant>["effort"];
+  try {
+    const modelVariant = resolveModelVariant(model);
+    resolved = modelVariant.wireId;
+    variantEffort = modelVariant.effort;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Unsupported model:")) {
+      throw new RequestTransformError(error.message, "unsupported_model", "model");
+    }
+    throw error;
+  }
   const projection = projectMessages(canonical);
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
@@ -271,6 +287,8 @@ export function buildCodeWhispererRequest(
     conversationState: {
       chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL,
       conversationId: convId,
+      agentContinuationId: randomUUID(),
+      agentTaskType: "vibe",
       currentMessage: { userInputMessage: currentInput },
       ...(history.length > 0 ? { history } : {}),
     },

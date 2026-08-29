@@ -28,8 +28,8 @@ Session queue + account selection (preferred binding first, then sticky /
 round-robin / lowest-usage)
         │
         ▼
-Account queue + token refresh if near expiry (shared OpenCode auth runtime by
-default, via optional proxy)
+Account queue + token refresh if near expiry (provider-owned local auth runtime
+by default, via optional proxy)
         │
         ▼
 Cached AWS CodeWhisperer Streaming SDK client and account-scoped transport
@@ -74,35 +74,36 @@ support is a transport-layer concern applied uniformly to every SDK call
 (chat requests, token refresh, and device-code login all reuse the same
 resolution).
 
-SDK clients are cached by account, region, endpoint, proxy, and effort. Their
-token provider is mutable, so an access-token refresh does not discard the
-client. Effort-specific clients for one account share one `NodeHttpHandler`.
-By default its direct and proxy agents use fresh sockets
+SDK clients are cached by account, region, endpoint, proxy, effort, and the
+current access token. Token rotation invalidates the credential-bound client
+immediately while retaining the account-scoped `NodeHttpHandler`.
+Effort-specific clients for one account share that transport. By default its
+direct and proxy agents use fresh sockets
 (`sdk_http_keep_alive: false`); setting the option to `true` explicitly opts
-into pooled socket reuse. SDK/transport object reuse therefore survives token
-refresh in either mode, but no mode promises a specific physical TCP
-connection.
+into pooled socket reuse. Transport reuse therefore survives token refresh,
+but no mode promises a specific physical TCP connection.
 
 ## Authentication authority and provider state
 
-The production default is `auth_source: "opencode-shared"`. Authentication
-facts remain in OpenCode's Kiro database
-(`~/.config/opencode/kiro.db` by default):
+The production default is `auth_source: "local"`.
+`~/.config/kiro-provider/accounts.db` is the single authority for credentials,
+usage, health, and provider state. Operators may authenticate directly with
+`kiro-provider login` or copy existing `opencode-kiro-auth` accounts once with
+`kiro-provider accounts import`. Import does not establish a live database
+link or shared lock.
 
-- The provider validates the account/tombstone schema and fails closed on an
-  incompatible version. It does not run migrations against an OpenCode-owned
-  database.
-- Account additions, re-logins, rotated tokens, tombstones, health, and usage
-  are reconciled from the live shared database.
-- Refresh uses the same per-account lock path and bounded wait contract as
-  `opencode-kiro-auth` v0.20.7. The provider re-reads the account after taking
-  the lock, persists before publishing, and uses a complete token/login
-  snapshot as a compare-and-swap guard.
-- This is a protocol-compatible implementation, not an import or copy of the
-  GPL plugin's private package internals; the provider remains MIT.
+The local runtime uses generation-based compare-and-swap persistence for token
+rotation and tombstones. A provider-owned background maintenance loop:
 
-The provider still owns `~/.config/kiro-provider/accounts.db`, but in shared
-mode it is the affinity/state database:
+- proactively refreshes access tokens near expiry;
+- rebuilds token-bound SDK clients while preserving transports;
+- refreshes stale usage through Kiro `getUsageLimits`;
+- keeps exhausted accounts out of model attempts until a due authoritative
+  probe confirms a new quota window;
+- marks permanently dead refresh credentials unhealthy; and
+- deduplicates account probes with bounded concurrency and pass deadlines.
+
+The same database also stores provider state:
 
 - `session_affinity` stores only a tenant-isolated request fingerprint,
   account ID, Kiro conversation ID, and timestamps. It never stores the
@@ -113,11 +114,13 @@ mode it is the affinity/state database:
 - The database file and its WAL/SHM siblings are created with `0600`
   permissions.
 
-The explicit `auth_source: "local"` compatibility mode uses the provider
-database for OAuth credentials as well. It retains generation-based
-compare-and-swap updates and tombstones. `kiro-provider login` and
-`accounts import` are local-mode tools; an import is a one-time snapshot, not
-the default production authentication path.
+The explicit `auth_source: "opencode-shared"` compatibility mode retains the
+older live OpenCode integration. It validates the v0.20.7 account/tombstone
+schema, honors the compatible per-account refresh lock, and never migrates the
+OpenCode-owned database. Because that mode reintroduces cross-process
+credential ownership, it is not the default after a one-time import. This is a
+protocol-compatible implementation, not a copy of the GPL plugin's private
+package internals; the provider remains MIT.
 
 The selected account manager layers strategy (`sticky` / `round-robin` /
 `lowest-usage`) and failover on top of the configured authority. When a
@@ -135,8 +138,9 @@ The scheduler has two independent keyed queues:
 The account lease remains owned by a committed stream until that stream
 finishes, errors, times out, or is cancelled. On account failover, the
 persisted session binding and Kiro conversation ID are rotated together.
-SQLite bindings work across processes, while queue and socket-pool ownership
-remain process-local.
+Bindings persist across service restarts, while queue and socket-pool ownership
+remain process-local. The default single-instance lock prevents a second
+provider process from splitting those owners.
 
 The default `session_affinity_mode: "explicit-only"` accepts Responses
 `metadata.zuno_session_id`, `metadata.kiro_provider_session_id`,

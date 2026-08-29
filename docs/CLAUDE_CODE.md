@@ -3,9 +3,11 @@
 kiro-provider exposes `POST /v1/messages` and
 `POST /v1/messages/count_tokens` for Anthropic-compatible clients.
 
-## Current v0.5.0-rc.3 status
+## Current v0.5.0-rc.4 status
 
-The compiled-service gate on 2026-08-27 used **Claude Code 2.1.209** with only
+RC.4 changes local authentication ownership and maintenance, not this protocol
+projection boundary. The latest compiled-service Claude Code gate on 2026-08-27 used
+**Claude Code 2.1.209** with only
 the standard `ANTHROPIC_BASE_URL`, API key, `claude-opus-5`, and max effort.
 The model now passes provider validation. The request is then rejected before
 Kiro with `unsupported_parameter` at `context_management`.
@@ -33,16 +35,19 @@ claude --bare --safe-mode --model claude-opus-5 --effort max \
   -p "Reply with exactly: CLAUDE_CODE_OK"
 ```
 
-For Claude Code 2.1.209, the expected RC.3 result is a non-zero exit at
+For Claude Code 2.1.209, the expected result is a non-zero exit at
 `context_management`. Do not add a request-stripping proxy: support requires
 an equivalent native implementation or a client version/configuration with a
 supported shape.
 
-In shared-auth mode, authenticate with `opencode auth login` and require
-authenticated `GET /ready` to return 200 before running the probe. The gateway
-root is used as the base URL; do not append `/v1`.
+Populate the provider-owned local auth store with `kiro-provider login` or a
+one-time `kiro-provider accounts import`, and require authenticated
+`GET /ready` to return 200 before running the probe. The gateway root is used
+as the base URL; do not append `/v1`.
 
-See the current evidence in
+See the RC.4 authentication lifecycle evidence in
+[`audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
+The latest Claude Code protocol evidence remains
 [`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
 The older [`E2E_VALIDATION_2026-08-22.md`](E2E_VALIDATION_2026-08-22.md) is a
 historical v0.4 record only.

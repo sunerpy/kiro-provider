@@ -5,6 +5,7 @@ import { accessTokenExpired, decodeRefreshToken } from "../kiro/auth.js";
 import {
 	isAccessTokenError,
 	isPermanentError,
+	isQuotaExhausted,
 	isRefreshTokenDead,
 	toDeadReason,
 } from "../kiro/health.js";
@@ -12,6 +13,7 @@ import { refreshAccessToken } from "../kiro/token.js";
 import type {
 	AccountSelectionStrategy,
 	KiroAuthDetails,
+	KiroUsageSnapshot,
 	ManagedAccount,
 } from "../kiro/types.js";
 import { toAuthDetails } from "./account-manager.js";
@@ -67,11 +69,13 @@ export class OpenCodeAccountManager {
 
 	selectHealthyAccount(
 		preferredAccountId?: string,
+		eligibleAccountIds?: ReadonlySet<string>,
 	): ManagedAccount | null {
 		for (let attempt = 0; attempt < 2; attempt += 1) {
 			const now = Date.now();
 			const candidates = this.accounts
 				.filter((account) => this.isSelectable(account, now))
+				.filter((account) => eligibleAccountIds?.has(account.id) ?? true)
 				.sort((left, right) => left.id.localeCompare(right.id));
 			if (candidates.length === 0) return null;
 
@@ -106,6 +110,44 @@ export class OpenCodeAccountManager {
 		return updated === undefined ? undefined : cloneAccount(updated);
 	}
 
+	markQuotaExhausted(
+		account: ManagedAccount,
+		recheckAfter: number,
+	): ManagedAccount | undefined {
+		const updated = this.store.markQuotaExhausted(account.id, recheckAfter);
+		if (updated) this.publishLatest(updated);
+		else this.reconcileFromDb();
+		return updated === undefined ? undefined : cloneAccount(updated);
+	}
+
+	scheduleQuotaRecheck(
+		account: ManagedAccount,
+		recheckAfter: number,
+	): ManagedAccount | undefined {
+		const updated = this.store.scheduleQuotaRecheck(
+			account.id,
+			recheckAfter,
+		);
+		if (updated) this.publishLatest(updated);
+		else this.reconcileFromDb();
+		return updated === undefined ? undefined : cloneAccount(updated);
+	}
+
+	updateQuotaUsage(
+		account: ManagedAccount,
+		usage: KiroUsageSnapshot & { readonly lastSync: number },
+		nextRecheckAt: number,
+	): ManagedAccount | undefined {
+		const updated = this.store.updateQuotaUsage(
+			account.id,
+			usage,
+			nextRecheckAt,
+		);
+		if (updated) this.publishLatest(updated);
+		else this.reconcileFromDb();
+		return updated === undefined ? undefined : cloneAccount(updated);
+	}
+
 	markUnhealthy(
 		account: ManagedAccount,
 		reason: string,
@@ -131,6 +173,7 @@ export class OpenCodeAccountManager {
 
 	private isSelectable(account: ManagedAccount, now: number): boolean {
 		if (isPermanentError(account.unhealthyReason)) return false;
+		if (isQuotaExhausted(account)) return false;
 		if (account.rateLimitResetTime > now) return false;
 		if (account.isHealthy || isAccessTokenError(account.unhealthyReason)) {
 			return true;

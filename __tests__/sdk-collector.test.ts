@@ -6,6 +6,26 @@ import type {
 } from '../src/kiro/transform/streaming/sdk-stream-runtime.js'
 
 function responseFrom(events: readonly SdkStreamEvent[]): SdkStreamResponse {
+  const hasCompletion = events.some(
+    (event) => event.metadataEvent?.tokenUsage !== undefined
+  )
+  return {
+    generateAssistantResponseResponse: {
+      async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
+        for (const event of events) yield event
+        if (!hasCompletion) {
+          yield {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function exactResponse(events: readonly SdkStreamEvent[]): SdkStreamResponse {
   return {
     generateAssistantResponseResponse: {
       async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
@@ -39,7 +59,8 @@ describe('collectSdkResponse tool aggregation', () => {
     const response = responseFrom([
       { toolUseEvent: { name: 'first', toolUseId: 'tool-a', input: '{"x":' } },
       { toolUseEvent: { name: 'second', toolUseId: 'tool-b', input: '{"y":2}' } },
-      { toolUseEvent: { name: 'first', toolUseId: 'tool-a', input: '1}' } }
+      { toolUseEvent: { name: 'second', toolUseId: 'tool-b', input: '', stop: true } },
+      { toolUseEvent: { name: 'first', toolUseId: 'tool-a', input: '1}', stop: true } }
     ])
 
     const completion = await collectSdkResponse(response, 'auto', 'conversation-2')
@@ -112,6 +133,119 @@ describe('collectSdkResponse content and usage', () => {
   })
 })
 
+describe('collectSdkResponse fail-closed stream validation', () => {
+  test('accepts valid metering followed by clean EOF as a completion witness', async () => {
+    const completion = await collectSdkResponse(
+      exactResponse([
+        { assistantResponseEvent: { content: 'complete' } },
+        { metadataEvent: {} },
+        { contextUsageEvent: { contextUsagePercentage: 0.01 } },
+        { meteringEvent: { usage: 0.03, unit: 'credit', unitPlural: 'credits' } }
+      ]),
+      'auto',
+      'metering-complete'
+    )
+
+    expect(completion.text).toBe('complete')
+    expect(completion.finishReason).toBe('stop')
+  })
+
+  test('rejects clean EOF without an authoritative completion witness', async () => {
+    const pending = collectSdkResponse(
+      exactResponse([{ assistantResponseEvent: { content: 'partial' } }]),
+      'auto',
+      'truncated'
+    )
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'SemanticStreamTruncationError',
+      code: 'upstream_stream_incomplete'
+    })
+  })
+
+  test('rejects empty or malformed metering events as completion witnesses', async () => {
+    for (const meteringEvent of [
+      {},
+      { usage: Number.NaN, unit: 'credit' },
+      { usage: -1, unit: 'credit' },
+      { usage: 1, unit: '' }
+    ]) {
+      await expect(
+        collectSdkResponse(
+          exactResponse([
+            { assistantResponseEvent: { content: 'partial' } },
+            { meteringEvent }
+          ]),
+          'auto',
+          'invalid-metering'
+        )
+      ).rejects.toMatchObject({ code: 'upstream_stream_incomplete' })
+    }
+  })
+
+  test('rejects embedded errors and unknown event types', async () => {
+    await expect(
+      collectSdkResponse(
+        exactResponse([{ error: { message: 'failed' } }]),
+        'auto',
+        'embedded-error'
+      )
+    ).rejects.toMatchObject({ code: 'upstream_stream_error' })
+    await expect(
+      collectSdkResponse(
+        exactResponse([{ $unknown: ['futureEvent', {}] }]),
+        'auto',
+        'unknown-event'
+      )
+    ).rejects.toMatchObject({ code: 'unsupported_upstream_event' })
+  })
+
+  test('rejects malformed or incomplete tool calls', async () => {
+    await expect(
+      collectSdkResponse(
+        exactResponse([
+          { toolUseEvent: { name: 'write', toolUseId: 'tool-1', input: '{"x":1}' } },
+          {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+            }
+          }
+        ]),
+        'auto',
+        'incomplete-tool'
+      )
+    ).rejects.toMatchObject({ code: 'incomplete_upstream_tool_call' })
+    await expect(
+      collectSdkResponse(
+        exactResponse([
+          { toolUseEvent: { name: 'write', toolUseId: 'tool-1', input: '{', stop: true } },
+          {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+            }
+          }
+        ]),
+        'auto',
+        'malformed-tool'
+      )
+    ).rejects.toMatchObject({ code: 'invalid_upstream_tool_call' })
+    await expect(
+      collectSdkResponse(
+        exactResponse([
+          { toolUseEvent: { name: 'write', input: '{}', stop: true } },
+          {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+            }
+          }
+        ]),
+        'auto',
+        'missing-tool-id'
+      )
+    ).rejects.toMatchObject({ code: 'invalid_upstream_tool_call' })
+  })
+})
+
 test('collectSdkResponse stops an aborted iterator and calls return', async () => {
   const controller = new AbortController()
   let returnCalled = false
@@ -148,8 +282,6 @@ test('collectSdkResponse stops an aborted iterator and calls return', async () =
   const pending = collectSdkResponse(response, 'auto', 'aborted', controller.signal)
   await secondNextStarted
   controller.abort()
-  const completion = await pending
-
-  expect(completion.text).toBe('partial')
+  await expect(pending).rejects.toBe(controller.signal.reason)
   expect(returnCalled).toBe(true)
 })

@@ -108,7 +108,7 @@ import { readFileSync } from "node:fs";
 const port = Number(Bun.env.MOCK_PORT);
 const modeFile = Bun.env.MOCK_MODE_FILE ?? "";
 const codec = new EventStreamCodec(toUtf8, fromUtf8);
-const event = codec.encode({
+const assistantEvent = codec.encode({
   headers: {
     ":message-type": { type: "string", value: "event" },
     ":event-type": { type: "string", value: "assistantResponseEvent" },
@@ -116,6 +116,25 @@ const event = codec.encode({
   },
   body: fromUtf8(JSON.stringify({ content: "mock response" })),
 });
+const meteringEvent = codec.encode({
+  headers: {
+    ":message-type": { type: "string", value: "event" },
+    ":event-type": { type: "string", value: "meteringEvent" },
+    ":content-type": { type: "string", value: "application/json" },
+  },
+  body: fromUtf8(
+    JSON.stringify({
+      usage: 0.01,
+      unit: "credit",
+      unitPlural: "credits",
+    }),
+  ),
+});
+const completeBody = new Uint8Array(
+  assistantEvent.byteLength + meteringEvent.byteLength,
+);
+completeBody.set(assistantEvent, 0);
+completeBody.set(meteringEvent, assistantEvent.byteLength);
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -127,7 +146,7 @@ Bun.serve({
         setTimeout(
           () =>
             resolve(
-              new Response(event, {
+              new Response(completeBody, {
                 headers: {
                   "Content-Type": "application/vnd.amazon.eventstream",
                   "x-amzn-codewhisperer-conversation-id": "security-check",
@@ -142,7 +161,7 @@ Bun.serve({
       return new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            controller.enqueue(event);
+            controller.enqueue(assistantEvent);
           },
         }),
         {
@@ -153,7 +172,7 @@ Bun.serve({
         },
       );
     }
-    return new Response(event, {
+    return new Response(completeBody, {
       headers: {
         "Content-Type": "application/vnd.amazon.eventstream",
         "x-amzn-codewhisperer-conversation-id": "security-check",

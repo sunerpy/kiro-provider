@@ -10,6 +10,14 @@ const temporaryDirectories: string[] = [];
 const timeoutFields = [
 	"request_timeout_ms",
 	"stream_idle_timeout_ms",
+	"quota_recheck_interval_ms",
+	"quota_recheck_timeout_ms",
+] as const;
+
+const maintenanceDurationFields = [
+	"account_maintenance_interval_ms",
+	"account_maintenance_timeout_ms",
+	"usage_refresh_interval_ms",
 ] as const;
 
 const validBaseConfig = {
@@ -21,12 +29,27 @@ const validBaseConfig = {
 	session_affinity_mode: "explicit-only",
 	proxy_url: null,
 	sdk_http_keep_alive: false,
-	auth_source: "opencode-shared",
+	enforce_single_instance: true,
+	instance_lock_path: null,
+	runtime_endpoint_mode: "kiro-runtime",
+	dynamic_model_catalog: true,
+	model_catalog_ttl_ms: 900000,
+	model_catalog_stale_ttl_ms: 86400000,
+	model_catalog_request_timeout_ms: 10000,
+	auth_source: "local",
 	opencode_auth_db_path: null,
 	default_region: "us-east-1",
 	account_selection_strategy: "lowest-usage",
 	rate_limit_max_retries: 3,
 	rate_limit_retry_delay_ms: 5000,
+	quota_recheck_interval_ms: 900000,
+	quota_recheck_timeout_ms: 10000,
+	quota_recheck_concurrency: 4,
+	account_maintenance_enabled: true,
+	account_maintenance_interval_ms: 60000,
+	account_maintenance_timeout_ms: 120000,
+	account_maintenance_concurrency: 4,
+	usage_refresh_interval_ms: 900000,
 	max_request_iterations: 20,
 	request_timeout_ms: 120000,
 	stream_idle_timeout_ms: 60000,
@@ -63,6 +86,20 @@ const rejectedTimeoutCases = [
 	{ label: "negative Infinity", value: Number.NEGATIVE_INFINITY },
 ] as const;
 
+const acceptedMaintenanceDurationCases = [
+	{ label: "the minimum 1000", value: 1_000 },
+	{ label: "60000", value: 60_000 },
+	{ label: "the maximum 2147483647", value: 2_147_483_647 },
+] as const;
+
+const rejectedMaintenanceDurationCases = [
+	{ label: "zero", value: 0 },
+	{ label: "below the minimum", value: 999 },
+	{ label: "a fraction", value: 1_000.5 },
+	{ label: "the overflow value", value: 2_147_483_648 },
+	{ label: "NaN", value: Number.NaN },
+] as const;
+
 function createConfigFile(config: unknown): string {
 	const directory = mkdtempSync(join(tmpdir(), "kiro-provider-config-"));
 	temporaryDirectories.push(directory);
@@ -87,15 +124,30 @@ describe("ConfigSchema", () => {
 			api_keys: ["sk-test"],
 			enable_legacy_chat_completions: false,
 			protocol_projection_mode: "safe",
-				session_affinity_mode: "explicit-only",
+			session_affinity_mode: "explicit-only",
 			proxy_url: null,
 			sdk_http_keep_alive: false,
-			auth_source: "opencode-shared",
+			enforce_single_instance: true,
+			instance_lock_path: null,
+			runtime_endpoint_mode: "kiro-runtime",
+			dynamic_model_catalog: true,
+			model_catalog_ttl_ms: 900000,
+			model_catalog_stale_ttl_ms: 86400000,
+			model_catalog_request_timeout_ms: 10000,
+			auth_source: "local",
 			opencode_auth_db_path: null,
 			default_region: "us-east-1",
 			account_selection_strategy: "lowest-usage",
 			rate_limit_max_retries: 3,
 			rate_limit_retry_delay_ms: 5000,
+			quota_recheck_interval_ms: 900000,
+			quota_recheck_timeout_ms: 10000,
+			quota_recheck_concurrency: 4,
+			account_maintenance_enabled: true,
+			account_maintenance_interval_ms: 60000,
+			account_maintenance_timeout_ms: 120000,
+			account_maintenance_concurrency: 4,
+			usage_refresh_interval_ms: 900000,
 			max_request_iterations: 20,
 			request_timeout_ms: 120000,
 			stream_idle_timeout_ms: 60000,
@@ -137,6 +189,40 @@ describe("ConfigSchema", () => {
 		});
 
 		expect(parsed.success).toBe(false);
+	});
+
+	test.each(
+		maintenanceDurationFields.flatMap((field) =>
+			acceptedMaintenanceDurationCases.map(({ label, value }) => ({
+				field,
+				label,
+				value,
+			})),
+		),
+	)("accepts $label for $field", ({ field, value }) => {
+		expect(
+			ConfigSchema.safeParse({
+				...validBaseConfig,
+				[field]: value,
+			}).success,
+		).toBe(true);
+	});
+
+	test.each(
+		maintenanceDurationFields.flatMap((field) =>
+			rejectedMaintenanceDurationCases.map(({ label, value }) => ({
+				field,
+				label,
+				value,
+			})),
+		),
+	)("rejects $label for $field", ({ field, value }) => {
+		expect(
+			ConfigSchema.safeParse({
+				...validBaseConfig,
+				[field]: value,
+			}).success,
+		).toBe(false);
 	});
 
 	test.each([
@@ -185,6 +271,30 @@ describe("ConfigSchema", () => {
 		const config = ConfigSchema.parse({ api_keys: ["sk-test"], effort: "high" });
 
 		expect(config.effort).toBe("high");
+	});
+
+	test("bounds quota and account maintenance concurrency", () => {
+		for (const field of [
+			"quota_recheck_concurrency",
+			"account_maintenance_concurrency",
+		] as const) {
+			for (const value of [1, 4, 32]) {
+				expect(
+					ConfigSchema.safeParse({
+						api_keys: ["sk-test"],
+						[field]: value,
+					}).success,
+				).toBe(true);
+			}
+			for (const value of [0, 33, 1.5]) {
+				expect(
+					ConfigSchema.safeParse({
+						api_keys: ["sk-test"],
+						[field]: value,
+					}).success,
+				).toBe(false);
+			}
+		}
 	});
 
 	test("accepts null effort", () => {
@@ -307,12 +417,27 @@ describe("loadConfig", () => {
 					KIRO_PROVIDER_SESSION_AFFINITY_MODE: "legacy-initial-input",
 				KIRO_PROVIDER_PROXY_URL: " https://proxy.example:8443 ",
 				KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE: "true",
+				KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE: "false",
+				KIRO_PROVIDER_INSTANCE_LOCK_PATH: " /tmp/kiro-provider.instance ",
+				KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE: "legacy-q",
+				KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG: "false",
+				KIRO_PROVIDER_MODEL_CATALOG_TTL_MS: "120000",
+				KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS: "240000",
+				KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS: "9000",
 				KIRO_PROVIDER_AUTH_SOURCE: "local",
 				KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH: " /tmp/opencode-kiro.db ",
 				KIRO_PROVIDER_DEFAULT_REGION: "eu-west-1",
 				KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY: "round-robin",
 				KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES: "8",
 				KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS: "6000",
+				KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS: "300000",
+				KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS: "7000",
+				KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY: "6",
+				KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED: "false",
+				KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS: "65000",
+				KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS: "125000",
+				KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY: "5",
+				KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS: "600000",
 				KIRO_PROVIDER_MAX_REQUEST_ITERATIONS: "30",
 				KIRO_PROVIDER_REQUEST_TIMEOUT_MS: "130000",
 				KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "70000",
@@ -338,15 +463,30 @@ describe("loadConfig", () => {
 			api_keys: ["sk-a", "sk-b"],
 			enable_legacy_chat_completions: true,
 			protocol_projection_mode: "legacy-user-prefix",
-				session_affinity_mode: "legacy-initial-input",
+			session_affinity_mode: "legacy-initial-input",
 			proxy_url: "https://proxy.example:8443",
 			sdk_http_keep_alive: true,
+			enforce_single_instance: false,
+			instance_lock_path: "/tmp/kiro-provider.instance",
+			runtime_endpoint_mode: "legacy-q",
+			dynamic_model_catalog: false,
+			model_catalog_ttl_ms: 120000,
+			model_catalog_stale_ttl_ms: 240000,
+			model_catalog_request_timeout_ms: 9000,
 			auth_source: "local",
 			opencode_auth_db_path: "/tmp/opencode-kiro.db",
 			default_region: "eu-west-1",
 			account_selection_strategy: "round-robin",
 			rate_limit_max_retries: 8,
 			rate_limit_retry_delay_ms: 6000,
+			quota_recheck_interval_ms: 300000,
+			quota_recheck_timeout_ms: 7000,
+			quota_recheck_concurrency: 6,
+			account_maintenance_enabled: false,
+			account_maintenance_interval_ms: 65000,
+			account_maintenance_timeout_ms: 125000,
+			account_maintenance_concurrency: 5,
+			usage_refresh_interval_ms: 600000,
 			max_request_iterations: 30,
 			request_timeout_ms: 130000,
 			stream_idle_timeout_ms: 70000,

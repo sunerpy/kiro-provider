@@ -6,13 +6,13 @@ Commands:
 	serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
       Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>]
-      Sign in to the local auth store. Shared mode uses "opencode auth login".
+      Sign in directly to the provider-owned local auth store.
   accounts list
-      List accounts in the local compatibility store.
+      List accounts in the provider-owned local auth store.
   accounts import [--from <path>] [--config <path>]
-      Snapshot authenticated accounts into the local compatibility store.
+      Copy OpenCode Kiro accounts once into the provider-owned local store.
   accounts remove <id|email>
-      Remove an account from the local compatibility store and write a tombstone.
+      Remove an account from the provider-owned local store and write a tombstone.
 
 Options:
   -h, --help  Show this help.`;

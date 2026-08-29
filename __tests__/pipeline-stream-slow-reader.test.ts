@@ -393,6 +393,11 @@ function finiteResponse(): SdkStreamResponse {
 				yield {
 					assistantResponseEvent: { content: "queued request acquired pipeline" },
 				};
+				yield {
+					metadataEvent: {
+						tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+					},
+				};
 			},
 		},
 	};

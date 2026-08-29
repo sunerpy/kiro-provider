@@ -31,17 +31,18 @@
 - OpenAI Responses `POST /v1/responses` and Anthropic Messages `POST /v1/messages` (both streaming and non-streaming), plus `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /health`, and authenticated `GET /ready`.
 - Legacy OpenAI Chat Completions is available at `POST /v1/chat/completions`, but is disabled by default and must be explicitly enabled with `enable_legacy_chat_completions`.
 - Bearer API-key gate that fails closed: the server refuses to start with no configured keys, and defaults to binding `127.0.0.1`.
-- Live OpenCode authentication reuse by default: `auth_source: "opencode-shared"` reads the same `~/.config/opencode/kiro.db`, honors tombstones, updates shared health/usage, and uses the account schema and refresh-lock behavior of `opencode-kiro-auth` v0.20.7.
-- Explicit-only session affinity by default: Responses requests can opt in through standard `metadata`, compatibility `client_metadata`, or `prompt_cache_key`; requests without an explicit key never derive identity from prompt text. A matching Zuno native OpenAI transport supplies `metadata.zuno_session_id` automatically.
-- Account-scoped scheduling and cached SDK/transport objects: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams; access-token refresh updates the cached client instead of rebuilding it. Kiro model-call HTTP keep-alive is disabled by default and is an explicit transport opt-in.
+- Provider-owned authentication by default: `auth_source: "local"` stores credentials in `~/.config/kiro-provider/accounts.db`. Existing `opencode-kiro-auth` accounts can be imported once with `kiro-provider accounts import`; after that, kiro-provider refreshes access tokens, usage, quota recovery, and account health without reading or locking OpenCode's database.
+- Explicit-only session affinity by default: Responses requests can opt in through standard `metadata`, compatibility `client_metadata`, or `prompt_cache_key`; standard clients that resend complete history can also continue through the exact prior assistant-output lineage. User prompts are never fingerprinted to guess a session. A matching Zuno native OpenAI transport supplies `metadata.zuno_session_id` automatically.
+- Account-scoped scheduling and cached SDK/transport objects: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams. Access-token rotation rebuilds the credential-bound SDK client while retaining the account transport. A production-default service lock prevents multiple processes from silently splitting those queues and pools. Kiro model-call HTTP keep-alive is disabled by default and is an explicit transport opt-in.
+- Live per-account model discovery and account-aware routing through Kiro management, with bounded stale/static fallback. Production calls use the live-probe-confirmed `runtime.<region>.kiro.dev` dialect. Token-usage metadata is an immediate completion witness; the current runtime's valid terminal metering event is accepted only when followed by clean EOF.
 - Zero provider-owned prompt injection in the default `safe` mode: a canonical
   input IR preserves client text, roles, content-block boundaries, tool
   identity, ordering, and source paths; Kiro output is normalized into a
   separate canonical completion/event IR before protocol-specific encoding.
 - Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
-- Multi-account rotation with automatic token refresh and failover. Shared mode treats OpenCode's database as the authentication authority; the provider database stores session affinity only.
-- An explicit `auth_source: "local"` compatibility mode retains `kiro-provider login` and `accounts import`; imported accounts are snapshots and must not be confused with live shared authentication.
-- A single global `proxy_url` that, when set, routes all upstream egress (model requests, token refresh, device-code login) through one HTTP(S) proxy.
+- Multi-account rotation with automatic token refresh and failover. Exhausted accounts are hard-excluded from model attempts, then automatically rejoin only after a bounded, deduplicated Kiro usage probe confirms a new quota window. A provider-owned maintenance loop also refreshes near-expiry tokens and stale usage while the service is idle.
+- `kiro-provider login` and `accounts import` write directly to the provider-owned local authentication store. `auth_source: "opencode-shared"` remains an explicit compatibility option, but it is not the production default and is not required after import.
+- A single global `proxy_url` that, when set, routes all upstream egress (model requests, token refresh, quota probes, device-code login) through one HTTP(S) proxy.
 - Ships as a self-contained compiled binary via `bun build --compile` — no runtime install required on the target machine.
 
 ## Protocol compatibility
@@ -56,12 +57,14 @@ Key boundaries:
 
 - plain text, consecutive same-role turns, function/custom tool declarations,
   calls, and results retain their original structure and order;
-- a message containing multiple top-level text blocks returns
-  `unsupported_content_block_projection`, because Kiro exposes only one text
-  field and concatenation would erase block boundaries;
+- plain-text-only top-level blocks remain distinct in the canonical request,
+  then are concatenated byte-for-byte with no inserted separator at Kiro's
+  single-text-field boundary; multiple text blocks interleaved with images or
+  tool content still return `unsupported_content_block_projection`;
 - `instructions`, `system`, and `developer` return
-  `unsupported_instruction_projection` in safe mode because the tested Kiro
-  `additionalContext` channel was rejected;
+  `unsupported_instruction_projection` in safe mode because Kiro accepted a
+  valid `additionalContext` shape but did not preserve its instruction content
+  or priority in live GPT and Claude probes;
 - `tool_choice: auto` is supported; `parallel_tool_calls: false` is accepted as
   a no-op only when no callable tool can run (including `tool_choice: none`),
   and otherwise returns `unsupported_parallel_tool_calls`; required/named
@@ -69,23 +72,35 @@ Key boundaries:
   rather than weakened;
 - base64/data-URL images are supported, while remote image URLs and detail
   controls are rejected;
+- Responses `input_file` supports inline base64/data-URL documents in Kiro's
+  native document formats. The original filename remains in the canonical
+  request; its recognized extension becomes the separate Kiro `format`, while
+  the extensionless ASCII name is validated before the SDK call. Names that
+  would require lossy rewriting return `invalid_file_name`; `file_id`
+  references are rejected because the provider has no OpenAI file store;
 - an output-token limit is probe-confirmed for `claude-sonnet-5` and
   `claude-opus-5` variants in the range 1,024–128,000;
+- Responses omits only the exact `...`/`…` reasoning placeholder emitted by
+  GPT 5.6 Sol; Opus reasoning, non-placeholder Sol reasoning, effort mapping,
+  and encrypted reasoning replay remain unchanged;
 - stateful Responses fields and native Web Search remain unsupported, and the
   provider never fabricates search/citation events.
 
-Current compiled-binary acceptance on 2026-08-27: RC.3 exposes
-`claude-opus-5` plus `low/medium/high/xhigh/max`, with a 1,000,000-token
-context window and a probe-confirmed 1,024–128,000 native output limit. OpenAI
-JavaScript SDK 7.5.0 passes Opus 5 Responses streaming/non-streaming, explicit
-Chat, function tools, and direct Anthropic Messages JSON/SSE. OpenCode 1.18.18
-passes a real Opus 5 Max bash/read tool loop in explicit
-`legacy-user-prefix` mode while reusing one account and Kiro conversation.
-Codex 0.150.0-alpha.9 now passes model validation but remains blocked before
-Kiro by `reasoning.summary`; Claude Code 2.1.209 likewise passes Opus 5 model
-validation but remains blocked by `context_management`. Zuno was intentionally
-not changed or rerun. These are RC findings; stable v0.5.0 remains gated
-rather than silently discarding unsupported fields.
+Current compiled-binary RC.4 acceptance on 2026-08-29 retains the RC.3
+protocol matrix and adds provider-owned authentication lifecycle validation.
+Starting from a one-time import, an isolated local store deliberately used an
+expired access token, stale usage, and a nonexistent OpenCode database path.
+The compiled service independently refreshed the token and usage, then OpenAI
+JavaScript SDK 7.5.0 completed two standard Responses turns and OpenCode
+1.18.18 completed a real bash/write/read tool loop. No live shared database or
+cross-process lock was used. OpenCode still requires explicit
+`legacy-user-prefix` because it sends developer instructions that Kiro cannot
+project losslessly. The known RC.3 protocol blockers are unchanged: Codex is
+blocked before Kiro by `reasoning.summary`, Claude Code 2.1.209 by
+`context_management`, and OpenCode Chat by the client's nonstandard
+`messages.0.cache_control`. Zuno was intentionally not changed or rerun.
+These are RC findings; stable v0.5.0 remains gated rather than silently
+discarding unsupported fields.
 
 For the complete capability matrix, error codes, reasoning replay contract,
 and v0.4 migration steps, see
@@ -151,30 +166,34 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
 
 ## Quickstart
 
-1. **Authenticate Kiro through OpenCode.** The default shared-auth mode uses
-   OpenCode's live account database:
-
-   ```bash
-   opencode auth login
-   ```
-
-   Select Kiro and complete the normal login flow. If you intentionally want
-   an independent compatibility store instead, set `"auth_source": "local"`
-   and then use:
-
-   ```bash
-   ./dist/kiro-provider login
-   # or take a one-time snapshot:
-   ./dist/kiro-provider accounts import
-   ```
-
-2. **Create a config with your own API key.**
+1. **Create a config with your own API key.**
 
    ```bash
    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
    cp config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
    # edit config.json and replace "sk-REPLACE-ME" with a private, random key
    ```
+
+   The example already uses the production default, `"auth_source": "local"`.
+
+2. **Populate the provider-owned authentication store.** If you previously
+   authenticated through OpenCode plus `opencode-kiro-auth`, import that
+   database once:
+
+   ```bash
+   ./dist/kiro-provider accounts import
+   ```
+
+   The default source is `~/.config/opencode/kiro.db`; use `--from <path>` when
+   needed. This is a copy, not a live link: subsequent token and usage refreshes
+   are owned by kiro-provider. Alternatively, authenticate directly:
+
+   ```bash
+   ./dist/kiro-provider login
+   ```
+
+   Avoid continuing to use the same imported refresh tokens from two
+   independently running authentication owners.
 
 3. **Start the gateway.**
 
@@ -235,10 +254,13 @@ Do not start a new provider for every agent or conversation. Keeping one
 process alive lets requests with an explicit affinity key reuse their
 persisted account/Kiro-conversation binding, while all requests can reuse
 process-local, account-scoped SDK clients and transport objects. A request
-without an explicit key gets a fresh Kiro conversation. Kiro model-call HTTP
-sockets are fresh by default (`sdk_http_keep_alive: false`); enabling it is a
-best-effort transport optimization, never a promise that one session owns one
-physical TCP connection.
+without an explicit key starts a fresh Kiro conversation on its first turn,
+then can recover the same binding from exact assistant-output history on later
+turns. Kiro model-call HTTP sockets are fresh by default
+(`sdk_http_keep_alive: false`); enabling it is a best-effort transport
+optimization, never a promise that one session owns one physical TCP
+connection. The default `enforce_single_instance: true` also prevents a second
+service process from splitting the in-memory queues and pools.
 
 Use a pinned standalone binary for a service rather than fetching through
 `bunx` on every start. The examples below assume the release installers'
@@ -249,13 +271,12 @@ defaults:
 - config: `~/.config/kiro-provider/config.json`;
 - service/task name: `kiro-provider`.
 
-Run the service as the **same OS user** that ran `opencode auth login`.
-Default `auth_source: "opencode-shared"` resolves that user's OpenCode
-database and home/XDG directories; running as `root`, `LocalSystem`, or
-another user will normally select different credentials. Use absolute paths,
-keep the API key in the protected config file rather than service arguments,
-and set `opencode_auth_db_path` explicitly if the service has a different XDG
-environment.
+Run the one-time import and the service as the **same OS user** so the service
+owns the same `~/.config/kiro-provider/accounts.db`, config, keyring, and
+instance lock. Running as `root`, `LocalSystem`, or another user normally
+selects a different local store. Use absolute paths and keep the API key in
+the protected config file rather than service arguments. The OpenCode
+database is not read again after the import.
 
 ### Linux: systemd user service
 
@@ -327,9 +348,9 @@ Service Control Manager executable. Do not register it directly with
 [Scheduled Task](https://learn.microsoft.com/powershell/module/scheduledtasks/register-scheduledtask)
 that starts at sign-in, runs as the current user, and restarts after failure.
 
-Run the following in PowerShell as the same user that owns the OpenCode
-credentials. It creates a small launcher so stdout/stderr are retained under
-`%LOCALAPPDATA%\kiro-provider`:
+Run the following in PowerShell as the same user that owns the provider's
+local authentication database and config. It creates a small launcher so
+stdout/stderr are retained under `%LOCALAPPDATA%\kiro-provider`:
 
 ```powershell
 $Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
@@ -412,10 +433,10 @@ Remove-Item "$HOME\.config\kiro-provider\service.ps1"
 ```
 
 This task intentionally runs only in the current user's interactive session,
-so it can use that user's network access and OpenCode credentials without
-storing a Windows password. A true pre-login Windows service requires a
-service wrapper and a deliberately configured user account; do not run it as
-`LocalSystem` and expect the same OpenCode database.
+so it can use that user's network access, provider database, and keyring
+without storing a Windows password. A true pre-login Windows service requires
+a service wrapper and a deliberately configured user account; do not run it
+as `LocalSystem` and expect the same provider-owned files.
 
 ### Health checks and automation contract
 
@@ -462,12 +483,27 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
-| `auth_source` | `opencode-shared` | `KIRO_PROVIDER_AUTH_SOURCE` |
+| `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null` (uses the OpenCode default) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
 | `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
+| `enforce_single_instance` | `true` | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE` |
+| `instance_lock_path` | platform config directory | `KIRO_PROVIDER_INSTANCE_LOCK_PATH` |
+| `runtime_endpoint_mode` | `kiro-runtime` | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE` |
+| `dynamic_model_catalog` | `true` | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG` |
+| `model_catalog_ttl_ms` | `900000` | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS` |
+| `model_catalog_stale_ttl_ms` | `86400000` | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` |
+| `model_catalog_request_timeout_ms` | `10000` | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
 | `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
+| `quota_recheck_interval_ms` | `900000` | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS` |
+| `quota_recheck_timeout_ms` | `10000` | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS` |
+| `quota_recheck_concurrency` | `4` | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY` |
+| `account_maintenance_enabled` | `true` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` |
+| `account_maintenance_interval_ms` | `60000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` |
+| `account_maintenance_timeout_ms` | `120000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` |
+| `account_maintenance_concurrency` | `4` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` |
+| `usage_refresh_interval_ms` | `900000` | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS` |
 | `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
 | `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
 | `reasoning_replay_key_path` | auto-generated config path | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
@@ -480,14 +516,15 @@ The full field reference, including retry/timeout tuning and the test-only `test
 
 ## Proxy
 
-Some networks reach one model family directly while another needs a proxy (for example, GPT direct, Claude via an approved egress). Set `proxy_url` (config file, `KIRO_PROVIDER_PROXY_URL`, or `serve --proxy`) to route **all** upstream traffic — model calls, token refresh, and device-code login — through a single HTTP(S) proxy. Leave it `null` for direct connections. See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#proxy) for precedence details and examples.
+Some networks reach one model family directly while another needs a proxy (for example, GPT direct, Claude via an approved egress). Set `proxy_url` (config file, `KIRO_PROVIDER_PROXY_URL`, or `serve --proxy`) to route **all** upstream traffic — model calls, token refresh, quota probes, and device-code login — through a single HTTP(S) proxy. Leave it `null` for direct connections. See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#proxy) for precedence details and examples.
 
 ## Security
 
 - **Fail-closed authentication.** The server will not start without at least one non-empty `api_keys` entry. OpenAI routes require `Authorization: Bearer <key>`; Anthropic routes also accept `x-api-key: <key>`.
 - **Local bind by default.** `host` defaults to `127.0.0.1`; only bind `0.0.0.0` behind a firewall or authenticated reverse proxy.
-- **Single authentication authority.** Shared mode reads and updates OpenCode's existing Kiro database and fails closed on an incompatible schema; it never runs provider-owned migrations against that database.
-- **Locked-down provider state.** `accounts.db` (and its WAL/SHM files) are created with mode `0600`; in shared mode this database contains affinity/state, not the authoritative credentials.
+- **Single authentication authority.** The default local mode makes kiro-provider the sole owner after one-time import. Do not keep two independent processes rotating the same imported refresh token. The explicit shared compatibility mode validates OpenCode's schema and never migrates it.
+- **Single service owner by default.** The compiled service acquires a platform-config lock before listening, so process-local account/session queues and SDK pools cannot be split accidentally.
+- **Locked-down provider state.** `accounts.db` (and its WAL/SHM files) are created with mode `0600`; in default local mode it contains credentials, usage, health, session affinity, and encrypted replay state.
 - **Authenticated reasoning replay.** The database stores token/fingerprint hashes and AES-256-GCM ciphertext, not raw `kr1_...` tokens. Missing active decryption keys fail startup.
 - **No sensitive content in logs.** Gateway/account secrets, replay tokens, signatures, reasoning, and request prompt text are not logged; structured audit fields contain hashes and field names only. Don't commit a real config file, account database, keyring, or gateway key.
 
@@ -514,9 +551,11 @@ to guess a conversation. Responses checks, in order,
 `client_metadata.thread_id|session_id|conversation_id`, and
 `prompt_cache_key`. Chat checks only `prompt_cache_key`; Anthropic Messages
 has no verified explicit affinity field. With no key, the request gets a
-fresh Kiro conversation but can still reuse account-scoped SDK clients and
-transport objects. The Kiro SDK's direct/proxy agents use fresh sockets by default;
-set `sdk_http_keep_alive: true` only when the deployment has validated pooled
+fresh Kiro conversation on its first turn; a later full-history request can
+reuse the same account/conversation by matching the exact prior assistant
+output lineage. It can also reuse account-scoped SDK clients and transport
+objects. The Kiro SDK's direct/proxy agents use fresh sockets by default; set
+`sdk_http_keep_alive: true` only when the deployment has validated pooled
 socket behavior.
 The temporary `legacy-initial-input` mode restores only the old affinity
 heuristics and logs a startup warning; it does not alter request content.
@@ -529,10 +568,10 @@ resend the complete input.
 <summary>Agent command reference</summary>
 
 - `kiro-provider serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]` — start the gateway.
-- `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` — local compatibility mode only; shared mode directs you to `opencode auth login`.
-- `kiro-provider accounts list` — list accounts in the local compatibility store.
-- `kiro-provider accounts import [--from <path>] [--config <path>]` — take a one-time snapshot into the local compatibility store.
-- `kiro-provider accounts remove <id|email>` — remove one account from the local compatibility store.
+- `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` — authenticate directly into the provider-owned local store.
+- `kiro-provider accounts list` — list accounts in the provider-owned local store.
+- `kiro-provider accounts import [--from <path>] [--config <path>]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; no live database link remains.
+- `kiro-provider accounts remove <id|email>` — remove one account from the provider-owned local store.
 
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.
 
@@ -593,8 +632,9 @@ Keep `surface: "responses"` for this integration. Selecting `chat` requires
 the separately enabled legacy endpoint and does not carry the Zuno Responses
 session metadata.
 
-Current Zuno sends agent instructions, while the live Kiro
-`additionalContext` probe did not prove a lossless instruction projection.
+Current Zuno sends agent instructions. Valid required-label
+`additionalContext` requests reached Kiro in live GPT and Claude probes, but
+the models did not receive the instruction content or preserve its priority.
 Consequently the verified functional path currently requires the provider's
 explicit `protocol_projection_mode: "legacy-user-prefix"`; `safe` correctly
 returns `unsupported_instruction_projection` and never rewrites the request.
@@ -605,7 +645,8 @@ exception scheduled for removal in v0.7.0.
 
 ## Use with Codex CLI
 
-Codex uses the correct Responses endpoint. The compiled RC.3 gate with Codex
+Codex uses the correct Responses endpoint. The last compiled protocol gate
+with Codex
 0.150.0-alpha.9 and `claude-opus-5-max` now passes provider model validation,
 but its first request is rejected before Kiro at `reasoning.summary`, which
 has no proven native equivalent. The provider does not strip that field or
@@ -631,7 +672,7 @@ EOF
 codex exec --skip-git-repo-check "say hi"
 ```
 
-For Codex 0.150.0-alpha.9 the expected RC.3 result is a non-zero exit with
+For Codex 0.150.0-alpha.9 the expected result is a non-zero exit with
 `unsupported_reasoning_summary` at `reasoning.summary`. A future supported request shape must
 then pass a real shell/custom-tool loop, continuation, and restart reasoning
 replay before Codex is marked supported. Full details live in
@@ -639,7 +680,7 @@ replay before Codex is marked supported. Full details live in
 
 ## Use with Claude Code
 
-Claude Code uses Anthropic Messages. The compiled RC.3 run with Claude Code
+Claude Code uses Anthropic Messages. The last compiled protocol run with Claude Code
 2.1.209, `claude-opus-5`, and max effort passes provider model validation but
 is rejected before Kiro at `context_management`, which has no proven native
 equivalent. The provider does not discard it. Direct Opus 5 Messages JSON/SSE
@@ -658,7 +699,9 @@ subset support typed JSON/SSE and tools, while `/v1/messages/count_tokens` is
 an explicit estimate. See
 [`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
 
-The current compiled-service validation record is in
+The current local-auth lifecycle validation record is in
+[`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
+The preceding protocol/client matrix is retained in
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
 The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
 is retained as historical v0.4 evidence only.

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { resolveModelVariant } from "../../kiro/models.js";
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
 import {
   assistantOutputFingerprint,
@@ -503,15 +502,6 @@ export function adaptAnthropicMessagesRequest(
     );
   }
   const request = parsed.data;
-  try {
-    resolveModelVariant(request.model);
-  } catch {
-    return failure(
-      `Invalid request: model ${request.model} is not supported`,
-      "unsupported_model",
-      "model",
-    );
-  }
   for (const key of Object.keys(request)) {
     if (!REQUEST_KEYS.has(key)) {
       return failure(

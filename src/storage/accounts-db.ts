@@ -34,6 +34,15 @@ interface SessionAffinityRow {
 	expires_at: number;
 }
 
+interface OutputLineageRow {
+	key_hash: string;
+	account_id: string;
+	conversation_id: string;
+	created_at: number;
+	last_seen: number;
+	expires_at: number;
+}
+
 interface CountRow {
 	count: number;
 }
@@ -86,6 +95,17 @@ export interface SessionAffinityBinding {
 }
 
 function rowToSessionAffinity(row: SessionAffinityRow): SessionAffinityBinding {
+	return {
+		keyHash: row.key_hash,
+		accountId: row.account_id,
+		conversationId: row.conversation_id,
+		createdAt: row.created_at,
+		lastSeen: row.last_seen,
+		expiresAt: row.expires_at,
+	};
+}
+
+function rowToOutputLineage(row: OutputLineageRow): SessionAffinityBinding {
 	return {
 		keyHash: row.key_hash,
 		accountId: row.account_id,
@@ -180,12 +200,31 @@ export class AccountsDatabase {
 	        CREATE INDEX IF NOT EXISTS session_affinity_expires_at_idx
 	        ON session_affinity (expires_at)
 	      `);
-				this.db.run(`
-	        CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
-	        ON session_affinity (last_seen)
-	      `);
-				this.db.run(`
-	        CREATE TABLE IF NOT EXISTS reasoning_replay (
+					this.db.run(`
+		        CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
+		        ON session_affinity (last_seen)
+		      `);
+					this.db.run(`
+		        CREATE TABLE IF NOT EXISTS output_lineage (
+		          key_hash TEXT NOT NULL,
+		          account_id TEXT NOT NULL,
+		          conversation_id TEXT NOT NULL,
+		          created_at INTEGER NOT NULL,
+		          last_seen INTEGER NOT NULL,
+		          expires_at INTEGER NOT NULL,
+		          PRIMARY KEY (key_hash, account_id, conversation_id)
+		        )
+		      `);
+					this.db.run(`
+		        CREATE INDEX IF NOT EXISTS output_lineage_lookup_idx
+		        ON output_lineage (key_hash, expires_at)
+		      `);
+					this.db.run(`
+		        CREATE INDEX IF NOT EXISTS output_lineage_lru_idx
+		        ON output_lineage (last_seen, key_hash)
+		      `);
+					this.db.run(`
+		        CREATE TABLE IF NOT EXISTS reasoning_replay (
 	          token_hash TEXT PRIMARY KEY,
 	          chat_lookup_hash TEXT,
 	          fingerprint_hash TEXT NOT NULL,
@@ -316,10 +355,13 @@ export class AccountsDatabase {
 			const lastGeneration =
 				existing?.generation ?? tombstone?.last_generation ?? 0;
 			this.db.query("DELETE FROM accounts WHERE id = ?").run(id);
-			this.db
-				.query("DELETE FROM session_affinity WHERE account_id = ?")
-				.run(id);
-			this.db
+				this.db
+					.query("DELETE FROM session_affinity WHERE account_id = ?")
+					.run(id);
+				this.db
+					.query("DELETE FROM output_lineage WHERE account_id = ?")
+					.run(id);
+				this.db
 				.query("DELETE FROM reasoning_replay WHERE account_id = ?")
 				.run(id);
 			this.db
@@ -420,6 +462,60 @@ export class AccountsDatabase {
 	): number {
 		return this.withImmediateTransaction(() =>
 			this.pruneSessionAffinitiesInternal(now, maxEntries),
+		);
+	}
+
+	resolveOutputLineage(
+		keyHash: string,
+		now: number = Date.now(),
+	): SessionAffinityBinding | undefined {
+		const rows = this.db
+			.query<OutputLineageRow, [string, number]>(`
+	      SELECT * FROM output_lineage
+	      WHERE key_hash = ? AND expires_at > ?
+	      ORDER BY last_seen DESC, account_id ASC, conversation_id ASC
+	      LIMIT 2
+	    `)
+			.all(keyHash, now);
+		return rows.length === 1 ? rowToOutputLineage(rows[0] as OutputLineageRow) : undefined;
+	}
+
+	recordOutputLineage(
+		keyHash: string,
+		accountId: string,
+		conversationId: string,
+		now: number,
+		ttlMs: number,
+		maxEntries: number,
+	): void {
+		this.withImmediateTransaction(() => {
+			this.db.query("DELETE FROM output_lineage WHERE expires_at <= ?").run(now);
+			this.db
+				.query(`
+	        INSERT INTO output_lineage (
+	          key_hash, account_id, conversation_id, created_at, last_seen, expires_at
+	        ) VALUES (?, ?, ?, ?, ?, ?)
+	        ON CONFLICT(key_hash, account_id, conversation_id) DO UPDATE SET
+	          last_seen = excluded.last_seen,
+	          expires_at = excluded.expires_at
+	      `)
+				.run(keyHash, accountId, conversationId, now, now, now + ttlMs);
+			this.pruneOutputLineageInternal(
+				now,
+				maxEntries,
+				keyHash,
+				accountId,
+				conversationId,
+			);
+		});
+	}
+
+	pruneOutputLineage(
+		now: number = Date.now(),
+		maxEntries = 10_000,
+	): number {
+		return this.withImmediateTransaction(() =>
+			this.pruneOutputLineageInternal(now, maxEntries),
 		);
 	}
 
@@ -618,6 +714,58 @@ export class AccountsDatabase {
 		changes += (
 			preserveTokenHash
 				? prune.run(preserveTokenHash, overflow)
+				: prune.run(overflow)
+		).changes;
+		return changes;
+	}
+
+	private pruneOutputLineageInternal(
+		now: number,
+		maxEntries: number,
+		preserveKey?: string,
+		preserveAccountId?: string,
+		preserveConversationId?: string,
+	): number {
+		let changes = this.db
+			.query("DELETE FROM output_lineage WHERE expires_at <= ?")
+			.run(now).changes;
+		const row = this.db
+			.query<CountRow, []>("SELECT COUNT(*) AS count FROM output_lineage")
+			.get();
+		const overflow = Math.max(0, (row?.count ?? 0) - maxEntries);
+		if (overflow <= 0) return changes;
+		const preserve =
+			preserveKey !== undefined &&
+			preserveAccountId !== undefined &&
+			preserveConversationId !== undefined;
+		const prune = preserve
+			? this.db.query(`
+	      DELETE FROM output_lineage
+	      WHERE rowid IN (
+	        SELECT rowid FROM output_lineage
+	        WHERE NOT (
+	          key_hash = ? AND account_id = ? AND conversation_id = ?
+	        )
+	        ORDER BY last_seen ASC, key_hash ASC, account_id ASC, conversation_id ASC
+	        LIMIT ?
+	      )
+	    `)
+			: this.db.query(`
+	      DELETE FROM output_lineage
+	      WHERE rowid IN (
+	        SELECT rowid FROM output_lineage
+	        ORDER BY last_seen ASC, key_hash ASC, account_id ASC, conversation_id ASC
+	        LIMIT ?
+	      )
+	    `);
+		changes += (
+			preserve
+				? prune.run(
+						preserveKey,
+						preserveAccountId,
+						preserveConversationId,
+						overflow,
+					)
 				: prune.run(overflow)
 		).changes;
 		return changes;

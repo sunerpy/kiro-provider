@@ -71,10 +71,24 @@ function config() {
 }
 
 function responseFrom(events: readonly SdkStreamEvent[]): SdkStreamResponse {
+	const hasCompletion = events.some(
+		(event) => event.metadataEvent?.tokenUsage !== undefined,
+	);
 	return {
 		generateAssistantResponseResponse: {
 			async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
 				for (const event of events) yield event;
+				if (!hasCompletion) {
+					yield {
+						metadataEvent: {
+							tokenUsage: {
+								inputTokens: 0,
+								outputTokens: 0,
+								totalTokens: 0,
+							},
+						},
+					};
+				}
 			},
 		},
 	};

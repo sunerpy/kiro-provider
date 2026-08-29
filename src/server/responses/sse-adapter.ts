@@ -30,6 +30,10 @@ import {
   responseFailed,
   responseInProgress,
 } from "./events.js";
+import {
+  couldStillBeGptSolReasoningPlaceholder,
+  isGptSolReasoningPlaceholder,
+} from "./reasoning.js";
 import type { ResponseRequestConfiguration } from "./state.js";
 import type { ResponsesToolBridge } from "./tool-bridge.js";
 
@@ -39,6 +43,7 @@ type AdapterOptions = {
   readonly finalize: () => void;
   readonly bridge?: ResponsesToolBridge;
   readonly configuration: ResponseRequestConfiguration;
+  readonly includeEncryptedReasoning: boolean;
 };
 
 type AdapterOutcome =
@@ -68,8 +73,9 @@ type ToolCallAccumulator = {
 
 type ReasoningRun = {
   readonly id: string;
-  readonly outputIndex: number;
+  outputIndex?: number;
   text: string;
+  emitted: boolean;
 };
 
 // allow: SIZE_OK — this file is one indivisible stream state machine with typed boundary parsing.
@@ -230,66 +236,70 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         : new DOMException("Client closed request", "AbortError");
     beginTerminal("client-abort", reason);
   };
-  const closeReasoning = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
-    if (!activeReasoning) return;
-    const item: ReasoningOutputItem = {
-      id: activeReasoning.id,
-      type: "reasoning",
-      summary: [{ type: "summary_text", text: activeReasoning.text }],
-      ...(reasoningEncryptedContent !== undefined
-        ? { encrypted_content: reasoningEncryptedContent }
-        : {}),
-    };
-    emit(controller, (sequence) =>
-      reasoningSummaryTextDone({
-        itemId: activeReasoning?.id ?? "",
-        outputIndex: activeReasoning?.outputIndex ?? 0,
-        summaryIndex: 0,
-        text: activeReasoning?.text ?? "",
-        sequenceNumber: sequence,
-      }),
-    );
-    emit(controller, (sequence) =>
-      outputItemDone({
-        item,
-        outputIndex: activeReasoning?.outputIndex ?? 0,
-        sequenceNumber: sequence,
-      }),
-    );
-    completedOutput.set(activeReasoning.outputIndex, item);
-    activeReasoning = undefined;
-  };
-  const flushDeferredReasoning = (
+  const startReasoning = (
     controller: ReadableStreamDefaultController<Uint8Array>,
+    run: ReasoningRun,
   ): void => {
-    if (deferredReasoningText.length === 0) return;
-    const run: ReasoningRun = {
-      id: `rs_${randomUUID()}`,
-      outputIndex: nextOutputIndex,
-      text: deferredReasoningText,
-    };
+    if (run.emitted) return;
+    const outputIndex = nextOutputIndex;
     nextOutputIndex += 1;
-    deferredReasoningText = "";
+    run.outputIndex = outputIndex;
+    run.emitted = true;
     emit(controller, (sequence) =>
       outputItemAdded({
         item: { id: run.id, type: "reasoning", summary: [] },
-        outputIndex: run.outputIndex,
+        outputIndex,
         sequenceNumber: sequence,
       }),
     );
     emit(controller, (sequence) =>
       reasoningSummaryTextDelta({
         itemId: run.id,
-        outputIndex: run.outputIndex,
+        outputIndex,
         summaryIndex: 0,
         delta: run.text,
         sequenceNumber: sequence,
       }),
     );
+  };
+  const finishReasoning = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    run: ReasoningRun,
+  ): void => {
+    if (isGptSolReasoningPlaceholder(options.model, run.text)) {
+      if (!options.includeEncryptedReasoning) return;
+      const outputIndex = nextOutputIndex;
+      nextOutputIndex += 1;
+      const item: ReasoningOutputItem = {
+        id: run.id,
+        type: "reasoning",
+        summary: [],
+        ...(reasoningEncryptedContent !== undefined
+          ? { encrypted_content: reasoningEncryptedContent }
+          : {}),
+      };
+      emit(controller, (sequence) =>
+        outputItemAdded({
+          item: { id: run.id, type: "reasoning", summary: [] },
+          outputIndex,
+          sequenceNumber: sequence,
+        }),
+      );
+      emit(controller, (sequence) =>
+        outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
+      );
+      completedOutput.set(outputIndex, item);
+      return;
+    }
+    startReasoning(controller, run);
+    const outputIndex = run.outputIndex;
+    if (outputIndex === undefined) {
+      throw new TypeError("Reasoning output index was not allocated");
+    }
     emit(controller, (sequence) =>
       reasoningSummaryTextDone({
         itemId: run.id,
-        outputIndex: run.outputIndex,
+        outputIndex,
         summaryIndex: 0,
         text: run.text,
         sequenceNumber: sequence,
@@ -304,9 +314,27 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         : {}),
     };
     emit(controller, (sequence) =>
-      outputItemDone({ item, outputIndex: run.outputIndex, sequenceNumber: sequence }),
+      outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
     );
-    completedOutput.set(run.outputIndex, item);
+    completedOutput.set(outputIndex, item);
+  };
+  const closeReasoning = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    if (!activeReasoning) return;
+    const run = activeReasoning;
+    activeReasoning = undefined;
+    finishReasoning(controller, run);
+  };
+  const flushDeferredReasoning = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+  ): void => {
+    if (deferredReasoningText.length === 0) return;
+    const run: ReasoningRun = {
+      id: `rs_${randomUUID()}`,
+      text: deferredReasoningText,
+      emitted: false,
+    };
+    deferredReasoningText = "";
+    finishReasoning(controller, run);
   };
   const addEvent = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -317,9 +345,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       case "completed":
         return;
       case "reasoning_delta": {
-        // Codex tracks one active output item. Kiro can interleave a late
-        // reasoning fragment between text deltas, so defer that fragment until
-        // the message is complete instead of overlapping two active items.
+        // Kiro has been observed to emit an ellipsis placeholder for GPT 5.6 Sol.
+        // Buffer only that exact candidate so it can be omitted without affecting
+        // normal Opus reasoning or future non-placeholder GPT reasoning.
         if (messageIndex !== undefined) {
           deferredReasoningText += event.text;
           return;
@@ -327,32 +355,38 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         if (!activeReasoning) {
           activeReasoning = {
             id: `rs_${randomUUID()}`,
-            outputIndex: nextOutputIndex,
             text: "",
+            emitted: false,
           };
-          nextOutputIndex += 1;
+        }
+        const run = activeReasoning;
+        const wasEmitted = run.emitted;
+        run.text += event.text;
+        if (wasEmitted) {
+          const outputIndex = run.outputIndex;
+          if (outputIndex === undefined) {
+            throw new TypeError("Reasoning output index was not allocated");
+          }
           emit(controller, (sequence) =>
-            outputItemAdded({
-              item: { id: activeReasoning?.id ?? "", type: "reasoning", summary: [] },
-              outputIndex: activeReasoning?.outputIndex ?? 0,
+            reasoningSummaryTextDelta({
+              itemId: run.id,
+              outputIndex,
+              summaryIndex: 0,
+              delta: event.text,
               sequenceNumber: sequence,
             }),
           );
+        } else if (
+          !couldStillBeGptSolReasoningPlaceholder(options.model, run.text)
+        ) {
+          startReasoning(controller, run);
         }
-        activeReasoning.text += event.text;
-        emit(controller, (sequence) =>
-          reasoningSummaryTextDelta({
-            itemId: activeReasoning?.id ?? "",
-            outputIndex: activeReasoning?.outputIndex ?? 0,
-            summaryIndex: 0,
-            delta: event.text,
-            sequenceNumber: sequence,
-          }),
-        );
         return;
       }
       case "reasoning_encrypted":
-        reasoningEncryptedContent = event.encryptedContent;
+        if (options.includeEncryptedReasoning) {
+          reasoningEncryptedContent = event.encryptedContent;
+        }
         return;
       case "reasoning_signature":
       case "reasoning_redacted":

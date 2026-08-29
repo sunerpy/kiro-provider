@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import {
   type PipelineAccountManager,
+  type PipelineClientFactory,
   type PipelineReasoningReplayStore,
   type PipelineSdkClient,
   type PipelineTokenRefresher,
   runChatCompletion,
 } from "../src/core/pipeline.js";
 import { createPipelineStreamResponse } from "../src/core/pipeline-stream.js";
+import { ModelCapabilityService } from "../src/kiro/model-capabilities.js";
 import type {
   SdkStreamEvent,
   SdkStreamResponse,
@@ -23,6 +25,8 @@ import {
   parseCanonicalCompletion,
   parseCanonicalOutputEventLine,
 } from "../src/protocol/output.js";
+import { canonicalSessionLineage } from "../src/server/session-affinity.js";
+import { AccountsDatabase } from "../src/storage/accounts-db.js";
 import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
 function requestBody(model = "auto"): CanonicalRequest {
@@ -31,7 +35,7 @@ function requestBody(model = "auto"): CanonicalRequest {
 
 const REQUEST_BODY = requestBody();
 
-function account(id: string): ManagedAccount {
+function account(id: string, overrides: Partial<ManagedAccount> = {}): ManagedAccount {
   return {
     id,
     email: `${id}@example.com`,
@@ -43,11 +47,13 @@ function account(id: string): ManagedAccount {
     rateLimitResetTime: 0,
     isHealthy: true,
     failCount: 0,
+    ...overrides,
   };
 }
 
 class FakeAccountManager implements PipelineAccountManager {
   readonly rateLimited: string[] = [];
+  readonly quotaExhausted: string[] = [];
   readonly unhealthy: string[] = [];
   private cursor = 0;
   private stickyId: string | undefined;
@@ -61,10 +67,16 @@ class FakeAccountManager implements PipelineAccountManager {
     return this.accounts;
   }
 
-  selectHealthyAccount(): ManagedAccount | null {
+  selectHealthyAccount(
+    _preferredAccountId?: string,
+    eligibleAccountIds?: ReadonlySet<string>,
+  ): ManagedAccount | null {
     const now = Date.now();
     const selectable = this.accounts.filter(
-      (candidate) => candidate.isHealthy && candidate.rateLimitResetTime <= now,
+      (candidate) =>
+        candidate.isHealthy &&
+        candidate.rateLimitResetTime <= now &&
+        (eligibleAccountIds?.has(candidate.id) ?? true),
     );
     if (selectable.length === 0) return null;
     if (this.strategy === "sticky") {
@@ -99,6 +111,14 @@ class FakeAccountManager implements PipelineAccountManager {
     this.rateLimited.push(selected.id);
   }
 
+  markQuotaExhausted(selected: ManagedAccount, recheckAfter: number): void {
+    if ((selected.limitCount ?? 0) > 0) {
+      selected.usedCount = Math.max(selected.usedCount ?? 0, selected.limitCount ?? 0);
+    }
+    selected.rateLimitResetTime = Math.max(selected.rateLimitResetTime, recheckAfter);
+    this.quotaExhausted.push(selected.id);
+  }
+
   markUnhealthy(selected: ManagedAccount, reason: string): void {
     selected.failCount += 1;
     selected.isHealthy = selected.failCount < 10 && !reason.includes("InvalidTokenException");
@@ -108,15 +128,19 @@ class FakeAccountManager implements PipelineAccountManager {
 }
 
 class PreferredAccountManager extends FakeAccountManager {
-  override selectHealthyAccount(preferredAccountId?: string): ManagedAccount | null {
+  override selectHealthyAccount(
+    preferredAccountId?: string,
+    eligibleAccountIds?: ReadonlySet<string>,
+  ): ManagedAccount | null {
     const now = Date.now();
     const preferred = this.accounts.find(
       (candidate) =>
         candidate.id === preferredAccountId &&
         candidate.isHealthy &&
-        candidate.rateLimitResetTime <= now,
+        candidate.rateLimitResetTime <= now &&
+        (eligibleAccountIds?.has(candidate.id) ?? true),
     );
-    return preferred ?? super.selectHealthyAccount();
+    return preferred ?? super.selectHealthyAccount(undefined, eligibleAccountIds);
   }
 }
 
@@ -154,6 +178,26 @@ function config(overrides: Partial<Config> = {}): Config {
 }
 
 function responseFrom(events: readonly SdkStreamEvent[]): SdkStreamResponse {
+  const hasCompletion = events.some(
+    (event) => event.metadataEvent?.tokenUsage !== undefined,
+  );
+  return {
+    generateAssistantResponseResponse: {
+      async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
+        for (const event of events) yield event;
+        if (!hasCompletion) {
+          yield {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            },
+          };
+        }
+      },
+    },
+  };
+}
+
+function exactResponse(events: readonly SdkStreamEvent[]): SdkStreamResponse {
   return {
     generateAssistantResponseResponse: {
       async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
@@ -377,6 +421,33 @@ async function errorBody(response: Response): Promise<{
 }
 
 describe("runChatCompletion success paths", () => {
+  test.each([
+    {
+      mode: "kiro-runtime" as const,
+      expected: "https://runtime.us-east-1.kiro.dev",
+    },
+    { mode: "legacy-q" as const, expected: undefined },
+  ])("selects the $mode runtime endpoint", async ({ mode, expected }) => {
+    const endpoints: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config({ runtime_endpoint_mode: mode }),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: (...factoryArgs) => {
+        endpoints.push(factoryArgs[3]);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "answer" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(endpoints).toEqual([expected]);
+  });
+
   test.each([
     {
       label: "configured",
@@ -663,6 +734,158 @@ describe("runChatCompletion retry and switching", () => {
     expect(refresher.forceSignals).toEqual([controller.signal]);
   });
 
+  test("excludes an account whose refreshed bearer is still rejected", async () => {
+    const first = account("account-a");
+    const second = account("account-b");
+    const sentAccounts: string[] = [];
+    const refresher = new FakeTokenRefresher();
+
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([first, second], "sticky"),
+      tokenRefresher: refresher,
+      makeClient: (auth) =>
+        clientWith(async () => {
+          sentAccounts.push(auth.email ?? "missing");
+          throw sdkError(403, "The bearer token included in the request is invalid");
+        }),
+    });
+
+    expect(response.status).toBe(403);
+    expect((await errorBody(response)).error).toMatchObject({
+      type: "upstream_error",
+      code: "SdkError",
+    });
+    expect(sentAccounts).toEqual([first.email, first.email, second.email, second.email]);
+    expect(refresher.forceSignals).toHaveLength(2);
+  });
+
+  test("switches immediately after a quota response without retrying that account", async () => {
+    const first = account("account-a");
+    const second = account("account-b");
+    const sentAccounts: string[] = [];
+    const manager = new FakeAccountManager([first, second], "sticky");
+
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: (auth) =>
+        clientWith(async () => {
+          sentAccounts.push(auth.email ?? "missing");
+          if (auth.email === first.email) throw sdkError(402, "quota exhausted");
+          return responseFrom([{ assistantResponseEvent: { content: "replacement" } }]);
+        }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(sentAccounts).toEqual([first.email, second.email]);
+    expect(manager.quotaExhausted).toEqual([first.id]);
+    expect(first.rateLimitResetTime).toBeGreaterThan(Date.now());
+  });
+
+  test("filters locally exhausted accounts before refresh or SDK creation", async () => {
+    const exhausted = account("account-a", { usedCount: 10_000, limitCount: 10_000 });
+    const available = account("account-b", { usedCount: 9_000, limitCount: 10_000 });
+    const selectedAccounts: string[] = [];
+    const refresher = new FakeTokenRefresher();
+
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([exhausted, available], "sticky"),
+      tokenRefresher: refresher,
+      makeClient: (auth) => {
+        selectedAccounts.push(auth.email ?? "missing");
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "available" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccounts).toEqual([available.email]);
+    expect(refresher.refreshSignals).toHaveLength(1);
+  });
+
+  test("returns quota exhausted before upstream work when every account is exhausted", async () => {
+    let clientCalls = 0;
+    const refresher = new FakeTokenRefresher();
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { overageCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: refresher,
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(402);
+    expect((await errorBody(response)).error).toEqual({
+      message: "All eligible Kiro accounts have exhausted their quota",
+      type: "upstream_error",
+      code: "quota_exhausted",
+    });
+    expect(clientCalls).toBe(0);
+    expect(refresher.refreshSignals).toHaveLength(0);
+  });
+
+  test("rechecks due exhausted accounts before model selection", async () => {
+    const exhausted = account("account-a", {
+      usedCount: 10_000,
+      limitCount: 10_000,
+      rateLimitResetTime: 0,
+    });
+    const manager = new FakeAccountManager([exhausted]);
+    let recheckCalls = 0;
+    let clientCalls = 0;
+
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: new FakeTokenRefresher(),
+      quotaRechecker: {
+        async recheckDueAccounts(accounts, signal): Promise<void> {
+          expect(signal).toBeInstanceOf(AbortSignal);
+          expect(accounts.map(({ id }) => id)).toEqual([exhausted.id]);
+          recheckCalls += 1;
+          exhausted.usedCount = 0;
+          exhausted.overageCount = 0;
+          exhausted.rateLimitResetTime = 0;
+        },
+        async syncDueAccounts(): Promise<void> {},
+      },
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "recovered" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(recheckCalls).toBe(1);
+    expect(clientCalls).toBe(1);
+  });
+
   test("permanently disables a suspended sticky account and sends next with the second account", async () => {
     // Given
     const suspended = account("account-a");
@@ -755,7 +978,7 @@ describe("runChatCompletion retry and switching", () => {
     expect((await errorBody(response)).error.type).toBe("service_unavailable");
   });
 
-  test("stops at the configured request iteration cap", async () => {
+  test("returns an authentication status instead of max_request_iterations", async () => {
     const response = await runChatCompletion({
       body: REQUEST_BODY,
       model: "auto",
@@ -766,8 +989,12 @@ describe("runChatCompletion retry and switching", () => {
       makeClient: () => clientWith(async () => Promise.reject(sdkError(401, "unauthorized"))),
     });
 
-    expect(response.status).toBe(500);
-    expect((await errorBody(response)).error.message).toContain("Exceeded max iterations (2)");
+    expect(response.status).toBe(401);
+    expect((await errorBody(response)).error).toMatchObject({
+      message: "unauthorized",
+      type: "upstream_error",
+      code: "SdkError",
+    });
   });
 });
 
@@ -1301,14 +1528,323 @@ describe("runChatCompletion cancellation", () => {
   });
 });
 
-describe("runChatCompletion terminal errors", () => {
-  test("rejects an unprojectable content boundary with its source path before SDK creation", async () => {
+describe("runChatCompletion projection and terminal errors", () => {
+  test("retries a semantically truncated non-stream response then succeeds", async () => {
+    let sends = 0;
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config({
+        rate_limit_max_retries: 1,
+        rate_limit_retry_delay_ms: 1,
+      }),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () =>
+        clientWith(async () => {
+          sends += 1;
+          return sends === 1
+            ? exactResponse([{ assistantResponseEvent: { content: "partial" } }])
+            : responseFrom([{ assistantResponseEvent: { content: "complete" } }]);
+        }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(sends).toBe(2);
+    expect(parseCanonicalCompletion(await response.json())?.text).toBe("complete");
+  });
+
+  test("maps persistent semantic truncation to a 502 upstream error", async () => {
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config({
+        rate_limit_max_retries: 0,
+        rate_limit_retry_delay_ms: 1,
+      }),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () =>
+        clientWith(async () =>
+          exactResponse([{ assistantResponseEvent: { content: "partial" } }]),
+        ),
+    });
+
+    expect(response.status).toBe(502);
+    expect(await errorBody(response)).toEqual({
+      error: {
+        message: expect.stringContaining("completion witness"),
+        type: "upstream_error",
+        code: "upstream_stream_incomplete",
+      },
+    });
+  });
+
+  test("discovers a model on one account and routes only to that account", async () => {
+    const first = account("account-a");
+    const second = account("account-b");
+    const capabilities = new ModelCapabilityService(
+      config(),
+      async (details) => ({
+        models:
+          details.access === second.accessToken
+            ? [
+                {
+                  modelId: "future-model",
+                  modelName: "Future Model",
+                  supportedInputTypes: ["TEXT"],
+                  tokenLimits: {
+                    maxInputTokens: 100_000,
+                    maxOutputTokens: 10_000,
+                  },
+                },
+              ]
+            : [
+                {
+                  modelId: "auto",
+                  modelName: "Auto",
+                  supportedInputTypes: ["TEXT"],
+                  tokenLimits: {
+                    maxInputTokens: 100_000,
+                    maxOutputTokens: 10_000,
+                  },
+                },
+              ],
+      }),
+    );
+    const selectedAccounts: string[] = [];
+    const response = await runChatCompletion({
+      body: requestBody("future-model"),
+      model: "future-model",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([first, second]),
+      tokenRefresher: new FakeTokenRefresher(),
+      modelCapabilities: capabilities,
+      makeClient: (details) => {
+        selectedAccounts.push(details.access);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "answer" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccounts).toEqual([second.accessToken]);
+  });
+
+  test("rejects a model absent from every account before creating an SDK client", async () => {
+    const capabilities = new ModelCapabilityService(config(), async () => ({
+      models: [
+        {
+          modelId: "auto",
+          modelName: "Auto",
+          supportedInputTypes: ["TEXT"],
+          tokenLimits: {
+            maxInputTokens: 100_000,
+            maxOutputTokens: 10_000,
+          },
+        },
+      ],
+    }));
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: requestBody("not-a-real-model"),
+      model: "not-a-real-model",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([
+        account("account-a"),
+        account("account-b"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      modelCapabilities: capabilities,
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(clientCalls).toBe(0);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "unsupported_model", param: "model" },
+    });
+  });
+
+  test("returns a field-level 400 for an unknown model without dynamic capabilities", async () => {
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: requestBody("not-a-real-model"),
+      model: "not-a-real-model",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(clientCalls).toBe(0);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "unsupported_model", param: "model" },
+    });
+  });
+
+  test("reuses the same account and Kiro conversation from standard history lineage", async () => {
+    const affinityStore = new AccountsDatabase(":memory:");
+    try {
+      const manager = new PreferredAccountManager([
+        account("account-a"),
+        account("account-b"),
+      ]);
+      const tenantId = "tenant-lineage";
+      const firstBody = canonicalRequest([message("user", "first turn")], {
+        protocol: "responses",
+        model: "gpt-5.6-sol",
+      });
+      const secondBody = canonicalRequest(
+        [
+          message("user", "first turn"),
+          message("assistant", "first answer"),
+          message("user", "follow-up"),
+        ],
+        { protocol: "responses", model: "gpt-5.6-sol" },
+      );
+      const firstLineage = canonicalSessionLineage(firstBody, tenantId);
+      const secondLineage = canonicalSessionLineage(secondBody, tenantId);
+      if (!firstLineage || !secondLineage) {
+        throw new TypeError("Expected standard history lineage");
+      }
+      const selectedAccounts: string[] = [];
+      const conversationIds: string[] = [];
+      let responseIndex = 0;
+      const makeClient: PipelineClientFactory = (auth) => ({
+        async send(command): Promise<SdkStreamResponse> {
+          selectedAccounts.push(auth.access);
+          const input = command.input as {
+            conversationState?: { conversationId?: string };
+          };
+          const conversationId = input.conversationState?.conversationId;
+          if (!conversationId) {
+            throw new TypeError("Expected a Kiro conversation id");
+          }
+          conversationIds.push(conversationId);
+          responseIndex += 1;
+          return responseFrom([
+            {
+              assistantResponseEvent: {
+                content: responseIndex === 1 ? "first answer" : "second answer",
+              },
+            },
+          ]);
+        },
+      });
+
+      const first = await runChatCompletion({
+        body: firstBody,
+        model: firstBody.model,
+        stream: false,
+        config: config(),
+        accountManager: manager,
+        tokenRefresher: new FakeTokenRefresher(),
+        affinityStore,
+        lineage: firstLineage,
+        tenantId,
+        makeClient,
+      });
+      expect(first.status).toBe(200);
+      await first.arrayBuffer();
+
+      const second = await runChatCompletion({
+        body: secondBody,
+        model: secondBody.model,
+        stream: false,
+        config: config(),
+        accountManager: manager,
+        tokenRefresher: new FakeTokenRefresher(),
+        affinityStore,
+        lineage: secondLineage,
+        tenantId,
+        makeClient,
+      });
+      expect(second.status).toBe(200);
+      await second.arrayBuffer();
+
+      expect(selectedAccounts).toEqual(["account-a-access", "account-a-access"]);
+      expect(conversationIds).toHaveLength(2);
+      expect(conversationIds[1]).toBe(conversationIds[0]);
+    } finally {
+      affinityStore.close();
+    }
+  });
+
+  test("sends plain-text-only content blocks as exact concatenated bytes", async () => {
     let makeClientCalls = 0;
+    let commandInput: unknown;
     const response = await runChatCompletion({
       body: canonicalRequest([
         message("user", [
           { type: "text", text: "first", path: "input.0.content.0" },
           { type: "text", text: "second", path: "input.0.content.1" },
+        ]),
+      ]),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () => {
+        makeClientCalls += 1;
+        return {
+          async send(command): Promise<SdkStreamResponse> {
+            commandInput = command.input;
+            return responseFrom([
+              { assistantResponseEvent: { content: "ok" } },
+              {
+                metadataEvent: {
+                  tokenUsage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+                },
+              },
+            ]);
+          },
+        };
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(makeClientCalls).toBe(1);
+    expect(commandInput).toMatchObject({
+      conversationState: {
+        currentMessage: {
+          userInputMessage: {
+            content: "firstsecond",
+          },
+        },
+      },
+    });
+    expect(parseCanonicalCompletion(await response.json())).toMatchObject({
+      text: "ok",
+    });
+  });
+
+  test("rejects mixed content whose text ordering cannot be projected before SDK creation", async () => {
+    let makeClientCalls = 0;
+    const response = await runChatCompletion({
+      body: canonicalRequest([
+        message("user", [
+          { type: "text", text: "first", path: "input.0.content.0" },
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+            path: "input.0.content.1",
+          },
+          { type: "text", text: "second", path: "input.0.content.2" },
         ]),
       ]),
       model: "gpt-5.6-sol",
@@ -1326,10 +1862,10 @@ describe("runChatCompletion terminal errors", () => {
     expect(makeClientCalls).toBe(0);
     expect(await errorBody(response)).toEqual({
       error: {
-        message: expect.stringContaining("cannot preserve their boundaries"),
+        message: expect.stringContaining("cannot preserve their ordering"),
         type: "invalid_request_error",
         code: "unsupported_content_block_projection",
-        param: "input.0.content.1",
+        param: "input.0.content.2",
       },
     });
   });

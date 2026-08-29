@@ -4,6 +4,7 @@ import {
 } from "@aws/codewhisperer-streaming-client";
 import { randomUUID } from "node:crypto";
 import {
+  assistantLineageFingerprint,
   assistantOutputFingerprint,
   type CanonicalAssistantOutput,
   type CanonicalRequest,
@@ -12,14 +13,26 @@ import {
 import { CANONICAL_OUTPUT_JSON_CONTENT_TYPE } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
+import { KIRO_CONSTANTS } from "../kiro/constants.js";
+import { isAccessTokenError, isQuotaExhausted } from "../kiro/health.js";
+import type { ManagedAccount } from "../kiro/types.js";
 import { transformToSdkRequest } from "../kiro/transform/request-sdk.js";
 import { RequestTransformError } from "../kiro/transform/errors.js";
 import { collectSdkResponse } from "../kiro/transform/sdk-collector.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
+import type { SdkOutputCaptureHandler } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { SdkReasoningCaptureHandler } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { SdkOutputFingerprint } from "../kiro/transform/streaming/sdk-stream-runtime.js";
+import {
+  SemanticStreamTruncationError,
+  SdkStreamProtocolError,
+} from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import { openAiError } from "../server/errors.js";
-import { classifyError, normalizeSdkError } from "./error-classifier.js";
+import {
+  classifyError,
+  normalizeSdkError,
+  type NormalizedSdkError,
+} from "./error-classifier.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import {
   abortable,
@@ -39,6 +52,8 @@ export type {
   PipelineAffinityStore,
   PipelineClientFactory,
   PipelineReasoningReplayStore,
+  PipelineModelCapabilities,
+  PipelineQuotaRechecker,
   PipelineSdkClient,
   PipelineTokenRefresher,
   RunChatCompletionOptions,
@@ -55,6 +70,7 @@ type CompletionResult =
       readonly emitEncryptedReasoning: boolean;
       readonly emitAnthropicReasoningMetadata: boolean;
       readonly fingerprintOutput?: SdkOutputFingerprint;
+      readonly captureOutput?: SdkOutputCaptureHandler;
       readonly releaseAccount: () => void;
     };
 
@@ -91,6 +107,54 @@ function thinkingOptions(
 
 function terminalError(status: number, message: string, code?: string): Response {
   return openAiError(status, message, "upstream_error", code);
+}
+
+function persistQuotaExhaustion(
+  options: RunChatCompletionOptions,
+  account: ManagedAccount,
+): void {
+  const recheckAfter =
+    Date.now() +
+    options.config.quota_recheck_interval_ms;
+  if (options.accountManager.markQuotaExhausted) {
+    options.accountManager.markQuotaExhausted(account, recheckAfter);
+  } else {
+    options.accountManager.markRateLimited(account, recheckAfter);
+  }
+  auditLog("warn", "quota_exhausted_account_persisted", {
+    account_hash: auditHash(account.id),
+    recheck_after: recheckAfter,
+  });
+}
+
+function modelAvailabilityError(
+  options: RunChatCompletionOptions,
+): CompletionResult {
+  const known = options.modelCapabilities?.isKnownModel(options.model) ?? false;
+  return {
+    kind: "response",
+    response: openAiError(
+      known ? 503 : 400,
+      known
+        ? `Model ${options.model} is not available to any currently usable Kiro account`
+        : `Model ${options.model} is not supported by Kiro`,
+      known ? "service_unavailable" : "invalid_request_error",
+      known ? "model_unavailable_for_accounts" : "unsupported_model",
+      "model",
+    ),
+  };
+}
+
+function runtimeEndpoint(
+  options: RunChatCompletionOptions,
+  region: string,
+): string | undefined {
+  if (options.config.test_upstream_endpoint) {
+    return options.config.test_upstream_endpoint;
+  }
+  return options.config.runtime_endpoint_mode === "kiro-runtime"
+    ? KIRO_CONSTANTS.RUNTIME_ENDPOINT.replace("{{region}}", region)
+    : undefined;
 }
 
 function canonicalOutputFingerprint(request: CanonicalRequest): SdkOutputFingerprint {
@@ -225,15 +289,41 @@ function reasoningCaptureOptions(
   readonly emitEncryptedReasoning: boolean;
   readonly emitAnthropicReasoningMetadata: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
+  readonly captureOutput?: SdkOutputCaptureHandler;
 } {
   const canonical = options.body;
   const emitEncryptedReasoning = canonical.includeEncryptedReasoning === true;
   const emitAnthropicReasoningMetadata = canonical.protocol === "anthropic-messages";
+  const captureOutput =
+    options.lineage && options.affinityStore
+      ? (output: CanonicalAssistantOutput): void => {
+          if (output.text.length === 0 && output.toolCalls.length === 0) return;
+          const lineageFingerprint = assistantLineageFingerprint(canonical, output);
+          const keyHash = options.lineage?.outputKeyHash(lineageFingerprint);
+          if (keyHash === undefined) return;
+          options.affinityStore?.recordOutputLineage(
+            keyHash,
+            accountId,
+            conversationId,
+            Date.now(),
+            options.config.session_affinity_ttl_ms,
+            options.config.session_affinity_max_entries,
+          );
+          auditLog("info", "output_lineage_recorded", {
+            protocol: canonical.protocol,
+            lineage_source: options.lineage?.source,
+            lineage_hash: auditHash(keyHash),
+            account_hash: auditHash(accountId),
+            conversation_hash: auditHash(conversationId),
+          });
+        }
+      : undefined;
   if (!options.reasoningReplayStore || !options.tenantId) {
     return {
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
       ...(canonical ? { fingerprintOutput: canonicalOutputFingerprint(canonical) } : {}),
+      ...(captureOutput ? { captureOutput } : {}),
     };
   }
   return {
@@ -248,6 +338,7 @@ function reasoningCaptureOptions(
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
     fingerprintOutput: canonicalOutputFingerprint(canonical),
+    ...(captureOutput ? { captureOutput } : {}),
   };
 }
 
@@ -258,22 +349,63 @@ async function executeLoop(
   const { think, budget } = thinkingOptions(options.body, options.model);
   const forcedRefreshAccountIds = new Set<string>();
   const serverErrors = new Map<string, number>();
+  const requestExcludedAccountIds = new Set<string>();
+  const reportedQuotaExhaustedAccountIds = new Set<string>();
+  let lastAuthenticationFailure: NormalizedSdkError | undefined;
+  let lastQuotaFailure: NormalizedSdkError | undefined;
   let retryCount = 0;
   let iterations = 0;
   let binding =
     options.affinity && options.affinityStore
       ? options.affinityStore.getSessionAffinity(options.affinity.keyHash)
       : undefined;
-  const replayState = resolveReplayState(options, binding);
+  const lineageBinding =
+    binding === undefined &&
+    options.lineage?.lookupKeyHash !== undefined &&
+    options.affinityStore
+      ? options.affinityStore.resolveOutputLineage(options.lineage.lookupKeyHash)
+      : undefined;
+  const effectiveBinding = binding ?? lineageBinding;
+  const replayState = resolveReplayState(options, effectiveBinding);
   const replayLocked = replayState.accountId !== undefined;
-  let preferredAccountId = replayState.accountId ?? binding?.accountId;
-  let requestAccountId: string | undefined;
-  let requestConversationId = replayState.conversationId ?? binding?.conversationId;
+  let preferredAccountId = replayState.accountId ?? effectiveBinding?.accountId;
+  let requestAccountId = replayState.accountId ?? effectiveBinding?.accountId;
+  let requestConversationId =
+    replayState.conversationId ?? effectiveBinding?.conversationId;
+  const modelRejectedAccountIds = new Set<string>();
+
+  if (options.quotaRechecker) {
+    await options.quotaRechecker.recheckDueAccounts(
+      options.accountManager.reconcileFromDb(),
+      signal,
+      replayState.accountId ?? effectiveBinding?.accountId,
+    );
+  }
 
   while (true) {
     if (signal.aborted) throw abortReason(signal);
     iterations += 1;
     if (iterations > options.config.max_request_iterations) {
+      if (lastAuthenticationFailure) {
+        return {
+          kind: "response",
+          response: terminalError(
+            lastAuthenticationFailure.status ?? 403,
+            lastAuthenticationFailure.message,
+            lastAuthenticationFailure.code ?? "upstream_authentication_failed",
+          ),
+        };
+      }
+      if (lastQuotaFailure) {
+        return {
+          kind: "response",
+          response: terminalError(
+            402,
+            lastQuotaFailure.message,
+            lastQuotaFailure.code ?? "quota_exhausted",
+          ),
+        };
+      }
       return {
         kind: "response",
         response: openAiError(
@@ -285,10 +417,71 @@ async function executeLoop(
       };
     }
 
-    options.accountManager.reconcileFromDb();
-    const selected = options.accountManager.selectHealthyAccount(preferredAccountId);
+    const accounts = options.accountManager.reconcileFromDb();
+    const requestCandidates = accounts.filter(
+      (account) =>
+        !modelRejectedAccountIds.has(account.id) &&
+        !requestExcludedAccountIds.has(account.id),
+    );
+    const quotaExhaustedAccounts = requestCandidates.filter(isQuotaExhausted);
+    const newlyReportedQuotaAccounts = quotaExhaustedAccounts.filter(
+      (account) => !reportedQuotaExhaustedAccountIds.has(account.id),
+    );
+    for (const account of newlyReportedQuotaAccounts) {
+      reportedQuotaExhaustedAccountIds.add(account.id);
+    }
+    if (newlyReportedQuotaAccounts.length > 0) {
+      auditLog("info", "quota_exhausted_accounts_excluded", {
+        account_count: newlyReportedQuotaAccounts.length,
+      });
+    }
+    const candidateAccountIds = requestCandidates
+      .filter((account) => !isQuotaExhausted(account))
+      .map((account) => account.id);
+    const cachedEligible = options.modelCapabilities?.eligibleAccountIds(
+      options.model,
+      candidateAccountIds,
+    );
+    const eligibleAccountIds = new Set(
+      [...(cachedEligible ?? candidateAccountIds)].filter(
+        (accountId) => !modelRejectedAccountIds.has(accountId),
+      ),
+    );
+    const selected = options.accountManager.selectHealthyAccount(
+      preferredAccountId,
+      eligibleAccountIds,
+    );
     if (!selected || (replayState.accountId !== undefined && selected.id !== replayState.accountId)) {
       if (replayLocked) return replayUnavailable();
+      if (candidateAccountIds.length === 0 && lastAuthenticationFailure) {
+        return {
+          kind: "response",
+          response: terminalError(
+            lastAuthenticationFailure.status ?? 403,
+            lastAuthenticationFailure.message,
+            lastAuthenticationFailure.code ?? "upstream_authentication_failed",
+          ),
+        };
+      }
+      if (
+        candidateAccountIds.length === 0 &&
+        (quotaExhaustedAccounts.length > 0 || lastQuotaFailure)
+      ) {
+        return {
+          kind: "response",
+          response: terminalError(
+            402,
+            lastQuotaFailure?.message ?? "All eligible Kiro accounts have exhausted their quota",
+            lastQuotaFailure?.code ?? "quota_exhausted",
+          ),
+        };
+      }
+      if (
+        modelRejectedAccountIds.size > 0 ||
+        (cachedEligible !== undefined && eligibleAccountIds.size === 0)
+      ) {
+        return modelAvailabilityError(options);
+      }
       return {
         kind: "response",
         response: openAiError(
@@ -355,8 +548,14 @@ async function executeLoop(
     auditLog("info", "upstream_affinity_selected", {
       projection_mode: options.config.protocol_projection_mode,
       session_affinity_mode: options.config.session_affinity_mode,
-      affinity_source: options.affinity?.source,
-      affinity_bound: options.affinity !== undefined,
+      affinity_source: options.affinity?.source ?? options.lineage?.source,
+      affinity_bound: binding !== undefined || lineageBinding !== undefined,
+      affinity_kind:
+        binding !== undefined
+          ? "explicit"
+          : lineageBinding !== undefined
+            ? "history-lineage"
+            : undefined,
       account_hash: auditHash(selected.id),
       conversation_hash:
         requestConversationId === undefined
@@ -375,6 +574,30 @@ async function executeLoop(
         signal,
       );
       const auth = options.accountManager.toAuthDetails(account);
+      if (options.modelCapabilities) {
+        const availability = await abortable(
+          options.modelCapabilities.ensureAccountModel(
+            account,
+            auth,
+            options.model,
+            signal,
+          ),
+          signal,
+        );
+        if (!availability.supported) {
+          auditLog("warn", "account_model_unavailable", {
+            account_hash: auditHash(account.id),
+            model_hash: auditHash(options.model),
+            capability_source: availability.source,
+          });
+          if (replayLocked) return replayUnavailable();
+          modelRejectedAccountIds.add(account.id);
+          preferredAccountId = undefined;
+          requestAccountId = undefined;
+          requestConversationId = undefined;
+          continue;
+        }
+      }
       const parsedEffort = EffortSchema.safeParse(options.config.effort);
       const prepared = transformToSdkRequest(options.body, options.model, auth, think, budget, {
         autoEffortMapping: options.config.auto_effort_mapping,
@@ -387,7 +610,7 @@ async function executeLoop(
         auth,
         prepared.region,
         prepared.effort,
-        options.config.test_upstream_endpoint,
+        runtimeEndpoint(options, prepared.region),
         resolveProxyUrl(options.config),
         account.id,
         options.config.sdk_http_keep_alive,
@@ -447,12 +670,32 @@ async function executeLoop(
         if (replayLocked) return replayUnavailable();
         throw caught;
       }
+      if (caught instanceof SemanticStreamTruncationError) {
+        if (retryCount < options.config.rate_limit_max_retries) {
+          retryCount += 1;
+          await abortableSleep(
+            options.config.rate_limit_retry_delay_ms * 2 ** (retryCount - 1),
+            signal,
+          );
+          continue;
+        }
+        return {
+          kind: "response",
+          response: terminalError(502, caught.message, caught.code),
+        };
+      }
+      if (caught instanceof SdkStreamProtocolError) {
+        return {
+          kind: "response",
+          response: terminalError(502, caught.message, caught.code),
+        };
+      }
       const error = normalizeSdkError(caught);
       const serverErrorCount = error.status === 500 ? (serverErrors.get(account.id) ?? 0) + 1 : 0;
       if (error.status === 500) serverErrors.set(account.id, serverErrorCount);
       const classification = classifyError(error, {
         accountId: account.id,
-        accountCount: options.accountManager.getAccountCount(),
+        accountCount: Math.max(1, eligibleAccountIds.size),
         retryCount,
         maxRetries: options.config.rate_limit_max_retries,
         serverErrorCount,
@@ -470,11 +713,21 @@ async function executeLoop(
           continue;
         case "switch":
           if (replayLocked) return replayUnavailable();
+          requestExcludedAccountIds.add(account.id);
+          if (
+            error.status === 401 ||
+            (error.status === 403 && isAccessTokenError(error.message))
+          ) {
+            lastAuthenticationFailure = error;
+          }
+          if (error.status === 402) lastQuotaFailure = error;
           if (error.reason === "TEMPORARILY_SUSPENDED") {
             options.accountManager.markUnhealthy(
               account,
               `InvalidTokenException: Account Suspended: ${error.message}`,
             );
+          } else if (error.status === 402) {
+            persistQuotaExhaustion(options, account);
           } else {
             options.accountManager.markRateLimited(
               account,
@@ -487,6 +740,9 @@ async function executeLoop(
           if (!options.affinityStore) requestConversationId = undefined;
           continue;
         case "fail":
+          if (error.status === 402) {
+            persistQuotaExhaustion(options, account);
+          }
           if (error.reason === "TEMPORARILY_SUSPENDED") {
             options.accountManager.markUnhealthy(
               account,
@@ -525,6 +781,11 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     if (options.affinity) {
       releaseSession = await acquireSessionQueue(
         options.affinity.keyHash,
+        deadline.signal,
+      );
+    } else if (options.lineage?.lookupKeyHash !== undefined) {
+      releaseSession = await acquireSessionQueue(
+        options.lineage.lookupKeyHash,
         deadline.signal,
       );
     }
