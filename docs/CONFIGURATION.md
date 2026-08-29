@@ -13,7 +13,7 @@ For every field, the effective value is the first one found, in this order:
 3. **Configuration file** — JSON at the resolved config path.
 4. **Schema default** — the zod schema default in `src/config/schema.ts`.
 
-The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG_CONFIG_HOME/kiro-provider/config.json` when `XDG_CONFIG_HOME` is set. Account-management subcommands (`accounts list|import|remove`) target the provider-owned local authentication store; they do not load gateway configuration and do not require `api_keys`.
+The config file path defaults to `~/.config/kiro-provider/config.json`, or `$XDG_CONFIG_HOME/kiro-provider/config.json` when `XDG_CONFIG_HOME` is set. `accounts list|import|remove` target the provider-owned local authentication store without loading gateway configuration. `accounts refresh|relogin` load refresh, timeout, region, and proxy settings from the selected config and require `auth_source: "local"`.
 
 ## Field reference
 
@@ -92,6 +92,37 @@ After import, kiro-provider independently:
 - marks permanently invalid refresh credentials unhealthy instead of retrying
   them in model loops;
 - deduplicates per-account probes and bounds maintenance concurrency.
+
+The local account store can be operated without OpenCode:
+
+```bash
+kiro-provider accounts list
+kiro-provider accounts list --details
+kiro-provider accounts list --json
+kiro-provider accounts refresh --all
+kiro-provider accounts refresh <id|email> --json
+kiro-provider accounts relogin <id|email>
+kiro-provider accounts remove <id|email>
+```
+
+The default list is an aligned summary. `--details` and `--json` expose the
+stable internal ID needed to disambiguate duplicate emails, but never include
+access tokens, refresh tokens, or client secrets. Email identifiers are
+case-insensitive and accepted only when exactly one row matches.
+
+Manual refresh always calls Kiro's authoritative usage endpoint, including for
+fresh or currently exhausted rows. It refreshes an access token only when it is
+near expiry or after one invalid-bearer response. A partial failure produces a
+non-zero exit code and a per-account result; `--json` is suitable for
+monitoring. Background maintenance remains responsible for automatic
+near-expiry token renewal, normal usage refresh, and periodic quota recovery.
+
+`accounts relogin` resolves the target before opening device authorization,
+then verifies the authenticated Kiro usage email before writing credentials.
+It preserves the selected internal account ID so existing session affinity can
+continue to reference the same account. `accounts remove` prompts by default;
+`--yes` is required for non-interactive deletion, which also removes that
+account's persisted affinity, output-lineage, and reasoning-replay rows.
 
 Run only one authentication owner for an imported rotating refresh token.
 Continuing to use the same imported account through an independently running

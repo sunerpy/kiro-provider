@@ -7,11 +7,15 @@ Commands:
       Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>]
       Sign in directly to the provider-owned local auth store.
-  accounts list
-      List accounts in the provider-owned local auth store.
+  accounts list [--details | --json]
+      List accounts without exposing credentials.
+  accounts refresh (--all | <id|email>) [--config <path>] [--json]
+      Refresh authoritative usage now and renew access tokens when needed.
+  accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]
+      Re-authenticate one account while preserving its internal account ID.
   accounts import [--from <path>] [--config <path>]
       Copy OpenCode Kiro accounts once into the provider-owned local store.
-  accounts remove <id|email>
+  accounts remove <id|email> [--yes]
       Remove an account from the provider-owned local store and write a tombstone.
 
 Options:
@@ -31,7 +35,23 @@ type LoginCommand = {
 	readonly startUrl?: string;
 	readonly region?: string;
 };
-type AccountsListCommand = { readonly kind: "accounts-list" };
+type AccountsListCommand = {
+	readonly kind: "accounts-list";
+	readonly mode: "table" | "details" | "json";
+};
+type AccountsRefreshCommand = {
+	readonly kind: "accounts-refresh";
+	readonly identifier?: string;
+	readonly configPath?: string;
+	readonly json: boolean;
+};
+type AccountsReloginCommand = {
+	readonly kind: "accounts-relogin";
+	readonly identifier: string;
+	readonly configPath?: string;
+	readonly startUrl?: string;
+	readonly region?: string;
+};
 type AccountsImportCommand = {
 	readonly kind: "accounts-import";
 	readonly configPath?: string;
@@ -40,6 +60,7 @@ type AccountsImportCommand = {
 type AccountsRemoveCommand = {
 	readonly kind: "accounts-remove";
 	readonly identifier: string;
+	readonly yes: boolean;
 };
 
 export type CliCommand =
@@ -47,6 +68,8 @@ export type CliCommand =
 	| ServeCommand
 	| LoginCommand
 	| AccountsListCommand
+	| AccountsRefreshCommand
+	| AccountsReloginCommand
 	| AccountsImportCommand
 	| AccountsRemoveCommand;
 
@@ -124,25 +147,140 @@ function parseImport(args: readonly string[]): AccountsImportCommand | HelpComma
 	};
 }
 
+function parseAccountList(
+	args: readonly string[],
+): AccountsListCommand | HelpCommand {
+	const parsed = parseArgs({
+		args: [...args],
+		options: {
+			details: { type: "boolean" },
+			json: { type: "boolean" },
+			help: { type: "boolean", short: "h" },
+		},
+		strict: true,
+		allowPositionals: false,
+	});
+	if (parsed.values.help) return { kind: "help" };
+	if (parsed.values.details && parsed.values.json) {
+		throw new CliUsageError("accounts list accepts only one of --details or --json");
+	}
+	return {
+		kind: "accounts-list",
+		mode: parsed.values.json
+			? "json"
+			: parsed.values.details
+				? "details"
+				: "table",
+	};
+}
+
+function parseAccountRefresh(
+	args: readonly string[],
+): AccountsRefreshCommand | HelpCommand {
+	const parsed = parseArgs({
+		args: [...args],
+		options: {
+			all: { type: "boolean" },
+			config: { type: "string" },
+			json: { type: "boolean" },
+			help: { type: "boolean", short: "h" },
+		},
+		strict: true,
+		allowPositionals: true,
+	});
+	if (parsed.values.help) return { kind: "help" };
+	if (parsed.positionals.length > 1) {
+		throw new CliUsageError(
+			"accounts refresh accepts exactly one <id|email> or --all",
+		);
+	}
+	const identifier = parsed.positionals[0];
+	if ((parsed.values.all ?? false) === (identifier !== undefined)) {
+		throw new CliUsageError(
+			"accounts refresh requires exactly one <id|email> or --all",
+		);
+	}
+	return {
+		kind: "accounts-refresh",
+		...(identifier ? { identifier } : {}),
+		...(parsed.values.config ? { configPath: parsed.values.config } : {}),
+		json: parsed.values.json ?? false,
+	};
+}
+
+function parseAccountRelogin(
+	args: readonly string[],
+): AccountsReloginCommand | HelpCommand {
+	const parsed = parseArgs({
+		args: [...args],
+		options: {
+			config: { type: "string" },
+			"start-url": { type: "string" },
+			region: { type: "string" },
+			help: { type: "boolean", short: "h" },
+		},
+		strict: true,
+		allowPositionals: true,
+	});
+	if (parsed.values.help) return { kind: "help" };
+	const identifier = parsed.positionals[0];
+	if (!identifier || parsed.positionals.length !== 1) {
+		throw new CliUsageError(
+			"accounts relogin requires exactly one <id|email>",
+		);
+	}
+	return {
+		kind: "accounts-relogin",
+		identifier,
+		...(parsed.values.config ? { configPath: parsed.values.config } : {}),
+		...(parsed.values["start-url"]
+			? { startUrl: parsed.values["start-url"] }
+			: {}),
+		...(parsed.values.region ? { region: parsed.values.region } : {}),
+	};
+}
+
+function parseAccountRemove(
+	args: readonly string[],
+): AccountsRemoveCommand | HelpCommand {
+	const parsed = parseArgs({
+		args: [...args],
+		options: {
+			yes: { type: "boolean", short: "y" },
+			help: { type: "boolean", short: "h" },
+		},
+		strict: true,
+		allowPositionals: true,
+	});
+	if (parsed.values.help) return { kind: "help" };
+	const identifier = parsed.positionals[0];
+	if (!identifier || parsed.positionals.length !== 1) {
+		throw new CliUsageError("accounts remove requires exactly one <id|email>");
+	}
+	return {
+		kind: "accounts-remove",
+		identifier,
+		yes: parsed.values.yes ?? false,
+	};
+}
+
 function parseAccounts(args: readonly string[]): CliCommand {
 	const action = args[0];
 	switch (action) {
 		case "list":
-			if (args.length !== 1) throw new CliUsageError("accounts list takes no arguments");
-			return { kind: "accounts-list" };
+			return parseAccountList(args.slice(1));
+		case "refresh":
+			return parseAccountRefresh(args.slice(1));
+		case "relogin":
+			return parseAccountRelogin(args.slice(1));
 		case "import":
 			return parseImport(args.slice(1));
-		case "remove": {
-			const identifier = args[1];
-			if (!identifier || args.length !== 2) {
-				throw new CliUsageError("accounts remove requires exactly one <id|email>");
-			}
-			return { kind: "accounts-remove", identifier };
-		}
+		case "remove":
+			return parseAccountRemove(args.slice(1));
 		default:
 			throw new CliUsageError(
 				action === undefined
-					? "accounts requires list, import, or remove"
+					? "accounts requires list, refresh, relogin, import, or remove"
 					: `Unknown accounts command: ${action}`,
 			);
 	}

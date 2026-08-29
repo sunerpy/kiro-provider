@@ -86,6 +86,56 @@ type QuotaRecheckResult =
 	| "skipped";
 type BatchKind = "quota_recheck" | "usage_refresh";
 
+export type AccountTokenRefreshStatus =
+	| "renewed"
+	| "not_needed"
+	| "skipped_unhealthy"
+	| "failed"
+	| "timeout"
+	| "aborted";
+
+export type AccountUsageRefreshStatus =
+	| "updated"
+	| "skipped"
+	| "failed"
+	| "timeout"
+	| "aborted";
+
+export interface AccountRefreshResult {
+	readonly accountId: string;
+	readonly email: string;
+	readonly before: {
+		readonly usedCount: number;
+		readonly limitCount: number;
+		readonly overageCount: number;
+	};
+	readonly after: {
+		readonly usedCount: number;
+		readonly limitCount: number;
+		readonly overageCount: number;
+	};
+	readonly tokenStatus: AccountTokenRefreshStatus;
+	readonly usageStatus: AccountUsageRefreshStatus;
+	readonly quotaStatus: "available" | "exhausted" | "unknown";
+	readonly error?: string;
+}
+
+export interface AccountRefreshSummary {
+	readonly startedAt: number;
+	readonly completedAt: number;
+	readonly totalAccounts: number;
+	readonly tokenRenewed: number;
+	readonly usageUpdated: number;
+	readonly failed: number;
+	readonly timedOut: boolean;
+	readonly accounts: readonly AccountRefreshResult[];
+}
+
+interface QuotaProbeOutcome {
+	readonly result: QuotaRecheckResult;
+	readonly account: AccountRefreshResult;
+}
+
 function isQuotaRecheckDue(account: ManagedAccount, now: number): boolean {
 	return (
 		isQuotaExhausted(account) &&
@@ -129,10 +179,37 @@ function errorFields(
 	};
 }
 
+function usageCounts(account: ManagedAccount): {
+	readonly usedCount: number;
+	readonly limitCount: number;
+	readonly overageCount: number;
+} {
+	return {
+		usedCount: account.usedCount ?? 0,
+		limitCount: account.limitCount ?? 0,
+		overageCount: account.overageCount ?? 0,
+	};
+}
+
+function quotaStatus(
+	account: ManagedAccount,
+): AccountRefreshResult["quotaStatus"] {
+	const counts = usageCounts(account);
+	if (counts.limitCount <= 0) return "unknown";
+	return isQuotaExhausted(counts) ? "exhausted" : "available";
+}
+
+function abortStatus(signal: AbortSignal): "timeout" | "aborted" {
+	return signal.reason instanceof DOMException &&
+		signal.reason.name === "TimeoutError"
+		? "timeout"
+		: "aborted";
+}
+
 export class QuotaRechecker implements PipelineQuotaRechecker {
 	private readonly inFlight = new Map<
 		string,
-		Promise<QuotaRecheckResult>
+		Promise<QuotaProbeOutcome>
 	>();
 	private readonly usageRetryAfter = new Map<string, number>();
 	private readonly now: () => number;
@@ -186,6 +263,96 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 		await this.runBatch(due, signal, "usage_refresh", false);
 	}
 
+	async refreshAccounts(
+		accounts: readonly ManagedAccount[],
+		signal: AbortSignal,
+	): Promise<AccountRefreshSummary> {
+		const startedAt = this.now();
+		const ordered = [...accounts].sort(
+			(left, right) =>
+				left.email.localeCompare(right.email) || left.id.localeCompare(right.id),
+		);
+		const results = new Map<string, AccountRefreshResult>();
+		let cursor = 0;
+		auditLog("info", "manual_account_refresh_started", {
+			account_count: ordered.length,
+			concurrency: this.options.concurrency,
+		});
+
+		const worker = async (): Promise<void> => {
+			for (;;) {
+				if (signal.aborted) return;
+				const account = ordered[cursor];
+				cursor += 1;
+				if (!account) return;
+				try {
+					const outcome = await abortable(
+						this.startOrJoin(account, true, signal),
+						signal,
+					);
+					results.set(account.id, outcome.account);
+				} catch (error) {
+					if (signal.aborted) return;
+					throw error;
+				}
+			}
+		};
+
+		await Promise.all(
+			Array.from(
+				{ length: Math.min(this.options.concurrency, ordered.length) },
+				worker,
+			),
+		);
+
+		if (signal.aborted) {
+			const status = abortStatus(signal);
+			for (const account of ordered) {
+				if (!results.has(account.id)) {
+					results.set(
+						account.id,
+						this.terminalAccountResult(
+							account,
+							status,
+							status === "timeout"
+								? "Account refresh timed out."
+								: "Account refresh was aborted.",
+						),
+					);
+				}
+			}
+		}
+
+		const accountResults = ordered
+			.map(({ id }) => results.get(id))
+			.filter((result): result is AccountRefreshResult => result !== undefined);
+		const summary: AccountRefreshSummary = {
+			startedAt,
+			completedAt: this.now(),
+			totalAccounts: ordered.length,
+			tokenRenewed: accountResults.filter(
+				(result) => result.tokenStatus === "renewed",
+			).length,
+			usageUpdated: accountResults.filter(
+				(result) => result.usageStatus === "updated",
+			).length,
+			failed: accountResults.filter(
+				(result) => result.usageStatus !== "updated",
+			).length,
+			timedOut: signal.aborted && abortStatus(signal) === "timeout",
+			accounts: accountResults,
+		};
+		auditLog("info", "manual_account_refresh_completed", {
+			account_count: summary.totalAccounts,
+			token_renewed_count: summary.tokenRenewed,
+			usage_updated_count: summary.usageUpdated,
+			failed_count: summary.failed,
+			timed_out: summary.timedOut,
+			duration_ms: summary.completedAt - summary.startedAt,
+		});
+		return summary;
+	}
+
 	private async runBatch(
 		due: readonly ManagedAccount[],
 		signal: AbortSignal,
@@ -221,11 +388,11 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 				const account = due[cursor];
 				cursor += 1;
 				if (!account) return;
-				const result = await abortable(
-					this.startOrJoin(account),
+				const outcome = await abortable(
+					this.startOrJoin(account, false),
 					batchSignal,
 				);
-				counts[result] += 1;
+				counts[outcome.result] += 1;
 			}
 		};
 
@@ -269,39 +436,94 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 		);
 	}
 
-	private startOrJoin(account: ManagedAccount): Promise<QuotaRecheckResult> {
-		const existing = this.inFlight.get(account.id);
+	private startOrJoin(
+		account: ManagedAccount,
+		force: boolean,
+		signal?: AbortSignal,
+	): Promise<QuotaProbeOutcome> {
+		const forcedKey = `${account.id}:force`;
+		if (!force) {
+			const forced = this.inFlight.get(forcedKey);
+			if (forced) return forced;
+		}
+		const key = force ? forcedKey : `${account.id}:scheduled`;
+		const existing = this.inFlight.get(key);
 		if (existing) return existing;
 
-		const operation = this.runProbe(account).finally(() => {
-			if (this.inFlight.get(account.id) === operation) {
-				this.inFlight.delete(account.id);
+		const operation = this.runProbe(account, force, signal).finally(() => {
+			if (this.inFlight.get(key) === operation) {
+				this.inFlight.delete(key);
 			}
 		});
-		this.inFlight.set(account.id, operation);
+		this.inFlight.set(key, operation);
 		return operation;
 	}
 
 	private async runProbe(
 		startedAccount: ManagedAccount,
-	): Promise<QuotaRecheckResult> {
-		const signal = AbortSignal.timeout(this.options.timeoutMs);
+		force: boolean,
+		parentSignal?: AbortSignal,
+	): Promise<QuotaProbeOutcome> {
+		const before = usageCounts(startedAccount);
 		let account = startedAccount;
+		let tokenStatus: AccountTokenRefreshStatus = "not_needed";
+		let phase: "token" | "usage" = "token";
+		if (force && isPermanentError(startedAccount.unhealthyReason)) {
+			return {
+				result: "failed",
+				account: {
+					accountId: startedAccount.id,
+					email: startedAccount.email,
+					before,
+					after: before,
+					tokenStatus: "skipped_unhealthy",
+					usageStatus: "skipped",
+					quotaStatus: quotaStatus(startedAccount),
+					error: "Account needs re-login before its usage can be refreshed.",
+				},
+			};
+		}
+
+		const timeoutSignal = AbortSignal.timeout(this.options.timeoutMs);
+		const signal = parentSignal
+			? AbortSignal.any([parentSignal, timeoutSignal])
+			: timeoutSignal;
 		try {
 			const initialAuth =
 				this.options.accountManager.toAuthDetails(startedAccount);
+			const previousAccess = startedAccount.accessToken;
+			const previousExpiry = startedAccount.expiresAt;
 			account = await this.options.tokenRefresher.refreshIfNeeded(
 				startedAccount,
 				initialAuth,
 				signal,
 			);
 			if (
+				account.accessToken !== previousAccess ||
+				account.expiresAt !== previousExpiry
+			) {
+				tokenStatus = "renewed";
+			}
+			if (
+				!force &&
 				!isQuotaRecheckDue(account, this.now()) &&
 				!this.isUsageRefreshDue(account, this.now())
 			) {
-				return "skipped";
+				return {
+					result: "skipped",
+					account: {
+						accountId: account.id,
+						email: account.email,
+						before,
+						after: usageCounts(account),
+						tokenStatus,
+						usageStatus: "skipped",
+						quotaStatus: quotaStatus(account),
+					},
+				};
 			}
 
+			phase = "usage";
 			const wasExhausted = isQuotaExhausted(account);
 			let auth = this.options.accountManager.toAuthDetails(account);
 			let usage: KiroUsageSnapshot;
@@ -317,6 +539,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 					account,
 					signal,
 				);
+				tokenStatus = "renewed";
 				auth = this.options.accountManager.toAuthDetails(account);
 				usage = await this.fetchUsage(auth, {
 					proxyUrl: this.options.proxyUrl,
@@ -335,10 +558,25 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 				{ ...usage, lastSync },
 				nextRecheckAt,
 			);
-			if (!persisted) return "skipped";
+			if (!persisted) {
+				return {
+					result: "skipped",
+					account: {
+						accountId: account.id,
+						email: account.email,
+						before,
+						after: usageCounts(account),
+						tokenStatus,
+						usageStatus: "skipped",
+						quotaStatus: quotaStatus(account),
+						error: "Account was removed while its usage was being refreshed.",
+					},
+				};
+			}
 
 			this.usageRetryAfter.delete(account.id);
 			const persistedExhausted = isQuotaExhausted(persisted);
+			let result: QuotaRecheckResult = "updated";
 			if (persistedExhausted) {
 				auditLog(
 					"info",
@@ -350,15 +588,25 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 						next_recheck_at: persisted.rateLimitResetTime,
 					},
 				);
-				return "exhausted";
-			}
-			if (wasExhausted) {
+				result = "exhausted";
+			} else if (wasExhausted) {
 				auditLog("info", "quota_exhausted_account_recovered", {
 					account_hash: auditHash(account.id),
 				});
-				return "recovered";
+				result = "recovered";
 			}
-			return "updated";
+			return {
+				result,
+				account: {
+					accountId: persisted.id,
+					email: persisted.email,
+					before,
+					after: usageCounts(persisted),
+					tokenStatus,
+					usageStatus: "updated",
+					quotaStatus: quotaStatus(persisted),
+				},
+			};
 		} catch (error) {
 			const nextRecheckAt = this.now() + this.options.intervalMs;
 			const reason = errorReason(error);
@@ -391,7 +639,44 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 				next_recheck_at: nextRecheckAt,
 				...errorFields(error),
 			});
-			return "failed";
+			const interrupted = signal.aborted ? abortStatus(signal) : undefined;
+			return {
+				result: "failed",
+				account: {
+					accountId: account.id,
+					email: account.email,
+					before,
+					after: usageCounts(account),
+					tokenStatus:
+						interrupted && phase === "token"
+							? interrupted
+							: phase === "token"
+								? "failed"
+								: tokenStatus,
+					usageStatus:
+						interrupted ?? (phase === "token" ? "skipped" : "failed"),
+					quotaStatus: quotaStatus(account),
+					error: reason,
+				},
+			};
 		}
+	}
+
+	private terminalAccountResult(
+		account: ManagedAccount,
+		status: "timeout" | "aborted",
+		error: string,
+	): AccountRefreshResult {
+		const counts = usageCounts(account);
+		return {
+			accountId: account.id,
+			email: account.email,
+			before: counts,
+			after: counts,
+			tokenStatus: status,
+			usageStatus: status,
+			quotaStatus: quotaStatus(account),
+			error,
+		};
 	}
 }

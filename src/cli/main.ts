@@ -1,19 +1,31 @@
+import { createInterface } from "node:readline/promises";
 import { defaultOpenCodeAuthDbPath } from "../auth/opencode-auth-store.js";
 import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
+import type { AccountRefreshSummary } from "../core/quota-rechecker.js";
 import { startServer } from "../server/app.js";
 import {
 	ACCOUNTS_DB_PATH,
 	AccountsDatabase,
 	type StoredAccount,
 } from "../storage/accounts-db.js";
+import {
+	formatAccountList,
+	formatAccountRefreshSummary,
+	resolveAccount,
+} from "./account-output.js";
 import { CLI_USAGE, type CliCommand, parseCliArgs } from "./arguments.js";
 import {
 	type ImportAccountsDependencies,
 	type ImportAccountsOptions,
 	runImportAccounts,
 } from "./import-accounts.js";
-import { type LoginOptions, runLogin } from "./login.js";
+import {
+	type LoginOptions,
+	type LoginResult,
+	runLogin,
+} from "./login.js";
+import { runAccountRefresh } from "./refresh-accounts.js";
 
 export type { CliCommand } from "./arguments.js";
 export { CLI_USAGE, parseCliArgs } from "./arguments.js";
@@ -31,27 +43,52 @@ type ServerAddress = {
 export type CliDependencies = {
 	readonly loadConfig: (options: LoadOptions) => Config;
 	readonly startServer: (config: Config) => ServerAddress;
-	readonly runLogin: (config: Config, options: LoginOptions) => Promise<void>;
+	readonly runLogin: (
+		config: Config,
+		options: LoginOptions,
+	) => Promise<LoginResult>;
+	readonly runAccountRefresh: (
+		config: Config,
+		options: { readonly identifier?: string },
+	) => Promise<AccountRefreshSummary>;
 	readonly runImportAccounts: (
 		options: ImportAccountsOptions,
 		dependencies: ImportAccountsDependencies,
 	) => unknown;
 	readonly openDb: (path: string) => AccountsStore;
+	readonly confirm: (message: string) => Promise<boolean>;
 	readonly stdout: (message: string) => void;
 	readonly stderr: (message: string) => void;
 };
 
-function formatAccount(account: StoredAccount): string {
-	const health = account.isHealthy ? "healthy" : "unhealthy";
-	return `${account.email}\t${account.region}\t${health}\tgeneration=${account.generation}\tused=${account.usedCount ?? 0}/${account.limitCount ?? 0}`;
+async function confirmOnTerminal(message: string): Promise<boolean> {
+	if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+	const readline = createInterface({
+		input: process.stdin,
+		output: process.stdout,
+	});
+	try {
+		const answer = await readline.question(`${message} [y/N] `);
+		return answer.trim().toLowerCase() === "y" ||
+			answer.trim().toLowerCase() === "yes";
+	} finally {
+		readline.close();
+	}
+}
+
+function sharedAuthError(config: Config): string | undefined {
+	if (config.auth_source !== "opencode-shared") return undefined;
+	return `auth_source=opencode-shared uses ${config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath()} as the authentication authority. Run "opencode auth login" and select Kiro, or set auth_source to "local" before using provider-owned account commands.`;
 }
 
 const defaultDependencies: CliDependencies = {
 	loadConfig,
 	startServer,
 	runLogin,
+	runAccountRefresh,
 	runImportAccounts,
 	openDb: (path) => new AccountsDatabase(path),
+	confirm: confirmOnTerminal,
 	stdout: console.log,
 	stderr: console.error,
 };
@@ -91,10 +128,9 @@ async function dispatch(
 			const config = dependencies.loadConfig({
 				...(command.configPath ? { configPath: command.configPath } : {}),
 			});
-			if (config.auth_source === "opencode-shared") {
-				dependencies.stderr(
-					`auth_source=opencode-shared uses ${config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath()} as the authentication authority. Run "opencode auth login" and select Kiro, or set auth_source to "local" before using kiro-provider login.`,
-				);
+			const authError = sharedAuthError(config);
+			if (authError) {
+				dependencies.stderr(authError);
 				return 1;
 			}
 			await dependencies.runLogin(config, {
@@ -106,12 +142,58 @@ async function dispatch(
 		case "accounts-list": {
 			const database = dependencies.openDb(ACCOUNTS_DB_PATH);
 			try {
-				for (const account of database.getAccounts()) {
-					dependencies.stdout(formatAccount(account));
+				for (const line of formatAccountList(
+					database.getAccounts(),
+					command.mode,
+				)) {
+					dependencies.stdout(line);
 				}
 			} finally {
 				database.close();
 			}
+			return 0;
+		}
+		case "accounts-refresh": {
+			const config = dependencies.loadConfig({
+				...(command.configPath ? { configPath: command.configPath } : {}),
+			});
+			const authError = sharedAuthError(config);
+			if (authError) {
+				dependencies.stderr(authError);
+				return 1;
+			}
+			const summary = await dependencies.runAccountRefresh(config, {
+				...(command.identifier ? { identifier: command.identifier } : {}),
+			});
+			for (const line of formatAccountRefreshSummary(summary, command.json)) {
+				dependencies.stdout(line);
+			}
+			return summary.failed === 0 ? 0 : 1;
+		}
+		case "accounts-relogin": {
+			const config = dependencies.loadConfig({
+				...(command.configPath ? { configPath: command.configPath } : {}),
+			});
+			const authError = sharedAuthError(config);
+			if (authError) {
+				dependencies.stderr(authError);
+				return 1;
+			}
+			const database = dependencies.openDb(ACCOUNTS_DB_PATH);
+			let selected: StoredAccount;
+			try {
+				selected = resolveAccount(
+					database.getAccounts(),
+					command.identifier,
+				);
+			} finally {
+				database.close();
+			}
+			await dependencies.runLogin(config, {
+				replaceAccount: selected,
+				...(command.startUrl ? { startUrl: command.startUrl } : {}),
+				...(command.region ? { region: command.region } : {}),
+			});
 			return 0;
 		}
 		case "accounts-import": {
@@ -132,19 +214,25 @@ async function dispatch(
 		case "accounts-remove": {
 			const database = dependencies.openDb(ACCOUNTS_DB_PATH);
 			try {
-				const account = database
-					.getAccounts()
-					.find(
-						(candidate) =>
-							candidate.id === command.identifier ||
-							candidate.email === command.identifier,
+				const account = resolveAccount(
+					database.getAccounts(),
+					command.identifier,
+				);
+				if (!command.yes) {
+					const confirmed = await dependencies.confirm(
+						`Remove ${account.email} [${account.id}]? This also deletes its session affinity, output lineage, and reasoning replay state.`,
 					);
-				if (!account) {
-					dependencies.stderr(`Account not found: ${command.identifier}`);
-					return 1;
+					if (!confirmed) {
+						dependencies.stderr(
+							"Account removal cancelled. Use --yes for non-interactive confirmation.",
+						);
+						return 1;
+					}
 				}
 				database.removeAccount(account.id);
-				dependencies.stdout(`Removed account ${account.email}`);
+				dependencies.stdout(
+					`Removed account ${account.email} [${account.id}]`,
+				);
 			} finally {
 				database.close();
 			}

@@ -180,6 +180,14 @@ bun run src/cli/bin.ts --help
 
    不要让两个独立认证所有者同时轮换同一批导入的 refresh token。
 
+   可随时查看或刷新 provider 自有账号池：
+
+   ```bash
+   ./dist/kiro-provider accounts list
+   ./dist/kiro-provider accounts list --details
+   ./dist/kiro-provider accounts refresh --all
+   ```
+
 3. **启动网关。**
 
    ```bash
@@ -539,9 +547,11 @@ Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境验�
 
 - `kiro-provider serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]` —— 启动网关。
 - `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` —— 直接登录到 provider 自有本地认证库。
-- `kiro-provider accounts list` —— 列出 provider 自有本地认证库中的账号。
+- `kiro-provider accounts list [--details | --json]` —— 对齐显示账号健康与用量；details/JSON 会显示稳定账号 ID，但绝不输出凭证。
+- `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` —— 绕过用量缓存，立即读取 Kiro 权威用量，并仅在 access token 到期或被上游拒绝时刷新。
+- `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` —— 经 Kiro 身份校验后重新认证选定账号，同时保留内部账号 ID 与会话亲和引用。
 - `kiro-provider accounts import [--from <path>] [--config <path>]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库，不保留实时数据库链接。
-- `kiro-provider accounts remove <id|email>` —— 从 provider 自有本地认证库删除账号。
+- `kiro-provider accounts remove <id|email> [--yes]` —— 删除账号及其亲和、lineage、reasoning 状态；除非显式传入 `--yes`，否则必须交互确认。
 
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models`、`GET /health` 与需鉴权的 `GET /ready` 返回结构化 JSON。
 
@@ -659,7 +669,9 @@ Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
 和工具；`/v1/messages/count_tokens` 明确是估算值。详见
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
 
-当前本地认证生命周期验证记录见
+当前账号管理与真实用量验证记录见
+[`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)。
+此前本地认证生命周期记录保留在
 [`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
 此前协议与客户端矩阵保留在
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
