@@ -3,9 +3,10 @@
 kiro-provider 提供 `POST /v1/responses`。Codex 自定义 `model_provider` 设置
 `wire_api = "responses"` 时会使用该协议。
 
-## v0.5.0-rc.5 当前状态
+## v0.5.0 支持边界
 
-RC.5 增加的是 provider 自有账号运维与真实用量刷新，不改变这里的协议投影边界。最近一次 Codex
+v0.5.0 包含 provider 自有账号运维、真实用量刷新和类型化流错误；这些能力
+不改变这里的协议投影边界。最近一次 Codex
 门禁于 2026-08-27 使用编译后二进制和 **Codex CLI 0.150.0-alpha.9**；
 客户端只配置标准 base URL、API key、模型和 reasoning effort。
 `claude-opus-5-max` 已通过 Provider 模型校验。调用 Kiro 前的第一个字段级

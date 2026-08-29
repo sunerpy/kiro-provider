@@ -3,10 +3,11 @@
 kiro-provider exposes `POST /v1/responses`, which is the wire API used by a
 Codex custom `model_provider` when `wire_api = "responses"` is selected.
 
-## Current v0.5.0-rc.5 status
+## v0.5.0 support boundary
 
-RC.5 adds provider-owned account operations and live usage refresh, not this protocol
-projection boundary. The latest compiled-service Codex gate on 2026-08-27 used Codex CLI
+v0.5.0 includes provider-owned account operations, live usage refresh, and
+typed stream failures. These do not change this protocol projection boundary.
+The latest compiled-service Codex gate on 2026-08-27 used Codex CLI
 **0.150.0-alpha.9** with only a standard base URL, API key, model, and
 reasoning-effort setting. `claude-opus-5-max` passes provider model validation.
 The first field-level rejection before Kiro is:

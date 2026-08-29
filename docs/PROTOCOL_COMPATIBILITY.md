@@ -44,7 +44,9 @@ compatibility.
 Streaming failures preserve a structured error code instead of collapsing to
 generic `upstream_error`. Retryable transport/truncation/timeout codes and fatal
 protocol codes, including the required downstream attempt semantics, are
-defined in [STREAM_ERROR_CONTRACT.md](STREAM_ERROR_CONTRACT.md).
+defined in [STREAM_ERROR_CONTRACT.md](STREAM_ERROR_CONTRACT.md). The concrete
+Zuno integration handoff is in
+[ZUNO_STREAM_ERROR_HANDOFF.zh.md](ZUNO_STREAM_ERROR_HANDOFF.zh.md).
 
 ## Projection modes
 

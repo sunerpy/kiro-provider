@@ -194,7 +194,7 @@ metering 则必须随后 clean EOF 才可证明完成。旧 `q` 方言只保留�
   账号/conversation 哈希、亲和来源和连接池命中；
 - 日志不记录 API key、token、签名、reasoning、工具 payload 或 prompt 正文。
 
-## 8. v0.5.0-rc.5 真实客户端与本地认证门禁
+## 8. v0.5.0 正式版验收与支持边界
 
 所有测试均使用编译后二进制；客户端只配置标准 base URL、API key 和模型。
 
@@ -209,14 +209,19 @@ metering 则必须随后 clean EOF 才可证明完成。旧 `q` 方言只保留�
 | OpenCode 1.18.18 Chat | RC.3 未重跑；RC.2 阻塞于非标准 `messages.0.cache_control` |
 | Codex 0.150.0-alpha.9 | Opus 5 模型校验通过；随后阻塞于 `reasoning.summary` |
 | Claude Code 2.1.209 | Opus 5 模型校验通过；随后阻塞于 `context_management` |
-| Zuno | 按范围未重跑，且未修改 Zuno 源码或配置；RC.1 只作历史集成证据 |
+| Zuno | RC.5 已通过 Responses 文本与 shell 工具循环；Provider v0.5.0 保留结构化流错误码，但不修改 Zuno 源码，Zuno 仍需按错误码补充恢复分类与持久化重试 |
+| 流错误契约 | v0.5.0 将传输/截断/超时与协议错误分离；前者可由下游有界重试，后者继续 fail-closed |
 | Web Search | 明确 `unsupported_web_search`，无伪事件 |
 
-因此可以发布预发布版 `v0.5.0-rc.5` 收集兼容反馈，但不能发布稳定版
-`v0.5.0`。不能通过忽略字段、请求补丁、私有 Header 或拼接提示词把上述阻塞
-伪装成通过。
+`v0.5.0` 的正式支持范围是本文与兼容矩阵中已验证的 Responses、Messages、
+显式旧 Chat、账号运维、会话亲和、reasoning 回放和流错误契约。正式版不代表
+Codex 0.150.0-alpha.9、Claude Code 2.1.209 或 OpenCode Chat 的未支持请求字段
+已经兼容；这些请求仍按精确字段路径显式拒绝。不能通过忽略字段、请求补丁、
+私有 Header 或拼接提示词把上述边界伪装成通过。
 
 详细证据见
+[Zuno 流错误接入说明](ZUNO_STREAM_ERROR_HANDOFF.zh.md)、
+[流错误协议契约](STREAM_ERROR_CONTRACT.md)、
 [RC.5 账号管理验收报告](audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)、
 [RC.4 本地认证验收报告](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)、
 [RC.3 协议验收报告](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)

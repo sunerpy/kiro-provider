@@ -1,8 +1,12 @@
 # Streaming error contract
 
-This contract applies to provider builds that include the typed stream-error
-changes after `v0.5.0-rc.5`. It separates transient stream failures from
-structural protocol failures so downstream clients can retry only the former.
+This contract is part of `v0.5.0` and later provider builds. It separates
+transient stream failures from structural protocol failures so downstream
+clients can retry only the former.
+
+The Zuno-specific Chinese handoff, including the current source location,
+minimal Rust change, persistence requirements, and acceptance cases, is in
+[ZUNO_STREAM_ERROR_HANDOFF.zh.md](ZUNO_STREAM_ERROR_HANDOFF.zh.md).
 
 ## Why an in-stream error has no HTTP status
 
