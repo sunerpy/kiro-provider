@@ -1,3 +1,4 @@
+import { auditHash } from '../../../core/audit-log.js'
 import type { CanonicalAssistantOutput } from '../../../protocol/canonical.js'
 import { getContextWindowSize } from '../../models.js'
 import { estimateTokens } from '../response.js'
@@ -8,6 +9,7 @@ export interface ToolCallState {
   readonly name: string
   input: string
   stopped: boolean
+  fragmentCount: number
 }
 
 export interface SdkTokenUsage {
@@ -82,6 +84,52 @@ export class SdkStreamProtocolError extends Error {
     readonly code: string
   ) {
     super(message)
+  }
+}
+
+export type ToolCallViolationKind =
+  | 'missing_identity'
+  | 'name_changed'
+  | 'arguments_after_stop'
+  | 'missing_stop'
+  | 'malformed_arguments'
+
+export type ToolCallViolationCode =
+  | 'invalid_upstream_tool_call'
+  | 'incomplete_upstream_tool_call'
+  | 'malformed_upstream_tool_arguments'
+
+export interface ToolCallViolationDetails {
+  readonly toolUseId?: string
+  readonly toolName?: string
+  readonly argumentsText: string
+  readonly fragmentCount: number
+}
+
+export class ToolCallViolation extends Error {
+  readonly name = 'ToolCallViolation'
+  readonly toolIdHash?: string
+  readonly toolNameHash?: string
+  readonly argumentLength: number
+  readonly argumentHash: string
+  readonly fragmentCount: number
+
+  constructor(
+    message: string,
+    readonly code: ToolCallViolationCode,
+    readonly violationKind: ToolCallViolationKind,
+    details: ToolCallViolationDetails
+  ) {
+    super(message)
+    if (details.toolUseId !== undefined) {
+      this.toolIdHash = auditHash(details.toolUseId)
+    }
+    if (details.toolName !== undefined) {
+      this.toolNameHash = auditHash(details.toolName)
+    }
+    this.argumentLength = Buffer.byteLength(details.argumentsText, 'utf8')
+    this.argumentHash = auditHash(details.argumentsText)
+    this.fragmentCount = details.fragmentCount
   }
 }
 
@@ -263,28 +311,50 @@ export function appendToolFragment(
 ): void {
   if (!event) return
   if (!event.name || !event.toolUseId) {
-    throw new SdkStreamProtocolError(
+    throw new ToolCallViolation(
       'Kiro emitted a tool call without both name and toolUseId',
-      'invalid_upstream_tool_call'
+      'invalid_upstream_tool_call',
+      'missing_identity',
+      {
+        ...(event.toolUseId !== undefined ? { toolUseId: event.toolUseId } : {}),
+        ...(event.name !== undefined ? { toolName: event.name } : {}),
+        argumentsText: event.input ?? '',
+        fragmentCount: 1
+      }
     )
   }
 
   const existing = toolCalls.get(event.toolUseId)
   if (existing) {
     if (existing.name !== event.name) {
-      throw new SdkStreamProtocolError(
+      throw new ToolCallViolation(
         'Kiro changed a tool name while streaming one tool call',
-        'invalid_upstream_tool_call'
+        'invalid_upstream_tool_call',
+        'name_changed',
+        {
+          toolUseId: existing.toolUseId,
+          toolName: existing.name,
+          argumentsText: existing.input + (event.input ?? ''),
+          fragmentCount: existing.fragmentCount + 1
+        }
       )
     }
     if (existing.stopped && (event.input ?? '').length > 0) {
-      throw new SdkStreamProtocolError(
+      throw new ToolCallViolation(
         'Kiro emitted tool arguments after the tool call stopped',
-        'invalid_upstream_tool_call'
+        'invalid_upstream_tool_call',
+        'arguments_after_stop',
+        {
+          toolUseId: existing.toolUseId,
+          toolName: existing.name,
+          argumentsText: existing.input + (event.input ?? ''),
+          fragmentCount: existing.fragmentCount + 1
+        }
       )
     }
     existing.input += event.input ?? ''
     existing.stopped ||= event.stop === true
+    existing.fragmentCount += 1
     return
   }
 
@@ -292,24 +362,39 @@ export function appendToolFragment(
     toolUseId: event.toolUseId,
     name: event.name,
     input: event.input ?? '',
-    stopped: event.stop === true
+    stopped: event.stop === true,
+    fragmentCount: 1
   })
 }
 
 export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCallState>): void {
   for (const toolCall of toolCalls.values()) {
     if (!toolCall.stopped) {
-      throw new SdkStreamProtocolError(
-        `Kiro ended before tool call ${toolCall.toolUseId} emitted its stop marker`,
-        'incomplete_upstream_tool_call'
+      throw new ToolCallViolation(
+        'Kiro ended before a streamed tool call emitted its stop marker',
+        'incomplete_upstream_tool_call',
+        'missing_stop',
+        {
+          toolUseId: toolCall.toolUseId,
+          toolName: toolCall.name,
+          argumentsText: toolCall.input,
+          fragmentCount: toolCall.fragmentCount
+        }
       )
     }
     try {
       JSON.parse(toolCall.input)
     } catch {
-      throw new SdkStreamProtocolError(
-        `Kiro returned invalid JSON arguments for tool call ${toolCall.toolUseId}`,
-        'invalid_upstream_tool_call'
+      throw new ToolCallViolation(
+        'Kiro returned malformed JSON arguments for a completed tool call',
+        'malformed_upstream_tool_arguments',
+        'malformed_arguments',
+        {
+          toolUseId: toolCall.toolUseId,
+          toolName: toolCall.name,
+          argumentsText: toolCall.input,
+          fragmentCount: toolCall.fragmentCount
+        }
       )
     }
   }

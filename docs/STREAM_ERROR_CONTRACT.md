@@ -30,6 +30,7 @@ Attempt-level retry belongs in the downstream orchestrator.
 | `upstream_stream_incomplete` | The stream ended without an authoritative completion witness, or the canonical stream reached EOF before `completed`. | Retry with bounded exponential backoff. |
 | `upstream_stream_idle_timeout` | No upstream event arrived before the configured stream idle timeout. | Retry if the request deadline still has budget. |
 | `request_deadline_exceeded` | The provider-side request deadline won the terminal race. | Retry only under the caller's overall deadline and attempt budget. |
+| `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. No tool-call delta is exposed before this validation succeeds. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
 
 The 2026-08-29 18:05 incident was logged as a top-level SDK `TypeError`, not a
 clean EOF. With this contract it maps to `upstream_stream_error`.
@@ -44,7 +45,7 @@ completion witness.
 | `upstream_invalid_state` | Kiro emitted an explicit invalid-state event. |
 | `unsupported_upstream_event` | Kiro emitted an unknown or unsupported event type. |
 | `invalid_upstream_reasoning` | Reasoning signatures or visible/redacted reasoning metadata contradicted each other. |
-| `invalid_upstream_tool_call` | A tool call changed identity or contained malformed arguments. |
+| `invalid_upstream_tool_call` | A tool call omitted its identity, changed its name while streaming, or appended arguments after its stop marker. |
 | `incomplete_upstream_tool_call` | A completion witness arrived but a tool call never reached its structural stop marker. |
 | `missing_upstream_stream` | The SDK response contained no event stream. |
 
@@ -114,6 +115,14 @@ type and must not parse the prose message.
    guarantee.
 6. Keep fatal protocol codes out of the retry set.
 
+`malformed_upstream_tool_arguments` is safe to classify separately because the
+provider buffers every tool fragment and validates every completed tool call
+before emitting any canonical `tool_call_delta`. Partial assistant text may
+already have been streamed, so the retry must still replace the failed
+attempt's output rather than append to it. The legacy
+`invalid_upstream_tool_call` remains fatal during migration because older
+provider versions used it for both malformed JSON and structural violations.
+
 Provider rollout should precede downstream classification rollout. The legacy
 generic `upstream_error` code mixed transient and protocol failures and should
 not be globally declared retryable during migration.
@@ -131,6 +140,7 @@ if matches!(
             | "upstream_stream_incomplete"
             | "upstream_stream_idle_timeout"
             | "request_deadline_exceeded"
+            | "malformed_upstream_tool_arguments"
     )
 ) {
     return ProviderError::Transient {
@@ -159,6 +169,11 @@ The `sdk_stream_upstream_error` audit event now includes:
 - hashed top-level and cause messages
 - safe cause/source error codes when present
 - the existing raw event count, final event type, and per-event counts
+- tool violation kind
+- hashed tool ID and name
+- accumulated argument UTF-8 byte length and hash
+- fragment count
 
 Raw exception prose is not logged, avoiding accidental credential or payload
-disclosure while still allowing repeated failures to be correlated.
+disclosure while still allowing repeated failures to be correlated. Raw tool
+arguments, tool IDs, and tool names are never written to the audit log.

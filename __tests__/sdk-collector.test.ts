@@ -214,7 +214,11 @@ describe('collectSdkResponse fail-closed stream validation', () => {
         'auto',
         'incomplete-tool'
       )
-    ).rejects.toMatchObject({ code: 'incomplete_upstream_tool_call' })
+    ).rejects.toMatchObject({
+      name: 'ToolCallViolation',
+      code: 'incomplete_upstream_tool_call',
+      violationKind: 'missing_stop'
+    })
     await expect(
       collectSdkResponse(
         exactResponse([
@@ -228,7 +232,12 @@ describe('collectSdkResponse fail-closed stream validation', () => {
         'auto',
         'malformed-tool'
       )
-    ).rejects.toMatchObject({ code: 'invalid_upstream_tool_call' })
+    ).rejects.toMatchObject({
+      name: 'ToolCallViolation',
+      code: 'malformed_upstream_tool_arguments',
+      violationKind: 'malformed_arguments',
+      fragmentCount: 1
+    })
     await expect(
       collectSdkResponse(
         exactResponse([
@@ -242,7 +251,63 @@ describe('collectSdkResponse fail-closed stream validation', () => {
         'auto',
         'missing-tool-id'
       )
-    ).rejects.toMatchObject({ code: 'invalid_upstream_tool_call' })
+    ).rejects.toMatchObject({
+      name: 'ToolCallViolation',
+      code: 'invalid_upstream_tool_call',
+      violationKind: 'missing_identity'
+    })
+  })
+
+  test('keeps structural tool identity and ordering violations fatal', async () => {
+    await expect(
+      collectSdkResponse(
+        exactResponse([
+          { toolUseEvent: { name: 'write', toolUseId: 'tool-1', input: '{"x":' } },
+          {
+            toolUseEvent: {
+              name: 'shell',
+              toolUseId: 'tool-1',
+              input: '1}',
+              stop: true
+            }
+          }
+        ]),
+        'auto',
+        'renamed-tool'
+      )
+    ).rejects.toMatchObject({
+      name: 'ToolCallViolation',
+      code: 'invalid_upstream_tool_call',
+      violationKind: 'name_changed'
+    })
+
+    await expect(
+      collectSdkResponse(
+        exactResponse([
+          {
+            toolUseEvent: {
+              name: 'write',
+              toolUseId: 'tool-1',
+              input: '{"x":1}',
+              stop: true
+            }
+          },
+          {
+            toolUseEvent: {
+              name: 'write',
+              toolUseId: 'tool-1',
+              input: ' trailing'
+            }
+          }
+        ]),
+        'auto',
+        'arguments-after-stop'
+      )
+    ).rejects.toMatchObject({
+      name: 'ToolCallViolation',
+      code: 'invalid_upstream_tool_call',
+      violationKind: 'arguments_after_stop'
+    })
   })
 })
 

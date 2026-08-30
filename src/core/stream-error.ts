@@ -17,6 +17,10 @@ const STREAM_FAILURES = {
     disposition: "retryable",
     message: "Upstream stream idle timeout",
   },
+  malformed_upstream_tool_arguments: {
+    disposition: "retryable",
+    message: "Upstream returned malformed tool arguments",
+  },
   incomplete_upstream_tool_call: {
     disposition: "fatal",
     message: "Upstream returned an incomplete tool call",
@@ -87,6 +91,13 @@ function safeDiagnosticCode(value: unknown): string | undefined {
     : undefined;
 }
 
+function numberProperty(value: unknown, key: string): number | undefined {
+  const candidate = property(value, key);
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate
+    : undefined;
+}
+
 export function streamFailure(
   code: StreamFailureCode,
   message?: string,
@@ -109,7 +120,7 @@ export function normalizeStreamFailure(
 
 export function streamErrorAuditFields(
   reason: unknown,
-): Readonly<Record<string, string>> {
+): Readonly<Record<string, string | number>> {
   const normalized = normalizeStreamFailure(reason);
   const message = stringProperty(reason, "message");
   const sourceErrorCode = safeDiagnosticCode(reason);
@@ -117,6 +128,14 @@ export function streamErrorAuditFields(
   const causeType = stringProperty(cause, "name");
   const causeCode = safeDiagnosticCode(cause);
   const causeMessage = stringProperty(cause, "message");
+  const violationSource =
+    stringProperty(reason, "violationKind") !== undefined ? reason : cause;
+  const violationKind = stringProperty(violationSource, "violationKind");
+  const toolIdHash = stringProperty(violationSource, "toolIdHash");
+  const toolNameHash = stringProperty(violationSource, "toolNameHash");
+  const argumentLength = numberProperty(violationSource, "argumentLength");
+  const argumentHash = stringProperty(violationSource, "argumentHash");
+  const fragmentCount = numberProperty(violationSource, "fragmentCount");
   return {
     error_type: stringProperty(reason, "name") ?? typeof reason,
     error_code: normalized.code,
@@ -131,6 +150,18 @@ export function streamErrorAuditFields(
     ...(causeCode !== undefined ? { error_cause_code: causeCode } : {}),
     ...(causeMessage !== undefined
       ? { error_cause_message_hash: auditHash(causeMessage) }
+      : {}),
+    ...(violationKind !== undefined ? { violation_kind: violationKind } : {}),
+    ...(toolIdHash !== undefined ? { tool_id_hash: toolIdHash } : {}),
+    ...(toolNameHash !== undefined ? { tool_name_hash: toolNameHash } : {}),
+    ...(argumentLength !== undefined
+      ? { tool_arguments_length: argumentLength }
+      : {}),
+    ...(argumentHash !== undefined
+      ? { tool_arguments_hash: argumentHash }
+      : {}),
+    ...(fragmentCount !== undefined
+      ? { tool_fragment_count: fragmentCount }
       : {}),
   };
 }

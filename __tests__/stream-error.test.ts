@@ -8,8 +8,11 @@ import { MissingSdkOutputStreamError } from "../src/kiro/transform/streaming/sdk
 import {
   SdkStreamProtocolError,
   SemanticStreamTruncationError,
+  ToolCallViolation,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import { anthropicSseAdapter } from "../src/server/anthropic/response-adapter.js";
+import { canonicalOutputToChatSse } from "../src/server/chat-output.js";
+import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 
 function activeSignals(): {
   readonly combined: AbortSignal;
@@ -23,6 +26,30 @@ function activeSignals(): {
     deadline: deadline.signal,
     client: client.signal,
   };
+}
+
+function failingResponse(error: unknown): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(error);
+      },
+    }),
+  );
+}
+
+function malformedToolViolation(): ToolCallViolation {
+  return new ToolCallViolation(
+    "private malformed arguments detail",
+    "malformed_upstream_tool_arguments",
+    "malformed_arguments",
+    {
+      toolUseId: "secret-tool-id",
+      toolName: "secret-tool-name",
+      argumentsText: '{"secret":"unterminated"',
+      fragmentCount: 18,
+    },
+  );
 }
 
 describe("stream error contract", () => {
@@ -50,6 +77,11 @@ describe("stream error contract", () => {
       code: "missing_upstream_stream",
       disposition: "fatal",
       message: "Upstream response did not include a stream",
+    });
+    expect(normalizeStreamFailure(malformedToolViolation())).toEqual({
+      code: "malformed_upstream_tool_arguments",
+      disposition: "retryable",
+      message: "Upstream returned malformed tool arguments",
     });
   });
 
@@ -122,5 +154,113 @@ describe("stream error contract", () => {
     expect(text).toContain('"type":"overloaded_error"');
     expect(text).toContain("Upstream stream idle timeout");
     expect(finalized).toBe(1);
+  });
+
+  test("maps malformed tool arguments as retryable across all streaming surfaces", async () => {
+    const responsesText = await responsesSseAdapter(
+      failingResponse(malformedToolViolation()),
+      {
+        model: "claude-opus-5",
+        signals: activeSignals(),
+        finalize: () => undefined,
+        configuration: {
+          instructions: null,
+          maxOutputTokens: null,
+          metadata: {},
+          reasoningEffort: null,
+          toolChoice: "auto",
+          tools: [],
+        },
+        includeEncryptedReasoning: false,
+      },
+    ).text();
+    expect(responsesText).toContain(
+      '"code":"malformed_upstream_tool_arguments"',
+    );
+    expect(responsesText).not.toContain('"type":"function_call"');
+
+    const chatText = await canonicalOutputToChatSse(
+      failingResponse(malformedToolViolation()),
+      activeSignals(),
+      () => undefined,
+      { expectedModel: "claude-opus-5" },
+    ).text();
+    expect(chatText).toContain('"type":"upstream_error"');
+    expect(chatText).toContain(
+      '"code":"malformed_upstream_tool_arguments"',
+    );
+    expect(chatText).not.toContain('"tool_calls"');
+
+    const anthropicText = await anthropicSseAdapter(
+      failingResponse(malformedToolViolation()),
+      {
+        model: "claude-opus-5",
+        inputTokens: 1,
+        signals: activeSignals(),
+        finalize: () => undefined,
+      },
+    ).text();
+    expect(anthropicText).toContain('"type":"overloaded_error"');
+    expect(anthropicText).toContain(
+      "Upstream returned malformed tool arguments",
+    );
+    expect(anthropicText).not.toContain('"type":"tool_use"');
+  });
+
+  test("keeps structural tool-call violations fatal across all streaming surfaces", async () => {
+    const violation = (): ToolCallViolation =>
+      new ToolCallViolation(
+        "private structural detail",
+        "invalid_upstream_tool_call",
+        "name_changed",
+        {
+          toolUseId: "tool-id",
+          toolName: "tool-name",
+          argumentsText: "{}",
+          fragmentCount: 2,
+        },
+      );
+
+    const responsesText = await responsesSseAdapter(
+      failingResponse(violation()),
+      {
+        model: "claude-opus-5",
+        signals: activeSignals(),
+        finalize: () => undefined,
+        configuration: {
+          instructions: null,
+          maxOutputTokens: null,
+          metadata: {},
+          reasoningEffort: null,
+          toolChoice: "auto",
+          tools: [],
+        },
+        includeEncryptedReasoning: false,
+      },
+    ).text();
+    expect(responsesText).toContain('"code":"invalid_upstream_tool_call"');
+
+    const chatText = await canonicalOutputToChatSse(
+      failingResponse(violation()),
+      activeSignals(),
+      () => undefined,
+      { expectedModel: "claude-opus-5" },
+    ).text();
+    expect(chatText).toContain('"type":"upstream_protocol_error"');
+    expect(chatText).toContain('"code":"invalid_upstream_tool_call"');
+
+    const anthropicText = await anthropicSseAdapter(
+      failingResponse(violation()),
+      {
+        model: "claude-opus-5",
+        inputTokens: 1,
+        signals: activeSignals(),
+        finalize: () => undefined,
+      },
+    ).text();
+    expect(anthropicText).toContain('"type":"api_error"');
+    expect(anthropicText).toContain(
+      "Upstream returned an invalid tool call",
+    );
   });
 });
