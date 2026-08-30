@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sunerpy/kiro-provider/compare/v0.5.0...v0.5.1) (2026-08-30)
+
+
+### Bug Fixes
+
+* classify malformed tool arguments as retryable ([#16](https://github.com/sunerpy/kiro-provider/issues/16)) ([a6f28ea](https://github.com/sunerpy/kiro-provider/commit/a6f28eaaae70c04738c139c4f655debacffaa153))
+
 ## [0.5.0](https://github.com/sunerpy/kiro-provider/compare/v0.4.0...v0.5.0) (2026-08-29)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "@sunerpy/kiro-provider",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Protocol-fidelity AWS Kiro gateway for verified OpenAI Responses and Anthropic Messages subsets",
   "homepage": "https://github.com/sunerpy/kiro-provider#readme",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
