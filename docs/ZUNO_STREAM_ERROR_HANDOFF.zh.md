@@ -1,7 +1,8 @@
-# Zuno 接入 kiro-provider v0.5.0 流错误恢复说明
+# Zuno 接入 kiro-provider 流错误恢复说明
 
 本文是提供给 Zuno 的正式接入说明。适用 Provider 版本为
-`kiro-provider v0.5.0` 及以后版本。
+`kiro-provider v0.5.0` 及以后版本；其中
+`malformed_upstream_tool_arguments` 从 `v0.5.1` 开始提供。
 
 ## 1. 问题与修复边界
 
@@ -16,6 +17,13 @@ Provider v0.5.0 不再把所有流故障压缩成通用
 2026-08-29 18:05 的现场异常是 SDK 顶层 `TypeError`，对应
 `upstream_stream_error`。只有流干净 EOF、但缺少 token usage 或有效
 `meteringEvent` 完成凭证时，才对应 `upstream_stream_incomplete`。
+
+2026-08-30 的工具异常已经收到 `metering-clean-eof`，但 18 个
+`toolUseEvent` 累计出的最终参数不是合法 JSON。`v0.5.1` 将它从旧的
+`invalid_upstream_tool_call` 中拆出为
+`malformed_upstream_tool_arguments`。Provider 在完整参数校验通过前不会
+发送任何 `tool_call_delta`，因此该错误发生时可以存在部分 assistant 文本，
+但不会存在已暴露或已执行的工具调用。
 
 ## 2. Responses 终止事件
 
@@ -46,6 +54,7 @@ Zuno 必须读取 `response.failed.response.error.code`，不要解析英文错�
 | `upstream_stream_incomplete` | 流结束但没有权威完成凭证 |
 | `upstream_stream_idle_timeout` | 上游事件空闲超时 |
 | `request_deadline_exceeded` | Provider 请求截止时间先到 |
+| `malformed_upstream_tool_arguments` | 工具调用已停止，但完整累计参数不是合法 JSON；Provider 尚未暴露工具调用 |
 
 ### 不可机械重试
 
@@ -56,6 +65,10 @@ Zuno 必须读取 `response.failed.response.error.code`，不要解析英文错�
 - `invalid_upstream_tool_call`
 - `incomplete_upstream_tool_call`
 - `missing_upstream_stream`
+
+`invalid_upstream_tool_call` 现在只表示缺少工具身份、流中改名、停止后继续追加
+参数等结构违规。旧 Provider 曾用它同时表示 JSON 解析失败，因此迁移期间仍
+必须保持 fatal。
 
 旧版本通用 `upstream_error` 曾混合上述两类故障，迁移期间不得把它全局声明为
 可重试。
@@ -78,6 +91,7 @@ if matches!(
             | "upstream_stream_incomplete"
             | "upstream_stream_idle_timeout"
             | "request_deadline_exceeded"
+            | "malformed_upstream_tool_arguments"
     )
 ) {
     return ProviderError::Transient {
@@ -108,7 +122,9 @@ if matches!(
 
 在 `crates/zuno-provider-compatible/src/stream.rs` 的现有结构化错误测试附近增加：
 
-- 四个可恢复 code 分别得到 `Recovery::Retry { after: None }`；
+- 原有四个可恢复 code 分别得到 `Recovery::Retry { after: None }`；
+- `malformed_upstream_tool_arguments` 得到
+  `Recovery::Retry { after: None }`；
 - `upstream_protocol_error`、`invalid_upstream_tool_call`、
   `invalid_upstream_reasoning` 分别得到 `Recovery::Fail`；
 - `code="upstream_error"` 不被新规则误判为可恢复。
@@ -124,9 +140,13 @@ if matches!(
 
 另注入一个 `invalid_upstream_tool_call`，确认不创建重试 attempt。
 
+针对本次工具参数故障，建议使用 18-fragment fixture：第一次返回部分文本后以
+`malformed_upstream_tool_arguments` 失败，第二次成功。除既有 attempt 和
+replacement 断言外，还必须确认两次尝试期间工具 dispatcher 调用次数为零。
+
 ## 7. 发布顺序与验收
 
-1. 先部署 `kiro-provider v0.5.0`；
+1. 先部署 `kiro-provider v0.5.1`；
 2. 再发布 Zuno 的结构化错误分类与 attempt 重试改动；
 3. 分别注入一个可恢复流错误和一个致命协议错误；
 4. 核对退避、attempt 记录、部分输出替换、会话亲和和工具幂等；
