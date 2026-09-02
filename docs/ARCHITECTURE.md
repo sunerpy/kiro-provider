@@ -8,7 +8,7 @@ English only — a Chinese translation was left out to keep this contribution fo
 OpenAI Responses / Anthropic Messages / explicitly enabled legacy Chat
         │
         ▼
-API-key gate (Bearer; Anthropic routes also accept x-api-key)
+API-key gate (Authorization: Bearer or x-api-key, accepted on every route)
         │
         ▼
 Route dispatch (/v1/responses, /v1/messages, optional /v1/chat/completions)
@@ -53,7 +53,7 @@ contract, so protocol-specific encoders cannot silently reinterpret Kiro
 events through another public API's semantics.
 
 The gateway's own HTTP surface (`src/server/app.ts`) is a small `fetch`-style
-handler: it checks the Bearer key, dispatches on method + path, and delegates
+handler: it checks the API key, dispatches on method + path, and delegates
 to a route handler. There is no framework in the middle — request handling,
 account selection, and the upstream call are explicit function calls, which
 keeps the retry/failover logic (see below) easy to follow.
@@ -86,8 +86,9 @@ but no mode promises a specific physical TCP connection.
 ## Authentication authority and provider state
 
 The production default is `auth_source: "local"`.
-`~/.config/kiro-provider/accounts.db` is the single authority for credentials,
-usage, health, and provider state. Operators may authenticate directly with
+`~/.config/kiro-provider/accounts.db` (`%APPDATA%\kiro-provider\accounts.db`
+on Windows) is the single authority for credentials, usage, health, and
+provider state. Operators may authenticate directly with
 `kiro-provider login` or copy existing `opencode-kiro-auth` accounts once with
 `kiro-provider accounts import`. Import does not establish a live database
 link or shared lock.
@@ -112,7 +113,8 @@ The same database also stores provider state:
   Requests without one receive a fresh Kiro conversation and do not collide
   merely because their prompt text is identical.
 - The database file and its WAL/SHM siblings are created with `0600`
-  permissions.
+  permissions on POSIX only; Windows has no equivalent mode bits, so the
+  per-user profile directory provides the isolation there.
 
 The explicit `auth_source: "opencode-shared"` compatibility mode retains the
 older live OpenCode integration. It validates the v0.20.7 account/tombstone
@@ -158,6 +160,8 @@ check only.
 ## Where to look in the code
 
 - `src/server/app.ts` — HTTP entry point and route dispatch.
+- `src/server/ingress.ts` — shared request ingress: body-size limit, request
+  deadlines, and the abort signals handed to every route.
 - `src/server/routes/` — per-endpoint handlers (`responses.ts`, `messages.ts`,
   `chat-completions.ts`, `models.ts`, `health.ts`, `readiness.ts`).
 - `src/protocol/output.ts` — strict, versioned canonical completion/event

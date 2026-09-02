@@ -14,6 +14,7 @@ done
 PORT=$(bun -e 'const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return new Response()}});console.log(server.port);server.stop(true)')
 MOCKPORT=$(bun -e 'const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return new Response()}});console.log(server.port);server.stop(true)')
 APIKEY="sk-test-$(openssl rand -hex 8)"
+WRONGKEY="sk-wrong-$(openssl rand -hex 8)"
 WORK=$(mktemp -d)
 export XDG_CONFIG_HOME="$WORK"
 LOGFILE="$WORK/serve.log"
@@ -230,11 +231,30 @@ HTTP_CODE=$(curl -sS --max-time 5 -o "$WORK/success.json" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   --data "$(request_body false)" \
   "http://127.0.0.1:$PORT/v1/chat/completions")
-[[ "$HTTP_CODE" == "200" ]] || fail "mock-backed request returned HTTP $HTTP_CODE"
-if grep -qE "$APIKEY|$SEED_ACCESS|$SEED_REFRESH" "$LOGFILE"; then
-  fail "gateway key or seeded account token appeared in logs"
+[[ "$HTTP_CODE" == "200" ]] || fail "mock-backed legacy Chat request returned HTTP $HTTP_CODE"
+RESPONSES_CODE=$(curl -sS --max-time 5 -o "$WORK/responses.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $APIKEY" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"auto","input":"security check"}' \
+  "http://127.0.0.1:$PORT/v1/responses")
+[[ "$RESPONSES_CODE" == "200" ]] || fail "mock-backed Responses request returned HTTP $RESPONSES_CODE: $(cat "$WORK/responses.json")"
+MESSAGES_CODE=$(curl -sS --max-time 5 -o "$WORK/messages.json" -w '%{http_code}' \
+  -H "x-api-key: $APIKEY" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"claude-sonnet-5","max_tokens":1024,"messages":[{"role":"user","content":"security check"}]}' \
+  "http://127.0.0.1:$PORT/v1/messages")
+[[ "$MESSAGES_CODE" == "200" ]] || fail "mock-backed Messages request returned HTTP $MESSAGES_CODE: $(cat "$WORK/messages.json")"
+BAD_AUTH_CODE=$(curl -sS --max-time 5 -o "$WORK/bad-auth.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $WRONGKEY" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"auto","input":"security check"}' \
+  "http://127.0.0.1:$PORT/v1/responses")
+[[ "$BAD_AUTH_CODE" == "401" ]] || fail "request with a wrong gateway key returned HTTP $BAD_AUTH_CODE: $(cat "$WORK/bad-auth.json")"
+if grep -qE "$APIKEY|$WRONGKEY|$SEED_ACCESS|$SEED_REFRESH" "$LOGFILE"; then
+  fail "gateway key, rejected key, or seeded account token appeared in logs"
 fi
-pass "secrets are absent from logs"
+pass "secrets are absent from logs after Responses, Messages, legacy Chat, and failed-auth requests"
 
 DB="$XDG_CONFIG_HOME/kiro-provider/accounts.db"
 DB_MODE=$(stat -c '%a' "$DB")

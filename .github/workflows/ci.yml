@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,6 +19,21 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      # Supply-chain gate: bun.lock must resolve every tarball from the canonical
+      # npm registry (bunfig.toml pins it). Any mirror host fails the build.
+      - name: Verify bun.lock only references registry.npmjs.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror_count=$(grep -c 'registry.npmmirror.com' bun.lock || true)
+          foreign_hosts=$(grep -oE 'https?://[^/"]+' bun.lock | sort -u | grep -v '^https://registry.npmjs.org$' || true)
+          if [ "$mirror_count" != "0" ] || [ -n "$foreign_hosts" ]; then
+            echo "::error file=bun.lock::bun.lock references non-npmjs registry hosts (registry.npmmirror.com URLs: ${mirror_count}). Regenerate it with the registry pinned in bunfig.toml: rm bun.lock && bun install"
+            printf 'offending hosts:\n%s\n' "${foreign_hosts:-registry.npmmirror.com}" >&2
+            exit 1
+          fi
+          echo "bun.lock references only https://registry.npmjs.org (registry.npmmirror.com URLs: ${mirror_count})."
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -41,6 +59,9 @@ jobs:
 
       - name: Lint
         run: make lint
+
+      - name: Shell script syntax
+        run: make scripts-syntax
 
       - name: Check formatting
         run: make fmt-check

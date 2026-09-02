@@ -1,4 +1,4 @@
-.PHONY: install fmt fmt-check typecheck lint test coverage coverage-gate coverage-parity build build-binary clean ci security codex-smoke-security
+.PHONY: install fmt fmt-check typecheck lint scripts-syntax test coverage coverage-gate coverage-parity build build-binary clean ci security codex-smoke-security
 
 install:
 	bun install
@@ -16,6 +16,11 @@ typecheck:
 
 lint:
 	bunx --bun @biomejs/biome check ./src ./scripts ./__tests__
+
+# Syntax-check every shell script; install.sh must additionally stay POSIX sh.
+scripts-syntax:
+	for script in scripts/*.sh; do bash -n "$$script" || exit 1; done
+	sh -n scripts/install.sh
 
 test:
 	bun test
@@ -46,4 +51,4 @@ codex-smoke-security:
 	KIRO_PROVIDER_SMOKE_SECURITY_SELF_TEST=1 bash scripts/codex-smoke.sh
 
 # Coverage runs separately via coverage-gate and in the GitHub Actions coverage job.
-ci: typecheck lint test
+ci: typecheck lint scripts-syntax test

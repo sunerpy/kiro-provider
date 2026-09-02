@@ -278,9 +278,51 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  smoke-binaries:
+    name: Smoke ${{ matrix.runner }}
+    needs: [prepare-release, build-binaries]
+    if: needs.prepare-release.outputs.build_artifacts == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The binaries are cross-compiled on Ubuntu, so execute them once on a
+          # native runner. macos-latest is Apple silicon; the darwin-x64 binary
+          # runs there through Rosetta 2, which the hosted image includes.
+          - runner: macos-latest
+            pattern: release-bun-darwin-*
+            assets: kiro-provider-darwin-arm64 kiro-provider-darwin-x64
+          - runner: windows-latest
+            pattern: release-bun-windows-x64
+            assets: kiro-provider-windows-x64.exe
+    steps:
+      - name: Download compiled binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ matrix.pattern }}
+          path: dist
+          merge-multiple: true
+
+      - name: Run --help on each binary
+        shell: bash
+        env:
+          ASSETS: ${{ matrix.assets }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for asset in $ASSETS; do
+            test -s "$asset"
+            chmod +x "$asset"
+            echo "::group::${asset} --help"
+            "./${asset}" --help
+            echo "::endgroup::"
+          done
+
   upload-assets:
     name: Collect and Upload Release Assets
-    needs: [prepare-release, verify-ci, build-binaries]
+    needs: [prepare-release, verify-ci, build-binaries, smoke-binaries]
     if: needs.prepare-release.outputs.build_artifacts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -364,10 +406,25 @@ jobs:
       - name: Build bunx package
         run: bun run build:npm
 
-      # OIDC Trusted Publishing requires npm CLI >= 11.5.1. Node 24 ships an
-      # older npm, so upgrade before publishing to enable OIDC auto-detection.
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+      # OIDC Trusted Publishing requires npm CLI >= 11.5.1. Node 24 may ship an
+      # older npm, so install a pinned npm (never @latest, which would make the
+      # publish path non-reproducible) only when the bundled version is too old.
+      - name: Ensure npm >= 11.5.1 for OIDC trusted publishing
+        shell: bash
+        env:
+          REQUIRED_NPM: "11.5.1"
+          PINNED_NPM: "11.5.1"
+        run: |
+          set -euo pipefail
+          current=$(npm --version)
+          lowest=$(printf '%s\n%s\n' "$REQUIRED_NPM" "$current" | sort -V | head -n 1)
+          if [ "$lowest" = "$REQUIRED_NPM" ]; then
+            echo "npm ${current} already satisfies >= ${REQUIRED_NPM}; keeping the bundled version."
+          else
+            echo "npm ${current} is older than ${REQUIRED_NPM}; installing pinned npm@${PINNED_NPM}."
+            npm install -g "npm@${PINNED_NPM}"
+          fi
+          npm --version
 
       # OIDC-first, token-fallback publish: with a configured trusted publisher
       # (id-token: write is set), npm auto-detects the short-lived GitHub OIDC
