@@ -7,10 +7,7 @@ import {
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
   parseCanonicalCompletion,
 } from "../../protocol/output.js";
-import {
-  canonicalCompletionToChat,
-  canonicalOutputToChatSse,
-} from "../chat-output.js";
+import { canonicalCompletionToChat, canonicalOutputToChatSse } from "../chat-output.js";
 import { openAiError } from "../errors.js";
 import {
   buildPipelineOptions,
@@ -22,10 +19,7 @@ import {
 } from "../ingress.js";
 import { chatToCanonical } from "../protocol/chat-adapter.js";
 import { parseChatCompletionRequest } from "../request-schema.js";
-import {
-  canonicalSessionLineage,
-  chatSessionAffinity,
-} from "../session-affinity.js";
+import { canonicalSessionLineage, chatSessionAffinity } from "../session-affinity.js";
 
 export type ChatCompletionDependencies = RouteDependencies;
 
@@ -105,10 +99,7 @@ export async function handleChatCompletions(
         );
       }
       const completion = parseCanonicalCompletion(await pipelineResponse.json());
-      if (
-        !completion ||
-        completion.model !== parsed.value.model
-      ) {
+      if (!completion || completion.model !== parsed.value.model) {
         return openAiError(
           500,
           "Pipeline returned an invalid canonical completion",

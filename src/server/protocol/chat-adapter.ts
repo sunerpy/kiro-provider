@@ -13,11 +13,7 @@ import {
 } from "../../protocol/canonical.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import type { ChatCompletionRequest } from "../request-schema.js";
-import {
-  allowedKeysValidator,
-  type ProtocolResult,
-  protocolFailure,
-} from "./adaptation.js";
+import { allowedKeysValidator, type ProtocolResult, protocolFailure } from "./adaptation.js";
 
 const CHAT_REQUEST_KEYS = new Set([
   "model",
@@ -141,19 +137,13 @@ function mapContent(
         mapped.push({
           type: "image",
           data: part.source.data,
-          ...(part.source.media_type !== undefined
-            ? { mediaType: part.source.media_type }
-            : {}),
+          ...(part.source.media_type !== undefined ? { mediaType: part.source.media_type } : {}),
           path: `${partPath}.source`,
         });
         break;
       }
       case "tool_use": {
-        const keys = validateAllowedKeys(
-          part,
-          partPath,
-          new Set(["type", "id", "name", "input"]),
-        );
+        const keys = validateAllowedKeys(part, partPath, new Set(["type", "id", "name", "input"]));
         if (!keys.ok) return keys;
         mapped.push({
           type: "tool_use",
@@ -311,7 +301,9 @@ function mapTools(
           : undefined;
     const inputSchema =
       openAiFunction !== undefined
-        ? (isRecord(openAiFunction.parameters) ? openAiFunction.parameters : {})
+        ? isRecord(openAiFunction.parameters)
+          ? openAiFunction.parameters
+          : {}
         : isRecord(tool.input_schema)
           ? tool.input_schema
           : {};
@@ -416,30 +408,20 @@ export function chatToCanonical(
       "store",
     );
   }
-  if (
-    request.max_tokens !== undefined &&
-    request.max_completion_tokens !== undefined
-  ) {
+  if (request.max_tokens !== undefined && request.max_completion_tokens !== undefined) {
     return protocolFailure(
       "conflicting_output_token_limits",
       "Chat max_tokens and max_completion_tokens cannot both be supplied",
       "max_completion_tokens",
     );
   }
-  const outputTokenLimit =
-    request.max_completion_tokens ?? request.max_tokens;
+  const outputTokenLimit = request.max_completion_tokens ?? request.max_tokens;
   const outputTokenLimitParam =
-    request.max_completion_tokens !== undefined
-      ? "max_completion_tokens"
-      : "max_tokens";
+    request.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
   if (outputTokenLimit !== undefined) {
     const outputLimit = resolveOutputTokenLimit(request.model, outputTokenLimit);
     if (!outputLimit.ok) {
-      return protocolFailure(
-        outputLimit.code,
-        outputLimit.message,
-        outputTokenLimitParam,
-      );
+      return protocolFailure(outputLimit.code, outputLimit.message, outputTokenLimitParam);
     }
   }
   if (
@@ -485,10 +467,7 @@ export function chatToCanonical(
         );
       }
     }
-    if (
-      projectionMode === "safe" &&
-      (message.role === "system" || message.role === "developer")
-    ) {
+    if (projectionMode === "safe" && (message.role === "system" || message.role === "developer")) {
       return protocolFailure(
         "unsupported_instruction_projection",
         `${message.role} messages cannot be projected losslessly to Kiro; use legacy-user-prefix explicitly to migrate`,
@@ -507,8 +486,9 @@ export function chatToCanonical(
     }
     let content = contentResult.value;
     if (message.role === "tool") {
-      const resultContent = content
-        .filter((part): part is CanonicalTextPart => part.type === "text");
+      const resultContent = content.filter(
+        (part): part is CanonicalTextPart => part.type === "text",
+      );
       if (resultContent.length !== content.length) {
         return protocolFailure(
           "unsupported_tool_result_content",

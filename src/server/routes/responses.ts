@@ -36,14 +36,8 @@ import {
   responseConfigurationFromCanonical,
   responseState,
 } from "../responses/state.js";
-import {
-  type ResponsesToolBridge,
-  reportToolRestoreFailure,
-} from "../responses/tool-bridge.js";
-import {
-  canonicalSessionLineage,
-  responsesSessionAffinity,
-} from "../session-affinity.js";
+import { type ResponsesToolBridge, reportToolRestoreFailure } from "../responses/tool-bridge.js";
+import { canonicalSessionLineage, responsesSessionAffinity } from "../session-affinity.js";
 
 export type ResponsesDependencies = RouteDependencies;
 
@@ -97,8 +91,7 @@ function completedResponse(
   const output: ResponseOutputItem[] = [];
   const reasoningText = payload.reasoning?.text;
   const reasoningSummary =
-    reasoningText !== undefined &&
-    !isGptSolReasoningPlaceholder(model, reasoningText)
+    reasoningText !== undefined && !isGptSolReasoningPlaceholder(model, reasoningText)
       ? [{ type: "summary_text" as const, text: reasoningText }]
       : [];
   if (reasoningSummary.length > 0 || payload.reasoning?.encryptedContent) {
@@ -158,10 +151,7 @@ export async function handleResponses(
     dependencies.tenantId,
     config.session_affinity_mode,
   );
-  const adapted = adaptResponsesRequest(
-    parsed.value,
-    config.protocol_projection_mode,
-  );
+  const adapted = adaptResponsesRequest(parsed.value, config.protocol_projection_mode);
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
       protocol: "responses",

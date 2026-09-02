@@ -62,8 +62,7 @@ const STREAM_FAILURES = {
 } as const;
 
 export type StreamFailureCode = keyof typeof STREAM_FAILURES;
-export type StreamFailureDisposition =
-  (typeof STREAM_FAILURES)[StreamFailureCode]["disposition"];
+export type StreamFailureDisposition = (typeof STREAM_FAILURES)[StreamFailureCode]["disposition"];
 
 export interface StreamFailure {
   readonly code: StreamFailureCode;
@@ -82,9 +81,7 @@ function property(value: unknown, key: string): unknown {
 
 function stringProperty(value: unknown, key: string): string | undefined {
   const candidate = property(value, key);
-  return typeof candidate === "string" && candidate.length > 0
-    ? candidate
-    : undefined;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
 }
 
 function knownCode(value: unknown): StreamFailureCode | undefined {
@@ -96,22 +93,15 @@ function knownCode(value: unknown): StreamFailureCode | undefined {
 
 function safeDiagnosticCode(value: unknown): string | undefined {
   const code = stringProperty(value, "code");
-  return code !== undefined && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(code)
-    ? code
-    : undefined;
+  return code !== undefined && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(code) ? code : undefined;
 }
 
 function numberProperty(value: unknown, key: string): number | undefined {
   const candidate = property(value, key);
-  return typeof candidate === "number" && Number.isFinite(candidate)
-    ? candidate
-    : undefined;
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
 }
 
-export function streamFailure(
-  code: StreamFailureCode,
-  message?: string,
-): StreamFailure {
+export function streamFailure(code: StreamFailureCode, message?: string): StreamFailure {
   const descriptor = STREAM_FAILURES[code];
   return {
     code,
@@ -128,9 +118,7 @@ export function normalizeStreamFailure(
   return streamFailure(code ?? fallbackCode);
 }
 
-export function streamErrorAuditFields(
-  reason: unknown,
-): Readonly<Record<string, string | number>> {
+export function streamErrorAuditFields(reason: unknown): Readonly<Record<string, string | number>> {
   const normalized = normalizeStreamFailure(reason);
   const message = stringProperty(reason, "message");
   const sourceErrorCode = safeDiagnosticCode(reason);
@@ -138,8 +126,7 @@ export function streamErrorAuditFields(
   const causeType = stringProperty(cause, "name");
   const causeCode = safeDiagnosticCode(cause);
   const causeMessage = stringProperty(cause, "message");
-  const violationSource =
-    stringProperty(reason, "violationKind") !== undefined ? reason : cause;
+  const violationSource = stringProperty(reason, "violationKind") !== undefined ? reason : cause;
   const violationKind = stringProperty(violationSource, "violationKind");
   const toolIdHash = stringProperty(violationSource, "toolIdHash");
   const toolNameHash = stringProperty(violationSource, "toolNameHash");
@@ -150,28 +137,16 @@ export function streamErrorAuditFields(
     error_type: stringProperty(reason, "name") ?? typeof reason,
     error_code: normalized.code,
     error_disposition: normalized.disposition,
-    ...(message !== undefined
-      ? { error_message_hash: auditHash(message) }
-      : {}),
-    ...(sourceErrorCode !== undefined
-      ? { source_error_code: sourceErrorCode }
-      : {}),
+    ...(message !== undefined ? { error_message_hash: auditHash(message) } : {}),
+    ...(sourceErrorCode !== undefined ? { source_error_code: sourceErrorCode } : {}),
     ...(causeType !== undefined ? { error_cause_type: causeType } : {}),
     ...(causeCode !== undefined ? { error_cause_code: causeCode } : {}),
-    ...(causeMessage !== undefined
-      ? { error_cause_message_hash: auditHash(causeMessage) }
-      : {}),
+    ...(causeMessage !== undefined ? { error_cause_message_hash: auditHash(causeMessage) } : {}),
     ...(violationKind !== undefined ? { violation_kind: violationKind } : {}),
     ...(toolIdHash !== undefined ? { tool_id_hash: toolIdHash } : {}),
     ...(toolNameHash !== undefined ? { tool_name_hash: toolNameHash } : {}),
-    ...(argumentLength !== undefined
-      ? { tool_arguments_length: argumentLength }
-      : {}),
-    ...(argumentHash !== undefined
-      ? { tool_arguments_hash: argumentHash }
-      : {}),
-    ...(fragmentCount !== undefined
-      ? { tool_fragment_count: fragmentCount }
-      : {}),
+    ...(argumentLength !== undefined ? { tool_arguments_length: argumentLength } : {}),
+    ...(argumentHash !== undefined ? { tool_arguments_hash: argumentHash } : {}),
+    ...(fragmentCount !== undefined ? { tool_fragment_count: fragmentCount } : {}),
   };
 }

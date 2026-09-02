@@ -10,9 +10,10 @@ const MODEL = "claude-sonnet-5";
 function transformWithImage(image: CanonicalContentPart): () => void {
   return () =>
     transformToSdkRequest(
-      canonicalRequest([
-        message("user", [textPart("inspect", "messages.0.content.0"), image], "messages.0"),
-      ], { model: MODEL }),
+      canonicalRequest(
+        [message("user", [textPart("inspect", "messages.0.content.0"), image], "messages.0")],
+        { model: MODEL },
+      ),
       MODEL,
       TEST_AUTH,
     );
@@ -108,16 +109,19 @@ describe("image projection validation (B23)", () => {
     ["image/webp", "webp"],
   ] as const)("media type %s is projected to Kiro format %s", (mediaType, format) => {
     const prepared = transformToSdkRequest(
-      canonicalRequest([
-        message(
-          "user",
-          [
-            textPart("inspect", "messages.0.content.0"),
-            { type: "image", mediaType, data: "AQID", path: "messages.0.content.1" },
-          ],
-          "messages.0",
-        ),
-      ], { model: MODEL }),
+      canonicalRequest(
+        [
+          message(
+            "user",
+            [
+              textPart("inspect", "messages.0.content.0"),
+              { type: "image", mediaType, data: "AQID", path: "messages.0.content.1" },
+            ],
+            "messages.0",
+          ),
+        ],
+        { model: MODEL },
+      ),
       MODEL,
       TEST_AUTH,
     );

@@ -201,7 +201,9 @@ describe("Anthropic SSE thinking block ordering (A7)", () => {
       [0, "text", ["text_delta", "text_delta"]],
       [1, "redacted_thinking", []],
     ]);
-    expect(frames.find((frame) => frame.type === "content_block_start" && frame.index === 1)).toMatchObject({
+    expect(
+      frames.find((frame) => frame.type === "content_block_start" && frame.index === 1),
+    ).toMatchObject({
       content_block: { type: "redacted_thinking", data: "cmVkYWN0ZWQ=" },
     });
     expect(frames.map((frame) => frame.type).slice(-2)).toEqual(["message_delta", "message_stop"]);
@@ -233,7 +235,8 @@ describe("Anthropic unsigned thinking parity (B22)", () => {
     expect(nonStream.status).toBe(502);
     expect(body).toMatchObject({ error: { type: "api_error" } });
     const streamMessage = isRecord(streamError?.error) ? streamError.error.message : undefined;
-    const nonStreamMessage = isRecord(body) && isRecord(body.error) ? body.error.message : undefined;
+    const nonStreamMessage =
+      isRecord(body) && isRecord(body.error) ? body.error.message : undefined;
     expect(streamMessage).toBe(nonStreamMessage);
   });
 

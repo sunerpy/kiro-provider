@@ -58,9 +58,7 @@ class FakeAccountManager implements PipelineAccountManager {
         (eligibleAccountIds?.has(candidate.id) ?? true),
     );
     return (
-      selectable.find((candidate) => candidate.id === preferredAccountId) ??
-      selectable[0] ??
-      null
+      selectable.find((candidate) => candidate.id === preferredAccountId) ?? selectable[0] ?? null
     );
   }
 

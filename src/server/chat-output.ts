@@ -1,9 +1,5 @@
 import { boundedCleanup, runCleanupSteps } from "../core/stream-cleanup.js";
-import {
-  normalizeStreamFailure,
-  type StreamFailure,
-  streamFailure,
-} from "../core/stream-error.js";
+import { normalizeStreamFailure, type StreamFailure, streamFailure } from "../core/stream-error.js";
 import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
@@ -59,39 +55,17 @@ function eventFrames(
     case "text_delta":
       return [JSON.stringify(chatChunk(identity, { content: event.text }, null))];
     case "reasoning_delta":
-      return [
-        JSON.stringify(
-          chatChunk(identity, { reasoning_content: event.text }, null),
-        ),
-      ];
+      return [JSON.stringify(chatChunk(identity, { reasoning_content: event.text }, null))];
     case "reasoning_signature":
-      return [
-        JSON.stringify(
-          chatChunk(
-            identity,
-            { reasoning_signature: event.signature },
-            null,
-          ),
-        ),
-      ];
+      return [JSON.stringify(chatChunk(identity, { reasoning_signature: event.signature }, null))];
     case "reasoning_redacted":
       return [
-        JSON.stringify(
-          chatChunk(
-            identity,
-            { reasoning_redacted_content: event.data },
-            null,
-          ),
-        ),
+        JSON.stringify(chatChunk(identity, { reasoning_redacted_content: event.data }, null)),
       ];
     case "reasoning_encrypted":
       return [
         JSON.stringify(
-          chatChunk(
-            identity,
-            { reasoning_encrypted_content: event.encryptedContent },
-            null,
-          ),
+          chatChunk(identity, { reasoning_encrypted_content: event.encryptedContent }, null),
         ),
       ];
     case "tool_call_delta":
@@ -103,9 +77,7 @@ function eventFrames(
               tool_calls: [
                 {
                   index: event.index,
-                  ...(event.id !== undefined
-                    ? { id: event.id, type: "function" }
-                    : {}),
+                  ...(event.id !== undefined ? { id: event.id, type: "function" } : {}),
                   function: {
                     ...(event.name !== undefined ? { name: event.name } : {}),
                     arguments: event.arguments,
@@ -118,9 +90,7 @@ function eventFrames(
         ),
       ];
     case "completed": {
-      const finish = JSON.stringify(
-        chatChunk(identity, {}, event.finishReason),
-      );
+      const finish = JSON.stringify(chatChunk(identity, {}, event.finishReason));
       if (!includeUsage) return [finish];
       const usage = {
         id: identity.id,
@@ -139,9 +109,7 @@ function eventFrames(
   }
 }
 
-export function canonicalCompletionToChat(
-  completion: CanonicalCompletion,
-): Response {
+export function canonicalCompletionToChat(completion: CanonicalCompletion): Response {
   const reasoning = completion.reasoning;
   return Response.json({
     id: completion.conversationId,
@@ -159,9 +127,7 @@ export function canonicalCompletionToChat(
               ? null
               : completion.text,
           ...(reasoning?.text ? { reasoning_content: reasoning.text } : {}),
-          ...(reasoning?.signature
-            ? { reasoning_signature: reasoning.signature }
-            : {}),
+          ...(reasoning?.signature ? { reasoning_signature: reasoning.signature } : {}),
           ...(reasoning?.redactedContent
             ? { reasoning_redacted_content: reasoning.redactedContent }
             : {}),
@@ -200,8 +166,7 @@ export function canonicalOutputToChatSse(
 ): Response {
   const includeUsage = options.includeUsage === true;
   const upstream =
-    response.body ??
-    new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    response.body ?? new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
   const reader = upstream.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -217,9 +182,7 @@ export function canonicalOutputToChatSse(
   const enqueueFrame = (frame: string): void => {
     pendingFrames.push(encoder.encode(`data: ${frame}\n\n`));
   };
-  const closeIfDrained = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): void => {
+  const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
     if (
       streamClosed ||
       terminalOutcome === undefined ||
@@ -231,9 +194,7 @@ export function canonicalOutputToChatSse(
     streamClosed = true;
     controller.close();
   };
-  const flushOne = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): boolean => {
+  const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     if (streamClosed || pendingFrames.length === 0) {
       closeIfDrained(controller);
       return false;
@@ -287,9 +248,7 @@ export function canonicalOutputToChatSse(
               error: {
                 message: failure.message,
                 type:
-                  failure.disposition === "fatal"
-                    ? "upstream_protocol_error"
-                    : "upstream_error",
+                  failure.disposition === "fatal" ? "upstream_protocol_error" : "upstream_error",
                 code: failure.code,
               },
             }),
@@ -320,26 +279,15 @@ export function canonicalOutputToChatSse(
     );
   };
   const failProtocol = (): void => {
-    beginTerminal(
-      "upstream-protocol-error",
-      undefined,
-      streamFailure("upstream_protocol_error"),
-    );
+    beginTerminal("upstream-protocol-error", undefined, streamFailure("upstream_protocol_error"));
   };
   const failIncomplete = (): void => {
-    beginTerminal(
-      "upstream-error",
-      undefined,
-      streamFailure("upstream_stream_incomplete"),
-    );
+    beginTerminal("upstream-error", undefined, streamFailure("upstream_stream_incomplete"));
   };
   const acceptEvent = (event: CanonicalOutputEvent): boolean => {
     if (event.type === "started") {
-      if (
-        identity !== undefined ||
-        completed ||
-        event.model !== options.expectedModel
-      ) return false;
+      if (identity !== undefined || completed || event.model !== options.expectedModel)
+        return false;
       identity = {
         id: event.conversationId,
         model: event.model,
@@ -356,9 +304,7 @@ export function canonicalOutputToChatSse(
       };
       if (
         (event.id !== undefined && tool.id.length > 0 && event.id !== tool.id) ||
-        (event.name !== undefined &&
-          tool.name.length > 0 &&
-          event.name !== tool.name)
+        (event.name !== undefined && tool.name.length > 0 && event.name !== tool.name)
       ) {
         return false;
       }

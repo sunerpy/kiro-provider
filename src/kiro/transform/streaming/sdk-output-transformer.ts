@@ -1,8 +1,5 @@
 import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
-import {
-  CANONICAL_OUTPUT_VERSION,
-  type CanonicalOutputEvent,
-} from "../../../protocol/output.js";
+import { CANONICAL_OUTPUT_VERSION, type CanonicalOutputEvent } from "../../../protocol/output.js";
 import {
   appendReasoningCapture,
   appendToolFragment,
@@ -35,9 +32,7 @@ export interface TransformSdkOutputOptions {
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
-  readonly onCompletionWitness?: (
-    kind: "token-usage-metadata" | "metering-clean-eof",
-  ) => void;
+  readonly onCompletionWitness?: (kind: "token-usage-metadata" | "metering-clean-eof") => void;
   readonly onRawEvent?: (eventTypes: readonly string[]) => void;
 }
 
@@ -50,9 +45,7 @@ export class MissingSdkOutputStreamError extends Error {
   }
 }
 
-function closeIteratorWithoutBlocking(
-  iterator: AsyncIterator<SdkStreamEvent>,
-): void {
+function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): void {
   try {
     const closing = iterator.return?.();
     if (closing) void Promise.resolve(closing).catch(() => undefined);
@@ -82,10 +75,7 @@ export async function* transformSdkOutputStream(
   let anthropicRedactedEmitted = false;
   let iteratorFinished = false;
   let iteratorClosed = false;
-  let completionWitness:
-    | "token-usage-metadata"
-    | "metering-clean-eof"
-    | undefined;
+  let completionWitness: "token-usage-metadata" | "metering-clean-eof" | undefined;
 
   try {
     yield {
@@ -186,9 +176,7 @@ export async function* transformSdkOutputStream(
             yield {
               canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
               type: "reasoning_redacted",
-              data: Buffer.from(capturedBeforeText.redactedContent).toString(
-                "base64",
-              ),
+              data: Buffer.from(capturedBeforeText.redactedContent).toString("base64"),
             };
           }
         }
@@ -219,21 +207,14 @@ export async function* transformSdkOutputStream(
 
   const captured = resolveReasoningCapture(reasoning);
   if (options.emitAnthropicReasoningMetadata) {
-    if (
-      reasoningStarted &&
-      !anthropicSignatureEmitted &&
-      captured.signature !== undefined
-    ) {
+    if (reasoningStarted && !anthropicSignatureEmitted && captured.signature !== undefined) {
       yield {
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
         type: "reasoning_signature",
         signature: captured.signature,
       };
     }
-    if (
-      !anthropicRedactedEmitted &&
-      captured.redactedContent !== undefined
-    ) {
+    if (!anthropicRedactedEmitted && captured.redactedContent !== undefined) {
       yield {
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
         type: "reasoning_redacted",
@@ -263,13 +244,8 @@ export async function* transformSdkOutputStream(
       input: call.input,
     })),
   };
-  const outputFingerprint = (
-    options.fingerprintOutput ?? assistantOutputFingerprint
-  )(output);
-  const encryptedContent = options.captureReasoning?.(
-    captured,
-    outputFingerprint,
-  );
+  const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output);
+  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
   options.captureOutput?.(output, outputFingerprint);
   if (options.emitEncryptedReasoning && encryptedContent !== undefined) {
     yield {

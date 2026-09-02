@@ -40,12 +40,7 @@ function canonicalToChatSseWithSignals(
   expectedModel = "auto",
 ): Response {
   const futureCanonicalToChatSse = canonicalOutputToChatSse as FutureCanonicalToChatSse;
-  return futureCanonicalToChatSse(
-    response,
-    signals,
-    finalize,
-    { expectedModel },
-  );
+  return futureCanonicalToChatSse(response, signals, finalize, { expectedModel });
 }
 
 function makeIngressSignals(deadline: AbortController, client: AbortController): IngressSignals {
@@ -137,7 +132,6 @@ function completedCanonicalStream(): Uint8Array {
       .join("\n")}\n`,
   );
 }
-
 
 function stalledSdkResponse(cleanup: Promise<void>): {
   readonly response: SdkStreamResponse;

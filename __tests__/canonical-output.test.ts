@@ -28,20 +28,14 @@ describe("canonical output boundary", () => {
         redactedContent: "redacted",
         encryptedContent: "kr1_token",
       },
-      toolCalls: [
-        { id: "call-1", name: "lookup", input: "{\"q\":\"x\"}" },
-      ],
+      toolCalls: [{ id: "call-1", name: "lookup", input: '{"q":"x"}' }],
       finishReason: "tool_calls",
     } as const;
-    expect(parseCanonicalCompletion(withReasoningAndTool)).toEqual(
-      withReasoningAndTool,
-    );
+    expect(parseCanonicalCompletion(withReasoningAndTool)).toEqual(withReasoningAndTool);
   });
 
   test("rejects unknown keys and inconsistent terminal state", () => {
-    expect(
-      parseCanonicalCompletion({ ...validCompletion, unexpected: true }),
-    ).toBeUndefined();
+    expect(parseCanonicalCompletion({ ...validCompletion, unexpected: true })).toBeUndefined();
     expect(
       parseCanonicalCompletion({
         ...validCompletion,
@@ -54,9 +48,7 @@ describe("canonical output boundary", () => {
         usage: { inputTokens: 3, outputTokens: 2, totalTokens: 6 },
       }),
     ).toBeUndefined();
-    expect(
-      parseCanonicalCompletion({ ...validCompletion, reasoning: "reason" }),
-    ).toBeUndefined();
+    expect(parseCanonicalCompletion({ ...validCompletion, reasoning: "reason" })).toBeUndefined();
     expect(
       parseCanonicalCompletion({
         ...validCompletion,
@@ -95,7 +87,7 @@ describe("canonical output boundary", () => {
         index: 0,
         id: "call-1",
         name: "lookup",
-        arguments: "{\"q\":\"x\"}",
+        arguments: '{"q":"x"}',
       }),
     ).toEqual({
       canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
@@ -103,7 +95,7 @@ describe("canonical output boundary", () => {
       index: 0,
       id: "call-1",
       name: "lookup",
-      arguments: "{\"q\":\"x\"}",
+      arguments: '{"q":"x"}',
     });
     expect(
       [

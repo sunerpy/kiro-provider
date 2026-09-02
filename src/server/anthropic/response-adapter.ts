@@ -46,10 +46,7 @@ function toAnthropicFailure(
 ): AnthropicTerminalFailure {
   return {
     message,
-    type:
-      failure.disposition === "retryable"
-        ? "overloaded_error"
-        : "api_error",
+    type: failure.disposition === "retryable" ? "overloaded_error" : "api_error",
   };
 }
 
@@ -78,10 +75,7 @@ function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>
   }
 }
 
-export function anthropicMessageResponse(
-  completion: CanonicalCompletion,
-  model: string,
-): Response {
+export function anthropicMessageResponse(completion: CanonicalCompletion, model: string): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
   const reasoning = completion.reasoning;
   if (
@@ -145,12 +139,10 @@ export function anthropicMessageResponse(
 }
 
 // allow: SIZE_OK — this state machine owns Anthropic SSE ordering and exactly-once cleanup.
-export function anthropicSseAdapter(
-  pipelineResponse: Response,
-  options: AdapterOptions,
-): Response {
+export function anthropicSseAdapter(pipelineResponse: Response, options: AdapterOptions): Response {
   const upstream =
-    pipelineResponse.body ?? new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    pipelineResponse.body ??
+    new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
   const reader = upstream.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -183,9 +175,7 @@ export function anthropicSseAdapter(
   const emit = (event: string, payload: unknown): void => {
     pendingFrames.push(encoder.encode(formatEvent(event, payload)));
   };
-  const closeIfDrained = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): void => {
+  const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
     if (
       streamClosed ||
       terminalOutcome === undefined ||
@@ -199,9 +189,7 @@ export function anthropicSseAdapter(
   };
   // One frame per pull: the runtime only pulls while desiredSize > 0, so a slow
   // reader never receives a burst and complete() cannot overfill the queue.
-  const flushOne = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): boolean => {
+  const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     if (streamClosed) return false;
     const desiredSize = controller.desiredSize;
     if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
@@ -238,9 +226,7 @@ export function anthropicSseAdapter(
       () => {
         if (!failure) return;
         pendingFrames.push(
-          encoder.encode(
-            anthropicStreamError(failure.message, failure.type ?? "api_error"),
-          ),
+          encoder.encode(anthropicStreamError(failure.message, failure.type ?? "api_error")),
         );
       },
       options.finalize,
@@ -451,10 +437,7 @@ export function anthropicSseAdapter(
     emit("content_block_stop", { type: "content_block_stop", index });
     return signed;
   };
-  const complete = (
-    usage: CanonicalOutputUsage,
-    finishReason: "stop" | "tool_calls",
-  ): void => {
+  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
     const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
@@ -462,11 +445,7 @@ export function anthropicSseAdapter(
       return;
     }
     const invalidTool = orderedTools.some(([, tool]) => {
-      return (
-        tool.id.length === 0 ||
-        tool.name.length === 0 ||
-        !parseToolInput(tool.arguments)
-      );
+      return tool.id.length === 0 || tool.name.length === 0 || !parseToolInput(tool.arguments);
     });
     if (invalidTool) {
       failProtocol("Malformed upstream tool call");
@@ -573,11 +552,7 @@ export function anthropicSseAdapter(
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -614,11 +589,7 @@ export function anthropicSseAdapter(
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -642,9 +613,7 @@ export function anthropicSseAdapter(
           if (terminalOutcome !== undefined) return;
           const failure = normalizeStreamFailure(error);
           beginTerminal(
-            failure.disposition === "fatal"
-              ? "upstream-protocol-error"
-              : "upstream-error",
+            failure.disposition === "fatal" ? "upstream-protocol-error" : "upstream-error",
             error,
             toAnthropicFailure(failure),
           );

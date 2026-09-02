@@ -402,13 +402,15 @@ describe("POST /v1/chat/completions", () => {
           new ReadableStream<Uint8Array>({
             start(controller): void {
               controller.enqueue(
-                encoder.encode(`${JSON.stringify({
-                  canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
-                  type: "started",
-                  conversationId: "locked-conversation",
-                  model: "auto",
-                  createdAt: 1_700_000_000,
-                })}\n`),
+                encoder.encode(
+                  `${JSON.stringify({
+                    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+                    type: "started",
+                    conversationId: "locked-conversation",
+                    model: "auto",
+                    createdAt: 1_700_000_000,
+                  })}\n`,
+                ),
               );
             },
           }),

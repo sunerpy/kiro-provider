@@ -19,10 +19,7 @@ import {
   openAiError,
   openAiInternalError,
 } from "./errors.js";
-import type {
-  IngressSignals,
-  RequestIdleTimeoutLease,
-} from "./request-lifecycle.js";
+import type { IngressSignals, RequestIdleTimeoutLease } from "./request-lifecycle.js";
 
 /**
  * Dependencies shared by every request route. The HTTP entry point assembles
@@ -308,14 +305,10 @@ export function buildPipelineOptions(input: PipelineOptionsInput): RunChatComple
     config: input.config,
     accountManager: dependencies.accountManager,
     tokenRefresher: dependencies.tokenRefresher,
-    ...(dependencies.quotaRechecker
-      ? { quotaRechecker: dependencies.quotaRechecker }
-      : {}),
+    ...(dependencies.quotaRechecker ? { quotaRechecker: dependencies.quotaRechecker } : {}),
     ...(input.affinity ? { affinity: input.affinity } : {}),
     ...(input.lineage ? { lineage: input.lineage } : {}),
-    ...(dependencies.affinityStore
-      ? { affinityStore: dependencies.affinityStore }
-      : {}),
+    ...(dependencies.affinityStore ? { affinityStore: dependencies.affinityStore } : {}),
     tenantId: dependencies.tenantId,
     ...(dependencies.reasoningReplayStore
       ? { reasoningReplayStore: dependencies.reasoningReplayStore }

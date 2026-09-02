@@ -46,8 +46,8 @@ export function auditLog(
 ): void {
   if (LEVEL_ORDER[level] < LEVEL_ORDER[threshold]) return;
   const present = Object.fromEntries(
-    Object.entries(fields).filter((entry): entry is [string, string | number | boolean | null] =>
-      entry[1] !== undefined,
+    Object.entries(fields).filter(
+      (entry): entry is [string, string | number | boolean | null] => entry[1] !== undefined,
     ),
   );
   console.error(

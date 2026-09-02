@@ -33,7 +33,8 @@ function installFetch(
 afterEach(() => {
   globalThis.fetch = realFetch;
   for (const database of databases.splice(0)) database.close();
-  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 function account(id: string, overrides: Partial<ManagedAccount> = {}): ManagedAccount {

@@ -30,10 +30,7 @@ import type {
   ResponsesReasoningItem,
   ResponsesRequest,
 } from "../request-schema.js";
-import {
-  createResponsesToolBridge,
-  type ResponsesToolBridge,
-} from "./tool-bridge.js";
+import { createResponsesToolBridge, type ResponsesToolBridge } from "./tool-bridge.js";
 
 export type ResponsesRequestAdaptationResult =
   | {
@@ -126,9 +123,7 @@ function canonicalSource(
   readonly sourceMetadata?: Readonly<Record<string, unknown>>;
 } {
   const sourceMetadata = Object.fromEntries(
-    metadataKeys
-      .filter((key) => value[key] !== undefined)
-      .map((key) => [key, value[key]]),
+    metadataKeys.filter((key) => value[key] !== undefined).map((key) => [key, value[key]]),
   );
   return {
     path,
@@ -166,9 +161,7 @@ function isCustomToolCallOutputItem(
   return item.type === "custom_tool_call_output";
 }
 
-function isAdditionalToolsItem(
-  item: ResponsesInputItem,
-): item is ResponsesAdditionalToolsItem {
+function isAdditionalToolsItem(item: ResponsesInputItem): item is ResponsesAdditionalToolsItem {
   return item.type === "additional_tools";
 }
 
@@ -200,11 +193,7 @@ function mapContentParts(
       });
       continue;
     }
-    if (
-      part.type === "input_image" &&
-      "image_url" in part &&
-      typeof part.image_url === "string"
-    ) {
+    if (part.type === "input_image" && "image_url" in part && typeof part.image_url === "string") {
       const keys = validateAllowedKeys(part, partPath, new Set(["type", "image_url"]));
       if (!keys.ok) return keys;
       if (!part.image_url.startsWith("data:")) {
@@ -259,11 +248,7 @@ function mapContentParts(
         });
       } catch (error) {
         if (!(error instanceof RequestTransformError)) throw error;
-        return protocolFailure(
-          error.code,
-          error.message,
-          error.param ?? `${partPath}.file_data`,
-        );
+        return protocolFailure(error.code, error.message, error.param ?? `${partPath}.file_data`);
       }
       continue;
     }
@@ -319,10 +304,7 @@ function outputTextParts(
   return { ok: true, value: parts };
 }
 
-function validateInputItemShape(
-  item: ResponsesInputItem,
-  path: string,
-): ProtocolResult<undefined> {
+function validateInputItemShape(item: ResponsesInputItem, path: string): ProtocolResult<undefined> {
   if (isMessageItem(item)) return validateAllowedKeys(item, path, MESSAGE_ITEM_KEYS);
   if (isFunctionCallItem(item)) {
     return validateAllowedKeys(item, path, FUNCTION_CALL_ITEM_KEYS);
@@ -355,11 +337,7 @@ function validateInputItemShape(
     }
     for (const [index, part] of (item.content ?? []).entries()) {
       const partPath = `${path}.content.${index}`;
-      const partKeys = validateAllowedKeys(
-        part,
-        partPath,
-        new Set(["type", "reasoning_text"]),
-      );
+      const partKeys = validateAllowedKeys(part, partPath, new Set(["type", "reasoning_text"]));
       if (!partKeys.ok) return partKeys;
     }
   }
@@ -463,10 +441,7 @@ type ReplayGroup = {
 // (reasoning, assistant messages, function/custom tool calls) around it. Every
 // reasoning item in that run describes the same Kiro turn, so the run shares one
 // output fingerprint and resolves to at most one replay envelope.
-function replayGroupAt(
-  items: readonly ResponsesInputItem[],
-  reasoningIndex: number,
-): ReplayGroup {
+function replayGroupAt(items: readonly ResponsesInputItem[], reasoningIndex: number): ReplayGroup {
   let start = reasoningIndex;
   while (start > 0) {
     const previous = items[start - 1];
@@ -496,10 +471,7 @@ function replayTokenOf(item: ResponsesReasoningItem): string | undefined {
     : undefined;
 }
 
-function groupHasReplayToken(
-  items: readonly ResponsesInputItem[],
-  group: ReplayGroup,
-): boolean {
+function groupHasReplayToken(items: readonly ResponsesInputItem[], group: ReplayGroup): boolean {
   for (let index = group.start; index <= group.end; index += 1) {
     const item = items[index];
     if (item && isReasoningItem(item) && replayTokenOf(item) !== undefined) return true;
@@ -568,9 +540,7 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
     }
     if (tool.type !== "function" && tool.type !== "custom") {
       return protocolFailure(
-        tool.type.startsWith("web_search")
-          ? "unsupported_web_search"
-          : "unsupported_tool_type",
+        tool.type.startsWith("web_search") ? "unsupported_web_search" : "unsupported_tool_type",
         `Responses tool type ${tool.type} is not supported by the Kiro upstream`,
         path,
       );
@@ -620,11 +590,7 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
     for (const [inputIndex, item] of request.input.entries()) {
       if (!isAdditionalToolsItem(item)) continue;
       for (const [toolIndex, tool] of item.tools.entries()) {
-        const result = validateTool(
-          tool,
-          `input.${inputIndex}.tools.${toolIndex}`,
-          true,
-        );
+        const result = validateTool(tool, `input.${inputIndex}.tools.${toolIndex}`, true);
         if (!result.ok) return result;
       }
     }
@@ -692,16 +658,9 @@ export function adaptResponsesRequest(
   const reasoningConfig = validateReasoningConfig(request);
   if (!reasoningConfig.ok) return reasoningConfig;
   if (request.max_output_tokens !== undefined) {
-    const outputLimit = resolveOutputTokenLimit(
-      request.model,
-      request.max_output_tokens,
-    );
+    const outputLimit = resolveOutputTokenLimit(request.model, request.max_output_tokens);
     if (!outputLimit.ok) {
-      return protocolFailure(
-        outputLimit.code,
-        outputLimit.message,
-        "max_output_tokens",
-      );
+      return protocolFailure(outputLimit.code, outputLimit.message, "max_output_tokens");
     }
   }
   const toolValidation = validateToolDeclarations(request);
@@ -724,11 +683,7 @@ export function adaptResponsesRequest(
 
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
-  if (
-    request.parallel_tool_calls === false &&
-    request.tool_choice !== "none" &&
-    tools.length > 0
-  ) {
+  if (request.parallel_tool_calls === false && request.tool_choice !== "none" && tools.length > 0) {
     return protocolFailure(
       "unsupported_parallel_tool_calls",
       "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
@@ -770,8 +725,10 @@ export function adaptResponsesRequest(
       const shape = validateInputItemShape(item, path);
       if (!shape.ok) return shape;
       if (isReasoningItem(item)) {
-        const hasSummary = item.summary !== undefined && item.summary !== null && item.summary.length > 0;
-        const hasContent = item.content !== undefined && item.content !== null && item.content.length > 0;
+        const hasSummary =
+          item.summary !== undefined && item.summary !== null && item.summary.length > 0;
+        const hasContent =
+          item.content !== undefined && item.content !== null && item.content.length > 0;
         const group = replayGroupAt(request.input, index);
         if (item.encrypted_content === undefined || item.encrypted_content === null) {
           // The provider attaches the replay token to one reasoning item per
@@ -868,10 +825,7 @@ export function adaptResponsesRequest(
         continue;
       }
       if (isMessageItem(item)) {
-        if (
-          projectionMode === "safe" &&
-          (item.role === "system" || item.role === "developer")
-        ) {
+        if (projectionMode === "safe" && (item.role === "system" || item.role === "developer")) {
           return protocolFailure(
             "unsupported_instruction_projection",
             `${item.role} input cannot be projected losslessly to Kiro; use legacy-user-prefix explicitly to migrate`,

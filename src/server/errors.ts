@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto";
 
 /**
  * Shared OpenAI-style error envelope helper for HTTP responses.
@@ -15,28 +15,28 @@ export function openAiError(
   const error: { message: string; type: string; code?: string; param?: string } = {
     message,
     type,
-  }
+  };
   if (code !== undefined) {
-    error.code = code
+    error.code = code;
   }
   if (param !== undefined) {
-    error.param = param
+    error.param = param;
   }
   return new Response(JSON.stringify({ error }), {
     status,
     headers: { "Content-Type": "application/json" },
-  })
+  });
 }
 
-export const INTERNAL_ERROR_MESSAGE = "Internal server error"
+export const INTERNAL_ERROR_MESSAGE = "Internal server error";
 
 /** Correlation id shared by the client-facing envelope and the audit log entry. */
 export function newRequestId(): string {
-  return `req_${randomUUID()}`
+  return `req_${randomUUID()}`;
 }
 
 function internalErrorMessage(requestId: string): string {
-  return `${INTERNAL_ERROR_MESSAGE} (request_id: ${requestId})`
+  return `${INTERNAL_ERROR_MESSAGE} (request_id: ${requestId})`;
 }
 
 /**
@@ -55,7 +55,7 @@ export function openAiInternalError(requestId: string): Response {
       },
     }),
     { status: 500, headers: { "Content-Type": "application/json" } },
-  )
+  );
 }
 
 /**
@@ -71,5 +71,5 @@ export function anthropicInternalError(requestId: string): Response {
       request_id: requestId,
     },
     { status: 500 },
-  )
+  );
 }

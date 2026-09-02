@@ -187,10 +187,7 @@ export const ChatCompletionRequestSchema = z
   .object({
     model: z.string().trim().min(1),
     stream: z.boolean().default(false),
-    stream_options: z
-      .object({ include_usage: z.boolean().optional() })
-      .passthrough()
-      .optional(),
+    stream_options: z.object({ include_usage: z.boolean().optional() }).passthrough().optional(),
     messages: z.array(ChatMessageSchema).min(1),
     tools: z.array(z.union([OpenAiToolSchema, AnthropicToolSchema])).optional(),
     user: z.string().optional(),
@@ -557,9 +554,7 @@ export const ResponsesRequestSchema = z
     instructions: z.string().optional(),
     stream: z.boolean().default(false),
     tools: z.array(ResponsesToolSchema).optional(),
-    tool_choice: z
-      .union([z.enum(["auto", "none", "required"]), z.record(z.unknown())])
-      .optional(),
+    tool_choice: z.union([z.enum(["auto", "none", "required"]), z.record(z.unknown())]).optional(),
     parallel_tool_calls: z.boolean().optional(),
     reasoning: ResponsesReasoningConfigSchema.nullable().optional(),
     include: z.array(z.string()).optional(),

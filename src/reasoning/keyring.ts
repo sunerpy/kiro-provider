@@ -87,9 +87,7 @@ function toKeyring(
   }
   const active = keys[0];
   if (!active) throw new TypeError("Reasoning replay keyring is empty");
-  return path === undefined
-    ? { active, byId, source }
-    : { active, byId, source, path };
+  return path === undefined ? { active, byId, source } : { active, byId, source, path };
 }
 
 function readKeyFile(path: string): ReasoningReplayKeyring {

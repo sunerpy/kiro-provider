@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
-import type {
-  PipelineAccountManager,
-  PipelineTokenRefresher,
-} from "../src/core/pipeline.js";
+import type { PipelineAccountManager, PipelineTokenRefresher } from "../src/core/pipeline.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import { createApp } from "../src/server/app.js";
 

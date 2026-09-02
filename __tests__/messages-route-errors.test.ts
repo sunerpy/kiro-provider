@@ -124,7 +124,9 @@ describe("Anthropic pipeline error translation", () => {
   test("preserves an upstream Retry-After header on translated 429 responses", async () => {
     const translated = await translatePipelineError(
       new Response(
-        JSON.stringify({ error: { message: "slow down", type: "upstream_error", code: "rate_limited" } }),
+        JSON.stringify({
+          error: { message: "slow down", type: "upstream_error", code: "rate_limited" },
+        }),
         { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "12" } },
       ),
     );
@@ -143,7 +145,14 @@ describe("Anthropic pipeline error translation", () => {
       config(),
       dependencies(async () =>
         Response.json(
-          { error: { message: "busy", type: "upstream_error", code: "rate_limited", retry_after_ms: 1_500 } },
+          {
+            error: {
+              message: "busy",
+              type: "upstream_error",
+              code: "rate_limited",
+              retry_after_ms: 1_500,
+            },
+          },
           { status: 429 },
         ),
       ),

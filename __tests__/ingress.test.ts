@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
-import type {
-  PipelineAccountManager,
-  PipelineTokenRefresher,
-} from "../src/core/pipeline.js";
+import type { PipelineAccountManager, PipelineTokenRefresher } from "../src/core/pipeline.js";
 import { CLEANUP_GRACE_MS } from "../src/core/stream-cleanup.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import { openAiError } from "../src/server/errors.js";
@@ -277,7 +274,9 @@ describe("readJsonBody", () => {
     });
 
     test(`returns 499 for a connection-closed abort in the ${envelope.label} envelope`, async () => {
-      const request = post(throwingBody(new DOMException("The connection was closed.", "AbortError")));
+      const request = post(
+        throwingBody(new DOMException("The connection was closed.", "AbortError")),
+      );
       const ingress = createIngress(request, config());
 
       const result = await readJsonBody(request, config(), ingress.signals, envelope.errors);
@@ -314,7 +313,9 @@ describe("readJsonBody", () => {
       const body: unknown = JSON.parse(text);
       envelope.expectError(body, "internal");
       expect(body).toMatchObject({
-        error: { message: expect.stringMatching(/^Internal server error \(request_id: req_[0-9a-f-]+\)$/) },
+        error: {
+          message: expect.stringMatching(/^Internal server error \(request_id: req_[0-9a-f-]+\)$/),
+        },
       });
       expect(text).toMatch(/"request_id":"req_[0-9a-f-]+"/);
     });
@@ -324,9 +325,9 @@ describe("readJsonBody", () => {
 describe("classifyBodyReadFailure", () => {
   test("separates client disconnects, malformed transfers, and internal failures", () => {
     expect(classifyBodyReadFailure(new DOMException("closed", "AbortError"))).toBe("client-closed");
-    expect(
-      classifyBodyReadFailure(Object.assign(new Error("reset"), { code: "ECONNRESET" })),
-    ).toBe("client-closed");
+    expect(classifyBodyReadFailure(Object.assign(new Error("reset"), { code: "ECONNRESET" }))).toBe(
+      "client-closed",
+    );
     expect(classifyBodyReadFailure(new SyntaxError("bad chunk size"))).toBe("malformed");
     expect(classifyBodyReadFailure(new RangeError("unexpected end of data"))).toBe("malformed");
     expect(classifyBodyReadFailure(new TypeError("ReadableStream is locked"))).toBe("internal");
@@ -423,7 +424,14 @@ describe("buildPipelineOptions", () => {
 describe("withRetryAfter", () => {
   test("promotes a retry_after_ms hint into Retry-After on 429 responses", async () => {
     const hinted = Response.json(
-      { error: { message: "slow down", type: "upstream_error", code: "rate_limited", retry_after_ms: 2_500 } },
+      {
+        error: {
+          message: "slow down",
+          type: "upstream_error",
+          code: "rate_limited",
+          retry_after_ms: 2_500,
+        },
+      },
       { status: 429 },
     );
 
@@ -522,7 +530,14 @@ describe("routes on the shared ingress", () => {
         ...dependencies,
         async runPipeline() {
           return Response.json(
-            { error: { message: "busy", type: "upstream_error", code: "rate_limited", retry_after_ms: 900 } },
+            {
+              error: {
+                message: "busy",
+                type: "upstream_error",
+                code: "rate_limited",
+                retry_after_ms: 900,
+              },
+            },
             { status: 429 },
           );
         },

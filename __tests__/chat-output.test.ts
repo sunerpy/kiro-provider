@@ -4,10 +4,7 @@ import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
 } from "../src/protocol/output.js";
-import {
-  canonicalCompletionToChat,
-  canonicalOutputToChatSse,
-} from "../src/server/chat-output.js";
+import { canonicalCompletionToChat, canonicalOutputToChatSse } from "../src/server/chat-output.js";
 
 function activeSignals(): {
   readonly combined: AbortSignal;
@@ -23,10 +20,7 @@ function activeSignals(): {
   };
 }
 
-function canonicalStream(
-  events: readonly CanonicalOutputEvent[],
-  finalNewline = true,
-): Response {
+function canonicalStream(events: readonly CanonicalOutputEvent[], finalNewline = true): Response {
   const body = events.map((event) => JSON.stringify(event)).join("\n");
   return new Response(`${body}${finalNewline ? "\n" : ""}`);
 }
@@ -41,9 +35,7 @@ function started(model = "claude-sonnet-5"): CanonicalOutputEvent {
   };
 }
 
-function completed(
-  finishReason: "stop" | "tool_calls",
-): CanonicalOutputEvent {
+function completed(finishReason: "stop" | "tool_calls"): CanonicalOutputEvent {
   return {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     type: "completed",
@@ -73,7 +65,7 @@ describe("canonical Chat output", () => {
         redactedContent: "redacted",
         encryptedContent: "kr1_token",
       },
-      toolCalls: [{ id: "call-1", name: "lookup", input: "{\"q\":\"x\"}" }],
+      toolCalls: [{ id: "call-1", name: "lookup", input: '{"q":"x"}' }],
       finishReason: "tool_calls",
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
     };
@@ -97,7 +89,7 @@ describe("canonical Chat output", () => {
         {
           id: "call-1",
           type: "function",
-          function: { name: "lookup", arguments: "{\"q\":\"x\"}" },
+          function: { name: "lookup", arguments: '{"q":"x"}' },
         },
       ],
     });
@@ -172,13 +164,13 @@ describe("canonical Chat output", () => {
         index: 0,
         id: "call-1",
         name: "lookup",
-        arguments: "{\"q\":",
+        arguments: '{"q":',
       },
       {
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
         type: "tool_call_delta",
         index: 0,
-        arguments: "\"x\"}",
+        arguments: '"x"}',
       },
       completed("tool_calls"),
     ];
@@ -299,12 +291,9 @@ describe("canonical Chat output", () => {
       }),
     );
 
-    const text = await canonicalOutputToChatSse(
-      response,
-      activeSignals(),
-      () => undefined,
-      { expectedModel: "claude-sonnet-5" },
-    ).text();
+    const text = await canonicalOutputToChatSse(response, activeSignals(), () => undefined, {
+      expectedModel: "claude-sonnet-5",
+    }).text();
 
     expect(text).toContain('"type":"upstream_error"');
     expect(text).toContain('"code":"upstream_stream_idle_timeout"');

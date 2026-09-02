@@ -40,7 +40,9 @@ describe("allowedKeysValidator", () => {
       message: "Responses field input.0.extra is not supported",
       param: "input.0.extra",
     });
-    expect(allowedKeysValidator("Chat field")({ bad: true }, "messages.1", new Set())).toMatchObject({
+    expect(
+      allowedKeysValidator("Chat field")({ bad: true }, "messages.1", new Set()),
+    ).toMatchObject({
       message: "Chat field messages.1.bad is not supported",
       param: "messages.1.bad",
     });

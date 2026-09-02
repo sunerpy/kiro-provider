@@ -101,10 +101,7 @@ export function reportToolRestoreFailure(failure: BridgeFailure): ToolRestoreFai
 
 type BridgeBuildFailure = {
   readonly ok: false;
-  readonly code:
-    | "invalid_tool_declaration"
-    | "invalid_tool_history"
-    | "missing_tool_declaration";
+  readonly code: "invalid_tool_declaration" | "invalid_tool_history" | "missing_tool_declaration";
   readonly message: string;
 };
 
@@ -383,9 +380,7 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
               ? { description: descriptions(tool.description, child.description) }
               : {}),
             parameters:
-              child.type === "custom"
-                ? customSchema()
-                : (child.parameters ?? { type: "object" }),
+              child.type === "custom" ? customSchema() : (child.parameters ?? { type: "object" }),
           },
         };
         const failure = registerDeclaration({

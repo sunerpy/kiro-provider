@@ -3,13 +3,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type PlatformPathOptions = {
-	readonly env?: Readonly<Record<string, string | undefined>>;
-	readonly platform?: NodeJS.Platform | string;
-	readonly homeDirectory?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly platform?: NodeJS.Platform | string;
+  readonly homeDirectory?: string;
 };
 
 function nonEmpty(value: string | undefined): string | undefined {
-	return value === undefined || value.trim().length === 0 ? undefined : value;
+  return value === undefined || value.trim().length === 0 ? undefined : value;
 }
 
 /**
@@ -21,12 +21,12 @@ function nonEmpty(value: string | undefined): string | undefined {
  * An empty environment value is treated as unset.
  */
 export function platformConfigRoot(options: PlatformPathOptions = {}): string {
-	const env = options.env ?? process.env;
-	const platform = options.platform ?? process.platform;
-	const homeDirectory = options.homeDirectory ?? homedir();
-	return platform === "win32"
-		? (nonEmpty(env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming"))
-		: (nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config"));
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const homeDirectory = options.homeDirectory ?? homedir();
+  return platform === "win32"
+    ? (nonEmpty(env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming"))
+    : (nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config"));
 }
 
 /**
@@ -35,13 +35,13 @@ export function platformConfigRoot(options: PlatformPathOptions = {}): string {
  * `config.json` still lives there keep working.
  */
 export function legacyConfigRoot(options: PlatformPathOptions = {}): string {
-	const env = options.env ?? process.env;
-	const homeDirectory = options.homeDirectory ?? homedir();
-	return nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config");
+  const env = options.env ?? process.env;
+  const homeDirectory = options.homeDirectory ?? homedir();
+  return nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config");
 }
 
 export type DefaultConfigPathOptions = PlatformPathOptions & {
-	readonly exists?: (path: string) => boolean;
+  readonly exists?: (path: string) => boolean;
 };
 
 /**
@@ -53,11 +53,11 @@ export type DefaultConfigPathOptions = PlatformPathOptions & {
  * existing installations are not silently reconfigured.
  */
 export function defaultConfigPath(options: DefaultConfigPathOptions = {}): string {
-	const exists = options.exists ?? existsSync;
-	const preferred = join(platformConfigRoot(options), "kiro-provider", "config.json");
-	const platform = options.platform ?? process.platform;
-	if (platform !== "win32") return preferred;
-	const legacy = join(legacyConfigRoot(options), "kiro-provider", "config.json");
-	if (legacy !== preferred && !exists(preferred) && exists(legacy)) return legacy;
-	return preferred;
+  const exists = options.exists ?? existsSync;
+  const preferred = join(platformConfigRoot(options), "kiro-provider", "config.json");
+  const platform = options.platform ?? process.platform;
+  if (platform !== "win32") return preferred;
+  const legacy = join(legacyConfigRoot(options), "kiro-provider", "config.json");
+  if (legacy !== preferred && !exists(preferred) && exists(legacy)) return legacy;
+  return preferred;
 }

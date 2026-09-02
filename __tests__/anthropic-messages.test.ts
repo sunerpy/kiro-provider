@@ -157,16 +157,18 @@ function chunk(
   usage?: Readonly<Record<string, number>>,
 ): readonly Readonly<Record<string, unknown>>[] {
   if (finishReason !== null) {
-    return [{
-      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
-      type: "completed",
-      finishReason,
-      usage: {
-        inputTokens: usage?.prompt_tokens ?? 0,
-        outputTokens: usage?.completion_tokens ?? 0,
-        totalTokens: usage?.total_tokens ?? 0,
+    return [
+      {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "completed",
+        finishReason,
+        usage: {
+          inputTokens: usage?.prompt_tokens ?? 0,
+          outputTokens: usage?.completion_tokens ?? 0,
+          totalTokens: usage?.total_tokens ?? 0,
+        },
       },
-    }];
+    ];
   }
   const events: Array<Readonly<Record<string, unknown>>> = [];
   if (typeof delta.reasoning_signature === "string") {
@@ -234,9 +236,7 @@ function eventPayloads(text: string): Array<Readonly<Record<string, unknown>>> {
     .split("\n\n")
     .filter(Boolean)
     .map((frame) => {
-      const data = frame
-        .split("\n")
-        .find((line) => line.startsWith("data: "));
+      const data = frame.split("\n").find((line) => line.startsWith("data: "));
       if (!data) throw new TypeError(`SSE frame has no data line: ${frame}`);
       return JSON.parse(data.slice("data: ".length)) as Readonly<Record<string, unknown>>;
     });
@@ -374,20 +374,18 @@ describe("Anthropic request adapter", () => {
 
   test("rejects unproven models and Kiro-invalid max_tokens ranges before the pipeline", () => {
     expect(
-      adaptAnthropicMessagesRequest(
-        validRequest({ model: "gpt-5.6-sol" }),
-        { requireMaxTokens: true },
-      ),
+      adaptAnthropicMessagesRequest(validRequest({ model: "gpt-5.6-sol" }), {
+        requireMaxTokens: true,
+      }),
     ).toMatchObject({
       ok: false,
       code: "unsupported_output_token_limit",
       param: "max_tokens",
     });
     expect(
-      adaptAnthropicMessagesRequest(
-        validRequest({ max_tokens: 1_023 }),
-        { requireMaxTokens: true },
-      ),
+      adaptAnthropicMessagesRequest(validRequest({ max_tokens: 1_023 }), {
+        requireMaxTokens: true,
+      }),
     ).toMatchObject({
       ok: false,
       code: "invalid_output_token_limit",
@@ -408,9 +406,7 @@ describe("Anthropic request adapter", () => {
       message: expect.stringContaining("tool_choice.type tool is not supported"),
     });
     expect(
-      adaptAnthropicMessagesRequest(
-        validRequest({ tools: [], tool_choice: { type: "any" } }),
-      ),
+      adaptAnthropicMessagesRequest(validRequest({ tools: [], tool_choice: { type: "any" } })),
     ).toMatchObject({
       ok: false,
       message: expect.stringContaining("tool_choice.type any is not supported"),
@@ -434,9 +430,7 @@ describe("Anthropic request adapter", () => {
     expect(
       adaptAnthropicMessagesRequest(
         validRequest({
-          system: [
-            { type: "text", text: "system policy", cache_control: { type: "ephemeral" } },
-          ],
+          system: [{ type: "text", text: "system policy", cache_control: { type: "ephemeral" } }],
         }),
         {},
         "legacy-user-prefix",
@@ -488,9 +482,7 @@ describe("Anthropic request adapter", () => {
     });
 
     expect(
-      adaptAnthropicMessagesRequest(
-        validRequest({ context_management: { edits: [] } }),
-      ),
+      adaptAnthropicMessagesRequest(validRequest({ context_management: { edits: [] } })),
     ).toMatchObject({
       ok: false,
       code: "unsupported_parameter",
@@ -586,11 +578,7 @@ describe("POST /v1/messages", () => {
               },
               null,
             ),
-            chunk(
-              {},
-              "tool_calls",
-              { prompt_tokens: 13, completion_tokens: 8, total_tokens: 21 },
-            ),
+            chunk({}, "tool_calls", { prompt_tokens: 13, completion_tokens: 8, total_tokens: 21 }),
           ]),
         leaseEvents,
       ),
@@ -678,11 +666,7 @@ describe("POST /v1/messages", () => {
             },
             null,
           ),
-          chunk(
-            {},
-            "tool_calls",
-            { prompt_tokens: 10, completion_tokens: 6, total_tokens: 16 },
-          ),
+          chunk({}, "tool_calls", { prompt_tokens: 10, completion_tokens: 6, total_tokens: 16 }),
         ]),
       ),
     );
@@ -709,9 +693,7 @@ describe("POST /v1/messages", () => {
     const response = await handleMessages(
       request(validRequest({ stream: true })),
       config(),
-      dependencies(async () =>
-        ndjson([{ object: "unexpected", choices: [] }]),
-      ),
+      dependencies(async () => ndjson([{ object: "unexpected", choices: [] }])),
     );
     const payloads = eventPayloads(await response.text());
 

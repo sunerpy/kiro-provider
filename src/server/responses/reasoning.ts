@@ -10,10 +10,7 @@ export function isGptSolReasoningPlaceholder(model: string, text: string): boole
   return normalized === "..." || normalized === "…";
 }
 
-export function couldStillBeGptSolReasoningPlaceholder(
-  model: string,
-  text: string,
-): boolean {
+export function couldStillBeGptSolReasoningPlaceholder(model: string, text: string): boolean {
   if (!GPT_SOL_MODEL.test(model)) return false;
   const normalized = normalizedReasoning(text);
   return (

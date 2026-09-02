@@ -52,9 +52,7 @@ describe("Responses tool-output codes in the stream failure registry", () => {
     const wrapper = new TypeError("adapter wrapper", { cause });
 
     expect(normalizeStreamFailure(wrapper)).toEqual(streamFailure(code));
-    expect(normalizeStreamFailure(wrapper, "upstream_protocol_error")).toEqual(
-      streamFailure(code),
-    );
+    expect(normalizeStreamFailure(wrapper, "upstream_protocol_error")).toEqual(streamFailure(code));
   });
 
   test.each(TOOL_OUTPUT_CODES)("audits %s with the fatal disposition and no prose", (code) => {
@@ -76,9 +74,7 @@ describe("Responses tool-output codes in the stream failure registry", () => {
     // tool bridge's internal reason and must still fall back like any unknown code.
     const bridgeFailure = { code: "unknown_tool_alias", message: "undeclared tool" };
 
-    expect(normalizeStreamFailure(bridgeFailure)).toEqual(
-      streamFailure("upstream_stream_error"),
-    );
+    expect(normalizeStreamFailure(bridgeFailure)).toEqual(streamFailure("upstream_stream_error"));
     expect(normalizeStreamFailure(bridgeFailure, "upstream_protocol_error")).toEqual(
       streamFailure("upstream_protocol_error"),
     );

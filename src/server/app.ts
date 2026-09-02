@@ -1,19 +1,13 @@
-import {
-	defaultOpenCodeAuthDbPath,
-	OpenCodeAuthStore,
-} from "../auth/opencode-auth-store.js";
+import { defaultOpenCodeAuthDbPath, OpenCodeAuthStore } from "../auth/opencode-auth-store.js";
 import type { Config } from "../config/schema.js";
 import {
-	AccountMaintenanceService,
-	bindAccountMaintenanceLifecycle,
-	type PipelineAccountMaintenance,
+  AccountMaintenanceService,
+  bindAccountMaintenanceLifecycle,
+  type PipelineAccountMaintenance,
 } from "../core/account-maintenance.js";
 import { AccountManager } from "../core/account-manager.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
-import {
-	OpenCodeAccountManager,
-	OpenCodeTokenRefresher,
-} from "../core/opencode-auth-runtime.js";
+import { OpenCodeAccountManager, OpenCodeTokenRefresher } from "../core/opencode-auth-runtime.js";
 import type {
   PipelineAccountManager,
   PipelineAffinityStore,
@@ -32,8 +26,8 @@ import {
 } from "../core/stream-cleanup.js";
 import { TokenRefresher } from "../core/token-refresher.js";
 import {
-	ModelCapabilityService,
-	type PipelineModelCapabilities,
+  ModelCapabilityService,
+  type PipelineModelCapabilities,
 } from "../kiro/model-capabilities.js";
 import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
@@ -51,24 +45,18 @@ import {
   DEFAULT_SHUTDOWN_DRAIN_MS,
   type ShutdownServer,
 } from "./lifecycle.js";
-import type {
-  RequestIdleTimeoutLease,
-  RequestIdleTimeoutLeaseMaker,
-} from "./request-lifecycle.js";
+import type { RequestIdleTimeoutLease, RequestIdleTimeoutLeaseMaker } from "./request-lifecycle.js";
 import { handleChatCompletions } from "./routes/chat-completions.js";
 import { handleHealth } from "./routes/health.js";
-import {
-  handleMessages,
-  handleMessageTokenCount,
-} from "./routes/messages.js";
+import { handleMessages, handleMessageTokenCount } from "./routes/messages.js";
 import { handleModels } from "./routes/models.js";
 import { handleReadiness } from "./routes/readiness.js";
 import { handleResponses } from "./routes/responses.js";
 import {
-	acquireServiceInstanceLock,
-	bindServiceInstanceLease,
-	type InstanceLockAcquireOptions,
-	type ServiceInstanceLease,
+  acquireServiceInstanceLock,
+  bindServiceInstanceLease,
+  type InstanceLockAcquireOptions,
+  type ServiceInstanceLease,
 } from "./single-instance.js";
 
 export type {
@@ -117,48 +105,39 @@ export function createRequestIdleTimeoutLease(
 export { boundedCleanup, CLEANUP_GRACE_MS, runCleanupSteps, safeStep };
 
 export type ServerDependencyFactories = {
-	readonly createDatabase?: () => AccountsDatabase;
-	readonly createOpenCodeAuthStore?: (path: string) => OpenCodeAuthStore;
-	readonly createTokenRefresher?: (
-		accountManager: AccountManager,
-		tokenExpiryBufferMs: number,
-		proxyUrl?: string,
-	) => PipelineTokenRefresher;
-	readonly createOpenCodeTokenRefresher?: (
-		accountManager: OpenCodeAccountManager,
-		store: OpenCodeAuthStore,
-		tokenExpiryBufferMs: number,
-		proxyUrl?: string,
-	) => PipelineTokenRefresher;
-	readonly createQuotaRechecker?: (
-		accountManager: AccountManager | OpenCodeAccountManager,
-		tokenRefresher: PipelineTokenRefresher,
-		config: Config,
-		proxyUrl?: string,
-	) => PipelineQuotaRechecker;
-	readonly createAccountMaintenance?: (
-		accountManager: AccountManager | OpenCodeAccountManager,
-		tokenRefresher: PipelineTokenRefresher,
-		quotaRechecker: PipelineQuotaRechecker,
-		config: Config,
-	) => PipelineAccountMaintenance;
-	readonly createReasoningReplayStore?: (
-		database: AccountsDatabase,
-		config: Config,
-	) => PipelineReasoningReplayStore;
-	readonly createModelCapabilityService?: (
-		config: Config,
-	) => PipelineModelCapabilities;
+  readonly createDatabase?: () => AccountsDatabase;
+  readonly createOpenCodeAuthStore?: (path: string) => OpenCodeAuthStore;
+  readonly createTokenRefresher?: (
+    accountManager: AccountManager,
+    tokenExpiryBufferMs: number,
+    proxyUrl?: string,
+  ) => PipelineTokenRefresher;
+  readonly createOpenCodeTokenRefresher?: (
+    accountManager: OpenCodeAccountManager,
+    store: OpenCodeAuthStore,
+    tokenExpiryBufferMs: number,
+    proxyUrl?: string,
+  ) => PipelineTokenRefresher;
+  readonly createQuotaRechecker?: (
+    accountManager: AccountManager | OpenCodeAccountManager,
+    tokenRefresher: PipelineTokenRefresher,
+    config: Config,
+    proxyUrl?: string,
+  ) => PipelineQuotaRechecker;
+  readonly createAccountMaintenance?: (
+    accountManager: AccountManager | OpenCodeAccountManager,
+    tokenRefresher: PipelineTokenRefresher,
+    quotaRechecker: PipelineQuotaRechecker,
+    config: Config,
+  ) => PipelineAccountMaintenance;
+  readonly createReasoningReplayStore?: (
+    database: AccountsDatabase,
+    config: Config,
+  ) => PipelineReasoningReplayStore;
+  readonly createModelCapabilityService?: (config: Config) => PipelineModelCapabilities;
 };
 
-type RouteName =
-  | "health"
-  | "ready"
-  | "models"
-  | "chat"
-  | "responses"
-  | "messages"
-  | "count_tokens";
+type RouteName = "health" | "ready" | "models" | "chat" | "responses" | "messages" | "count_tokens";
 
 interface RouteDefinition {
   readonly name: RouteName;
@@ -180,10 +159,7 @@ const ROUTES: ReadonlyMap<string, RouteDefinition> = new Map<string, RouteDefini
   ["/v1/chat/completions", { name: "chat", methods: ["POST"], protocol: "openai" }],
   ["/v1/responses", { name: "responses", methods: ["POST"], protocol: "openai" }],
   ["/v1/messages", { name: "messages", methods: ["POST"], protocol: "anthropic" }],
-  [
-    "/v1/messages/count_tokens",
-    { name: "count_tokens", methods: ["POST"], protocol: "anthropic" },
-  ],
+  ["/v1/messages/count_tokens", { name: "count_tokens", methods: ["POST"], protocol: "anthropic" }],
 ]);
 
 export function normalizeRoutePath(pathname: string): string {
@@ -234,13 +210,9 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
     const routeDependencies: RouteDependencies = {
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
-      ...(dependencies.quotaRechecker
-        ? { quotaRechecker: dependencies.quotaRechecker }
-        : {}),
+      ...(dependencies.quotaRechecker ? { quotaRechecker: dependencies.quotaRechecker } : {}),
       tenantId: auth.tenantId,
-      ...(dependencies.affinityStore
-        ? { affinityStore: dependencies.affinityStore }
-        : {}),
+      ...(dependencies.affinityStore ? { affinityStore: dependencies.affinityStore } : {}),
       ...(dependencies.reasoningReplayStore
         ? { reasoningReplayStore: dependencies.reasoningReplayStore }
         : {}),
@@ -302,103 +274,92 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
 }
 
 export function buildServerDeps(
-	config: Config,
-	factories: ServerDependencyFactories = {},
+  config: Config,
+  factories: ServerDependencyFactories = {},
 ): AppDependencies {
-	if (config.protocol_projection_mode === "legacy-user-prefix") {
-		auditLog("warn", "legacy_protocol_projection_enabled", {
-			projection_mode: config.protocol_projection_mode,
-			planned_removal: "v0.7.0",
-		});
-	}
-	if (config.session_affinity_mode === "legacy-initial-input") {
-		auditLog("warn", "legacy_session_affinity_enabled", {
-			session_affinity_mode: config.session_affinity_mode,
-			risk: "identical_initial_input_can_alias_independent_sessions",
-			planned_removal: "v0.7.0",
-		});
-	}
-	const database = factories.createDatabase?.() ?? new AccountsDatabase();
-	const reasoningReplayStore =
-		factories.createReasoningReplayStore?.(database, config) ??
-		new ReasoningReplayStore(database, config);
-	const modelCapabilities =
-		factories.createModelCapabilityService?.(config) ??
-		new ModelCapabilityService(config);
-	const proxyUrl = resolveProxyUrl(config);
-	if (config.auth_source === "opencode-shared") {
-		const authStorePath =
-			config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath();
-		const authStore =
-			factories.createOpenCodeAuthStore?.(authStorePath) ??
-			new OpenCodeAuthStore(authStorePath);
-		const accountManager = new OpenCodeAccountManager(
-			authStore,
-			config.account_selection_strategy,
-		);
-		const tokenRefresher = factories.createOpenCodeTokenRefresher
-			? factories.createOpenCodeTokenRefresher(
-					accountManager,
-					authStore,
-					config.token_expiry_buffer_ms,
-					proxyUrl,
-				)
-			: new OpenCodeTokenRefresher(
-					accountManager,
-					authStore,
-					config.token_expiry_buffer_ms,
-					proxyUrl,
-				);
-		const quotaRechecker =
-			factories.createQuotaRechecker?.(
-				accountManager,
-				tokenRefresher,
-				config,
-				proxyUrl,
-			) ??
-				new QuotaRechecker({
-					accountManager,
-					tokenRefresher,
-					intervalMs: config.quota_recheck_interval_ms,
-					usageRefreshIntervalMs: config.usage_refresh_interval_ms,
-					timeoutMs: config.quota_recheck_timeout_ms,
-				concurrency: config.quota_recheck_concurrency,
-					proxyUrl,
-				});
-		const accountMaintenance =
-			factories.createAccountMaintenance?.(
-				accountManager,
-				tokenRefresher,
-				quotaRechecker,
-				config,
-			) ??
-			new AccountMaintenanceService({
-				enabled: config.account_maintenance_enabled,
-				intervalMs: config.account_maintenance_interval_ms,
-				timeoutMs: config.account_maintenance_timeout_ms,
-				concurrency: config.account_maintenance_concurrency,
-				tokenExpiryBufferMs: config.token_expiry_buffer_ms,
-				accountManager,
-				tokenRefresher,
-				usageRefresher: quotaRechecker,
-			});
-		return {
-			accountManager,
-			tokenRefresher,
-			quotaRechecker,
-			accountMaintenance,
-			affinityStore: database,
-			reasoningReplayStore,
-			modelCapabilities,
-		};
-	}
+  if (config.protocol_projection_mode === "legacy-user-prefix") {
+    auditLog("warn", "legacy_protocol_projection_enabled", {
+      projection_mode: config.protocol_projection_mode,
+      planned_removal: "v0.7.0",
+    });
+  }
+  if (config.session_affinity_mode === "legacy-initial-input") {
+    auditLog("warn", "legacy_session_affinity_enabled", {
+      session_affinity_mode: config.session_affinity_mode,
+      risk: "identical_initial_input_can_alias_independent_sessions",
+      planned_removal: "v0.7.0",
+    });
+  }
+  const database = factories.createDatabase?.() ?? new AccountsDatabase();
+  const reasoningReplayStore =
+    factories.createReasoningReplayStore?.(database, config) ??
+    new ReasoningReplayStore(database, config);
+  const modelCapabilities =
+    factories.createModelCapabilityService?.(config) ?? new ModelCapabilityService(config);
+  const proxyUrl = resolveProxyUrl(config);
+  if (config.auth_source === "opencode-shared") {
+    const authStorePath = config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath();
+    const authStore =
+      factories.createOpenCodeAuthStore?.(authStorePath) ?? new OpenCodeAuthStore(authStorePath);
+    const accountManager = new OpenCodeAccountManager(authStore, config.account_selection_strategy);
+    const tokenRefresher = factories.createOpenCodeTokenRefresher
+      ? factories.createOpenCodeTokenRefresher(
+          accountManager,
+          authStore,
+          config.token_expiry_buffer_ms,
+          proxyUrl,
+        )
+      : new OpenCodeTokenRefresher(
+          accountManager,
+          authStore,
+          config.token_expiry_buffer_ms,
+          proxyUrl,
+        );
+    const quotaRechecker =
+      factories.createQuotaRechecker?.(accountManager, tokenRefresher, config, proxyUrl) ??
+      new QuotaRechecker({
+        accountManager,
+        tokenRefresher,
+        intervalMs: config.quota_recheck_interval_ms,
+        usageRefreshIntervalMs: config.usage_refresh_interval_ms,
+        timeoutMs: config.quota_recheck_timeout_ms,
+        concurrency: config.quota_recheck_concurrency,
+        proxyUrl,
+      });
+    const accountMaintenance =
+      factories.createAccountMaintenance?.(
+        accountManager,
+        tokenRefresher,
+        quotaRechecker,
+        config,
+      ) ??
+      new AccountMaintenanceService({
+        enabled: config.account_maintenance_enabled,
+        intervalMs: config.account_maintenance_interval_ms,
+        timeoutMs: config.account_maintenance_timeout_ms,
+        concurrency: config.account_maintenance_concurrency,
+        tokenExpiryBufferMs: config.token_expiry_buffer_ms,
+        accountManager,
+        tokenRefresher,
+        usageRefresher: quotaRechecker,
+      });
+    return {
+      accountManager,
+      tokenRefresher,
+      quotaRechecker,
+      accountMaintenance,
+      affinityStore: database,
+      reasoningReplayStore,
+      modelCapabilities,
+    };
+  }
 
-	const accountManager = new AccountManager(
-		database.getAccounts(),
-		config.account_selection_strategy,
-		database,
-	);
-	const tokenRefresher = factories.createTokenRefresher
+  const accountManager = new AccountManager(
+    database.getAccounts(),
+    config.account_selection_strategy,
+    database,
+  );
+  const tokenRefresher = factories.createTokenRefresher
     ? factories.createTokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl)
     : new TokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl);
   const quotaRechecker =
@@ -413,12 +374,7 @@ export function buildServerDeps(
       proxyUrl,
     });
   const accountMaintenance =
-    factories.createAccountMaintenance?.(
-      accountManager,
-      tokenRefresher,
-      quotaRechecker,
-      config,
-    ) ??
+    factories.createAccountMaintenance?.(accountManager, tokenRefresher, quotaRechecker, config) ??
     new AccountMaintenanceService({
       enabled: config.account_maintenance_enabled,
       intervalMs: config.account_maintenance_interval_ms,
@@ -499,57 +455,54 @@ export interface StartServerOptions<S extends ServerHandle> {
  * exit.
  */
 export function startServer<S extends ServerHandle = Bun.Server<undefined>>(
-	config: Config,
-	options: StartServerOptions<S> = {},
+  config: Config,
+  options: StartServerOptions<S> = {},
 ): S {
-	const exit = options.exit ?? ((code: number): void => process.exit(code));
-	const lease: ServiceInstanceLease | undefined = acquireServiceInstanceLock(config, {
-		...(options.lockOptions ?? {}),
-		exit,
-	});
-	try {
-		const dependencies = buildServerDeps(config, options.factories);
-		const serve =
-			options.serve ??
-			((serveOptions: Bun.Serve.Options<undefined>): S =>
-				Bun.serve(serveOptions) as unknown as S);
-		const server = serve(buildServeOptions(config, dependencies));
-		// Capture the runtime's own stop before the lifecycle bindings wrap it so
-		// the shutdown routine controls when the lock is released.
-		const rawStop = server.stop.bind(server);
-		const shutdown = createGracefulShutdown({
-			server: {
-				stop: rawStop,
-				get pendingRequests(): number | undefined {
-					return server.pendingRequests;
-				},
-			},
-			...(dependencies.accountMaintenance
-				? { maintenance: dependencies.accountMaintenance }
-				: {}),
-			...(lease ? { lease } : {}),
-			exit,
-			drainTimeoutMs: options.drainTimeoutMs ?? DEFAULT_SHUTDOWN_DRAIN_MS,
-			...(options.drainPollMs !== undefined ? { drainPollMs: options.drainPollMs } : {}),
-		});
-		const leasedServer = bindServiceInstanceLease(server, lease);
-		const managedServer = bindAccountMaintenanceLifecycle(
-			leasedServer,
-			dependencies.accountMaintenance,
-		);
-		lease?.onCompromised(() => {
-			void shutdown("lock_compromised", 1);
-		});
-		const signalSource = options.signalSource ?? process;
-		signalSource.on("SIGTERM", () => {
-			void shutdown("SIGTERM", 0);
-		});
-		signalSource.on("SIGINT", () => {
-			void shutdown("SIGINT", 0);
-		});
-		return managedServer;
-	} catch (error) {
-		lease?.release();
-		throw error;
-	}
+  const exit = options.exit ?? ((code: number): void => process.exit(code));
+  const lease: ServiceInstanceLease | undefined = acquireServiceInstanceLock(config, {
+    ...(options.lockOptions ?? {}),
+    exit,
+  });
+  try {
+    const dependencies = buildServerDeps(config, options.factories);
+    const serve =
+      options.serve ??
+      ((serveOptions: Bun.Serve.Options<undefined>): S => Bun.serve(serveOptions) as unknown as S);
+    const server = serve(buildServeOptions(config, dependencies));
+    // Capture the runtime's own stop before the lifecycle bindings wrap it so
+    // the shutdown routine controls when the lock is released.
+    const rawStop = server.stop.bind(server);
+    const shutdown = createGracefulShutdown({
+      server: {
+        stop: rawStop,
+        get pendingRequests(): number | undefined {
+          return server.pendingRequests;
+        },
+      },
+      ...(dependencies.accountMaintenance ? { maintenance: dependencies.accountMaintenance } : {}),
+      ...(lease ? { lease } : {}),
+      exit,
+      drainTimeoutMs: options.drainTimeoutMs ?? DEFAULT_SHUTDOWN_DRAIN_MS,
+      ...(options.drainPollMs !== undefined ? { drainPollMs: options.drainPollMs } : {}),
+    });
+    const leasedServer = bindServiceInstanceLease(server, lease);
+    const managedServer = bindAccountMaintenanceLifecycle(
+      leasedServer,
+      dependencies.accountMaintenance,
+    );
+    lease?.onCompromised(() => {
+      void shutdown("lock_compromised", 1);
+    });
+    const signalSource = options.signalSource ?? process;
+    signalSource.on("SIGTERM", () => {
+      void shutdown("SIGTERM", 0);
+    });
+    signalSource.on("SIGINT", () => {
+      void shutdown("SIGINT", 0);
+    });
+    return managedServer;
+  } catch (error) {
+    lease?.release();
+    throw error;
+  }
 }

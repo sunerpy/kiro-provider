@@ -13,10 +13,7 @@ async function run(command: readonly string[]): Promise<{ exitCode: number; stde
     stderr: "pipe",
     env: { ...process.env, NO_COLOR: "1" },
   });
-  const [exitCode, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stderr).text(),
-  ]);
+  const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
   return { exitCode, stderr };
 }
 

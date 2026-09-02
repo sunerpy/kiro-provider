@@ -1,52 +1,47 @@
-import { createHash, timingSafeEqual } from "node:crypto"
-import { openAiError } from "./errors.js"
+import { createHash, timingSafeEqual } from "node:crypto";
+import { openAiError } from "./errors.js";
 
-const BEARER_SCHEME = "bearer "
+const BEARER_SCHEME = "bearer ";
 
-export type AuthGateResult =
-  | { ok: true; tenantId: string }
-  | { ok: false; response: Response }
+export type AuthGateResult = { ok: true; tenantId: string } | { ok: false; response: Response };
 export type AuthErrorFactory = (
   status: number,
   message: string,
   type: string,
   code?: string,
-) => Response
+) => Response;
 
 function matchingApiKey(candidate: string, apiKeys: readonly string[]): string | undefined {
-  const candidateBuffer = Buffer.from(candidate)
+  const candidateBuffer = Buffer.from(candidate);
   for (const apiKey of apiKeys) {
-    const configuredBuffer = Buffer.from(apiKey)
+    const configuredBuffer = Buffer.from(apiKey);
     if (
       candidateBuffer.byteLength === configuredBuffer.byteLength &&
       timingSafeEqual(candidateBuffer, configuredBuffer)
     ) {
-      return apiKey
+      return apiKey;
     }
   }
-  return undefined
+  return undefined;
 }
 
 function tenantId(apiKey: string): string {
-  return createHash("sha256")
-    .update("kiro-provider-tenant-v1\0")
-    .update(apiKey)
-    .digest("hex")
+  return createHash("sha256").update("kiro-provider-tenant-v1\0").update(apiKey).digest("hex");
 }
 
 /** RFC 7235 auth-scheme tokens are case-insensitive. */
 function hasBearerScheme(header: string): boolean {
-  return header.slice(0, BEARER_SCHEME.length).toLowerCase() === BEARER_SCHEME
+  return header.slice(0, BEARER_SCHEME.length).toLowerCase() === BEARER_SCHEME;
 }
 
 function unauthorized(makeError: AuthErrorFactory, message: string, code: string): Response {
-  const response = makeError(401, message, "authentication_error", code)
+  const response = makeError(401, message, "authentication_error", code);
   try {
-    response.headers.set("WWW-Authenticate", "Bearer")
+    response.headers.set("WWW-Authenticate", "Bearer");
   } catch {
     // A factory returning immutable headers still yields the correct envelope.
   }
-  return response
+  return response;
 }
 
 /**
@@ -61,13 +56,13 @@ export function checkApiKey(
   apiKeys: string[],
   makeError: AuthErrorFactory = openAiError,
 ): AuthGateResult {
-  const header = req.headers.get("Authorization")
+  const header = req.headers.get("Authorization");
 
   if (header === null) {
-    const apiKey = req.headers.get("x-api-key")
-    const matched = apiKey === null ? undefined : matchingApiKey(apiKey, apiKeys)
+    const apiKey = req.headers.get("x-api-key");
+    const matched = apiKey === null ? undefined : matchingApiKey(apiKey, apiKeys);
     if (matched !== undefined) {
-      return { ok: true, tenantId: tenantId(matched) }
+      return { ok: true, tenantId: tenantId(matched) };
     }
     return {
       ok: false,
@@ -76,7 +71,7 @@ export function checkApiKey(
         "Missing Authorization or x-api-key header.",
         "missing_api_key",
       ),
-    }
+    };
   }
 
   if (!hasBearerScheme(header)) {
@@ -87,18 +82,18 @@ export function checkApiKey(
         "Authorization header must use the Bearer scheme.",
         "invalid_api_key",
       ),
-    }
+    };
   }
 
-  const key = header.slice(BEARER_SCHEME.length)
+  const key = header.slice(BEARER_SCHEME.length);
 
-  const matched = matchingApiKey(key, apiKeys)
+  const matched = matchingApiKey(key, apiKeys);
   if (matched === undefined) {
     return {
       ok: false,
       response: unauthorized(makeError, "Incorrect API key provided.", "invalid_api_key"),
-    }
+    };
   }
 
-  return { ok: true, tenantId: tenantId(matched) }
+  return { ok: true, tenantId: tenantId(matched) };
 }

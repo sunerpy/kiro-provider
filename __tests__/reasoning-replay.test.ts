@@ -1,12 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
@@ -14,10 +8,7 @@ import {
   loadReasoningReplayKeyring,
   type ReasoningReplayKeyring,
 } from "../src/reasoning/keyring.js";
-import {
-  ReasoningReplayError,
-  ReasoningReplayStore,
-} from "../src/reasoning/replay-store.js";
+import { ReasoningReplayError, ReasoningReplayStore } from "../src/reasoning/replay-store.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
 const directories = new Set<string>();
@@ -124,9 +115,7 @@ describe("ReasoningReplayStore", () => {
           auth_tag: Uint8Array;
         },
         []
-      >(
-        "SELECT token_hash, fingerprint_hash, nonce, ciphertext, auth_tag FROM reasoning_replay",
-      )
+      >("SELECT token_hash, fingerprint_hash, nonce, ciphertext, auth_tag FROM reasoning_replay")
       .get();
     raw.close();
     expect(row).not.toBeNull();
@@ -157,10 +146,7 @@ describe("ReasoningReplayStore", () => {
   test("survives a database restart with the same keyring", () => {
     const first = fixture();
     const token = requireToken(
-      first.store.store(
-        { text: "restart reasoning", signature: "restart signature" },
-        baseContext,
-      ),
+      first.store.store({ text: "restart reasoning", signature: "restart signature" }, baseContext),
     );
     first.database.close();
     databases.delete(first.database);
@@ -183,11 +169,7 @@ describe("ReasoningReplayStore", () => {
     const first = fixture(firstConfig);
     const now = Date.now();
     const oldToken = requireToken(
-      first.store.store(
-        { text: "old reasoning", signature: "old signature" },
-        baseContext,
-        now,
-      ),
+      first.store.store({ text: "old reasoning", signature: "old signature" }, baseContext, now),
     );
     first.database.close();
     databases.delete(first.database);
@@ -196,7 +178,9 @@ describe("ReasoningReplayStore", () => {
     databases.add(rotatedDatabase);
     const rotatedConfig = config([`new:${key(2)}`, `old:${key(1)}`]);
     const rotatedStore = new ReasoningReplayStore(rotatedDatabase, rotatedConfig);
-    expect(rotatedStore.resolveResponses(oldToken, { ...baseContext, now: now + 1 }, 0)).toMatchObject({
+    expect(
+      rotatedStore.resolveResponses(oldToken, { ...baseContext, now: now + 1 }, 0),
+    ).toMatchObject({
       replay: { content: { text: "old reasoning", signature: "old signature" } },
     });
     requireToken(
@@ -255,10 +239,9 @@ describe("ReasoningReplayStore", () => {
     if (!row) throw new TypeError("Expected an encrypted replay row");
     const tampered = Uint8Array.from(row.ciphertext);
     tampered[0] = (tampered[0] ?? 0) ^ 0xff;
-    raw.query("UPDATE reasoning_replay SET ciphertext = ? WHERE token_hash = ?").run(
-      tampered,
-      row.token_hash,
-    );
+    raw
+      .query("UPDATE reasoning_replay SET ciphertext = ? WHERE token_hash = ?")
+      .run(tampered, row.token_hash);
     raw.close();
 
     expectReplayError(
@@ -296,14 +279,16 @@ describe("ReasoningReplayStore", () => {
         ),
       "reasoning_replay_ambiguous",
     );
-    expect(store.resolveChat(reasoningText, { ...baseContext, accountId: "account-a" }, 2)).toEqual({
-      accountId: "account-a",
-      conversationId: "conversation-a",
-      replay: {
-        insertBeforeMessage: 2,
-        content: { kind: "reasoning_text", text: reasoningText, signature },
+    expect(store.resolveChat(reasoningText, { ...baseContext, accountId: "account-a" }, 2)).toEqual(
+      {
+        accountId: "account-a",
+        conversationId: "conversation-a",
+        replay: {
+          insertBeforeMessage: 2,
+          content: { kind: "reasoning_text", text: reasoningText, signature },
+        },
       },
-    });
+    );
     expectReplayError(
       () =>
         store.resolveChat(
@@ -318,9 +303,7 @@ describe("ReasoningReplayStore", () => {
   test("round-trips redacted bytes and rejects incomplete or ambiguous captures", () => {
     const { path, store } = fixture();
     const bytes = Uint8Array.from([0, 1, 2, 3, 127, 128, 254, 255]);
-    const token = requireToken(
-      store.store({ text: "", redactedContent: bytes }, baseContext),
-    );
+    const token = requireToken(store.store({ text: "", redactedContent: bytes }, baseContext));
     expect(store.resolveResponses(token, baseContext, 4)).toEqual({
       accountId: baseContext.accountId,
       conversationId: baseContext.conversationId,
@@ -340,7 +323,9 @@ describe("ReasoningReplayStore", () => {
     );
 
     const raw = openRaw(path);
-    const count = raw.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM reasoning_replay").get();
+    const count = raw
+      .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM reasoning_replay")
+      .get();
     raw.close();
     expect(count?.count).toBe(1);
   });
@@ -388,16 +373,20 @@ describe("ReasoningReplayStore", () => {
         ),
       "reasoning_replay_not_found",
     );
-    expect(store.resolveResponses(
-      token1,
-      { ...baseContext, outputFingerprint: "output-one", now: now + 4 },
-      0,
-    )).toMatchObject({ accountId: baseContext.accountId });
-    expect(store.resolveResponses(
-      token3,
-      { ...baseContext, outputFingerprint: "output-three", now: now + 4 },
-      0,
-    )).toMatchObject({ accountId: baseContext.accountId });
+    expect(
+      store.resolveResponses(
+        token1,
+        { ...baseContext, outputFingerprint: "output-one", now: now + 4 },
+        0,
+      ),
+    ).toMatchObject({ accountId: baseContext.accountId });
+    expect(
+      store.resolveResponses(
+        token3,
+        { ...baseContext, outputFingerprint: "output-three", now: now + 4 },
+        0,
+      ),
+    ).toMatchObject({ accountId: baseContext.accountId });
 
     expect(database.pruneReasoningReplay(now + 13, 2)).toBe(2);
     expect(database.activeReasoningReplayKeyIds(now + 13)).toEqual([]);

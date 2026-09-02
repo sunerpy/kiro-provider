@@ -1,30 +1,27 @@
-import { Database } from 'bun:sqlite'
-import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import type { ManagedAccount } from '../src/kiro/types.js'
-import {
-  AccountsDatabase,
-  type StoredAccount
-} from '../src/storage/accounts-db.js'
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ManagedAccount } from "../src/kiro/types.js";
+import { AccountsDatabase, type StoredAccount } from "../src/storage/accounts-db.js";
 
-const temporaryDirectories: string[] = []
-const openDatabases: AccountsDatabase[] = []
+const temporaryDirectories: string[] = [];
+const openDatabases: AccountsDatabase[] = [];
 
 function account(overrides: Partial<ManagedAccount> = {}): ManagedAccount {
   return {
-    id: 'account-1',
-    email: 'builder@example.com',
-    authMethod: 'idc',
-    region: 'us-east-1',
-    oidcRegion: 'us-west-2',
-    clientId: 'client-id',
-    clientSecret: 'client-secret',
-    profileArn: 'arn:aws:codewhisperer:us-east-1:123456789012:profile/test',
-    startUrl: 'https://example.awsapps.com/start',
-    refreshToken: 'refresh-token-1',
-    accessToken: 'access-token-1',
+    id: "account-1",
+    email: "builder@example.com",
+    authMethod: "idc",
+    region: "us-east-1",
+    oidcRegion: "us-west-2",
+    clientId: "client-id",
+    clientSecret: "client-secret",
+    profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/test",
+    startUrl: "https://example.awsapps.com/start",
+    refreshToken: "refresh-token-1",
+    accessToken: "access-token-1",
     expiresAt: 2_000_000_000_000,
     rateLimitResetTime: 0,
     isHealthy: true,
@@ -34,34 +31,34 @@ function account(overrides: Partial<ManagedAccount> = {}): ManagedAccount {
     overageCount: 1,
     lastSync: 1_700_000_000_000,
     lastUsed: 1_700_000_000_001,
-    ...overrides
-  }
+    ...overrides,
+  };
 }
 
 function createDatabasePair(): readonly [AccountsDatabase, AccountsDatabase, string] {
-  const directory = mkdtempSync(join(tmpdir(), 'kiro-provider-accounts-'))
-  const path = join(directory, 'accounts.db')
-  const first = new AccountsDatabase(path)
-  const second = new AccountsDatabase(path)
+  const directory = mkdtempSync(join(tmpdir(), "kiro-provider-accounts-"));
+  const path = join(directory, "accounts.db");
+  const first = new AccountsDatabase(path);
+  const second = new AccountsDatabase(path);
 
-  temporaryDirectories.push(directory)
-  openDatabases.push(first, second)
-  return [first, second, path]
+  temporaryDirectories.push(directory);
+  openDatabases.push(first, second);
+  return [first, second, path];
 }
 
 afterEach(() => {
-  for (const database of openDatabases.splice(0)) database.close()
+  for (const database of openDatabases.splice(0)) database.close();
   for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true })
+    rmSync(directory, { recursive: true, force: true });
   }
-})
+});
 
-describe('AccountsDatabase', () => {
-  test('migrates a legacy accounts table and preserves CAS updates', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kiro-provider-legacy-'))
-    const path = join(directory, 'accounts.db')
-    temporaryDirectories.push(directory)
-    const legacy = new Database(path, { create: true })
+describe("AccountsDatabase", () => {
+  test("migrates a legacy accounts table and preserves CAS updates", () => {
+    const directory = mkdtempSync(join(tmpdir(), "kiro-provider-legacy-"));
+    const path = join(directory, "accounts.db");
+    temporaryDirectories.push(directory);
+    const legacy = new Database(path, { create: true });
     legacy.exec(`
       CREATE TABLE accounts (
         id TEXT PRIMARY KEY, email TEXT NOT NULL, auth_method TEXT NOT NULL,
@@ -80,267 +77,240 @@ describe('AccountsDatabase', () => {
         'legacy-1', 'legacy@example.com', 'desktop', 'us-east-1',
         'refresh-token', 'access-token', 2000000000000
       );
-    `)
-    legacy.close()
+    `);
+    legacy.close();
 
-    const database = new AccountsDatabase(path)
-    openDatabases.push(database)
-    const migrated = new Database(path, { readonly: true })
+    const database = new AccountsDatabase(path);
+    openDatabases.push(database);
+    const migrated = new Database(path, { readonly: true });
     const columns = migrated
-      .query<{ name: string }, []>('PRAGMA table_info(accounts)')
+      .query<{ name: string }, []>("PRAGMA table_info(accounts)")
       .all()
-      .map(({ name }) => name)
-    migrated.close()
-    const stored = database.getById('legacy-1')
-    expect(stored).toBeDefined()
-    if (stored === undefined) return
+      .map(({ name }) => name);
+    migrated.close();
+    const stored = database.getById("legacy-1");
+    expect(stored).toBeDefined();
+    if (stored === undefined) return;
 
-    const changes = database.updateExistingAccounts([
-      { ...stored, accessToken: 'updated-token' }
-    ])
+    const changes = database.updateExistingAccounts([{ ...stored, accessToken: "updated-token" }]);
 
-    expect(columns).toContain('generation')
-    expect(stored.generation).toBe(1)
-    expect(changes).toBe(1)
-    expect(database.getById('legacy-1')).toMatchObject({
-      accessToken: 'updated-token',
-      generation: 2
-    })
-  })
+    expect(columns).toContain("generation");
+    expect(stored.generation).toBe(1);
+    expect(changes).toBe(1);
+    expect(database.getById("legacy-1")).toMatchObject({
+      accessToken: "updated-token",
+      generation: 2,
+    });
+  });
 
-  test('supports insert, read, CAS update, and tombstone removal', () => {
-    const [database] = createDatabasePair()
+  test("supports insert, read, CAS update, and tombstone removal", () => {
+    const [database] = createDatabasePair();
 
-    const inserted = database.insertAccount(account())
-    const beforeUpdate = database.getAccounts()
-    const accountBeforeUpdate = beforeUpdate[0]
-    expect(accountBeforeUpdate).toBeDefined()
-    if (accountBeforeUpdate === undefined) return
+    const inserted = database.insertAccount(account());
+    const beforeUpdate = database.getAccounts();
+    const accountBeforeUpdate = beforeUpdate[0];
+    expect(accountBeforeUpdate).toBeDefined();
+    if (accountBeforeUpdate === undefined) return;
     const updated = database.updateExistingAccounts([
-      { ...accountBeforeUpdate, accessToken: 'access-token-2' }
-    ])
-    const afterUpdate = database.getById('account-1')
-    database.removeAccount('account-1')
+      { ...accountBeforeUpdate, accessToken: "access-token-2" },
+    ]);
+    const afterUpdate = database.getById("account-1");
+    database.removeAccount("account-1");
 
-    expect(inserted.generation).toBe(1)
-    expect(beforeUpdate).toHaveLength(1)
+    expect(inserted.generation).toBe(1);
+    expect(beforeUpdate).toHaveLength(1);
     expect(beforeUpdate[0]).toMatchObject({
-      accessToken: 'access-token-1',
+      accessToken: "access-token-1",
       generation: 1,
       usedCount: 3,
-      overageCount: 1
-    })
-    expect(updated).toBe(1)
-    expect(afterUpdate).toMatchObject({ accessToken: 'access-token-2', generation: 2 })
-    expect(database.getAccounts()).toEqual([])
-    expect(database.getById('account-1')).toBeUndefined()
-  })
+      overageCount: 1,
+    });
+    expect(updated).toBe(1);
+    expect(afterUpdate).toMatchObject({ accessToken: "access-token-2", generation: 2 });
+    expect(database.getAccounts()).toEqual([]);
+    expect(database.getById("account-1")).toBeUndefined();
+  });
 
-  test('does not resurrect an account when another connection deletes it', () => {
-    const [reader, remover] = createDatabasePair()
-    reader.insertAccount(account())
-    const stale = reader.getById('account-1')
-    expect(stale).toBeDefined()
-    if (stale === undefined) return
+  test("does not resurrect an account when another connection deletes it", () => {
+    const [reader, remover] = createDatabasePair();
+    reader.insertAccount(account());
+    const stale = reader.getById("account-1");
+    expect(stale).toBeDefined();
+    if (stale === undefined) return;
 
-    remover.removeAccount(stale.id)
-    const changes = reader.updateExistingAccounts([
-      { ...stale, accessToken: 'stale-token' }
-    ])
+    remover.removeAccount(stale.id);
+    const changes = reader.updateExistingAccounts([{ ...stale, accessToken: "stale-token" }]);
 
-    expect(changes).toBe(0)
-    expect(reader.getById(stale.id)).toBeUndefined()
-    expect(reader.getAccounts()).toEqual([])
-  })
+    expect(changes).toBe(0);
+    expect(reader.getById(stale.id)).toBeUndefined();
+    expect(reader.getAccounts()).toEqual([]);
+  });
 
-  test('rejects a stale write after another connection refreshes the row', () => {
-    const [staleWriter, refresher] = createDatabasePair()
-    staleWriter.insertAccount(account())
-    const stale = staleWriter.getById('account-1')
-    const fresh = refresher.getById('account-1')
-    expect(stale).toBeDefined()
-    expect(fresh).toBeDefined()
-    if (stale === undefined || fresh === undefined) return
+  test("rejects a stale write after another connection refreshes the row", () => {
+    const [staleWriter, refresher] = createDatabasePair();
+    staleWriter.insertAccount(account());
+    const stale = staleWriter.getById("account-1");
+    const fresh = refresher.getById("account-1");
+    expect(stale).toBeDefined();
+    expect(fresh).toBeDefined();
+    if (stale === undefined || fresh === undefined) return;
 
-    expect(
-      refresher.updateExistingAccounts([{ ...fresh, accessToken: 'fresh-token' }])
-    ).toBe(1)
+    expect(refresher.updateExistingAccounts([{ ...fresh, accessToken: "fresh-token" }])).toBe(1);
     const staleChanges = staleWriter.updateExistingAccounts([
-      { ...stale, accessToken: 'stale-token' }
-    ])
+      { ...stale, accessToken: "stale-token" },
+    ]);
 
-    expect(staleChanges).toBe(0)
+    expect(staleChanges).toBe(0);
     expect(staleWriter.getById(stale.id)).toMatchObject({
-      accessToken: 'fresh-token',
-      generation: 2
-    })
-  })
+      accessToken: "fresh-token",
+      generation: 2,
+    });
+  });
 
-  test('rejects generation one after delete and same-id relogin', () => {
-    const [staleWriter, reloginWriter] = createDatabasePair()
-    const initial = staleWriter.insertAccount(account())
-    const stale = staleWriter.getById(initial.id)
-    expect(stale).toBeDefined()
-    if (stale === undefined) return
+  test("rejects generation one after delete and same-id relogin", () => {
+    const [staleWriter, reloginWriter] = createDatabasePair();
+    const initial = staleWriter.insertAccount(account());
+    const stale = staleWriter.getById(initial.id);
+    expect(stale).toBeDefined();
+    if (stale === undefined) return;
 
-    reloginWriter.removeAccount(stale.id)
+    reloginWriter.removeAccount(stale.id);
     const relogged = reloginWriter.insertAccount(
-      account({ refreshToken: 'refresh-token-2', accessToken: 'relogin-token' })
-    )
+      account({ refreshToken: "refresh-token-2", accessToken: "relogin-token" }),
+    );
     const staleChanges = staleWriter.updateExistingAccounts([
-      { ...stale, accessToken: 'stale-token' }
-    ])
+      { ...stale, accessToken: "stale-token" },
+    ]);
 
-    expect(stale.generation).toBe(1)
-    expect(relogged.generation).toBe(2)
-    expect(staleChanges).toBe(0)
+    expect(stale.generation).toBe(1);
+    expect(relogged.generation).toBe(2);
+    expect(staleChanges).toBe(0);
     expect(staleWriter.getById(stale.id)).toMatchObject({
-      refreshToken: 'refresh-token-2',
-      accessToken: 'relogin-token',
-      generation: 2
-    })
-  })
+      refreshToken: "refresh-token-2",
+      accessToken: "relogin-token",
+      generation: 2,
+    });
+  });
 
-  test('clears the tombstone and advances generation on deliberate relogin', () => {
-    const [database] = createDatabasePair()
-    const initial = database.insertAccount(account())
-    database.removeAccount(initial.id)
+  test("clears the tombstone and advances generation on deliberate relogin", () => {
+    const [database] = createDatabasePair();
+    const initial = database.insertAccount(account());
+    database.removeAccount(initial.id);
 
     const relogged = database.insertAccount(
-      account({ refreshToken: 'refresh-token-2', accessToken: 'relogin-token' })
-    )
+      account({ refreshToken: "refresh-token-2", accessToken: "relogin-token" }),
+    );
 
-    expect(initial.generation).toBe(1)
-    expect(relogged.generation).toBe(2)
-    expect(database.getAccounts()).toEqual([relogged])
-    expect(
-      database.updateExistingAccounts([{ ...relogged, accessToken: 'updated-token' }])
-    ).toBe(1)
-  })
+    expect(initial.generation).toBe(1);
+    expect(relogged.generation).toBe(2);
+    expect(database.getAccounts()).toEqual([relogged]);
+    expect(database.updateExistingAccounts([{ ...relogged, accessToken: "updated-token" }])).toBe(
+      1,
+    );
+  });
 
-  test('never inserts an account through updateExistingAccounts', () => {
-    const [database] = createDatabasePair()
-    const missing: StoredAccount = { ...account(), generation: 1 }
+  test("never inserts an account through updateExistingAccounts", () => {
+    const [database] = createDatabasePair();
+    const missing: StoredAccount = { ...account(), generation: 1 };
 
-    expect(database.updateExistingAccounts([missing])).toBe(0)
-    expect(database.getAccounts()).toEqual([])
-  })
+    expect(database.updateExistingAccounts([missing])).toBe(0);
+    expect(database.getAccounts()).toEqual([]);
+  });
 
-  test('atomically claims and reuses one session binding across database connections', () => {
-    const [first, second] = createDatabasePair()
-    first.insertAccount(account({ id: 'account-a' }))
-    first.insertAccount(account({ id: 'account-b' }))
+  test("atomically claims and reuses one session binding across database connections", () => {
+    const [first, second] = createDatabasePair();
+    first.insertAccount(account({ id: "account-a" }));
+    first.insertAccount(account({ id: "account-b" }));
 
     const initial = first.claimSessionAffinity(
-      'session-key',
-      'account-a',
-      'conversation-a',
+      "session-key",
+      "account-a",
+      "conversation-a",
       1_000,
       10_000,
-      100
-    )
+      100,
+    );
     const collided = second.claimSessionAffinity(
-      'session-key',
-      'account-b',
-      'conversation-b',
+      "session-key",
+      "account-b",
+      "conversation-b",
       2_000,
       10_000,
-      100
-    )
+      100,
+    );
 
     expect(initial).toMatchObject({
-      accountId: 'account-a',
-      conversationId: 'conversation-a',
-      createdAt: 1_000
-    })
+      accountId: "account-a",
+      conversationId: "conversation-a",
+      createdAt: 1_000,
+    });
     expect(collided).toMatchObject({
-      accountId: 'account-a',
-      conversationId: 'conversation-a',
+      accountId: "account-a",
+      conversationId: "conversation-a",
       createdAt: 1_000,
       lastSeen: 2_000,
-      expiresAt: 12_000
-    })
-  })
+      expiresAt: 12_000,
+    });
+  });
 
-  test('rebinds failed sessions, expires old bindings, and prunes least-recent entries', () => {
-    const [database] = createDatabasePair()
-    database.insertAccount(account({ id: 'account-a' }))
-    database.insertAccount(account({ id: 'account-b' }))
-    database.claimSessionAffinity('oldest', 'account-a', 'conversation-1', 1_000, 10_000, 2)
-    database.claimSessionAffinity('middle', 'account-a', 'conversation-2', 2_000, 10_000, 2)
-    database.claimSessionAffinity('newest', 'account-a', 'conversation-3', 3_000, 10_000, 2)
+  test("rebinds failed sessions, expires old bindings, and prunes least-recent entries", () => {
+    const [database] = createDatabasePair();
+    database.insertAccount(account({ id: "account-a" }));
+    database.insertAccount(account({ id: "account-b" }));
+    database.claimSessionAffinity("oldest", "account-a", "conversation-1", 1_000, 10_000, 2);
+    database.claimSessionAffinity("middle", "account-a", "conversation-2", 2_000, 10_000, 2);
+    database.claimSessionAffinity("newest", "account-a", "conversation-3", 3_000, 10_000, 2);
 
     const rebound = database.rebindSessionAffinity(
-      'middle',
-      'account-b',
-      'conversation-rebound',
+      "middle",
+      "account-b",
+      "conversation-rebound",
       4_000,
       2_000,
-      2
-    )
+      2,
+    );
 
-    expect(database.getSessionAffinity('oldest', 4_000)).toBeUndefined()
+    expect(database.getSessionAffinity("oldest", 4_000)).toBeUndefined();
     expect(rebound).toMatchObject({
-      accountId: 'account-b',
-      conversationId: 'conversation-rebound'
-    })
-    expect(database.getSessionAffinity('middle', 6_000)).toBeUndefined()
-    expect(database.getSessionAffinity('newest', 4_000)).toBeDefined()
-  })
+      accountId: "account-b",
+      conversationId: "conversation-rebound",
+    });
+    expect(database.getSessionAffinity("middle", 6_000)).toBeUndefined();
+    expect(database.getSessionAffinity("newest", 4_000)).toBeDefined();
+  });
 
-  test('removing an account removes its persisted session affinities', () => {
-    const [database] = createDatabasePair()
-    database.insertAccount(account({ id: 'account-a' }))
-    database.claimSessionAffinity(
-      'session-key',
-      'account-a',
-      'conversation-a',
-      1_000,
-      10_000,
-      100
-    )
+  test("removing an account removes its persisted session affinities", () => {
+    const [database] = createDatabasePair();
+    database.insertAccount(account({ id: "account-a" }));
+    database.claimSessionAffinity("session-key", "account-a", "conversation-a", 1_000, 10_000, 100);
 
-    database.removeAccount('account-a')
+    database.removeAccount("account-a");
 
-    expect(database.getSessionAffinity('session-key', 2_000)).toBeUndefined()
-  })
+    expect(database.getSessionAffinity("session-key", 2_000)).toBeUndefined();
+  });
 
-  test('resolves output lineage only when one active binding is unambiguous', () => {
-    const [database] = createDatabasePair()
-    database.recordOutputLineage(
-      'lineage-key',
-      'account-a',
-      'conversation-a',
-      1_000,
-      10_000,
-      100
-    )
+  test("resolves output lineage only when one active binding is unambiguous", () => {
+    const [database] = createDatabasePair();
+    database.recordOutputLineage("lineage-key", "account-a", "conversation-a", 1_000, 10_000, 100);
 
-    expect(database.resolveOutputLineage('lineage-key', 2_000)).toMatchObject({
-      accountId: 'account-a',
-      conversationId: 'conversation-a'
-    })
+    expect(database.resolveOutputLineage("lineage-key", 2_000)).toMatchObject({
+      accountId: "account-a",
+      conversationId: "conversation-a",
+    });
 
-    database.recordOutputLineage(
-      'lineage-key',
-      'account-b',
-      'conversation-b',
-      2_000,
-      10_000,
-      100
-    )
+    database.recordOutputLineage("lineage-key", "account-b", "conversation-b", 2_000, 10_000, 100);
 
-    expect(database.resolveOutputLineage('lineage-key', 3_000)).toBeUndefined()
-    expect(database.resolveOutputLineage('lineage-key', 12_000)).toBeUndefined()
-  })
+    expect(database.resolveOutputLineage("lineage-key", 3_000)).toBeUndefined();
+    expect(database.resolveOutputLineage("lineage-key", 12_000)).toBeUndefined();
+  });
 
-  test('restricts the database and existing WAL sidecars to mode 0600', () => {
-    const [database, , path] = createDatabasePair()
-    database.insertAccount(account())
+  test("restricts the database and existing WAL sidecars to mode 0600", () => {
+    const [database, , path] = createDatabasePair();
+    database.insertAccount(account());
 
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    expect(statSync(path).mode & 0o777).toBe(0o600);
     for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
-      if (existsSync(sidecar)) expect(statSync(sidecar).mode & 0o777).toBe(0o600)
+      if (existsSync(sidecar)) expect(statSync(sidecar).mode & 0o777).toBe(0o600);
     }
-  })
-})
+  });
+});

@@ -163,7 +163,6 @@ function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
   return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
 }
 
-
 /**
  * Alternatives the classifier may switch to: accounts that are eligible for
  * the model AND selectable right now. Counting rate-limited or unhealthy
@@ -213,13 +212,8 @@ function refreshFailureResponse(): CompletionResult {
   };
 }
 
-function persistQuotaExhaustion(
-  options: RunChatCompletionOptions,
-  account: ManagedAccount,
-): void {
-  const recheckAfter =
-    Date.now() +
-    options.config.quota_recheck_interval_ms;
+function persistQuotaExhaustion(options: RunChatCompletionOptions, account: ManagedAccount): void {
+  const recheckAfter = Date.now() + options.config.quota_recheck_interval_ms;
   if (options.accountManager.markQuotaExhausted) {
     options.accountManager.markQuotaExhausted(account, recheckAfter);
   } else {
@@ -231,9 +225,7 @@ function persistQuotaExhaustion(
   });
 }
 
-function modelAvailabilityError(
-  options: RunChatCompletionOptions,
-): CompletionResult {
+function modelAvailabilityError(options: RunChatCompletionOptions): CompletionResult {
   const known = options.modelCapabilities?.isKnownModel(options.model) ?? false;
   return {
     kind: "response",
@@ -249,10 +241,7 @@ function modelAvailabilityError(
   };
 }
 
-function runtimeEndpoint(
-  options: RunChatCompletionOptions,
-  region: string,
-): string | undefined {
+function runtimeEndpoint(options: RunChatCompletionOptions, region: string): string | undefined {
   if (options.config.test_upstream_endpoint) {
     return options.config.test_upstream_endpoint;
   }
@@ -357,11 +346,7 @@ function resolveReplayState(
             context,
             replay.insertBeforeMessage,
           )
-        : store.resolveChat(
-            replay.lookup.reasoningText,
-            context,
-            replay.insertBeforeMessage,
-          );
+        : store.resolveChat(replay.lookup.reasoningText, context, replay.insertBeforeMessage);
     if (
       (accountId !== undefined && accountId !== resolved.accountId) ||
       (conversationId !== undefined && conversationId !== resolved.conversationId)
@@ -516,9 +501,7 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
       ? options.affinityStore.getSessionAffinity(options.affinity.keyHash)
       : undefined;
   const lineageBinding =
-    binding === undefined &&
-    options.lineage?.lookupKeyHash !== undefined &&
-    options.affinityStore
+    binding === undefined && options.lineage?.lookupKeyHash !== undefined && options.affinityStore
       ? options.affinityStore.resolveOutputLineage(options.lineage.lookupKeyHash)
       : undefined;
   const effectiveBinding = binding ?? lineageBinding;
@@ -568,10 +551,8 @@ function excludeAfterRefreshFailure(
   failure: RefreshFailure,
 ): "retry" | "switch" {
   const reason = refreshFailureReason(failure);
-  const refreshTokenDead =
-    failure instanceof KiroTokenRefreshError && isRefreshTokenDead(reason);
-  const networkError =
-    failure instanceof KiroTokenRefreshError && failure.code === "NETWORK_ERROR";
+  const refreshTokenDead = failure instanceof KiroTokenRefreshError && isRefreshTokenDead(reason);
+  const networkError = failure instanceof KiroTokenRefreshError && failure.code === "NETWORK_ERROR";
   state.lastRefreshFailure = failure;
   if (networkError && !state.refreshNetworkRetriedAccountIds.has(failed.id)) {
     state.refreshNetworkRetriedAccountIds.add(failed.id);
@@ -901,12 +882,7 @@ async function runAttempt(
     const auth = options.accountManager.toAuthDetails(account);
     if (options.modelCapabilities) {
       const availability = await abortable(
-        options.modelCapabilities.ensureAccountModel(
-          account,
-          auth,
-          options.model,
-          signal,
-        ),
+        options.modelCapabilities.ensureAccountModel(account, auth, options.model, signal),
         signal,
       );
       if (!availability.supported) {
@@ -967,11 +943,7 @@ async function runAttempt(
       client.send(command, { abortSignal: AbortSignal.any([signal, attempt.signal]) }),
       signal,
     );
-    const captureOptions = reasoningCaptureOptions(
-      options,
-      account.id,
-      prepared.conversationId,
-    );
+    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId);
     if (options.stream) {
       return {
         kind: "result",
@@ -1142,10 +1114,7 @@ async function applyClassification(
     case "switch":
       if (state.replayLocked) return returning(replayUnavailable());
       state.requestExcludedAccountIds.add(account.id);
-      if (
-        error.status === 401 ||
-        (error.status === 403 && isAccessTokenError(error.message))
-      ) {
+      if (error.status === 401 || (error.status === 403 && isAccessTokenError(error.message))) {
         state.lastAuthenticationFailure = error;
       }
       if (error.status === 402) state.lastQuotaFailure = error;
@@ -1159,8 +1128,7 @@ async function applyClassification(
       } else {
         options.accountManager.markRateLimited(
           account,
-          Date.now() +
-            (classification.retryAfterMs ?? options.config.rate_limit_retry_delay_ms),
+          Date.now() + (classification.retryAfterMs ?? options.config.rate_limit_retry_delay_ms),
         );
       }
       forgetPreferredAccount(state);
@@ -1261,15 +1229,9 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
   let streamOwnsResources = false;
   try {
     if (options.affinity) {
-      releaseSession = await acquireSessionQueue(
-        options.affinity.keyHash,
-        deadline.signal,
-      );
+      releaseSession = await acquireSessionQueue(options.affinity.keyHash, deadline.signal);
     } else if (options.lineage?.lookupKeyHash !== undefined) {
-      releaseSession = await acquireSessionQueue(
-        options.lineage.lookupKeyHash,
-        deadline.signal,
-      );
+      releaseSession = await acquireSessionQueue(options.lineage.lookupKeyHash, deadline.signal);
     }
     const result = await executeLoop(options, deadline.signal);
     if (result.kind === "response") return result.response;
@@ -1293,13 +1255,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     return response;
   } catch (error) {
     if (error instanceof RequestTransformError) {
-      return openAiError(
-        400,
-        error.message,
-        "invalid_request_error",
-        error.code,
-        error.param,
-      );
+      return openAiError(400, error.message, "invalid_request_error", error.code, error.param);
     }
     if (error instanceof ReasoningReplayError) {
       return openAiError(

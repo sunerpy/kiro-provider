@@ -222,9 +222,7 @@ describe("anthropic-direct signed thinking replay (B25)", () => {
     const client: PipelineSdkClient = {
       async send() {
         sends += 1;
-        throw validationException(
-          "messages.1.content.0: Invalid `signature` in `thinking` block",
-        );
+        throw validationException("messages.1.content.0: Invalid `signature` in `thinking` block");
       },
     };
 

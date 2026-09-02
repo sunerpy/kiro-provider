@@ -137,9 +137,7 @@ function asAssistantResponse(
   };
   const toolUses = [
     ...message.content.flatMap((part) =>
-      part.type === "tool_use"
-        ? [{ toolUseId: part.id, name: part.name, input: part.input }]
-        : [],
+      part.type === "tool_use" ? [{ toolUseId: part.id, name: part.name, input: part.input }] : [],
     ),
     ...message.toolCalls.map((call) => ({
       toolUseId: call.id,

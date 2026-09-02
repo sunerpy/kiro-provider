@@ -17,10 +17,7 @@ import type {
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
-import {
-  assistantOutputFingerprint,
-  type CanonicalRequest,
-} from "../src/protocol/canonical.js";
+import { assistantOutputFingerprint, type CanonicalRequest } from "../src/protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
@@ -180,9 +177,7 @@ function config(overrides: Partial<Config> = {}): Config {
 }
 
 function responseFrom(events: readonly SdkStreamEvent[]): SdkStreamResponse {
-  const hasCompletion = events.some(
-    (event) => event.metadataEvent?.tokenUsage !== undefined,
-  );
+  const hasCompletion = events.some((event) => event.metadataEvent?.tokenUsage !== undefined);
   return {
     generateAssistantResponseResponse: {
       async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
@@ -538,9 +533,7 @@ describe("runChatCompletion success paths", () => {
     // Then
     const completion = parseCanonicalCompletion(await response.json());
     expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Type")).toContain(
-      CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
-    );
+    expect(response.headers.get("Content-Type")).toContain(CANONICAL_OUTPUT_JSON_MEDIA_TYPE);
     expect(completion?.text).toBe("answer");
     expect(completion?.reasoning?.text).toBe("reason");
     expect(completion?.finishReason).toBe("stop");
@@ -579,11 +572,9 @@ describe("runChatCompletion success paths", () => {
       .map((line) => parseCanonicalOutputEventLine(line));
     const content = events
       .filter((event) => event?.type === "text_delta")
-      .map((event) => event?.type === "text_delta" ? event.text : "")
+      .map((event) => (event?.type === "text_delta" ? event.text : ""))
       .join("");
-    expect(response.headers.get("Content-Type")).toContain(
-      CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
-    );
+    expect(response.headers.get("Content-Type")).toContain(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE);
     expect(content).toBe("streamed answer");
     expect(events.at(0)?.type).toBe("started");
     expect(events.at(-1)?.type).toBe("completed");
@@ -1040,10 +1031,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       model: "gpt-5.6-sol",
       stream: false,
       config: config(),
-      accountManager: new PreferredAccountManager([
-        account("account-b"),
-        account("account-a"),
-      ]),
+      accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
       reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
@@ -1095,10 +1083,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       model: "gpt-5.6-sol",
       stream: false,
       config: config(),
-      accountManager: new PreferredAccountManager([
-        account("account-b"),
-        account("account-a"),
-      ]),
+      accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
       reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
@@ -1578,9 +1563,7 @@ describe("runChatCompletion projection and terminal errors", () => {
       accountManager: new FakeAccountManager([account("account-a")]),
       tokenRefresher: new FakeTokenRefresher(),
       makeClient: () =>
-        clientWith(async () =>
-          exactResponse([{ assistantResponseEvent: { content: "partial" } }]),
-        ),
+        clientWith(async () => exactResponse([{ assistantResponseEvent: { content: "partial" } }])),
     });
 
     expect(response.status).toBe(502);
@@ -1596,35 +1579,32 @@ describe("runChatCompletion projection and terminal errors", () => {
   test("discovers a model on one account and routes only to that account", async () => {
     const first = account("account-a");
     const second = account("account-b");
-    const capabilities = new ModelCapabilityService(
-      config(),
-      async (details) => ({
-        models:
-          details.access === second.accessToken
-            ? [
-                {
-                  modelId: "future-model",
-                  modelName: "Future Model",
-                  supportedInputTypes: ["TEXT"],
-                  tokenLimits: {
-                    maxInputTokens: 100_000,
-                    maxOutputTokens: 10_000,
-                  },
+    const capabilities = new ModelCapabilityService(config(), async (details) => ({
+      models:
+        details.access === second.accessToken
+          ? [
+              {
+                modelId: "future-model",
+                modelName: "Future Model",
+                supportedInputTypes: ["TEXT"],
+                tokenLimits: {
+                  maxInputTokens: 100_000,
+                  maxOutputTokens: 10_000,
                 },
-              ]
-            : [
-                {
-                  modelId: "auto",
-                  modelName: "Auto",
-                  supportedInputTypes: ["TEXT"],
-                  tokenLimits: {
-                    maxInputTokens: 100_000,
-                    maxOutputTokens: 10_000,
-                  },
+              },
+            ]
+          : [
+              {
+                modelId: "auto",
+                modelName: "Auto",
+                supportedInputTypes: ["TEXT"],
+                tokenLimits: {
+                  maxInputTokens: 100_000,
+                  maxOutputTokens: 10_000,
                 },
-              ],
-      }),
-    );
+              },
+            ],
+    }));
     const selectedAccounts: string[] = [];
     const response = await runChatCompletion({
       body: requestBody("future-model"),
@@ -1666,10 +1646,7 @@ describe("runChatCompletion projection and terminal errors", () => {
       model: "not-a-real-model",
       stream: false,
       config: config(),
-      accountManager: new FakeAccountManager([
-        account("account-a"),
-        account("account-b"),
-      ]),
+      accountManager: new FakeAccountManager([account("account-a"), account("account-b")]),
       tokenRefresher: new FakeTokenRefresher(),
       modelCapabilities: capabilities,
       makeClient: () => {
@@ -1710,10 +1687,7 @@ describe("runChatCompletion projection and terminal errors", () => {
   test("reuses the same account and Kiro conversation from standard history lineage", async () => {
     const affinityStore = new AccountsDatabase(":memory:");
     try {
-      const manager = new PreferredAccountManager([
-        account("account-a"),
-        account("account-b"),
-      ]);
+      const manager = new PreferredAccountManager([account("account-a"), account("account-b")]);
       const tenantId = "tenant-lineage";
       const firstBody = canonicalRequest([message("user", "first turn")], {
         protocol: "responses",

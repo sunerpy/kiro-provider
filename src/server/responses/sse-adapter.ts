@@ -133,9 +133,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     pendingFrames.push(encoder.encode(formatSseEvent(create(sequenceNumber))));
     sequenceNumber += 1;
   };
-  const closeIfDrained = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): void => {
+  const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
     if (
       streamClosed ||
       terminalOutcome === undefined ||
@@ -147,9 +145,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     streamClosed = true;
     controller.close();
   };
-  const flushOne = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): boolean => {
+  const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     if (streamClosed) return false;
     const desiredSize = controller.desiredSize;
     if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
@@ -325,9 +321,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           sequenceNumber: sequence,
         }),
       );
-      emit((sequence) =>
-        outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-      );
+      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
       completedOutput.set(outputIndex, item);
       return;
     }
@@ -362,9 +356,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       summary: [summary],
       ...(encryptedContent !== undefined ? { encrypted_content: encryptedContent } : {}),
     };
-    emit((sequence) =>
-      outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-    );
+    emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
     completedOutput.set(outputIndex, item);
   };
   const closeReasoning = (): void => {
@@ -428,9 +420,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               sequenceNumber: sequence,
             }),
           );
-        } else if (
-          !couldStillBeGptSolReasoningPlaceholder(options.model, run.text)
-        ) {
+        } else if (!couldStillBeGptSolReasoningPlaceholder(options.model, run.text)) {
           startReasoning(run);
         }
         return;
@@ -500,10 +490,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     }
   };
 
-  const complete = (
-    usage: CanonicalOutputUsage,
-    finishReason: "stop" | "tool_calls",
-  ): void => {
+  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
     const invalidTool = [...tools.values()].some(
       (tool) => tool.id.length === 0 || tool.name.length === 0,
     );
@@ -512,8 +499,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       return;
     }
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
-    const expectedFinishReason =
-      orderedTools.length > 0 ? "tool_calls" : "stop";
+    const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
       failProtocol("Upstream finish reason does not match its output");
       return;
@@ -521,11 +507,11 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     // The canonical stream only carries validated JSON arguments; a no-argument
     // Kiro tool call already arrives as "{}" from the SDK transformer.
     const restorableTools = orderedTools.map(([, tool]) => ({
-        itemId: tool.itemId,
-        id: tool.id,
-        name: tool.name,
-        arguments: tool.arguments,
-      }));
+      itemId: tool.itemId,
+      id: tool.id,
+      name: tool.name,
+      arguments: tool.arguments,
+    }));
     const restored = options.bridge?.restoreCalls(restorableTools) ?? {
       ok: true as const,
       items: restorableTools.map((tool) => ({
@@ -593,9 +579,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           sequenceNumber: sequence,
         }),
       );
-      emit((sequence) =>
-        outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-      );
+      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
       completedOutput.set(outputIndex, item);
     }
     for (const item of restored.items) {
@@ -700,11 +684,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -740,11 +720,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -767,9 +743,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           if (terminalOutcome !== undefined) return;
           const failure = normalizeStreamFailure(error);
           beginTerminal(
-            failure.disposition === "fatal"
-              ? "upstream-protocol-error"
-              : "upstream-error",
+            failure.disposition === "fatal" ? "upstream-protocol-error" : "upstream-error",
             error,
             toTerminalFailure(failure),
           );

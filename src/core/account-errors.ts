@@ -7,28 +7,28 @@
  * Non-string codes (DOMException.code is a number) are ignored.
  */
 export function errorCode(error: unknown): string | undefined {
-	return typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string"
-		? error.code
-		: undefined;
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : undefined;
 }
 
 export function errorReason(error: unknown): string {
-	const code = errorCode(error);
-	const message = error instanceof Error ? error.message : String(error);
-	return code ? `${code}: ${message}` : message;
+  const code = errorCode(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return code ? `${code}: ${message}` : message;
 }
 
 export type ErrorAuditFields = Readonly<
-	Record<string, string | number | boolean | null | undefined>
+  Record<string, string | number | boolean | null | undefined>
 >;
 
 /** Audit-log fields for a failure: the error class name and its string code. */
 export function errorFields(error: unknown): ErrorAuditFields {
-	return {
-		error_name: error instanceof Error ? error.name : "UnknownError",
-		error_code: errorCode(error),
-	};
+  return {
+    error_name: error instanceof Error ? error.name : "UnknownError",
+    error_code: errorCode(error),
+  };
 }

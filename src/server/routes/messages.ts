@@ -10,10 +10,7 @@ import {
 } from "../../protocol/output.js";
 import { type AnthropicErrorType, anthropicError } from "../anthropic/errors.js";
 import { adaptAnthropicMessagesRequest } from "../anthropic/request-adapter.js";
-import {
-  anthropicMessageResponse,
-  anthropicSseAdapter,
-} from "../anthropic/response-adapter.js";
+import { anthropicMessageResponse, anthropicSseAdapter } from "../anthropic/response-adapter.js";
 import {
   anthropicIngressErrors,
   buildPipelineOptions,
@@ -22,10 +19,7 @@ import {
   readJsonBody,
   withRetryAfter,
 } from "../ingress.js";
-import {
-  anthropicSessionAffinity,
-  canonicalSessionLineage,
-} from "../session-affinity.js";
+import { anthropicSessionAffinity, canonicalSessionLineage } from "../session-affinity.js";
 
 export type MessagesDependencies = RouteDependencies;
 
@@ -54,9 +48,7 @@ function pipelineErrorDetails(value: unknown): {
   }
   const error = value.error;
   return {
-    ...("message" in error && typeof error.message === "string"
-      ? { message: error.message }
-      : {}),
+    ...("message" in error && typeof error.message === "string" ? { message: error.message } : {}),
     ...("code" in error && typeof error.code === "string" ? { code: error.code } : {}),
   };
 }
@@ -99,19 +91,18 @@ export async function handleMessages(
   dependencies: MessagesDependencies,
 ): Promise<Response> {
   const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
-  const bodyResult = await readJsonBody(
-    request,
-    config,
-    ingress.signals,
-    anthropicIngressErrors,
-  );
+  const bodyResult = await readJsonBody(request, config, ingress.signals, anthropicIngressErrors);
   if (!bodyResult.ok) {
     ingress.finalize();
     return bodyResult.response;
   }
-  const adapted = adaptAnthropicMessagesRequest(bodyResult.value, {
-    requireMaxTokens: true,
-  }, config.protocol_projection_mode);
+  const adapted = adaptAnthropicMessagesRequest(
+    bodyResult.value,
+    {
+      requireMaxTokens: true,
+    },
+    config.protocol_projection_mode,
+  );
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
       protocol: "anthropic-messages",
@@ -127,10 +118,7 @@ export async function handleMessages(
     dependencies.tenantId,
     config.session_affinity_mode,
   );
-  const lineage = canonicalSessionLineage(
-    adapted.value.body,
-    dependencies.tenantId,
-  );
+  const lineage = canonicalSessionLineage(adapted.value.body, dependencies.tenantId);
 
   let streamOwnsRouteResources = false;
   try {
@@ -194,18 +182,10 @@ export async function handleMessages(
   }
 }
 
-export async function handleMessageTokenCount(
-  request: Request,
-  config: Config,
-): Promise<Response> {
+export async function handleMessageTokenCount(request: Request, config: Config): Promise<Response> {
   const ingress = createIngress(request, config);
   try {
-    const bodyResult = await readJsonBody(
-      request,
-      config,
-      ingress.signals,
-      anthropicIngressErrors,
-    );
+    const bodyResult = await readJsonBody(request, config, ingress.signals, anthropicIngressErrors);
     if (!bodyResult.ok) return bodyResult.response;
     const adapted = adaptAnthropicMessagesRequest(
       bodyResult.value,

@@ -54,9 +54,7 @@ export function createPipelineStreamResponse(
   let lastEventType: string | undefined;
   const eventTypeCountsJson = (): string =>
     JSON.stringify(Object.fromEntries([...eventTypeCounts.entries()].sort()));
-  const streamAuditFields = (): Readonly<
-    Record<string, string | number | undefined>
-  > => ({
+  const streamAuditFields = (): Readonly<Record<string, string | number | undefined>> => ({
     model: result.model,
     conversation_hash: auditHash(result.conversationId),
     raw_event_count: rawEventCount,
@@ -71,14 +69,10 @@ export function createPipelineStreamResponse(
     result.conversationId,
     composedSignal,
     {
-      ...(result.captureReasoning
-        ? { captureReasoning: result.captureReasoning }
-        : {}),
+      ...(result.captureReasoning ? { captureReasoning: result.captureReasoning } : {}),
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
-      ...(result.fingerprintOutput
-        ? { fingerprintOutput: result.fingerprintOutput }
-        : {}),
+      ...(result.fingerprintOutput ? { fingerprintOutput: result.fingerprintOutput } : {}),
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
       onCompletionWitness: (kind) => {
         auditLog("info", "sdk_stream_completion_witness", {

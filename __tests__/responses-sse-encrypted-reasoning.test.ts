@@ -137,16 +137,18 @@ function itemDone(events: readonly ParsedEvent[], type: string): ParsedEvent[] {
 
 function completedOutput(events: readonly ParsedEvent[]): unknown[] {
   const terminal = events.at(-1);
-  if (!terminal || !isRecord(terminal.body.response) || !Array.isArray(terminal.body.response.output)) {
+  if (
+    !terminal ||
+    !isRecord(terminal.body.response) ||
+    !Array.isArray(terminal.body.response.output)
+  ) {
     throw new TypeError("response.completed did not carry output");
   }
   return [...terminal.body.response.output];
 }
 
 function expectMonotonicSequence(events: readonly ParsedEvent[]): void {
-  expect(events.map((event) => event.sequenceNumber)).toEqual(
-    events.map((_event, index) => index),
-  );
+  expect(events.map((event) => event.sequenceNumber)).toEqual(events.map((_event, index) => index));
 }
 
 describe("Responses SSE encrypted reasoning completion (A6)", () => {
@@ -193,9 +195,7 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
     expect(reasoningDoneIndex).toBeGreaterThan(messageAdded);
     // ...but item-level done events still arrive in output order.
     expect(reasoningDoneIndex).toBeLessThan(messageDoneIndex);
-    expect(
-      types.indexOf("response.reasoning_summary_text.done"),
-    ).toBeLessThan(reasoningDoneIndex);
+    expect(types.indexOf("response.reasoning_summary_text.done")).toBeLessThan(reasoningDoneIndex);
 
     const reasoningDone = itemDone(events, "reasoning");
     expect(reasoningDone).toHaveLength(1);
@@ -270,10 +270,9 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
         encrypted_content: "kr1_late",
       },
     });
-    expect(completedOutput(events).map((item) => (isRecord(item) ? item.type : undefined))).toEqual([
-      "message",
-      "reasoning",
-    ]);
+    expect(completedOutput(events).map((item) => (isRecord(item) ? item.type : undefined))).toEqual(
+      ["message", "reasoning"],
+    );
   });
 
   test("keeps eager reasoning completion when encrypted replay was not requested", async () => {

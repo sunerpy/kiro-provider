@@ -121,11 +121,7 @@ function validateAllowedKeys(
 ): AnthropicFailure | undefined {
   for (const key of Object.keys(value)) {
     if (allowed.has(key)) continue;
-    return failure(
-      `Invalid request: ${path}.${key} is not supported`,
-      code,
-      `${path}.${key}`,
-    );
+    return failure(`Invalid request: ${path}.${key} is not supported`, code, `${path}.${key}`);
   }
   return undefined;
 }
@@ -508,10 +504,7 @@ export function adaptAnthropicMessagesRequest(
     return failure("Invalid request: max_tokens is required", undefined, "max_tokens");
   }
   if (request.max_tokens !== undefined) {
-    const outputLimit = resolveOutputTokenLimit(
-      request.model,
-      request.max_tokens,
-    );
+    const outputLimit = resolveOutputTokenLimit(request.model, request.max_tokens);
     if (!outputLimit.ok) {
       return failure(
         `Invalid request: max_tokens: ${outputLimit.message}`,
@@ -657,9 +650,7 @@ export function adaptAnthropicMessagesRequest(
           },
         }
       : {}),
-    ...(request.max_tokens !== undefined
-      ? { outputTokenLimit: request.max_tokens }
-      : {}),
+    ...(request.max_tokens !== undefined ? { outputTokenLimit: request.max_tokens } : {}),
     reasoningReplays,
     includeEncryptedReasoning: false,
   };

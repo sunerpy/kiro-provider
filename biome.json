@@ -4,16 +4,16 @@
     "includes": ["src/**/*.ts", "scripts/**/*.ts", "__tests__/**/*.ts"]
   },
   "formatter": {
-    "enabled": false,
+    "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2,
     "lineWidth": 100
   },
   "javascript": {
     "formatter": {
-      "quoteStyle": "single",
-      "semicolons": "asNeeded",
-      "trailingCommas": "none"
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
     }
   },
   "linter": {
@@ -32,7 +32,7 @@
   },
   "overrides": [
     {
-      "includes": ["src/core/pipeline.ts", "src/kiro/transform/streaming/dialect-gate.ts"],
+      "includes": ["src/core/pipeline.ts"],
       "assist": {
         "actions": {
           "source": {
