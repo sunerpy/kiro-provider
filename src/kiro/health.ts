@@ -19,20 +19,36 @@
 // refresh-token-dead account IS permanent. invalid-bearer is deliberately NOT
 // in this set, so it is no longer treated as permanent.
 
-/** REFRESH-token-dead signals (needs re-login). Historical permanent set. */
+/**
+ * Structured signals that the REFRESH token (or the OIDC client registration)
+ * is permanently dead. Only service-issued codes and their canonical messages
+ * qualify. token.ts emits a bare `HTTP_<status>` code whenever the response
+ * body carried no service error code (HTML from a proxy / WAF, an empty body,
+ * or JSON without `error` / `__type`); such reasons are transient and must never
+ * park an account permanently, even for 401 / 403.
+ */
+const REFRESH_TOKEN_DEAD_MARKERS: readonly string[] = [
+  // OAuth2 / AWS SSO OIDC `error` codes
+  'invalid_grant',
+  'invalid_client',
+  'unauthorized_client',
+  // AWS JSON protocol `__type` exception names
+  'InvalidGrantException',
+  'InvalidClientException',
+  'UnauthorizedClientException',
+  'ExpiredTokenException',
+  'InvalidTokenException',
+  'ExpiredClientException',
+  // Kiro desktop auth service messages
+  'Invalid refresh token',
+  'Invalid grant provided',
+  'Client is expired'
+]
+
+/** REFRESH-token-dead signals (needs re-login). */
 export function isRefreshTokenDead(reason?: string): boolean {
   if (!reason) return false
-  return (
-    reason.includes('Invalid refresh token') ||
-    reason.includes('Invalid grant provided') ||
-    reason.includes('invalid_grant') ||
-    reason.includes('ExpiredTokenException') ||
-    reason.includes('InvalidTokenException') ||
-    reason.includes('ExpiredClientException') ||
-    reason.includes('Client is expired') ||
-    reason.includes('HTTP_401') ||
-    reason.includes('HTTP_403')
-  )
+  return REFRESH_TOKEN_DEAD_MARKERS.some((marker) => reason.includes(marker))
 }
 
 /**

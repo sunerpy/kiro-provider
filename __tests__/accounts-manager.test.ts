@@ -57,12 +57,14 @@ describe('AccountManager health persistence', () => {
     const manager = new AccountManager([first, second], 'sticky', db)
 
     // When
-    const updated = manager.markUnhealthy(first, 'HTTP_403')
+    const updated = manager.markUnhealthy(first, 'invalid_grant: Refresh failed: Invalid refresh token provided')
 
     // Then
     expect(updated?.isHealthy).toBeFalse()
     expect(updated?.failCount).toBe(10)
-    expect(db.getById('A')?.unhealthyReason).toBe('HTTP_403')
+    expect(db.getById('A')?.unhealthyReason).toBe(
+      'invalid_grant: Refresh failed: Invalid refresh token provided'
+    )
     expect(manager.selectHealthyAccount()?.id).toBe('B')
   })
 

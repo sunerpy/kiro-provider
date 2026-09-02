@@ -24,17 +24,26 @@ function numberValue(data: JsonObject, snakeCase: string, camelCase: string): nu
   return typeof camelValue === 'number' ? camelValue : undefined
 }
 
+/**
+ * Map a failed refresh response to a message and a classification code.
+ * Structured JSON bodies surface the service's own code (`__type` for the AWS
+ * JSON protocol, `error` for OAuth2 / OIDC), which health.ts matches against its
+ * permanent-failure set. Any body without a service code, whether non-JSON
+ * (HTML from a proxy / WAF, empty text) or JSON lacking `error` / `__type`,
+ * falls back to the `HTTP_<status>` marker, which health.ts treats as transient.
+ */
 function errorDetails(text: string, status: number): { readonly message: string; readonly code: string } {
+  const fallbackCode = `HTTP_${status}`
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
-    return { message: text, code: `HTTP_${status}` }
+    return { message: text, code: fallbackCode }
   }
-  if (!isJsonObject(parsed)) return { message: text, code: `HTTP_${status}` }
+  if (!isJsonObject(parsed)) return { message: text, code: fallbackCode }
 
   const message = stringValue(parsed, 'message', 'error_description') ?? text
-  const code = stringValue(parsed, '__type', 'error') ?? `HTTP_${status}`
+  const code = stringValue(parsed, '__type', 'error') ?? fallbackCode
   return { message, code }
 }
 
