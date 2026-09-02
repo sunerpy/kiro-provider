@@ -531,11 +531,30 @@ async function executeLoop(
   };
 
   if (options.quotaRechecker) {
-    await options.quotaRechecker.recheckDueAccounts(
-      options.accountManager.reconcileFromDb(),
-      signal,
-      replayState.accountId ?? effectiveBinding?.accountId,
+    const recheckAccounts = options.accountManager.reconcileFromDb();
+    const boundAccountId = replayState.accountId ?? effectiveBinding?.accountId;
+    const recheckNow = Date.now();
+    const usableCandidate = recheckAccounts.some((account) =>
+      isSelectableNow(account, recheckNow),
     );
+    const lockedAccountExhausted =
+      replayLocked &&
+      recheckAccounts.some(
+        (account) => account.id === boundAccountId && isQuotaExhausted(account),
+      );
+    if (usableCandidate && !lockedAccountExhausted) {
+      // B6: authoritative quota probes stay off the request hot path when the
+      // request can proceed anyway; the rechecker dedupes and bounds them.
+      void options.quotaRechecker
+        .recheckDueAccounts(recheckAccounts, new AbortController().signal, boundAccountId)
+        .catch((error: unknown) => {
+          auditLog("warn", "quota_recheck_background_failed", {
+            error_type: error instanceof Error ? error.name : typeof error,
+          });
+        });
+    } else {
+      await options.quotaRechecker.recheckDueAccounts(recheckAccounts, signal, boundAccountId);
+    }
   }
 
   while (true) {
