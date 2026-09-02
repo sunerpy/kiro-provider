@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { fetchProxyOption } from "../core/proxy.js";
+import { buildUrl, KIRO_CONSTANTS } from "./constants.js";
 import { isAccessTokenError } from "./health.js";
 import type { KiroAuthDetails, KiroUsageSnapshot } from "./types.js";
 
@@ -134,7 +135,7 @@ export async function fetchUsageLimits(
 	for (const [index, params] of USAGE_ATTEMPTS.entries()) {
 		if (signal.aborted) throw abortReason(signal);
 		const endpoint = new URL(
-			`https://q.${auth.region}.amazonaws.com/getUsageLimits`,
+			buildUrl(KIRO_CONSTANTS.USAGE_LIMITS_URL, auth.region),
 		);
 		endpoint.searchParams.set("isEmailRequired", "true");
 		if (params.origin) endpoint.searchParams.set("origin", params.origin);

@@ -621,19 +621,6 @@ export class AccountsDatabase {
 		});
 	}
 
-	getReasoningReplayByTokenHash(
-		tokenHash: string,
-		now: number = Date.now(),
-	): ReasoningReplayRecord | undefined {
-		const row = this.db
-			.query<ReasoningReplayRow, [string, number]>(`
-	      SELECT * FROM reasoning_replay
-	      WHERE token_hash = ? AND expires_at > ?
-	    `)
-			.get(tokenHash, now);
-		return row === null ? undefined : rowToReasoningReplay(row);
-	}
-
 	getReasoningReplayRecord(tokenHash: string): ReasoningReplayRecord | undefined {
 		const row = this.db
 			.query<ReasoningReplayRow, [string]>(
