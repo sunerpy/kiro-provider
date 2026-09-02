@@ -51,7 +51,7 @@ interface Harness {
 }
 
 function harness(
-  respond: (call: number) => Promise<KiroAvailableModelsResponse>,
+  respond: (call: number, signal?: AbortSignal) => Promise<KiroAvailableModelsResponse>,
   ttlMs: number = TTL_MS
 ): Harness {
   const clock = { now: 1_000_000 }
@@ -64,9 +64,9 @@ function harness(
       model_catalog_request_timeout_ms: 10_000,
       proxy_url: null
     },
-    async () => {
+    async (_auth, _region, options) => {
       calls += 1
-      return respond(calls)
+      return respond(calls, options?.signal)
     },
     () => clock.now
   )
@@ -182,6 +182,27 @@ describe('ModelCapabilityService negative cache', () => {
     expect(live).toMatchObject({ supported: true, source: 'live' })
     expect(calls()).toBe(3)
     expect(service.readiness()).toMatchObject({ source: 'live', freshAccounts: 1 })
+  })
+
+  test('a caller-cancelled refresh does not open a backoff window', async () => {
+    const { service, calls } = harness(async (_call, signal) => {
+      if (signal?.aborted) throw signal.reason
+      return { models: [model('future-model')] }
+    })
+    const cancelled = new AbortController()
+    cancelled.abort(new DOMException('client went away', 'AbortError'))
+
+    const aborted = await service.ensureAccountModel(
+      selected,
+      auth(selected),
+      'future-model',
+      cancelled.signal
+    )
+    const next = await service.ensureAccountModel(selected, auth(selected), 'future-model')
+
+    expect(aborted).toEqual({ supported: false, source: 'static' })
+    expect(next).toEqual({ supported: true, source: 'live', wireModel: 'future-model' })
+    expect(calls()).toBe(2)
   })
 
   test('refreshAccounts respects the backoff window instead of re-probing a failing endpoint', async () => {

@@ -252,9 +252,11 @@ export class ModelCapabilityService implements PipelineModelCapabilities {
     }
     // A background revalidation must outlive the request that triggered it, so
     // it only carries the catalog request timeout, not the caller's signal.
-    const refresh = this.fetchSnapshot(account, auth, serveStale ? undefined : signal)
+    const fetchSignal = serveStale ? undefined : signal
+    const refresh = this.fetchSnapshot(account, auth, fetchSignal)
       .catch((error: unknown) => {
-        this.recordFailure(account.id, error)
+        // A caller-cancelled fetch says nothing about the endpoint's health.
+        if (!fetchSignal?.aborted) this.recordFailure(account.id, error)
         throw error
       })
       .finally(() => {
