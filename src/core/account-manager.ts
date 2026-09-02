@@ -226,34 +226,23 @@ export class AccountManager {
     throw new AccountConcurrentUpdateError(account.id)
   }
 
-  markUnhealthy(
-    account: ManagedAccount,
-    reason: string,
-    recoveryTime?: number
-  ): StoredAccount | undefined {
+  /**
+   * Marks an account unhealthy until a later successful refresh heals it
+   * (updateFromAuth resets isHealthy/failCount). Every production caller
+   * passes a refresh-token-dead reason, so the former transient fail-count
+   * ladder (unreachable, and never reset) is gone: failCount is a binary
+   * marker, 10 when marked and 0 when healed.
+   */
+  markUnhealthy(account: ManagedAccount, reason: string): StoredAccount | undefined {
     const now = Date.now()
-    return this.patchAccount(account.id, (latest) => {
-      if (isPermanentError(reason)) {
-        return {
-          ...latest,
-          failCount: 10,
-          isHealthy: false,
-          unhealthyReason: reason,
-          recoveryTime: undefined,
-          lastUsed: now
-        }
-      }
-
-      const failCount = latest.failCount + 1
-      return {
-        ...latest,
-        failCount,
-        isHealthy: failCount < 10,
-        unhealthyReason: reason,
-        recoveryTime: failCount >= 10 ? (recoveryTime ?? now + 3_600_000) : undefined,
-        lastUsed: now
-      }
-    })
+    return this.patchAccount(account.id, (latest) => ({
+      ...latest,
+      failCount: 10,
+      isHealthy: false,
+      unhealthyReason: reason,
+      recoveryTime: undefined,
+      lastUsed: now
+    }))
   }
 
   updateFromAuth(account: StoredAccount, auth: KiroAuthDetails): StoredAccount | undefined {

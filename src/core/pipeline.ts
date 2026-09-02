@@ -451,7 +451,7 @@ function reasoningCaptureOptions(
     return {
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
-      ...(canonical ? { fingerprintOutput: canonicalOutputFingerprint(canonical) } : {}),
+      fingerprintOutput: canonicalOutputFingerprint(canonical),
       ...(captureOutput ? { captureOutput } : {}),
     };
   }
@@ -1005,7 +1005,7 @@ async function executeLoop(
           }
           preferredAccountId = undefined;
           requestAccountId = undefined;
-          if (!options.affinityStore) requestConversationId = undefined;
+          requestConversationId = undefined;
           continue;
         case "fail":
           if (isInvalidReasoningSignature(error)) {
