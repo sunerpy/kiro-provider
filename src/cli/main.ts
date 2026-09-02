@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises";
 import { defaultOpenCodeAuthDbPath } from "../auth/opencode-auth-store.js";
 import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
+import { setAuditLogLevel } from "../core/audit-log.js";
 import type { AccountRefreshSummary } from "../core/quota-rechecker.js";
 import { startServer } from "../server/app.js";
 import {
@@ -113,6 +114,7 @@ async function dispatch(
 				...(command.configPath ? { configPath: command.configPath } : {}),
 				overrides,
 			});
+			setAuditLogLevel(config.log_level);
 			if (config.test_upstream_endpoint) {
 				dependencies.stderr(
 					`WARNING: test_upstream_endpoint is set (${config.test_upstream_endpoint}); routing upstream to a NON-production endpoint. Unset it for normal use.`,
@@ -128,6 +130,7 @@ async function dispatch(
 			const config = dependencies.loadConfig({
 				...(command.configPath ? { configPath: command.configPath } : {}),
 			});
+			setAuditLogLevel(config.log_level);
 			const authError = sharedAuthError(config);
 			if (authError) {
 				dependencies.stderr(authError);
@@ -157,6 +160,7 @@ async function dispatch(
 			const config = dependencies.loadConfig({
 				...(command.configPath ? { configPath: command.configPath } : {}),
 			});
+			setAuditLogLevel(config.log_level);
 			const authError = sharedAuthError(config);
 			if (authError) {
 				dependencies.stderr(authError);
@@ -174,6 +178,7 @@ async function dispatch(
 			const config = dependencies.loadConfig({
 				...(command.configPath ? { configPath: command.configPath } : {}),
 			});
+			setAuditLogLevel(config.log_level);
 			const authError = sharedAuthError(config);
 			if (authError) {
 				dependencies.stderr(authError);
@@ -200,7 +205,10 @@ async function dispatch(
 			const database = dependencies.openDb(ACCOUNTS_DB_PATH);
 			try {
 				dependencies.runImportAccounts(
-					{ ...(command.from ? { from: command.from } : {}) },
+					{
+						...(command.from ? { from: command.from } : {}),
+						force: command.force,
+					},
 					{ database, stdout: dependencies.stdout },
 				);
 				dependencies.stderr(

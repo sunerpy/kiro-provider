@@ -58,6 +58,9 @@ export interface KiroIDCTokenResult {
 	readonly authMethod: "idc";
 }
 
+/** Per-request deadline for every SSO OIDC call (register, authorize, poll). */
+export const IDC_REQUEST_TIMEOUT_MS = 30_000;
+
 export class KiroIDCError extends Error {
 	constructor(message: string, options?: ErrorOptions) {
 		super(message, options);
@@ -100,6 +103,7 @@ export async function authorizeKiroIDC(
 				"refresh_token",
 			],
 		}),
+		signal: AbortSignal.timeout(IDC_REQUEST_TIMEOUT_MS),
 		...(proxyUrl ? { proxy: proxyUrl } : {}),
 	});
 	if (!registerResponse.ok) {
@@ -129,6 +133,7 @@ export async function authorizeKiroIDC(
 			clientSecret: registration.data.clientSecret,
 			startUrl: effectiveStartUrl,
 		}),
+		signal: AbortSignal.timeout(IDC_REQUEST_TIMEOUT_MS),
 		...(proxyUrl ? { proxy: proxyUrl } : {}),
 	});
 	if (!authorizationResponse.ok) {
@@ -184,22 +189,33 @@ export async function pollKiroIDCToken(
 	const maxAttempts = Math.floor(expiresIn / interval);
 	let currentInterval = interval * 1_000;
 
+	let lastTransportError: unknown;
+
 	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 		await sleep(currentInterval);
-		const tokenResponse = await fetch(`${endpoint}/token`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"User-Agent": KIRO_CONSTANTS.USER_AGENT,
-			},
-			body: JSON.stringify({
-				clientId,
-				clientSecret,
-				deviceCode,
-				grantType: "urn:ietf:params:oauth:grant-type:device_code",
-			}),
-			...(proxyUrl ? { proxy: proxyUrl } : {}),
-		});
+		let tokenResponse: Response;
+		try {
+			tokenResponse = await fetch(`${endpoint}/token`, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"User-Agent": KIRO_CONSTANTS.USER_AGENT,
+				},
+				body: JSON.stringify({
+					clientId,
+					clientSecret,
+					deviceCode,
+					grantType: "urn:ietf:params:oauth:grant-type:device_code",
+				}),
+				signal: AbortSignal.timeout(IDC_REQUEST_TIMEOUT_MS),
+				...(proxyUrl ? { proxy: proxyUrl } : {}),
+			});
+		} catch (error) {
+			// Transient transport failure (DNS, connection reset, per-request
+			// timeout): keep polling until the device code budget is exhausted.
+			lastTransportError = error;
+			continue;
+		}
 		const text = await responseText(tokenResponse);
 		let parsedJson: unknown = {};
 		if (text) {
@@ -265,6 +281,12 @@ export async function pollKiroIDCToken(
 		throw new KiroIDCError("Token polling failed: response did not contain tokens");
 	}
 
+	if (lastTransportError !== undefined) {
+		throw new KiroIDCError(
+			`Token polling timed out after repeated network failures: ${lastTransportError instanceof Error ? lastTransportError.message : String(lastTransportError)}`,
+			{ cause: lastTransportError },
+		);
+	}
 	throw new KiroIDCError(
 		"Token polling timed out. Authorization may have expired.",
 	);

@@ -593,7 +593,7 @@ describe("loadConfig", () => {
 		expect(config.proxy_url).toBe("https://env-proxy:8443");
 	});
 
-	test("lets an empty proxy URL environment value clear the file value", () => {
+	test("treats an empty proxy URL environment value as unset and keeps the file value", () => {
 		const config = loadConfig({
 			configPath: createConfigFile({
 				api_keys: ["file-key"],
@@ -602,7 +602,7 @@ describe("loadConfig", () => {
 			env: { KIRO_PROVIDER_PROXY_URL: "" },
 		});
 
-		expect(config.proxy_url).toBeNull();
+		expect(config.proxy_url).toBe("http://file-proxy:8080");
 	});
 
 	test("keeps the file proxy URL when the environment value is unset", () => {

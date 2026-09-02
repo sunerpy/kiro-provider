@@ -88,7 +88,7 @@ function createHarness(
 		readonly replaceAccount?: StoredAccount;
 	}>;
 	readonly refreshes: Array<{ readonly identifier?: string }>;
-	readonly imports: Array<{ readonly from?: string }>;
+	readonly imports: Array<{ readonly from?: string; readonly force?: boolean }>;
 	readonly removed: string[];
 	readonly confirmations: string[];
 	readonly dbPaths: Array<string | undefined>;
@@ -108,7 +108,7 @@ function createHarness(
 	const refreshes: Array<{ readonly identifier?: string }> = [];
 	const removed: string[] = [];
 	const confirmations: string[] = [];
-	const imports: Array<{ readonly from?: string }> = [];
+	const imports: Array<{ readonly from?: string; readonly force?: boolean }> = [];
 	const dbPaths: Array<string | undefined> = [];
 	const deps: CliDependencies = {
 		loadConfig: (options) => {
@@ -239,13 +239,16 @@ describe("parseCliArgs", () => {
 				"import",
 				"--from",
 				"/tmp/opencode.db",
-				"--config",
-				"/tmp/config.json",
+				"--force",
 			]),
 		).toEqual({
 			kind: "accounts-import",
 			from: "/tmp/opencode.db",
-			configPath: "/tmp/config.json",
+			force: true,
+		});
+		expect(parseCliArgs(["accounts", "import"])).toEqual({
+			kind: "accounts-import",
+			force: false,
 		});
 	});
 
@@ -711,20 +714,15 @@ describe("main", () => {
 		const harness = createHarness();
 
 		const exitCode = await main(
-			[
-				"accounts",
-				"import",
-				"--from",
-				"/tmp/opencode.db",
-				"--config",
-				"/tmp/config.json",
-			],
+			["accounts", "import", "--from", "/tmp/opencode.db"],
 			harness.deps,
 		);
 
 		expect(exitCode).toBe(0);
 		expect(harness.loaded).toHaveLength(0);
-		expect(harness.imports).toEqual([{ from: "/tmp/opencode.db" }]);
+		expect(harness.imports).toEqual([
+			{ from: "/tmp/opencode.db", force: false },
+		]);
 		expect(harness.stderr).toEqual([
 			"Accounts imported into the provider-owned local database. kiro-provider will now refresh access tokens, usage, and account health independently.",
 		]);
@@ -745,7 +743,9 @@ describe("main", () => {
 		);
 
 		expect(exitCode).toBe(0);
-		expect(harness.imports).toEqual([{ from: "/tmp/opencode.db" }]);
+		expect(harness.imports).toEqual([
+			{ from: "/tmp/opencode.db", force: false },
+		]);
 	});
 
 	test("lists accounts when api_keys validation would fail", async () => {
@@ -893,6 +893,7 @@ describe("runLogin", () => {
 		// Given
 		let authorizeProxyUrl: string | undefined;
 		let pollProxyUrl: string | undefined;
+		let usageProxyUrl: string | undefined;
 
 		// When
 		await runLogin(
@@ -927,6 +928,15 @@ describe("runLogin", () => {
 						authMethod: "idc",
 					};
 				},
+				fetchUsage: async (_auth, usageOptions) => {
+					usageProxyUrl = usageOptions?.proxyUrl;
+					return {
+						email: "dev@example.com",
+						usedCount: 1,
+						limitCount: 100,
+						overageCount: 0,
+					};
+				},
 				openDb: () => ({
 					getAccounts: () => [],
 					insertAccount: (managedAccount) => ({
@@ -943,6 +953,7 @@ describe("runLogin", () => {
 		// Then
 		expect(authorizeProxyUrl).toBe(expectedProxyUrl);
 		expect(pollProxyUrl).toBe(expectedProxyUrl);
+		expect(usageProxyUrl).toBe(expectedProxyUrl);
 	});
 
 	test("prints the verification URL and persists through insertAccount", async () => {
@@ -974,11 +985,17 @@ describe("runLogin", () => {
 					refreshToken: "refresh-secret",
 					accessToken: "access-secret",
 					expiresAt: 123_456,
-					email: "dev@example.com",
+					email: "builder-id@aws.amazon.com",
 					clientId: "client-id",
 					clientSecret: "client-secret",
 					region: "eu-west-1",
 					authMethod: "idc",
+				}),
+				fetchUsage: async () => ({
+					email: "dev@example.com",
+					usedCount: 1,
+					limitCount: 100,
+					overageCount: 0,
 				}),
 				openDb: (...paths: readonly string[]) => {
 					dbPaths.push(paths[0]);
