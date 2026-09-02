@@ -4,10 +4,10 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -46,13 +46,20 @@ function keyId(key: Uint8Array): string {
   return `rk_${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
 }
 
+function isErrnoCode(error: unknown, ...codes: readonly string[]): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    codes.includes(error.code)
+  );
+}
+
 function parseKeyMaterial(encoded: string, source: string): Uint8Array {
-  let bytes: Buffer;
-  try {
-    bytes = Buffer.from(encoded, "base64url");
-  } catch {
-    throw new TypeError(`${source} contains invalid base64url key material`);
-  }
+  // Buffer.from never throws for base64url input; the length check below is the
+  // only validation that can fail.
+  const bytes = Buffer.from(encoded, "base64url");
   if (bytes.byteLength !== 32) {
     throw new TypeError(`${source} must decode to exactly 32 bytes for AES-256-GCM`);
   }
@@ -123,6 +130,40 @@ function readKeyFile(path: string): ReasoningReplayKeyring {
   return toKeyring(keys, "file", path);
 }
 
+/** Errors that mean the filesystem cannot hard-link, not that the target exists. */
+const LINK_UNSUPPORTED_CODES = [
+  "EPERM",
+  "EACCES",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  "EXDEV",
+  "EMLINK",
+  "ENOSYS",
+] as const;
+
+/**
+ * Publish a fully written temporary file at `path` without ever replacing an
+ * existing key file. `linkSync` is exclusive: it fails with EEXIST when another
+ * process published first, so a racing pair never ends up holding different
+ * keys for the same path (renameSync would silently let the last writer win).
+ * Filesystems without hard links fall back to an exclusive create.
+ */
+function publishExclusively(temporary: string, path: string): void {
+  try {
+    linkSync(temporary, path);
+    return;
+  } catch (error) {
+    if (!isErrnoCode(error, ...LINK_UNSUPPORTED_CODES)) throw error;
+  }
+  const descriptor = openSync(path, "wx", 0o600);
+  try {
+    writeFileSync(descriptor, readFileSync(temporary));
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 function writeGeneratedKeyFile(path: string): ReasoningReplayKeyring {
   mkdirSync(dirname(path), { recursive: true });
   const key = Uint8Array.from(randomBytes(32));
@@ -139,17 +180,20 @@ function writeGeneratedKeyFile(path: string): ReasoningReplayKeyring {
     closeSync(descriptor);
   }
   try {
-    if (existsSync(path)) {
-      unlinkSync(temporary);
-      return readKeyFile(path);
-    }
-    renameSync(temporary, path);
-    if (process.platform !== "win32") chmodSync(path, 0o600);
+    publishExclusively(temporary, path);
   } catch (error) {
-    if (existsSync(temporary)) unlinkSync(temporary);
-    if (existsSync(path)) return readKeyFile(path);
+    // Another process created the key file between our existence check and the
+    // publish step; adopt its key so both processes agree on the active key.
+    if (isErrnoCode(error, "EEXIST")) return readKeyFile(path);
     throw error;
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Best effort: a leftover temporary file is harmless and never read.
+    }
   }
+  if (process.platform !== "win32") chmodSync(path, 0o600);
   return toKeyring([{ id: keyId(key), key }], "file", path);
 }
 
