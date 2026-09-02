@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   AccountConcurrentUpdateError,
   AccountManager,
   toAuthDetails
 } from '../src/core/account-manager.js'
+import { clearSdkClientCache, createSdkClient } from '../src/core/sdk-client.js'
 import type { ManagedAccount } from '../src/kiro/types.js'
 import { AccountsDatabase } from '../src/storage/accounts-db.js'
 
@@ -62,9 +64,7 @@ describe('AccountManager health persistence', () => {
     // Then
     expect(updated?.isHealthy).toBeFalse()
     expect(updated?.failCount).toBe(10)
-    expect(db.getById('A')?.unhealthyReason).toBe(
-      'invalid_grant: Refresh failed: Invalid refresh token provided'
-    )
+    expect(db.getById('A')?.unhealthyReason).toBe('invalid_grant: Refresh failed: Invalid refresh token provided')
     expect(manager.selectHealthyAccount()?.id).toBe('B')
   })
 
@@ -223,32 +223,41 @@ describe('AccountManager health persistence', () => {
     externalDb.updateExistingAccounts([{ ...stale, accessToken: 'external-access' }])
 
     // When
-    manager.markUnhealthy(stale, 'temporary upstream failure')
+    manager.markUnhealthy(stale, 'InvalidTokenException: refresh credential rejected')
 
     // Then
     const persisted = externalDb.getById('A')
     expect(persisted?.accessToken).toBe('external-access')
-    expect(persisted?.failCount).toBe(1)
-    expect(persisted?.unhealthyReason).toBe('temporary upstream failure')
+    expect(persisted?.isHealthy).toBeFalse()
+    expect(persisted?.failCount).toBe(10)
+    expect(persisted?.unhealthyReason).toBe('InvalidTokenException: refresh credential rejected')
   })
 
-  test('keeps transient failures selectable until the tenth failure', () => {
+  test('marks any reason unhealthy at once and a successful refresh heals it', () => {
     // Given
     const [db] = createDatabasePair()
     const stored = db.insertAccount(account('A'))
     const manager = new AccountManager([stored], 'sticky', db)
 
     // When
-    for (let failure = 1; failure < 10; failure += 1) {
-      manager.markUnhealthy(stored, 'temporary upstream failure')
-    }
-    const ninth = db.getById('A')
-    const tenth = manager.markUnhealthy(stored, 'temporary upstream failure', Date.now() + 5_000)
+    const marked = manager.markUnhealthy(stored, 'temporary upstream failure')
+    if (!marked) throw new Error('account must still exist')
+    const healed = manager.updateFromAuth(marked, {
+      ...toAuthDetails(marked),
+      access: 'fresh-access',
+      expires: Date.now() + 3_600_000
+    })
 
-    // Then
-    expect(ninth).toMatchObject({ failCount: 9, isHealthy: true })
-    expect(tenth).toMatchObject({ failCount: 10, isHealthy: false })
-    expect(tenth?.recoveryTime).toBeGreaterThan(Date.now())
+    // Then: no transient fail-count ladder, health is binary and refresh-healed
+    expect(marked).toMatchObject({ failCount: 10, isHealthy: false, recoveryTime: undefined })
+    expect(healed).toMatchObject({
+      failCount: 0,
+      isHealthy: true,
+      unhealthyReason: undefined,
+      recoveryTime: undefined,
+      accessToken: 'fresh-access'
+    })
+    expect(manager.selectHealthyAccount()?.id).toBe('A')
   })
 
   test('reports a concurrent update after exhausting compare-and-swap attempts', () => {
@@ -316,9 +325,51 @@ describe('AccountManager selection metrics', () => {
     // When / Then
     expect(manager.getMinWaitTime()).toBe(0)
   })
+
+  test('counts only selectable accounts among the eligible ids', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const healthy = db.insertAccount(account('A'))
+    const throttled = db.insertAccount(account('B', { rateLimitResetTime: Date.now() + 60_000 }))
+    const exhausted = db.insertAccount(account('C', { usedCount: 100, limitCount: 100 }))
+    const manager = new AccountManager([healthy, throttled, exhausted], 'sticky', db)
+
+    // When / Then
+    expect(manager.countSelectableAccounts()).toBe(1)
+    expect(manager.countSelectableAccounts(new Set(['A', 'B']))).toBe(1)
+    expect(manager.countSelectableAccounts(new Set(['B', 'C']))).toBe(0)
+  })
 })
 
 describe('AccountManager reconcileFromDb', () => {
+  test('destroys the SDK transport of an account that disappeared from the database', () => {
+    // Given
+    const [managerDb, externalDb] = createDatabasePair()
+    const stored = managerDb.insertAccount(account('A'))
+    const kept = managerDb.insertAccount(account('B'))
+    const manager = new AccountManager([stored, kept], 'sticky', managerDb)
+    clearSdkClientCache()
+    const removedClient = createSdkClient(toAuthDetails(stored), 'us-east-1', undefined, undefined, undefined, 'A')
+    const keptClient = createSdkClient(toAuthDetails(kept), 'us-east-1', undefined, undefined, undefined, 'B')
+    const removedHandler = removedClient.config.requestHandler
+    const keptHandler = keptClient.config.requestHandler
+    if (!(removedHandler instanceof NodeHttpHandler) || !(keptHandler instanceof NodeHttpHandler)) {
+      throw new TypeError('expected NodeHttpHandler transports')
+    }
+    const removedDestroy = spyOn(removedHandler, 'destroy')
+    const keptDestroy = spyOn(keptHandler, 'destroy')
+    externalDb.removeAccount('A')
+
+    // When
+    manager.reconcileFromDb(managerDb)
+
+    // Then
+    expect(removedDestroy).toHaveBeenCalledTimes(1)
+    expect(keptDestroy).not.toHaveBeenCalled()
+    expect(manager.getAccounts().map(({ id }) => id)).toEqual(['B'])
+    clearSdkClientCache()
+  })
+
   test('makes an externally inserted account visible', () => {
     // Given
     const [managerDb, externalDb] = createDatabasePair()

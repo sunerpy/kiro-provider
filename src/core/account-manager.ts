@@ -7,6 +7,7 @@ import type {
   ManagedAccount
 } from '../kiro/types.js'
 import type { AccountsDatabase, StoredAccount } from '../storage/accounts-db.js'
+import { evictSdkClientsForAccount } from './sdk-client.js'
 
 const MAX_CAS_ATTEMPTS = 4
 
@@ -69,6 +70,21 @@ export class AccountManager {
     return this.accounts.map(cloneAccount)
   }
 
+  /**
+   * Re-reads one account row from the database and publishes it to the
+   * in-memory snapshot. Returns undefined when the account no longer exists.
+   */
+  getLatestAccount(id: string): StoredAccount | undefined {
+    const latest = this.database.getById(id)
+    if (!latest) {
+      this.dropAccount(id)
+      return undefined
+    }
+    const current = this.accounts.find((account) => account.id === id)
+    if (current?.generation !== latest.generation) this.replaceAccount(cloneAccount(latest))
+    return cloneAccount(latest)
+  }
+
   getMinWaitTime(): number {
     const now = Date.now()
     const waits = this.accounts
@@ -83,6 +99,10 @@ export class AccountManager {
       const current = currentById.get(row.id)
       return current?.generation === row.generation ? current : cloneAccount(row)
     })
+    const survivingIds = new Set(this.accounts.map(({ id }) => id))
+    for (const id of currentById.keys()) {
+      if (!survivingIds.has(id)) evictSdkClientsForAccount(id)
+    }
     if (this.stickyId && !this.accounts.some(({ id }) => id === this.stickyId)) {
       this.stickyId = undefined
     }
@@ -117,6 +137,18 @@ export class AccountManager {
 
   getCurrentOrNext(): StoredAccount | null {
     return this.selectHealthyAccount()
+  }
+
+  /**
+   * Number of accounts selectHealthyAccount could return right now (healthy,
+   * not rate-limited, not quota-exhausted), optionally restricted to the
+   * given eligible ids. Used as the failover alternative count.
+   */
+  countSelectableAccounts(eligibleAccountIds?: ReadonlySet<string>, now = Date.now()): number {
+    return this.accounts.filter(
+      (account) =>
+        this.isSelectable(account, now) && (eligibleAccountIds?.has(account.id) ?? true)
+    ).length
   }
 
   markRateLimited(account: ManagedAccount, resetTime: number): StoredAccount | undefined {
@@ -162,7 +194,7 @@ export class AccountManager {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const current = this.database.getById(account.id)
       if (!current) {
-        this.accounts = this.accounts.filter((candidate) => candidate.id !== account.id)
+        this.dropAccount(account.id)
         return undefined
       }
       if ((current.lastSync ?? 0) > usage.lastSync) {
@@ -194,34 +226,23 @@ export class AccountManager {
     throw new AccountConcurrentUpdateError(account.id)
   }
 
-  markUnhealthy(
-    account: ManagedAccount,
-    reason: string,
-    recoveryTime?: number
-  ): StoredAccount | undefined {
+  /**
+   * Marks an account unhealthy until a later successful refresh heals it
+   * (updateFromAuth resets isHealthy/failCount). Every production caller
+   * passes a refresh-token-dead reason, so the former transient fail-count
+   * ladder (unreachable, and never reset) is gone: failCount is a binary
+   * marker, 10 when marked and 0 when healed.
+   */
+  markUnhealthy(account: ManagedAccount, reason: string): StoredAccount | undefined {
     const now = Date.now()
-    return this.patchAccount(account.id, (latest) => {
-      if (isPermanentError(reason)) {
-        return {
-          ...latest,
-          failCount: 10,
-          isHealthy: false,
-          unhealthyReason: reason,
-          recoveryTime: undefined,
-          lastUsed: now
-        }
-      }
-
-      const failCount = latest.failCount + 1
-      return {
-        ...latest,
-        failCount,
-        isHealthy: failCount < 10,
-        unhealthyReason: reason,
-        recoveryTime: failCount >= 10 ? (recoveryTime ?? now + 3_600_000) : undefined,
-        lastUsed: now
-      }
-    })
+    return this.patchAccount(account.id, (latest) => ({
+      ...latest,
+      failCount: 10,
+      isHealthy: false,
+      unhealthyReason: reason,
+      recoveryTime: undefined,
+      lastUsed: now
+    }))
   }
 
   updateFromAuth(account: StoredAccount, auth: KiroAuthDetails): StoredAccount | undefined {
@@ -232,11 +253,22 @@ export class AccountManager {
         this.reconcileFromDb()
         return undefined
       }
+      if (attempt > 0 && !this.sameCredentials(account, current)) {
+        // Another writer already rotated this login's credentials; adopt the
+        // newer row instead of overwriting it with this refresh result.
+        this.replaceAccount(cloneAccount(current))
+        return cloneAccount(current)
+      }
       const updated: StoredAccount = {
         ...current,
         refreshToken: refresh.refreshToken,
         accessToken: auth.access,
-        expiresAt: auth.expires
+        expiresAt: auth.expires,
+        ...(auth.email ? { email: auth.email } : {}),
+        isHealthy: true,
+        failCount: 0,
+        unhealthyReason: undefined,
+        recoveryTime: undefined
       }
       if (this.database.updateExistingAccounts([updated]) === 1) {
         const persisted = { ...updated, generation: current.generation + 1 }
@@ -262,11 +294,18 @@ export class AccountManager {
 
   private isSameLogin(started: StoredAccount, current: StoredAccount): boolean {
     return (
-      current.refreshToken === started.refreshToken &&
       current.authMethod === started.authMethod &&
       current.clientId === started.clientId &&
       current.email === started.email &&
       current.startUrl === started.startUrl
+    )
+  }
+
+  private sameCredentials(started: StoredAccount, current: StoredAccount): boolean {
+    return (
+      current.refreshToken === started.refreshToken &&
+      current.accessToken === started.accessToken &&
+      current.expiresAt === started.expiresAt
     )
   }
 
@@ -304,7 +343,7 @@ export class AccountManager {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const latest = this.database.getById(id)
       if (!latest) {
-        this.accounts = this.accounts.filter((account) => account.id !== id)
+        this.dropAccount(id)
         return undefined
       }
       const updated = patch(latest)
@@ -316,6 +355,13 @@ export class AccountManager {
     }
     this.reconcileFromDb()
     throw new AccountConcurrentUpdateError(id)
+  }
+
+  /** Forgets an account that vanished from the database and releases its SDK transports. */
+  private dropAccount(id: string): void {
+    this.accounts = this.accounts.filter((account) => account.id !== id)
+    if (this.stickyId === id) this.stickyId = undefined
+    evictSdkClientsForAccount(id)
   }
 
   private replaceAccount(account: StoredAccount): void {

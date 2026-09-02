@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
+import { auditHash } from "../src/core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineClientFactory,
@@ -9,6 +10,7 @@ import {
   runChatCompletion,
 } from "../src/core/pipeline.js";
 import { createPipelineStreamResponse } from "../src/core/pipeline-stream.js";
+import { KiroTokenRefreshError } from "../src/kiro/errors.js";
 import { ModelCapabilityService } from "../src/kiro/model-capabilities.js";
 import type {
   SdkStreamEvent,
@@ -542,7 +544,11 @@ describe("runChatCompletion success paths", () => {
     expect(completion?.text).toBe("answer");
     expect(completion?.reasoning?.text).toBe("reason");
     expect(completion?.finishReason).toBe("stop");
-    expect(sendSignal).toBe(controller.signal);
+    // The send signal is a per-attempt composite that follows the ingress signal.
+    expect(sendSignal).toBeInstanceOf(AbortSignal);
+    expect(sendSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(sendSignal?.aborted).toBe(true);
     expect(refresher.refreshSignals).toEqual([controller.signal]);
   });
 
@@ -1255,8 +1261,9 @@ describe("runChatCompletion cancellation", () => {
     controller.abort();
     const response = await pending;
 
-    // Then
-    expect(capturedSignal).toBe(controller.signal);
+    // Then: the per-attempt send signal fires together with the ingress signal
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal).not.toBe(controller.signal);
     expect(response.status).toBe(504);
     expect((await errorBody(response)).error.type).toBe("timeout_error");
   });
@@ -1901,12 +1908,50 @@ describe("runChatCompletion projection and terminal errors", () => {
     expect(suspended.unhealthyReason).toContain("Account Suspended");
   });
 
-  test("maps an unexpected token refresh error to an internal OpenAI error", async () => {
+  test("switches to another account when token refresh fails before the upstream call", async () => {
+    // Given
+    const dead = account("account-a");
+    const healthy = account("account-b");
+    const manager = new FakeAccountManager([dead, healthy], "sticky");
+    const refresher = new FakeTokenRefresher();
+    refresher.refreshHandler = async (selected) => {
+      if (selected.id === dead.id) {
+        throw new KiroTokenRefreshError("Refresh failed: invalid_grant", "invalid_grant");
+      }
+      return selected;
+    };
+    const sentAccounts: string[] = [];
+
+    // When
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: refresher,
+      makeClient: (auth) =>
+        clientWith(async () => {
+          sentAccounts.push(auth.email ?? "missing");
+          return responseFrom([{ assistantResponseEvent: { content: "fallback" } }]);
+        }),
+    });
+
+    // Then
+    expect(response.status).toBe(200);
+    expect(sentAccounts).toEqual([healthy.email]);
+    expect(manager.unhealthy).toEqual([dead.id]);
+    expect(dead.unhealthyReason).toContain("invalid_grant");
+    expect(manager.rateLimited).toEqual([]);
+  });
+
+  test("returns 503 when the only account's token refresh fails", async () => {
     // Given
     const refresher = new FakeTokenRefresher();
     refresher.refreshHandler = async () => {
-      throw new RangeError("refresh state is corrupt");
+      throw new KiroTokenRefreshError("Refresh failed: invalid_grant", "invalid_grant");
     };
+    let clientCalls = 0;
 
     // When
     const response = await runChatCompletion({
@@ -1916,18 +1961,182 @@ describe("runChatCompletion projection and terminal errors", () => {
       config: config(),
       accountManager: new FakeAccountManager([account("account-a")]),
       tokenRefresher: refresher,
-      makeClient: () => clientWith(async () => responseFrom([])),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
     });
 
     // Then
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
+    expect(clientCalls).toBe(0);
     expect(await errorBody(response)).toEqual({
       error: {
-        message: "refresh state is corrupt",
-        type: "internal_error",
-        code: "RangeError",
+        message: "Token refresh failed for every usable Kiro account",
+        type: "service_unavailable",
+        code: "upstream_token_refresh_failed",
       },
     });
+  });
+
+  test("retries a transient refresh network error once on the same account", async () => {
+    // Given
+    const only = account("account-a");
+    const manager = new FakeAccountManager([only]);
+    const refresher = new FakeTokenRefresher();
+    let refreshCalls = 0;
+    refresher.refreshHandler = async (selected) => {
+      refreshCalls += 1;
+      if (refreshCalls === 1) {
+        throw new KiroTokenRefreshError("Token refresh failed: fetch failed", "NETWORK_ERROR");
+      }
+      return selected;
+    };
+
+    // When
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: refresher,
+      makeClient: () =>
+        clientWith(async () => responseFrom([{ assistantResponseEvent: { content: "ok" } }])),
+    });
+
+    // Then
+    expect(response.status).toBe(200);
+    expect(refreshCalls).toBe(2);
+    expect(manager.rateLimited).toEqual([]);
+    expect(manager.unhealthy).toEqual([]);
+  });
+
+  test("rate-limits, not kills, an account whose refresh keeps failing on the network and switches", async () => {
+    // Given
+    const flaky = account("account-a");
+    const healthy = account("account-b");
+    const manager = new FakeAccountManager([flaky, healthy], "sticky");
+    const refresher = new FakeTokenRefresher();
+    refresher.refreshHandler = async (selected) => {
+      if (selected.id === flaky.id) {
+        throw new KiroTokenRefreshError("Token refresh failed: fetch failed", "NETWORK_ERROR");
+      }
+      return selected;
+    };
+    const sentAccounts: string[] = [];
+
+    // When
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: refresher,
+      makeClient: (auth) =>
+        clientWith(async () => {
+          sentAccounts.push(auth.email ?? "missing");
+          return responseFrom([{ assistantResponseEvent: { content: "fallback" } }]);
+        }),
+    });
+
+    // Then
+    expect(response.status).toBe(200);
+    expect(sentAccounts).toEqual([healthy.email]);
+    expect(manager.rateLimited).toEqual([flaky.id]);
+    expect(manager.unhealthy).toEqual([]);
+    expect(flaky.isHealthy).toBe(true);
+    expect(flaky.rateLimitResetTime).toBeGreaterThan(Date.now() - 1_000);
+  });
+
+  test("switches accounts when the forced refresh after an invalid bearer fails", async () => {
+    // Given
+    const stale = account("account-a");
+    const healthy = account("account-b");
+    const manager = new FakeAccountManager([stale, healthy], "sticky");
+    const refresher = new FakeTokenRefresher();
+    refresher.forceHandler = async () => {
+      throw new KiroTokenRefreshError("Refresh failed: invalid_grant", "invalid_grant");
+    };
+    const sentAccounts: string[] = [];
+
+    // When
+    const response = await runChatCompletion({
+      body: REQUEST_BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: manager,
+      tokenRefresher: refresher,
+      makeClient: (auth) =>
+        clientWith(async () => {
+          sentAccounts.push(auth.email ?? "missing");
+          if (auth.email === stale.email) {
+            throw sdkError(403, "The bearer token included in the request is invalid");
+          }
+          return responseFrom([{ assistantResponseEvent: { content: "fallback" } }]);
+        }),
+    });
+
+    // Then
+    expect(response.status).toBe(200);
+    expect(sentAccounts).toEqual([stale.email, healthy.email]);
+    expect(refresher.forceSignals).toHaveLength(1);
+    expect(manager.unhealthy).toEqual([stale.id]);
+  });
+
+  test("maps an unexpected internal error to a fixed message with an audited request id", async () => {
+    // Given
+    const refresher = new FakeTokenRefresher();
+    refresher.refreshHandler = async () => {
+      throw new RangeError("refresh state is corrupt /home/op/.config/kiro-provider/accounts.db");
+    };
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
+
+    // When
+    let response: Response;
+    let events: Record<string, unknown>[];
+    try {
+      response = await runChatCompletion({
+        body: REQUEST_BODY,
+        model: "auto",
+        stream: false,
+        config: config(),
+        accountManager: new FakeAccountManager([account("account-a")]),
+        tokenRefresher: refresher,
+        makeClient: () => clientWith(async () => responseFrom([])),
+      });
+      events = consoleError.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((event) => event.event === "pipeline_internal_error");
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    // Then: the client sees a fixed message, a stable code, and a correlation id
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      error: { message: string; type: string; code?: string; request_id?: string };
+    };
+    expect(body.error).toEqual({
+      message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+      type: "internal_error",
+      code: "internal_error",
+      request_id: expect.stringMatching(/^req_[0-9a-f-]{36}$/),
+    });
+    expect(body.error.message).not.toContain("accounts.db");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      request_id: body.error.request_id,
+      error_type: "RangeError",
+      error_code: "RangeError",
+      error_message_hash: auditHash(
+        "refresh state is corrupt /home/op/.config/kiro-provider/accounts.db",
+      ),
+    });
+    expect(JSON.stringify(events[0])).not.toContain("accounts.db");
   });
 
   test("returns the exact status in a standard OpenAI error envelope", async () => {

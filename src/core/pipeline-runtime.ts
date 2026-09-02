@@ -38,9 +38,24 @@ export function abortable<T>(
 	});
 }
 
+/**
+ * Sleeps for `ms` unless the signal aborts first. The underlying timer is
+ * cleared on abort so a cancelled request never leaves a stray timer running.
+ */
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 	if (ms <= 0) return Promise.resolve();
-	return abortable(Bun.sleep(ms), signal);
+	if (signal.aborted) return Promise.reject(abortReason(signal));
+	return new Promise<void>((resolve, reject) => {
+		const onAbort = (): void => {
+			clearTimeout(timer);
+			reject(abortReason(signal));
+		};
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 async function acquireKeyedQueue(

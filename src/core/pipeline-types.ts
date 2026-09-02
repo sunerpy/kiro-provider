@@ -18,6 +18,11 @@ export interface PipelineAccountManager {
 		eligibleAccountIds?: ReadonlySet<string>,
 	): ManagedAccount | null;
 	getAccountCount(): number;
+	/**
+	 * Count of accounts that could be selected right now among the eligible
+	 * ids. When absent the pipeline approximates it from the account rows.
+	 */
+	countSelectableAccounts?(eligibleAccountIds: ReadonlySet<string>): number;
 	toAuthDetails(account: ManagedAccount): KiroAuthDetails;
 	markRateLimited(account: ManagedAccount, resetTime: number): unknown;
 	markQuotaExhausted?(
