@@ -21,8 +21,10 @@ import { errorReason } from "./account-errors.js";
 import { toAuthDetails } from "./account-manager.js";
 import {
 	AccountSelector,
+	countSelectable,
 	selectableCandidates,
 } from "./account-selection.js";
+import { evictSdkClientsForAccount } from "./sdk-client.js";
 import { AccountUnavailableError } from "./token-refresher.js";
 
 function cloneAccount(account: ManagedAccount): ManagedAccount {
@@ -41,8 +43,18 @@ export class OpenCodeAccountManager {
 		this.reconcileFromDb();
 	}
 
+	/**
+	 * Re-reads every live row. Accounts that vanished (removed or tombstoned by
+	 * another OpenCode writer) lose their cached SDK transports, mirroring
+	 * AccountManager.reconcileFromDb.
+	 */
 	reconcileFromDb(): readonly ManagedAccount[] {
+		const previousIds = this.accounts.map(({ id }) => id);
 		this.accounts = this.store.getAccounts();
+		const survivingIds = new Set(this.accounts.map(({ id }) => id));
+		for (const id of previousIds) {
+			if (!survivingIds.has(id)) evictSdkClientsForAccount(id);
+		}
 		this.selector.retainSticky(this.accounts);
 		return this.accounts.map(cloneAccount);
 	}
@@ -73,6 +85,19 @@ export class OpenCodeAccountManager {
 
 	getAccountCount(): number {
 		return this.accounts.length;
+	}
+
+	/**
+	 * Number of accounts selectHealthyAccount could return right now among the
+	 * eligible ids; same semantics as AccountManager.countSelectableAccounts, so
+	 * the pipeline's failover classifier sees the same alternative count in
+	 * both auth modes instead of a row-based approximation.
+	 */
+	countSelectableAccounts(
+		eligibleAccountIds?: ReadonlySet<string>,
+		now = Date.now(),
+	): number {
+		return countSelectable(this.accounts, now, eligibleAccountIds);
 	}
 
 	toAuthDetails(account: ManagedAccount): KiroAuthDetails {
@@ -127,6 +152,13 @@ export class OpenCodeAccountManager {
 		return updated === undefined ? undefined : cloneAccount(updated);
 	}
 
+	/**
+	 * Mirrors AccountManager.markUnhealthy for refresh-token-dead reasons, the
+	 * only kind production callers pass: a binary permanent marker (fail_count
+	 * 10, unhealthy, no recovery time). Any other reason falls through to the
+	 * shared store's fail_count ladder, documented on
+	 * OpenCodeAuthStore.markUnhealthy.
+	 */
 	markUnhealthy(
 		account: ManagedAccount,
 		reason: string,

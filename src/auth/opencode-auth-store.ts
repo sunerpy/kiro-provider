@@ -308,6 +308,18 @@ export class OpenCodeAuthStore {
 		});
 	}
 
+	/**
+	 * Health marker for a shared row.
+	 *
+	 * `permanent` (a refresh-token-dead reason, which is what every production
+	 * caller passes) writes the same binary marker as the local
+	 * AccountManager.markUnhealthy: fail_count 10, is_healthy 0, recovery_time
+	 * cleared. The non-permanent branch keeps opencode-kiro-auth's own
+	 * fail_count ladder (unhealthy from the tenth failure, with a recovery
+	 * time) because the plugin reads and increments the same columns; making
+	 * it binary here would leave this process disagreeing with the database's
+	 * other writer about what fail_count means. The schema is never migrated.
+	 */
 	markUnhealthy(
 		id: string,
 		reason: string,
