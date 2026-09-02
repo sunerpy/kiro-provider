@@ -130,6 +130,50 @@ describe("standard-field session affinity", () => {
 		);
 	});
 
+	test("treats untyped Responses input items as messages in legacy mode", () => {
+		const typed = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: [
+				{ type: "message", role: "system", content: "system prompt" },
+				{ type: "message", role: "user", content: "initial request" },
+			],
+		});
+		const untyped = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: [
+				{ role: "system", content: "system prompt" },
+				{ role: "user", content: "initial request" },
+			],
+		});
+		const laterTurn = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: [
+				{ role: "system", content: "system prompt" },
+				{ role: "user", content: "initial request" },
+				{ role: "assistant", content: "first answer" },
+				{ role: "user", content: "follow-up" },
+			],
+		});
+		const otherUser = ResponsesRequestSchema.parse({
+			model: "gpt-5.6-sol",
+			input: [
+				{ role: "system", content: "system prompt" },
+				{ role: "user", content: "different request" },
+			],
+		});
+
+		const typedHint = responsesSessionAffinity(typed, TENANT, "legacy-initial-input");
+		const untypedHint = responsesSessionAffinity(untyped, TENANT, "legacy-initial-input");
+		expect(untypedHint?.source).toBe("responses.initial_input");
+		expect(untypedHint).toEqual(
+			responsesSessionAffinity(laterTurn, TENANT, "legacy-initial-input"),
+		);
+		expect(untypedHint?.keyHash).not.toBe(
+			responsesSessionAffinity(otherUser, TENANT, "legacy-initial-input")?.keyHash,
+		);
+		expect(typedHint?.keyHash).not.toBe(untypedHint?.keyHash);
+	});
+
 	test("combines Anthropic metadata.user_id with initial input only in legacy mode", () => {
 		const first = adaptAnthropicMessagesRequest({
 			model: "claude-opus-4-8",

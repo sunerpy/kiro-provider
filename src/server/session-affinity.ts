@@ -7,7 +7,6 @@ import {
 import type { AnthropicMessagesRequest } from "./anthropic/request-adapter.js";
 import type {
 	ChatCompletionRequest,
-	ResponsesInputItem,
 	ResponsesRequest,
 } from "./request-schema.js";
 
@@ -134,9 +133,12 @@ function nonEmptyMetadataValue<const Field extends string>(
 
 function initialResponsesInput(input: ResponsesRequest["input"]): unknown {
 	if (typeof input === "string") return { role: "user", content: input };
+	// Responses message items may omit `type`; treat untyped items as messages.
 	const preferred = input.find(
-		(item): item is ResponsesInputItem =>
-			item.type === "message" && item.role === "user",
+		(item) =>
+			(item.type === undefined || item.type === "message") &&
+			"role" in item &&
+			item.role === "user",
 	);
 	return preferred ?? input[0];
 }
