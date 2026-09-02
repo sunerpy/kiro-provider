@@ -118,6 +118,14 @@ function terminalError(status: number, message: string, code?: string): Response
   return openAiError(status, message, "upstream_error", code);
 }
 
+// Kept local so this branch compiles standalone; the classifier exports
+// isRetryableServerStatus with the same set and replaces this at integration.
+const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([500, 502, 503, 504]);
+
+function isRetryableServerStatus(status: number | undefined): boolean {
+  return status !== undefined && RETRYABLE_SERVER_STATUSES.has(status);
+}
+
 type RefreshFailure = KiroTokenRefreshError | AccountUnavailableError;
 
 function isRefreshFailure(error: unknown): error is RefreshFailure {
@@ -807,8 +815,11 @@ async function executeLoop(
         };
       }
       const error = normalizeSdkError(caught);
-      const serverErrorCount = error.status === 500 ? (serverErrors.get(account.id) ?? 0) + 1 : 0;
-      if (error.status === 500) serverErrors.set(account.id, serverErrorCount);
+      const retryableServerStatus = isRetryableServerStatus(error.status);
+      const serverErrorCount = retryableServerStatus
+        ? (serverErrors.get(account.id) ?? 0) + 1
+        : 0;
+      if (retryableServerStatus) serverErrors.set(account.id, serverErrorCount);
       const classification = classifyError(error, {
         accountId: account.id,
         accountCount: Math.max(1, eligibleAccountIds.size),
