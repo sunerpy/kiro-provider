@@ -519,6 +519,8 @@ const EXTENDED_LIFECYCLE_TYPES = new Set([
   "response.content_part.added",
   "response.output_text.done",
   "response.content_part.done",
+  "response.reasoning_summary_part.added",
+  "response.reasoning_summary_part.done",
   "response.function_call_arguments.done",
   "response.custom_tool_call_input.done",
 ]);
@@ -697,7 +699,9 @@ describe("responsesSseAdapter", () => {
     });
   });
 
-  test("normalizes a no-argument function call before streaming and replay", async () => {
+  test("streams a no-argument function call exactly as the canonical {} arguments", async () => {
+    // The SDK transformer already projects a Kiro tool call that never carried an
+    // input chunk as "{}"; the adapter must not re-normalize other payloads.
     const lines = [
       chunk({
         tool_calls: [
@@ -705,7 +709,7 @@ describe("responsesSseAdapter", () => {
             index: 0,
             id: "call_no_args",
             type: "function",
-            function: { name: "list_resources", arguments: "" },
+            function: { name: "list_resources", arguments: "{}" },
           },
         ],
       }),
@@ -800,7 +804,10 @@ describe("responsesSseAdapter", () => {
   });
 
   test("fails atomically when a valid call precedes an invalid custom wrapper", async () => {
-    const bridge = bridgeFor([{ type: "custom", name: "exec" }]);
+    const bridge = bridgeFor([
+      { type: "function", name: "plain", parameters: { type: "object" } },
+      { type: "custom", name: "exec" },
+    ]);
     const lines = [
       chunk({
         tool_calls: [
@@ -827,7 +834,7 @@ describe("responsesSseAdapter", () => {
     expect(terminalTypes(events)).toEqual(["response.failed"]);
     expect(events.some((event) => event.type === "response.completed")).toBe(false);
     expect(events.at(-1)?.body).toMatchObject({
-      response: { error: { code: "upstream_protocol_error" } },
+      response: { error: { code: "invalid_custom_tool_input" } },
     });
   });
 

@@ -247,12 +247,14 @@ describe("Responses event type registry and SSE serialization", () => {
 			"response.output_text.done",
 			"response.content_part.done",
 			"response.output_item.done",
+			"response.reasoning_summary_part.added",
 			"response.reasoning_summary_text.delta",
 			"response.reasoning_summary_text.done",
 			"response.completed",
 			"response.failed",
 		]);
 		expect(OPTIONAL_IGNORED_TYPES).toEqual([
+			"response.reasoning_summary_part.done",
 			"response.function_call_arguments.delta",
 			"response.function_call_arguments.done",
 			"response.custom_tool_call_input.delta",

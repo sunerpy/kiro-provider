@@ -67,6 +67,8 @@ export type BridgeFailure = {
   readonly ok: false;
   readonly code: BridgeErrorCode;
   readonly message: string;
+  /** Wire name of the upstream tool call that failed restoration, for hashed audit fields. */
+  readonly toolName?: string;
 };
 
 type BridgeBuildFailure = {
@@ -179,12 +181,9 @@ function isOutputItem(
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function normalizedFunctionArguments(argumentsText: string): string {
-  return argumentsText.trim().length === 0 ? "{}" : argumentsText;
-}
-
 function exactCustomInput(
   argumentsText: string,
+  toolName: string,
 ): { readonly ok: true; readonly input: string } | BridgeFailure {
   let parsed: unknown;
   try {
@@ -195,6 +194,7 @@ function exactCustomInput(
         ok: false,
         code: "invalid_custom_tool_input",
         message: "Custom tool arguments must be valid JSON",
+        toolName,
       };
     }
     throw error;
@@ -210,6 +210,7 @@ function exactCustomInput(
       ok: false,
       code: "invalid_custom_tool_input",
       message: 'Custom tool arguments must contain exactly {"input": string}',
+      toolName,
     };
   }
   return { ok: true, input: (parsed as { readonly input: string }).input };
@@ -258,10 +259,11 @@ export class ResponsesToolBridge {
           ok: false,
           code: "unknown_tool_alias",
           message: `Upstream returned undeclared tool ${call.name}`,
+          toolName: call.name,
         };
       }
       if (isCustomIdentity(identity)) {
-        const parsed = exactCustomInput(call.arguments);
+        const parsed = exactCustomInput(call.arguments, call.name);
         if (!parsed.ok) return parsed;
         items.push({
           id: call.itemId,
@@ -279,7 +281,7 @@ export class ResponsesToolBridge {
         call_id: call.id,
         ...(identity.kind === "namespace" ? { namespace: identity.namespace } : {}),
         name: identity.name,
-        arguments: normalizedFunctionArguments(call.arguments),
+        arguments: call.arguments,
       });
     }
     return { ok: true, items };

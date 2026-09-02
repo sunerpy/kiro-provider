@@ -4,6 +4,7 @@ export type OutputTextContent = {
 	readonly type: "output_text";
 	readonly text: string;
 	readonly annotations: readonly [];
+	readonly logprobs?: readonly [];
 };
 
 export type SummaryText = {
@@ -33,7 +34,7 @@ export type FunctionCallOutputItem = {
 	readonly namespace?: string;
 	readonly name: string;
 	readonly arguments: string;
-	readonly status?: "completed";
+	readonly status?: "in_progress" | "completed";
 };
 
 export type CustomToolCallOutputItem = {
@@ -43,7 +44,7 @@ export type CustomToolCallOutputItem = {
 	readonly namespace?: string;
 	readonly name: string;
 	readonly input: string;
-	readonly status?: "completed";
+	readonly status?: "in_progress" | "completed";
 };
 
 export type ResponseToolCallItem =
@@ -62,6 +63,51 @@ export type ResponseUsage = {
 	readonly input_tokens_details?: Readonly<Record<string, number>>;
 	readonly output_tokens_details?: Readonly<Record<string, number>>;
 };
+
+export function outputTextContent(text: string): OutputTextContent {
+	return { type: "output_text", text, annotations: [], logprobs: [] };
+}
+
+// Kiro exposes no cached-token or reasoning-token breakdown, so the OpenAI
+// detail objects are present for client compatibility and always report zero.
+export function responseUsage(usage: {
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly totalTokens: number;
+}): ResponseUsage {
+	return {
+		input_tokens: usage.inputTokens,
+		output_tokens: usage.outputTokens,
+		total_tokens: usage.totalTokens,
+		input_tokens_details: { cached_tokens: 0 },
+		output_tokens_details: { reasoning_tokens: 0 },
+	};
+}
+
+function normalizedUsage(usage: ResponseUsage): ResponseUsage {
+	return {
+		...usage,
+		input_tokens_details: usage.input_tokens_details ?? { cached_tokens: 0 },
+		output_tokens_details: usage.output_tokens_details ?? { reasoning_tokens: 0 },
+	};
+}
+
+// Non-stream responses build items directly; normalize the additive OpenAI
+// fields here so the JSON body and the SSE item events describe the same shape.
+function normalizedOutputItem(item: ResponseOutputItem): ResponseOutputItem {
+	if (item.type === "message") {
+		return {
+			...item,
+			content: item.content.map((part) =>
+				part.logprobs === undefined ? { ...part, logprobs: [] } : part,
+			),
+		};
+	}
+	if (item.type === "function_call" || item.type === "custom_tool_call") {
+		return item.status === undefined ? { ...item, status: "completed" } : item;
+	}
+	return item;
+}
 
 export type ResponseError = {
 	readonly code: string;
@@ -197,7 +243,7 @@ export function responseState(input: {
     max_tool_calls: null,
     metadata: configuration.metadata,
     model: input.model,
-    output: input.output ?? [],
+    output: (input.output ?? []).map(normalizedOutputItem),
     parallel_tool_calls: true,
     previous_response_id: null,
     reasoning: { effort: configuration.reasoningEffort, summary: null },
@@ -211,6 +257,6 @@ export function responseState(input: {
     top_p: null,
     truncation: "disabled",
     user: null,
-    usage: input.usage ?? null,
+    usage: input.usage === undefined ? null : normalizedUsage(input.usage),
   };
 }
