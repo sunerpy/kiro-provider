@@ -1,13 +1,29 @@
+import { RequestTransformError } from './errors.js'
+
 export interface UnifiedImage {
   mediaType: string
   data: string
+  /** Source path of the image block, used for error `param` values. */
+  path?: string
 }
 
 const MAX_KIRO_IMAGES = 4
 const MAX_KIRO_IMAGE_BYTES = 3_750_000
 
+/** The exact `ImageFormat` enum accepted by the Kiro streaming SDK. */
+export const KIRO_IMAGE_FORMATS = ['gif', 'jpeg', 'png', 'webp'] as const
+
+export type KiroImageFormat = (typeof KIRO_IMAGE_FORMATS)[number]
+
+const MEDIA_TYPE_FORMATS: Readonly<Record<string, KiroImageFormat>> = {
+  'image/gif': 'gif',
+  'image/jpeg': 'jpeg',
+  'image/png': 'png',
+  'image/webp': 'webp'
+}
+
 export interface KiroImage {
-  format: string
+  format: KiroImageFormat
   source: { bytes: Uint8Array }
 }
 
@@ -16,48 +32,39 @@ export interface ImageConversionResult {
   omitted: number
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
-  return bytes
-}
-
-function extractImagesFromAnthropicFormat(content: unknown[]): UnifiedImage[] {
-  const images: UnifiedImage[] = []
-  for (const item of content) {
-    if (!isRecord(item) || item.type !== 'image' || !isRecord(item.source)) continue
-    const source = item.source
-    if (source.type !== 'base64' || typeof source.data !== 'string') continue
-    images.push({
-      mediaType: typeof source.media_type === 'string' ? source.media_type : 'image/jpeg',
-      data: source.data
-    })
+function kiroImageFormat(mediaType: string, path: string): KiroImageFormat {
+  const format = MEDIA_TYPE_FORMATS[mediaType.trim().toLowerCase()]
+  if (format === undefined) {
+    throw new RequestTransformError(
+      `Image ${path} media type ${mediaType} is not supported by Kiro; use image/png, image/jpeg, image/gif, or image/webp`,
+      'unsupported_image_media_type',
+      path
+    )
   }
-  return images
+  return format
 }
 
-function extractImagesFromOpenAI(content: unknown[]): UnifiedImage[] {
-  const images: UnifiedImage[] = []
-  for (const item of content) {
-    if (!isRecord(item) || item.type !== 'image_url' || !isRecord(item.image_url)) continue
-    const url = item.image_url.url
-    if (typeof url !== 'string' || !url.startsWith('data:')) continue
-    const [header = '', data] = url.split(',', 2)
-    if (!data) continue
-    const mediaType = header.split(';')[0]?.replace('data:', '')
-    images.push({ mediaType: mediaType || 'image/jpeg', data })
+function decodeImageBase64(value: string, path: string): Uint8Array {
+  if (value.length === 0) {
+    throw new RequestTransformError(
+      `Image ${path} contains no base64 data`,
+      'invalid_image_data',
+      path
+    )
   }
-  return images
-}
-
-export function extractAllImages(content: unknown): UnifiedImage[] {
-  if (!Array.isArray(content)) return []
-  return [...extractImagesFromAnthropicFormat(content), ...extractImagesFromOpenAI(content)]
+  try {
+    const binary = atob(value)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+    return bytes
+  } catch (error) {
+    if (!(error instanceof DOMException)) throw error
+    throw new RequestTransformError(
+      `Image ${path} contains invalid base64 data`,
+      'invalid_image_data',
+      path
+    )
+  }
 }
 
 export function convertImagesToKiroFormat(images: UnifiedImage[]): ImageConversionResult {
@@ -71,20 +78,13 @@ export function convertImagesToKiroFormat(images: UnifiedImage[]): ImageConversi
   }
 
   return {
-    images: selected.map((image) => ({
-      format: image.mediaType.split('/')[1] || 'png',
-      source: { bytes: base64ToUint8Array(image.data) }
-    })),
+    images: selected.map((image) => {
+      const path = image.path ?? 'image'
+      return {
+        format: kiroImageFormat(image.mediaType, path),
+        source: { bytes: decodeImageBase64(image.data, path) }
+      }
+    }),
     omitted: images.length - selected.length
   }
-}
-
-export function extractTextFromParts(parts: unknown[]): string {
-  const textParts: string[] = []
-  for (const part of parts) {
-    if (!isRecord(part)) continue
-    if (typeof part.text === 'string') textParts.push(part.text)
-    else if (part.type === 'text' && part.text) textParts.push(String(part.text))
-  }
-  return textParts.join('')
 }

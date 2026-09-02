@@ -15,19 +15,19 @@ Web Search 生成解释性补偿文本。
 
 | 能力 | v0.5 行为 |
 | --- | --- |
-| 普通文本与连续同角色回合 | 保持原始顺序直接发送，不合并，也不插入分隔文本。 |
+| 普通文本与连续同角色回合 | 保持原始顺序直接发送，不合并，也不插入分隔文本。2026-09-02 的真实探针确认 Kiro 接受拆分的工具历史投影（`A{content}`、`A{toolUses:[a]}`、`A{toolUses:[b]}`、`U{toolResults:[ra]}` 加当前 `U{toolResults:[rb]}`），与原生合并形态 `A{content, toolUses:[a,b]}` + `U{toolResults:[ra,rb]}` 同样成功，因此保留不合并投影。 |
 | 同一消息中的多个顶层文本块 | 纯文本块在统一请求中保持独立，只在 Kiro 标量文本边界按原字节无分隔拼接。多个文本块与非文本内容交错时返回 `unsupported_content_block_projection`；工具结果内部的文本数组仍保持结构化。 |
 | Responses `instructions`；Chat/Responses `system`、`developer`；Anthropic `system` | `safe`：返回 `unsupported_instruction_projection`。Kiro 虽接受合法 `additionalContext` 结构，但 GPT 与 Claude 实测均未保留其中的指令内容或优先级。`legacy-user-prefix`：仅用 `\n\n` 连接原始文本并前置到首个 user 回合；不会恢复其他旧改写。 |
-| function 工具与 Responses custom 工具 | 保留精确声明、公开名称、schema、调用 ID、参数、结果、顺序与来源路径。历史缺少原始声明时返回 `missing_tool_declaration`。 |
+| function 工具与 Responses custom 工具 | 保留精确声明、公开名称、schema、调用 ID、参数、结果、顺序与来源路径。历史缺少原始声明时返回 `missing_tool_declaration`。Kiro 对无参数工具的调用从不发送 `input` 片段（2026-09-02 观测为 `{toolUseId, name}` 后接 `{toolUseId, name, stop: true}`），这种精确形态投影为 `{}`；任何已收到的片段（包括空串或仅空白）都必须是合法 JSON，否则流以 `malformed_upstream_tool_arguments` 失败。完成的调用若工具名不在声明中，以 `unknown_upstream_tool` 失败；custom 工具包装不是精确的 `{"input": string}` 时以 `invalid_custom_tool_input` 失败。 |
 | `tool_choice: auto` | 支持。 |
 | `tool_choice: none` | 仅在不存在尚未完成的工具状态时支持，否则拒绝。 |
 | required/指定工具 | 返回 `unsupported_tool_choice`；Kiro 无法保证。 |
 | `parallel_tool_calls: false` | 仅在没有可调用工具（包括 `tool_choice: none`）时作为无副作用字段接受，否则返回 `unsupported_parallel_tool_calls`。 |
 | strict schema、custom grammar、namespace 工具 | `strict: true`、custom `format` 和 namespace 身份都会被拒绝，不会被弱化或改名。 |
 | reasoning effort | 保留显式 effort 映射；Opus 5 的 `low/medium/high/xhigh/max` 已通过原生 `output_config.effort` 实时探针确认，无法映射的控制项按字段拒绝。 |
-| Responses reasoning summary | 仅省略 GPT 5.6 Sol 返回的精确 `...` 或 `…` 占位内容。Opus reasoning 与 Sol 的任何非占位 reasoning 均保留；请求加密回放时仍返回可回放的不透明 item，只是可见 summary 为空。 |
-| Responses `reasoning.encrypted_content` | Kiro 返回完整签名文本或 redacted envelope 时，响应包含随机 `kr1_...` 令牌，并由本地加密存储支撑。只有签名等不完整事件不会生成令牌。 |
-| 图片 | Anthropic base64 图片和 OpenAI data URL 映射到 Kiro。远程 URL、detail 控制、非法媒体、超过 4 张图片或超过 3.75 MiB base64 数据会被拒绝。 |
+| Responses reasoning summary | 仅省略 GPT 5.6 Sol 返回的精确 `...` 或 `…` 占位内容。Opus reasoning 与 Sol 的任何非占位 reasoning 均保留；请求加密回放时仍返回可回放的不透明 item，只是可见 summary 为空。summary 文本以 `response.reasoning_summary_part.added`、`response.reasoning_summary_text.delta`/`.done`、`response.reasoning_summary_part.done` 在 `summary_index` 0 上流式输出。assistant 文本之后再出现的 reasoning 会成为独立的后续 reasoning item。 |
+| Responses `reasoning.encrypted_content` | Kiro 返回完整签名文本或 redacted envelope 时，响应包含随机 `kr1_...` 令牌，并由本地加密存储支撑。只有签名等不完整事件不会生成令牌。每轮恰好一个 reasoning item 携带令牌（首个 item；文本之后恢复的 reasoning 生成的后续 item 不携带）。由于 Kiro 只在所有工具 delta 之后交付 envelope，流式 reasoning item 会在文本与工具 delta 期间保持打开，并在终止步骤完成：其 `reasoning_summary_text.done`、`reasoning_summary_part.done` 与 `output_item.done` 出现在后续 item 的 `output_item.added` 之后，因此 item 级 `done` 携带与 `response.completed` 相同的 `encrypted_content`。item 级 `output_item.done` 仍按输出顺序到达（reasoning、message、后续 reasoning、工具调用），所以从 `output_item.done` 组装历史的客户端（Codex `process_sse`）与按 `output_index` 建立快照的客户端（OpenAI SDK）都能重建 `response.completed.output`。未请求 `include: ["reasoning.encrypted_content"]` 时，reasoning item 仍在首个文本或工具 item 之前完成。 |
+| 图片 | 媒体类型为 `image/png`、`image/jpeg`、`image/gif` 或 `image/webp` 的 Anthropic base64 图片块和 OpenAI base64 data URL 映射到 Kiro SDK 的 `ImageFormat` 枚举。其他媒体类型（包括 `image/jpg`）返回 `unsupported_image_media_type`；空或非法 base64 返回 `invalid_image_data`；远程 URL 返回 `unsupported_image_source`；detail 控制按字段拒绝；超过 4 张图片或 3.75 MiB base64 数据返回 `too_many_images`。所有拒绝均为 HTTP 400，`param` 指向图片块路径。 |
 | Responses 内联文件 | 带 `file_data` 与 `filename` 的 `input_file` 映射到 Kiro 原生 document 结构，不会插入文件名或内容说明文本。Canonical 请求保留原始文件名；降级时把已识别的末尾扩展名放入独立 `format` 字段。剩余名称必须为 1–200 个 ASCII 字母数字、空格、`-`、`_`、圆括号或方括号，且不能有首尾或连续空格；任何需要其他有损改名的输入都返回 `invalid_file_name`。支持原始 base64 或 base64 data URL，格式为 `csv`、`doc`、`docx`、`html`、`md`、`pdf`、`txt`、`xls`、`xlsx`。无状态 Provider 无法解析 OpenAI 文件存储，因此拒绝 `file_id`。 |
 | 输出 token 上限 | 已探针确认 `claude-sonnet-5` 与 `claude-opus-5` 变体支持 1,024 到 128,000；其他模型返回 `unsupported_output_token_limit`。 |
 | 结构化输出与采样/logprob 控制 | 在取得等价 Kiro 原生能力证据前拒绝；默认纯文本格式可用。 |
@@ -35,6 +35,9 @@ Web Search 生成解释性补偿文本。
 | Kiro 托管 Web Search | 返回 `unsupported_web_search`，不会伪造 `web_search_call` 或引用事件。 |
 | Chat `stream_options.include_usage` | 仅流式 Chat 支持；启用后恰好输出一个独立、`choices` 为空的 usage chunk。其他 `stream_options` 字段会被拒绝。 |
 | 流完成语义 | 带 token usage 的 metadata 是立即生效的权威完成证据。当前 Kiro runtime 也会用合法 metering 事件结束成功流，但只有其后出现 clean EOF 才接受该证据。普通 EOF、只有 context 的流、空或非法 metering、嵌入式上游错误、未知事件、缺少工具身份或不完整/非法工具参数都会明确失败；工具事件也必须结构完整，非流式请求会在配置上限内重试。 |
+| stop reason 与截断 | Kiro 不暴露 stop reason。Responses 的 `status` 始终为 `completed`、`incomplete_details` 始终为 `null`；Anthropic 的 `stop_reason` 在有工具调用时为 `tool_use`，否则为 `end_turn`，永不为 `max_tokens`。因此被原生输出 token 上限截断的输出与正常结束无法区分。 |
+| Responses item 与 usage 形态 | `output_text` 部分携带 `annotations: []` 与 `logprobs: []`；function 与 custom 工具 item 携带 `status`（`output_item.added` 为 `in_progress`，`output_item.done` 与非流式输出为 `completed`）；`usage` 携带 `input_tokens_details.cached_tokens` 与 `output_tokens_details.reasoning_tokens`，由于 Kiro 不暴露此类拆分，两者始终为 `0`。 |
+| Anthropic thinking 块 | 文本之前的 reasoning 以一个 `thinking` 块流式输出，其 `signature_delta` 可以在最后一个 `thinking_delta` 之后、块停止之前到达。完成时仍无签名的 thinking 块，或没有对应块的签名，会以 `invalid_upstream_reasoning`（`api_error`）使流失败，与非流式 HTTP 502 同一处置。文本开始后到达的 reasoning 在响应完成时作为新块输出；文本块打开期间到达的 redacted envelope 等到文本块停止后再输出，因此不会有 delta 指向已停止的块。`message_delta.usage` 携带 canonical 的 `input_tokens` 与 `output_tokens`（缓存计数始终为 `0`）；`message_start.usage.input_tokens` 仍是由 `x-kiro-token-count-mode: estimate` 标记的估算值。回放的 `thinking` 块必须携带返回时的非空签名；`tool_result.content` 可以省略，视为空结果。 |
 
 受支持对象中的未知嵌套字段也会带字段路径被拒绝。接受后丢弃会造成虚假的
 协议兼容声明，因此这里有意采用默认拒绝。
@@ -127,6 +130,15 @@ Kiro，也绝不会作为明文 reasoning 降级。
 回放期间管道不能切换账号；绑定账号临时不可用时返回可重试的
 `reasoning_replay_account_unavailable`。
 
+回放解析把 reasoning item 周围连续相邻的 reasoning item、assistant message 与
+function/custom 工具调用视为同一个 assistant 轮次。该轮次的指纹覆盖其中所有
+assistant message 与工具调用（包括位于 reasoning item 之前的 item），解析出的
+envelope 附加到该轮次的首个 assistant message。同一轮次中不带
+`encrypted_content` 的同级 reasoning item 被接受为该轮次的输出元数据；同一轮次
+中相同的令牌合并为一次查询；同一轮次中出现两个不同令牌则返回
+`invalid_reasoning_replay`。会指向同一 assistant message 的不同 envelope 会被
+拒绝，而不是静默丢弃其一。
+
 可通过 `KIRO_PROVIDER_REASONING_REPLAY_KEYS` 提供逗号分隔的密钥环，每项格式
 为 `key-id:base64url-32-byte-key`（可省略 ID）。首个密钥用于新记录加密，其余
 只解密旧记录。未配置环境密钥环时，Provider 会在配置目录原子生成
@@ -144,6 +156,7 @@ Kiro，也绝不会作为明文 reasoning 降级。
 | `unsupported_file_reference` | 无状态 Provider 无法解析 Responses `file_id`；应发送内联 `file_data` 与 `filename`。 |
 | `invalid_file_name` | 文件名无法在不有损改写的前提下表示为 Kiro 原生 `name` 与 `format`；`param` 指向 `filename`。 |
 | `unsupported_file_format` / `invalid_file_data` | 内联文件格式或 base64 数据无法映射为 Kiro 原生 document。 |
+| `unsupported_image_media_type` / `invalid_image_data` / `unsupported_image_source` / `too_many_images` | 图片媒体类型不是 `image/png`、`image/jpeg`、`image/gif` 或 `image/webp`；base64 数据为空或非法；图片是远程 URL；或消息超过 4 张图片 / 3.75 MiB。`param` 指向图片块（大小限制时指向消息）。 |
 | `unsupported_parameter` | 指定字段没有经过证明的等价映射；`param` 给出路径。 |
 | `unsupported_tool_choice` | 无法保证 required 或指定工具选择。 |
 | `unsupported_parallel_tool_calls` | 无法保证仅串行调用工具。 |
@@ -154,6 +167,7 @@ Kiro，也绝不会作为明文 reasoning 降级。
 | `unsupported_stateful_responses` | 不提供服务端 Responses 状态。 |
 | `unsupported_web_search` | 不支持原生 Kiro 搜索/引用事件。 |
 | `reasoning_replay_*` | 加密回放的查询、上下文、密钥、过期、完整性或账号绑定失败。 |
+| `invalid_reasoning_replay` / `unsupported_reasoning_plaintext_replay` | reasoning item 格式非法、其轮次中没有 assistant 输出、与同轮次的同级 item 携带不同令牌，或（Anthropic）回放的 `thinking` 块签名为空；或 Responses reasoning item 只有明文 summary/content 且整个轮次中没有任何令牌。 |
 | `quota_exhausted`（HTTP 402） | 所有其他条件合格的账号均已达到已知额度。耗尽账号在刷新/创建 SDK 前被拒绝；上游 402 也会立即持久化并排除该账号。 |
 | 上游认证错误（HTTP 401/403） | 每个合格账号的一次强制刷新仍无法恢复认证。Provider 保留原始认证状态，不再返回 `max_request_iterations` HTTP 500。 |
 

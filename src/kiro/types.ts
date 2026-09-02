@@ -63,7 +63,7 @@ export interface CodeWhispererMessage {
     content: string
     modelId: string
     origin: string
-    images?: Array<{ format: string; source: { bytes: Uint8Array } }>
+    images?: Array<{ format: 'gif' | 'jpeg' | 'png' | 'webp'; source: { bytes: Uint8Array } }>
     documents?: Array<{
       name: string
       format: 'csv' | 'doc' | 'docx' | 'html' | 'md' | 'pdf' | 'txt' | 'xls' | 'xlsx'

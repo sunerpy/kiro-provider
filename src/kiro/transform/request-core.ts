@@ -16,12 +16,7 @@ import type {
   KiroAuthDetails,
 } from "../types.js";
 import { RequestTransformError } from "./errors.js";
-import {
-  buildHistory,
-  currentUserInput,
-  extractToolNamesFromHistory,
-  historyHasToolCalling,
-} from "./history-builder.js";
+import { buildHistory, currentUserInput } from "./history-builder.js";
 
 export interface RequestTransformResult {
   readonly request: CodeWhispererRequest;
@@ -196,8 +191,6 @@ export function buildCodeWhispererRequest(
   body: CanonicalRequest,
   model: string,
   auth: KiroAuthDetails,
-  _think = false,
-  _budget = 20_000,
   identity: RequestTransformIdentity = {},
 ): RequestTransformResult {
   if (!isCanonicalRequest(body)) {
@@ -270,16 +263,6 @@ export function buildCodeWhispererRequest(
   if (suppliedTools.length > 0) {
     currentInput.userInputMessageContext ??= {};
     currentInput.userInputMessageContext.tools = suppliedTools;
-  }
-  if (historyHasToolCalling(history) && canonical.toolChoice === "auto") {
-    const names = new Set(suppliedTools.map((tool) => tool.toolSpecification.name));
-    const missing = [...extractToolNamesFromHistory(history)].filter((name) => !names.has(name));
-    if (missing.length > 0) {
-      throw new RequestTransformError(
-        `Tool history is missing exact declarations for: ${missing.join(", ")}`,
-        "missing_tool_declaration",
-      );
-    }
   }
 
   const convId = identity.conversationId ?? randomUUID();

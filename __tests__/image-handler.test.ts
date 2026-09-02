@@ -1,64 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  convertImagesToKiroFormat,
-  extractAllImages,
-  extractTextFromParts
-} from '../src/kiro/transform/image-handler.js'
+import { RequestTransformError } from '../src/kiro/transform/errors.js'
+import { convertImagesToKiroFormat } from '../src/kiro/transform/image-handler.js'
 
 const HELLO_B64 = 'SGVsbG8='
 const HELLO_BYTES = [72, 101, 108, 108, 111]
-
-describe('extractAllImages', () => {
-  test('returns [] for non-array content', () => {
-    expect(extractAllImages('a string')).toEqual([])
-    expect(extractAllImages(null)).toEqual([])
-    expect(extractAllImages(undefined)).toEqual([])
-    expect(extractAllImages({ type: 'image' })).toEqual([])
-  })
-  test('extracts Anthropic base64 image with declared media_type', () => {
-    expect(
-      extractAllImages([
-        { type: 'text', text: 'hi' },
-        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: HELLO_B64 } }
-      ])
-    ).toEqual([{ mediaType: 'image/png', data: HELLO_B64 }])
-  })
-  test('Anthropic image without media_type defaults to image/jpeg', () => {
-    expect(extractAllImages([{ type: 'image', source: { type: 'base64', data: HELLO_B64 } }])).toEqual([
-      { mediaType: 'image/jpeg', data: HELLO_B64 }
-    ])
-  })
-  test('ignores Anthropic image whose source type is not base64', () => {
-    expect(extractAllImages([{ type: 'image', source: { type: 'url', url: 'http://x/y.png' } }])).toEqual([])
-  })
-  test('extracts OpenAI data-URL image and parses media type from header', () => {
-    expect(
-      extractAllImages([{ type: 'image_url', image_url: { url: `data:image/webp;base64,${HELLO_B64}` } }])
-    ).toEqual([{ mediaType: 'image/webp', data: HELLO_B64 }])
-  })
-  test('OpenAI data URL with no explicit media type defaults to image/jpeg', () => {
-    expect(extractAllImages([{ type: 'image_url', image_url: { url: `data:;base64,${HELLO_B64}` } }])).toEqual([
-      { mediaType: 'image/jpeg', data: HELLO_B64 }
-    ])
-  })
-  test('ignores OpenAI image_url that is not a data URL (http)', () => {
-    expect(extractAllImages([{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }])).toEqual([])
-  })
-  test('ignores data URL with no data portion after the comma', () => {
-    expect(extractAllImages([{ type: 'image_url', image_url: { url: 'data:image/png;base64,' } }])).toEqual([])
-  })
-  test('combines Anthropic then OpenAI images in that order', () => {
-    expect(
-      extractAllImages([
-        { type: 'image_url', image_url: { url: `data:image/gif;base64,${HELLO_B64}` } },
-        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: HELLO_B64 } }
-      ])
-    ).toEqual([
-      { mediaType: 'image/png', data: HELLO_B64 },
-      { mediaType: 'image/gif', data: HELLO_B64 }
-    ])
-  })
-})
 
 describe('convertImagesToKiroFormat', () => {
   test('decodes base64 to exact byte values and derives format from media type', () => {
@@ -69,9 +14,46 @@ describe('convertImagesToKiroFormat', () => {
     expect(Array.from(result.images[0]?.source.bytes ?? [])).toEqual(HELLO_BYTES)
     expect(result.images[0]?.source.bytes).toBeInstanceOf(Uint8Array)
   })
-  test('media type without a subtype falls back to format png', () => {
-    expect(convertImagesToKiroFormat([{ mediaType: 'image', data: HELLO_B64 }]).images[0]?.format).toBe('png')
+  test.each(['image', 'image/jpg', 'image/svg+xml', 'application/pdf', ''])(
+    'rejects media type %p instead of guessing a Kiro format',
+    (mediaType) => {
+      let caught: unknown
+      try {
+        convertImagesToKiroFormat([{ mediaType, data: HELLO_B64, path: 'messages.0.content.1' }])
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(RequestTransformError)
+      expect(caught).toMatchObject({
+        code: 'unsupported_image_media_type',
+        param: 'messages.0.content.1'
+      })
+    }
+  )
+  test('accepts the four SDK formats case-insensitively', () => {
+    expect(
+      convertImagesToKiroFormat([
+        { mediaType: 'image/GIF', data: HELLO_B64 },
+        { mediaType: 'image/jpeg', data: HELLO_B64 },
+        { mediaType: 'image/png', data: HELLO_B64 },
+        { mediaType: 'image/webp', data: HELLO_B64 }
+      ]).images.map((image) => image.format)
+    ).toEqual(['gif', 'jpeg', 'png', 'webp'])
   })
+  test.each(['not base64!', 'A', ''])(
+    'rejects invalid base64 %p with a transform error instead of a DOMException',
+    (data) => {
+      let caught: unknown
+      try {
+        convertImagesToKiroFormat([{ mediaType: 'image/png', data, path: 'input.0.content.2' }])
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(RequestTransformError)
+      expect(caught).not.toBeInstanceOf(DOMException)
+      expect(caught).toMatchObject({ code: 'invalid_image_data', param: 'input.0.content.2' })
+    }
+  )
   test('caps at 4 images and reports the omitted count', () => {
     const result = convertImagesToKiroFormat(
       Array.from({ length: 6 }, () => ({ mediaType: 'image/png', data: HELLO_B64 }))
@@ -91,25 +73,4 @@ describe('convertImagesToKiroFormat', () => {
   test('empty input yields no images and zero omitted', () => {
     expect(convertImagesToKiroFormat([])).toEqual({ images: [], omitted: 0 })
   })
-})
-
-describe('extractTextFromParts', () => {
-  test('joins text fields with no separator', () => {
-    expect(extractTextFromParts([{ text: 'foo' }, { text: 'bar' }])).toBe('foobar')
-  })
-  test('handles explicit type:text parts', () => {
-    expect(
-      extractTextFromParts([
-        { type: 'text', text: 'hello ' },
-        { type: 'text', text: 'world' }
-      ])
-    ).toBe('hello world')
-  })
-  test('skips parts with no text', () => {
-    expect(extractTextFromParts([{ type: 'image' }, { text: 'kept' }, {}])).toBe('kept')
-  })
-  test('ignores non-string text values', () => {
-    expect(extractTextFromParts([{ text: 123 }, { text: 'ok' }])).toBe('ok')
-  })
-  test('empty array yields empty string', () => expect(extractTextFromParts([])).toBe(''))
 })

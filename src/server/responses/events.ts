@@ -5,6 +5,7 @@ import type {
 	ResponseRequestConfiguration,
 	ResponseStateObject,
 	ResponseUsage,
+	SummaryText,
 } from "./state.js";
 import { responseState } from "./state.js";
 
@@ -18,6 +19,7 @@ export type {
 	ResponseOutputItem,
 	ResponseToolCallItem,
 	ResponseUsage,
+	SummaryText,
 } from "./state.js";
 
 export const CODEX_RECOGNIZED_TYPES = [
@@ -29,6 +31,7 @@ export const CODEX_RECOGNIZED_TYPES = [
   "response.output_text.done",
   "response.content_part.done",
   "response.output_item.done",
+  "response.reasoning_summary_part.added",
   "response.reasoning_summary_text.delta",
   "response.reasoning_summary_text.done",
   "response.completed",
@@ -37,6 +40,7 @@ export const CODEX_RECOGNIZED_TYPES = [
 
 // Codex ignores these event types; they exist only for stricter Responses clients.
 export const OPTIONAL_IGNORED_TYPES = [
+  "response.reasoning_summary_part.done",
   "response.function_call_arguments.delta",
   "response.function_call_arguments.done",
   "response.custom_tool_call_input.delta",
@@ -45,11 +49,6 @@ export const OPTIONAL_IGNORED_TYPES = [
 
 export type CodexRecognizedType = (typeof CODEX_RECOGNIZED_TYPES)[number];
 export type OptionalIgnoredType = (typeof OPTIONAL_IGNORED_TYPES)[number];
-
-export type SummaryText = {
-	readonly type: "summary_text";
-	readonly text: string;
-};
 
 export type ResponseCreatedEvent = {
   readonly type: "response.created";
@@ -60,7 +59,7 @@ export type ResponseCreatedEvent = {
 export type ResponseInProgressEvent = {
   readonly type: "response.in_progress";
   readonly sequence_number: number;
-  readonly response: import("./state.js").ResponseStateObject;
+  readonly response: ResponseStateObject;
 };
 
 export type OutputItemAddedEvent = {
@@ -104,6 +103,24 @@ export type ContentPartDoneEvent = {
   readonly output_index: number;
   readonly content_index: number;
   readonly part: OutputTextContent;
+};
+
+export type ReasoningSummaryPartAddedEvent = {
+  readonly type: "response.reasoning_summary_part.added";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly summary_index: number;
+  readonly part: SummaryText;
+};
+
+export type ReasoningSummaryPartDoneEvent = {
+  readonly type: "response.reasoning_summary_part.done";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly summary_index: number;
+  readonly part: SummaryText;
 };
 
 export type ReasoningSummaryTextDeltaEvent = {
@@ -183,6 +200,8 @@ export type ResponsesEvent =
   | OutputTextDeltaEvent
   | OutputTextDoneEvent
   | ContentPartDoneEvent
+  | ReasoningSummaryPartAddedEvent
+  | ReasoningSummaryPartDoneEvent
   | ReasoningSummaryTextDeltaEvent
   | ReasoningSummaryTextDoneEvent
   | OutputItemDoneEvent
@@ -310,6 +329,40 @@ export function contentPartDone(input: {
     item_id: input.itemId,
     output_index: input.outputIndex,
     content_index: input.contentIndex,
+    part: input.part,
+  };
+}
+
+export function reasoningSummaryPartAdded(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly summaryIndex: number;
+  readonly part: SummaryText;
+  readonly sequenceNumber: number;
+}): ReasoningSummaryPartAddedEvent {
+  return {
+    type: "response.reasoning_summary_part.added",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    summary_index: input.summaryIndex,
+    part: input.part,
+  };
+}
+
+export function reasoningSummaryPartDone(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly summaryIndex: number;
+  readonly part: SummaryText;
+  readonly sequenceNumber: number;
+}): ReasoningSummaryPartDoneEvent {
+  return {
+    type: "response.reasoning_summary_part.done",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    summary_index: input.summaryIndex,
     part: input.part,
   };
 }

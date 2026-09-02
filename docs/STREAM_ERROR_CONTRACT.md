@@ -30,7 +30,7 @@ Attempt-level retry belongs in the downstream orchestrator.
 | `upstream_stream_incomplete` | The stream ended without an authoritative completion witness, or the canonical stream reached EOF before `completed`. | Retry with bounded exponential backoff. |
 | `upstream_stream_idle_timeout` | No upstream event arrived before the configured stream idle timeout. | Retry if the request deadline still has budget. |
 | `request_deadline_exceeded` | The provider-side request deadline won the terminal race. | Retry only under the caller's overall deadline and attempt budget. |
-| `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. No tool-call delta is exposed before this validation succeeds. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
+| `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. No tool-call delta is exposed before this validation succeeds. A call that stopped without ever carrying an `input` key (the probe-confirmed zero-parameter shape) is projected as `{}` and is not malformed; an empty or whitespace-only fragment that was actually received still is. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
 
 The 2026-08-29 18:05 incident was logged as a top-level SDK `TypeError`, not a
 clean EOF. With this contract it maps to `upstream_stream_error`.
@@ -44,10 +44,21 @@ completion witness.
 | `upstream_protocol_error` | The canonical stream was malformed, out of order, or internally inconsistent. |
 | `upstream_invalid_state` | Kiro emitted an explicit invalid-state event. |
 | `unsupported_upstream_event` | Kiro emitted an unknown or unsupported event type. |
-| `invalid_upstream_reasoning` | Reasoning signatures or visible/redacted reasoning metadata contradicted each other. |
+| `invalid_upstream_reasoning` | Reasoning signatures or visible/redacted reasoning metadata contradicted each other, or (Anthropic Messages) a thinking block completed without any signature, or a signature arrived without a thinking block. This matches the non-stream HTTP 502 for the same upstream output. |
 | `invalid_upstream_tool_call` | A tool call omitted its identity, changed its name while streaming, or appended arguments after its stop marker. |
 | `incomplete_upstream_tool_call` | A completion witness arrived but a tool call never reached its structural stop marker. |
 | `missing_upstream_stream` | The SDK response contained no event stream. |
+| `unknown_upstream_tool` | Kiro completed a tool call whose wire name matches no declared tool or bridge alias (typically a hallucinated tool name). Responses only; the bridge code is `unknown_tool_alias`. |
+| `invalid_custom_tool_input` | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`. |
+
+`unknown_upstream_tool` and `invalid_custom_tool_input` are model-output
+failures rather than transport or provider-protocol failures. They keep the
+fatal disposition for now: retrying may repeat the same output, and the alias
+table could also be at fault. The provider records an
+`upstream_tool_restore_failed` audit event for each occurrence so real traffic
+can show whether replacement attempts succeed; the disposition will be revisited
+after that evidence exists. Downstream classifiers should therefore treat both
+codes as fatal until this document changes.
 
 These failures require a provider/protocol correction. Mechanical retry can
 repeat the same failure and must not be the default.
@@ -160,6 +171,10 @@ changing `Fatal` to `Transient` is insufficient if the engine does not discard
 the failed attempt's partial output before replay.
 
 ## Provider observability
+
+The `upstream_tool_restore_failed` audit event (Responses) includes
+`error_code`, `error_disposition`, the internal `bridge_code`, and a hashed
+`tool_name_hash`; the raw tool name is never logged.
 
 The `sdk_stream_upstream_error` audit event now includes:
 

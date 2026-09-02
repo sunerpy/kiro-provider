@@ -22,7 +22,7 @@ describe("ResponsesToolBridge exact declarations", () => {
 				itemId: "item_f",
 				id: "call_f",
 				name: "read",
-				arguments: "",
+				arguments: "{}",
 			},
 			{
 				itemId: "item_c",

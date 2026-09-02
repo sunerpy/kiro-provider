@@ -175,6 +175,8 @@ function toolResultContent(
   value: unknown,
   path: string,
 ): AnthropicFailure | readonly CanonicalTextPart[] {
+  // Anthropic's tool_result.content is optional; an omitted result is empty.
+  if (value === undefined) return [];
   if (typeof value === "string") return [textPart(value, path)];
   if (!Array.isArray(value)) {
     return failure(
@@ -216,6 +218,16 @@ function reasoningContent(
         `Invalid request: ${path} requires thinking text and signature`,
         "invalid_reasoning_replay",
         path,
+      );
+    }
+    // An empty signature only exists transiently at the start of a stream; a
+    // replayed block must carry the signature Kiro emitted, or Kiro cannot
+    // verify it. Reject explicitly instead of forwarding an unsigned block.
+    if (block.signature.length === 0) {
+      return failure(
+        `Invalid request: ${path}.signature must be the non-empty signature returned with the thinking block`,
+        "invalid_reasoning_replay",
+        `${path}.signature`,
       );
     }
     return { kind: "reasoning_text", text: block.thinking, signature: block.signature };

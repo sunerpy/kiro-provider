@@ -21,17 +21,10 @@ export function transformToSdkRequest(
   budget = 20_000,
   effortConfig?: EffortConfig
 ): SdkPreparedRequest {
-  const { request, resolved, convId } = buildCodeWhispererRequest(
-    body,
-    model,
-    auth,
-    think,
-    budget,
-    {
-      conversationId: effortConfig?.conversationId,
-      resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays
-    }
-  )
+  const { request, resolved, convId } = buildCodeWhispererRequest(body, model, auth, {
+    conversationId: effortConfig?.conversationId,
+    resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays
+  })
   const effort = resolveEffectiveEffort({
     model,
     think,
