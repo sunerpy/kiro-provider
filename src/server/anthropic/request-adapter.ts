@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -103,10 +104,6 @@ const REQUEST_KEYS = new Set([
   "metadata",
 ]);
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function failure(message: string, code?: string, param?: string): AnthropicFailure {
   return {
     ok: false,
@@ -144,10 +141,6 @@ function formatIssues(error: z.ZodError): string {
       return `${path}: ${issue.message}`;
     })
     .join(", ");
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
 }
 
 function systemParts(

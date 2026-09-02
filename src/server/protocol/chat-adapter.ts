@@ -1,4 +1,5 @@
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -13,6 +14,7 @@ import {
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import type { ChatCompletionRequest } from "../request-schema.js";
 import {
+  allowedKeysValidator,
   type ProtocolResult,
   protocolFailure,
 } from "./adaptation.js";
@@ -69,29 +71,7 @@ const UNSUPPORTED_CHAT_FIELDS = [
 
 type ChatMessage = ChatCompletionRequest["messages"][number];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateAllowedKeys(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  allowed: ReadonlySet<string>,
-): ProtocolResult<undefined> {
-  for (const key of Object.keys(value)) {
-    if (allowed.has(key)) continue;
-    return protocolFailure(
-      "unsupported_parameter",
-      `Chat field ${path}.${key} is not supported`,
-      `${path}.${key}`,
-    );
-  }
-  return { ok: true, value: undefined };
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
-}
+const validateAllowedKeys = allowedKeysValidator("Chat field");
 
 function mapContent(
   content: ChatMessage["content"],

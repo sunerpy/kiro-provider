@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { textPart } from "../../protocol/adapter-utils.js";
 import {
-  type CanonicalContentPart,
   type CanonicalMessage,
   type CanonicalRequest,
   type CanonicalToolDeclaration,
@@ -29,10 +29,6 @@ export interface RequestTransformResult {
 export interface RequestTransformIdentity {
   readonly conversationId?: string;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
-}
-
-function sourceTextPart(text: string, path: string): CanonicalContentPart {
-  return { type: "text", text, path };
 }
 
 function cloneMessage(message: CanonicalMessage): CanonicalMessage {
@@ -106,7 +102,7 @@ function projectMessages(request: CanonicalRequest): {
   if (firstUserIndex < 0) {
     messages.unshift({
       role: "user",
-      content: [sourceTextPart(prefix, "legacy-user-prefix")],
+      content: [textPart(prefix, "legacy-user-prefix")],
       toolCalls: [],
       path: "legacy-user-prefix",
     });
@@ -120,7 +116,7 @@ function projectMessages(request: CanonicalRequest): {
   messages[firstUserIndex] = {
     ...firstUser,
     content: [
-      sourceTextPart(`${prefix}\n\n`, "legacy-user-prefix"),
+      textPart(`${prefix}\n\n`, "legacy-user-prefix"),
       ...firstUser.content,
     ],
   };
