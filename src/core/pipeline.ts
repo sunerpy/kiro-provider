@@ -989,6 +989,19 @@ async function runAttempt(
         },
       };
     }
+    // Non-stream collection shares the raw-event audit the streaming path emits
+    // from pipeline-stream.ts so both modes leave the same operator trail.
+    const eventTypeCounts = new Map<string, number>();
+    let rawEventCount = 0;
+    let lastEventType: string | undefined;
+    const collectAuditFields = (): Readonly<Record<string, string | number | undefined>> => ({
+      model: options.model,
+      conversation_hash: auditHash(prepared.conversationId),
+      raw_event_count: rawEventCount,
+      last_event_type: lastEventType,
+      event_type_counts: JSON.stringify(Object.fromEntries([...eventTypeCounts.entries()].sort())),
+      mode: "non-stream",
+    });
     let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
     try {
       completion = await collectSdkResponse(
@@ -996,13 +1009,35 @@ async function runAttempt(
         options.model,
         prepared.conversationId,
         signal,
-        captureOptions,
+        {
+          ...captureOptions,
+          onCompletionWitness: (kind) => {
+            auditLog("info", "sdk_stream_completion_witness", {
+              model: options.model,
+              conversation_hash: auditHash(prepared.conversationId),
+              witness_kind: kind,
+              mode: "non-stream",
+            });
+          },
+          onRawEvent: (eventTypes) => {
+            rawEventCount += 1;
+            lastEventType = eventTypes.join("+");
+            for (const eventType of eventTypes) {
+              eventTypeCounts.set(eventType, (eventTypeCounts.get(eventType) ?? 0) + 1);
+            }
+          },
+        },
       );
     } catch (collectError) {
+      auditLog("warn", "sdk_stream_upstream_error", {
+        ...collectAuditFields(),
+        error_name: collectError instanceof Error ? collectError.name : typeof collectError,
+      });
       abortUpstream(collectError);
       throw collectError;
     }
     if (signal.aborted) throw abortReason(signal);
+    auditLog("info", "sdk_stream_completed", collectAuditFields());
     return {
       kind: "result",
       leaseTransferred: false,
