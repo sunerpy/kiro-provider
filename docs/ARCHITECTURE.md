@@ -74,14 +74,21 @@ support is a transport-layer concern applied uniformly to every SDK call
 (chat requests, token refresh, and device-code login all reuse the same
 resolution).
 
-SDK clients are cached by account, region, endpoint, proxy, effort, and the
-current access token. Token rotation invalidates the credential-bound client
-immediately while retaining the account-scoped `NodeHttpHandler`.
-Effort-specific clients for one account share that transport. By default its
-direct and proxy agents use fresh sockets
-(`sdk_http_keep_alive: false`); setting the option to `true` explicitly opts
-into pooled socket reuse. Transport reuse therefore survives token refresh,
-but no mode promises a specific physical TCP connection.
+SDK clients are cached by account, region, endpoint, proxy, and the current
+access token. Token rotation invalidates the credential-bound client
+immediately while retaining the account-scoped `NodeHttpHandler`; the client
+is configured with a single SDK attempt (`maxAttempts: 1`) because the
+pipeline owns retries. Effort is no longer part of the cache key: it is merged
+into each command's `additionalModelRequestFields`, so one client per account
+transport serves every effort level. When an account disappears from the
+store its clients and transport are evicted. By default the direct and proxy
+agents use fresh sockets (`sdk_http_keep_alive: false`); setting the option
+to `true` explicitly opts into pooled socket reuse. Transport reuse therefore
+survives token refresh, but no mode promises a specific physical TCP
+connection. On idle timeout, consumer cancel, or a failed non-stream
+collection the pipeline aborts the upstream request and destroys the response
+body (Bun drops the SDK's own abort listener once a response starts), so a
+released account lease never leaves a Kiro stream running.
 
 ## Authentication authority and provider state
 

@@ -35,9 +35,10 @@ import {
   SdkStreamProtocolError,
   ToolCallViolation,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
-import { openAiError } from "../server/errors.js";
+import { newRequestId, openAiError, openAiInternalError } from "../server/errors.js";
 import {
   classifyError,
+  isRetryableServerStatus,
   normalizeSdkError,
   type NormalizedSdkError,
 } from "./error-classifier.js";
@@ -121,35 +122,9 @@ function terminalError(status: number, message: string, code?: string): Response
   return openAiError(status, message, "upstream_error", code);
 }
 
-// Mirrors the server layer's internal-error envelope (src/server/errors.ts on
-// the server branch) so both halves of B16 present one shape to clients.
-export const INTERNAL_ERROR_MESSAGE = "Internal server error";
-
-function newRequestId(): string {
-  return `req_${randomUUID()}`;
-}
-
-function internalErrorResponse(requestId: string): Response {
-  return new Response(
-    JSON.stringify({
-      error: {
-        message: `${INTERNAL_ERROR_MESSAGE} (request_id: ${requestId})`,
-        type: "internal_error",
-        code: "internal_error",
-        request_id: requestId,
-      },
-    }),
-    { status: 500, headers: { "Content-Type": "application/json" } },
-  );
-}
-
-// Kept local so this branch compiles standalone; the classifier exports
-// isRetryableServerStatus with the same set and replaces this at integration.
-const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([500, 502, 503, 504]);
-
-function isRetryableServerStatus(status: number | undefined): boolean {
-  return status !== undefined && RETRYABLE_SERVER_STATUSES.has(status);
-}
+// B16: both halves of the pipeline/server internal-error envelope share one
+// implementation so clients see one shape and operators one request_id format.
+export { INTERNAL_ERROR_MESSAGE } from "../server/errors.js";
 
 type StreamFailureError =
   | SemanticStreamTruncationError
@@ -1314,7 +1289,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       error_code: normalized.code,
       error_message_hash: auditHash(normalized.message),
     });
-    return internalErrorResponse(requestId);
+    return openAiInternalError(requestId);
   } finally {
     if (!streamOwnsResources) {
       releaseAccount?.();

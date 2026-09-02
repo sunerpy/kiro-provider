@@ -373,7 +373,14 @@ describe("createApp", () => {
 		const body: unknown = await response.json();
 
 		expect(response.status).toBe(500);
-		expect(body).toMatchObject({ error: { code: "Error", message: "selection failed" } });
+		expect(body).toMatchObject({
+			error: {
+				type: "internal_error",
+				code: "internal_error",
+				message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+				request_id: expect.stringMatching(/^req_/),
+			},
+		});
 	});
 
 	test("converts a request-body stream failure into a fixed 500 with a request id", async () => {
