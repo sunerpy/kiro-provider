@@ -69,6 +69,21 @@ export class AccountManager {
     return this.accounts.map(cloneAccount)
   }
 
+  /**
+   * Re-reads one account row from the database and publishes it to the
+   * in-memory snapshot. Returns undefined when the account no longer exists.
+   */
+  getLatestAccount(id: string): StoredAccount | undefined {
+    const latest = this.database.getById(id)
+    if (!latest) {
+      this.accounts = this.accounts.filter((account) => account.id !== id)
+      return undefined
+    }
+    const current = this.accounts.find((account) => account.id === id)
+    if (current?.generation !== latest.generation) this.replaceAccount(cloneAccount(latest))
+    return cloneAccount(latest)
+  }
+
   getMinWaitTime(): number {
     const now = Date.now()
     const waits = this.accounts
@@ -232,11 +247,22 @@ export class AccountManager {
         this.reconcileFromDb()
         return undefined
       }
+      if (attempt > 0 && !this.sameCredentials(account, current)) {
+        // Another writer already rotated this login's credentials; adopt the
+        // newer row instead of overwriting it with this refresh result.
+        this.replaceAccount(cloneAccount(current))
+        return cloneAccount(current)
+      }
       const updated: StoredAccount = {
         ...current,
         refreshToken: refresh.refreshToken,
         accessToken: auth.access,
-        expiresAt: auth.expires
+        expiresAt: auth.expires,
+        ...(auth.email ? { email: auth.email } : {}),
+        isHealthy: true,
+        failCount: 0,
+        unhealthyReason: undefined,
+        recoveryTime: undefined
       }
       if (this.database.updateExistingAccounts([updated]) === 1) {
         const persisted = { ...updated, generation: current.generation + 1 }
@@ -262,11 +288,18 @@ export class AccountManager {
 
   private isSameLogin(started: StoredAccount, current: StoredAccount): boolean {
     return (
-      current.refreshToken === started.refreshToken &&
       current.authMethod === started.authMethod &&
       current.clientId === started.clientId &&
       current.email === started.email &&
       current.startUrl === started.startUrl
+    )
+  }
+
+  private sameCredentials(started: StoredAccount, current: StoredAccount): boolean {
+    return (
+      current.refreshToken === started.refreshToken &&
+      current.accessToken === started.accessToken &&
+      current.expiresAt === started.expiresAt
     )
   }
 

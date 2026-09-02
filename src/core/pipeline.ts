@@ -14,7 +14,13 @@ import { CANONICAL_OUTPUT_JSON_CONTENT_TYPE } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { KIRO_CONSTANTS } from "../kiro/constants.js";
-import { isAccessTokenError, isQuotaExhausted } from "../kiro/health.js";
+import { KiroTokenRefreshError } from "../kiro/errors.js";
+import {
+  isAccessTokenError,
+  isQuotaExhausted,
+  isRefreshTokenDead,
+  toDeadReason,
+} from "../kiro/health.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import { transformToSdkRequest } from "../kiro/transform/request-sdk.js";
 import { RequestTransformError } from "../kiro/transform/errors.js";
@@ -46,6 +52,7 @@ import { createPipelineStreamResponse } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type { RunChatCompletionOptions } from "./pipeline-types.js";
 import { createSdkClient } from "./sdk-client.js";
+import { AccountUnavailableError } from "./token-refresher.js";
 
 export type {
   PipelineAccountManager,
@@ -107,6 +114,29 @@ function thinkingOptions(
 
 function terminalError(status: number, message: string, code?: string): Response {
   return openAiError(status, message, "upstream_error", code);
+}
+
+type RefreshFailure = KiroTokenRefreshError | AccountUnavailableError;
+
+function isRefreshFailure(error: unknown): error is RefreshFailure {
+  return error instanceof KiroTokenRefreshError || error instanceof AccountUnavailableError;
+}
+
+function refreshFailureReason(failure: RefreshFailure): string {
+  const code = failure instanceof KiroTokenRefreshError ? failure.code : undefined;
+  return code ? `${code}: ${failure.message}` : failure.message;
+}
+
+function refreshFailureResponse(): CompletionResult {
+  return {
+    kind: "response",
+    response: openAiError(
+      503,
+      "Token refresh failed for every usable Kiro account",
+      "service_unavailable",
+      "upstream_token_refresh_failed",
+    ),
+  };
 }
 
 function persistQuotaExhaustion(
@@ -351,8 +381,10 @@ async function executeLoop(
   const serverErrors = new Map<string, number>();
   const requestExcludedAccountIds = new Set<string>();
   const reportedQuotaExhaustedAccountIds = new Set<string>();
+  const refreshNetworkRetriedAccountIds = new Set<string>();
   let lastAuthenticationFailure: NormalizedSdkError | undefined;
   let lastQuotaFailure: NormalizedSdkError | undefined;
+  let lastRefreshFailure: RefreshFailure | undefined;
   let retryCount = 0;
   let iterations = 0;
   let binding =
@@ -373,6 +405,53 @@ async function executeLoop(
   let requestConversationId =
     replayState.conversationId ?? effectiveBinding?.conversationId;
   const modelRejectedAccountIds = new Set<string>();
+
+  /**
+   * A refresh failure before the upstream call started is an account-level
+   * fault, not a request fault: exclude the account for this request and let
+   * the loop pick another one. A first NETWORK_ERROR gets one bounded retry on
+   * the same account before it is excluded.
+   */
+  const excludeAfterRefreshFailure = (
+    failed: ManagedAccount,
+    failure: RefreshFailure,
+  ): "retry" | "switch" => {
+    const reason = refreshFailureReason(failure);
+    const refreshTokenDead =
+      failure instanceof KiroTokenRefreshError && isRefreshTokenDead(reason);
+    const networkError =
+      failure instanceof KiroTokenRefreshError && failure.code === "NETWORK_ERROR";
+    lastRefreshFailure = failure;
+    if (networkError && !refreshNetworkRetriedAccountIds.has(failed.id)) {
+      refreshNetworkRetriedAccountIds.add(failed.id);
+      auditLog("warn", "account_token_refresh_retry", {
+        account_hash: auditHash(failed.id),
+        error_code: failure.code,
+      });
+      return "retry";
+    }
+    requestExcludedAccountIds.add(failed.id);
+    if (failure instanceof KiroTokenRefreshError) {
+      if (refreshTokenDead) {
+        options.accountManager.markUnhealthy(failed, toDeadReason(reason));
+      } else {
+        options.accountManager.markRateLimited(
+          failed,
+          Date.now() + options.config.rate_limit_retry_delay_ms,
+        );
+      }
+    }
+    auditLog("warn", "account_token_refresh_failed", {
+      account_hash: auditHash(failed.id),
+      error_type: failure.name,
+      error_code: failure instanceof KiroTokenRefreshError ? failure.code : undefined,
+      refresh_token_dead: refreshTokenDead,
+    });
+    preferredAccountId = undefined;
+    requestAccountId = undefined;
+    requestConversationId = undefined;
+    return "switch";
+  };
 
   if (options.quotaRechecker) {
     await options.quotaRechecker.recheckDueAccounts(
@@ -475,6 +554,9 @@ async function executeLoop(
             lastQuotaFailure?.code ?? "quota_exhausted",
           ),
         };
+      }
+      if (candidateAccountIds.length === 0 && lastRefreshFailure !== undefined) {
+        return refreshFailureResponse();
       }
       if (
         modelRejectedAccountIds.size > 0 ||
@@ -668,6 +750,12 @@ async function executeLoop(
           throw caught;
         }
         if (replayLocked) return replayUnavailable();
+        if (isRefreshFailure(caught)) {
+          if (excludeAfterRefreshFailure(account, caught) === "retry") {
+            await abortableSleep(options.config.rate_limit_retry_delay_ms, signal);
+          }
+          continue;
+        }
         throw caught;
       }
       if (caught instanceof SemanticStreamTruncationError) {
@@ -705,7 +793,16 @@ async function executeLoop(
 
       switch (classification.action) {
         case "refresh-then-retry":
-          await abortable(options.tokenRefresher.forceRefresh(account, signal), signal);
+          try {
+            await abortable(options.tokenRefresher.forceRefresh(account, signal), signal);
+          } catch (refreshError) {
+            if (signal.aborted) throw abortReason(signal);
+            if (!isRefreshFailure(refreshError)) throw refreshError;
+            if (replayLocked) return replayUnavailable();
+            if (excludeAfterRefreshFailure(account, refreshError) === "retry") {
+              await abortableSleep(options.config.rate_limit_retry_delay_ms, signal);
+            }
+          }
           continue;
         case "retry":
           retryCount += 1;
