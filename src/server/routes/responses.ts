@@ -36,7 +36,10 @@ import {
   responseConfigurationFromCanonical,
   responseState,
 } from "../responses/state.js";
-import type { ResponsesToolBridge } from "../responses/tool-bridge.js";
+import {
+  type ResponsesToolBridge,
+  reportToolRestoreFailure,
+} from "../responses/tool-bridge.js";
 import {
   canonicalSessionLineage,
   responsesSessionAffinity,
@@ -88,7 +91,8 @@ function completedResponse(
     })),
   );
   if (!restored.ok) {
-    return openAiError(502, restored.message, "upstream_error", "upstream_protocol_error");
+    const failure = reportToolRestoreFailure(restored);
+    return openAiError(502, failure.message, "upstream_error", failure.code);
   }
   const output: ResponseOutputItem[] = [];
   const reasoningText = payload.reasoning?.text;

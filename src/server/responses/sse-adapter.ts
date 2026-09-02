@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { auditHash, auditLog } from "../../core/audit-log.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
 import {
   normalizeStreamFailure,
@@ -48,7 +47,11 @@ import {
   type ResponseUsage,
   responseUsage,
 } from "./state.js";
-import type { BridgeFailure, ResponsesToolBridge } from "./tool-bridge.js";
+import {
+  type BridgeFailure,
+  type ResponsesToolBridge,
+  reportToolRestoreFailure,
+} from "./tool-bridge.js";
 
 type AdapterOptions = {
   readonly model: string;
@@ -79,12 +82,6 @@ type TerminalFailure = {
 
 function toTerminalFailure(failure: StreamFailure): TerminalFailure {
   return { code: failure.code, message: failure.message };
-}
-
-// Model-output tool failures keep a fatal disposition for now; the typed codes
-// exist so real traffic can be observed before any retry policy is decided.
-function toolRestoreFailureCode(failure: BridgeFailure): string {
-  return failure.code === "unknown_tool_alias" ? "unknown_upstream_tool" : failure.code;
 }
 
 type ToolCallAccumulator = {
@@ -244,17 +241,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     beginTerminal("upstream-protocol-error", undefined, { code, message });
   };
   const failToolRestore = (failure: BridgeFailure): void => {
-    const code = toolRestoreFailureCode(failure);
-    auditLog("warn", "upstream_tool_restore_failed", {
-      protocol: "responses",
-      error_code: code,
-      error_disposition: "fatal",
-      bridge_code: failure.code,
-      ...(failure.toolName !== undefined
-        ? { tool_name_hash: auditHash(failure.toolName) }
-        : {}),
-    });
-    beginTerminal("upstream-protocol-error", undefined, { code, message: failure.message });
+    beginTerminal("upstream-protocol-error", undefined, reportToolRestoreFailure(failure));
   };
   const failIncomplete = (): void => {
     beginTerminal(

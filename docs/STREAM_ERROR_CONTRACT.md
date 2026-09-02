@@ -51,6 +51,10 @@ completion witness.
 | `unknown_upstream_tool` | Kiro completed a tool call whose wire name matches no declared tool or bridge alias (typically a hallucinated tool name). Responses only; the bridge code is `unknown_tool_alias`. |
 | `invalid_custom_tool_input` | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`. |
 
+Both codes are shared by the Responses SSE path (`response.failed`) and the
+non-stream Responses path, which returns HTTP 502 with
+`error.type=upstream_error` and the same `error.code`.
+
 `unknown_upstream_tool` and `invalid_custom_tool_input` are model-output
 failures rather than transport or provider-protocol failures. They keep the
 fatal disposition for now: retrying may repeat the same output, and the alias
@@ -172,9 +176,10 @@ the failed attempt's partial output before replay.
 
 ## Provider observability
 
-The `upstream_tool_restore_failed` audit event (Responses) includes
-`error_code`, `error_disposition`, the internal `bridge_code`, and a hashed
-`tool_name_hash`; the raw tool name is never logged.
+The `upstream_tool_restore_failed` audit event (Responses, emitted by both the
+SSE and non-stream paths) includes `error_code`, `error_disposition`, the
+internal `bridge_code`, and a hashed `tool_name_hash`; the raw tool name is
+never logged.
 
 The `sdk_stream_upstream_error` audit event now includes:
 
