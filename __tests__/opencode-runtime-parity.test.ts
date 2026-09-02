@@ -207,25 +207,37 @@ describe("OpenCodeAccountManager parity with AccountManager", () => {
   });
 
   test("selection sequences match the local manager for every strategy", () => {
-    const fleet = [
-      account("B", { usedCount: 2, lastUsed: 20 }),
-      account("A", { usedCount: 2, lastUsed: 10 }),
-      account("C", { usedCount: 1, lastUsed: 30 }),
-    ];
-    for (const strategy of ["sticky", "round-robin", "lowest-usage"] as const) {
-      const { manager } = openCodeManager(fleet, strategy);
-      const local = localManager(fleet, strategy);
-      const steps: readonly (string | undefined)[] = [
-        undefined,
-        "B",
-        undefined,
-        undefined,
-        "missing",
-        undefined,
+    // Both managers stamp lastUsed with Date.now(); lowest-usage breaks usedCount
+    // ties on that stamp, so picks that share or split a millisecond would make
+    // the two sequences diverge. Drive both through one deterministic clock.
+    let tick = 1_000_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => {
+      tick += 1_000;
+      return tick;
+    });
+    try {
+      const fleet = [
+        account("B", { usedCount: 2, lastUsed: 20 }),
+        account("A", { usedCount: 2, lastUsed: 10 }),
+        account("C", { usedCount: 1, lastUsed: 30 }),
       ];
-      const sharedPicks = steps.map((preferred) => manager.selectHealthyAccount(preferred)?.id);
-      const localPicks = steps.map((preferred) => local.selectHealthyAccount(preferred)?.id);
-      expect(sharedPicks).toEqual(localPicks);
+      for (const strategy of ["sticky", "round-robin", "lowest-usage"] as const) {
+        const { manager } = openCodeManager(fleet, strategy);
+        const local = localManager(fleet, strategy);
+        const steps: readonly (string | undefined)[] = [
+          undefined,
+          "B",
+          undefined,
+          undefined,
+          "missing",
+          undefined,
+        ];
+        const sharedPicks = steps.map((preferred) => manager.selectHealthyAccount(preferred)?.id);
+        const localPicks = steps.map((preferred) => local.selectHealthyAccount(preferred)?.id);
+        expect(sharedPicks).toEqual(localPicks);
+      }
+    } finally {
+      clock.mockRestore();
     }
   });
 
