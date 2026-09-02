@@ -26,6 +26,7 @@ import { join } from "node:path";
 import {
 	GenerateAssistantResponseCommand,
 	type GenerateAssistantResponseCommandInput,
+	type ToolUse,
 } from "@aws/codewhisperer-streaming-client";
 import { createSdkClient } from "../src/core/sdk-client.js";
 import { encodeRefreshToken } from "../src/kiro/auth.js";
@@ -133,7 +134,7 @@ function userInput(modelId: string, content: string, extra: Partial<UserInput> =
 	return {
 		content,
 		modelId,
-		origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
+		origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR as UserInput["origin"],
 		...extra,
 	};
 }
@@ -144,7 +145,7 @@ function conversation(
 	history: HistoryEntry[] = [],
 ): ConversationState {
 	return {
-		chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL,
+		chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL as ConversationState["chatTriggerType"],
 		conversationId,
 		agentContinuationId: crypto.randomUUID(),
 		agentTaskType: "vibe",
@@ -177,7 +178,7 @@ async function runProbe(
 		const output = await client.send(new GenerateAssistantResponseCommand(input));
 		const httpStatus = output.$metadata.httpStatusCode;
 		for await (const event of output.generateAssistantResponseResponse ?? []) {
-			const record = event as Record<string, unknown>;
+			const record = event as unknown as Record<string, unknown>;
 			for (const [key, value] of Object.entries(record)) {
 				if (value === undefined) continue;
 				const detail: Record<string, unknown> = {};
@@ -383,15 +384,19 @@ async function main(): Promise<void> {
 	const rawSignature = (turn1 as ProbeResult & { __signature?: string }).__signature;
 	const call = turn1.toolUses[0];
 	if (rawSignature && call?.toolUseId) {
-		let parsedInput: unknown = {};
-		try { parsedInput = JSON.parse(call.inputChunks.join("") || "{}"); } catch { parsedInput = {}; }
+		let parsedInput: Record<string, unknown> = {};
+		try {
+			parsedInput = JSON.parse(call.inputChunks.join("") || "{}") as Record<string, unknown>;
+		} catch {
+			parsedInput = {};
+		}
 		const replayed = (signature: string, includeReasoning = true): HistoryEntry[] => [
 			{ userInputMessage: turn1Input },
 			{
 				assistantResponseMessage: {
 					content: turn1.text,
 					...(includeReasoning ? { reasoningContent: { reasoningText: { text: turn1.reasoning.text, signature } } } : {}),
-					toolUses: [{ toolUseId: call.toolUseId, name: call.name, input: parsedInput }],
+					toolUses: [{ toolUseId: call.toolUseId, name: call.name, input: parsedInput as ToolUse["input"] }],
 				},
 			},
 		];
