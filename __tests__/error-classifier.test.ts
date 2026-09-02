@@ -183,12 +183,18 @@ describe("classifyError HTTP decisions", () => {
 		).toEqual({ action: "switch", status: 429, retryAfterMs: 7_000 });
 	});
 
-	test("waits and retries a rate limit when only one account exists", () => {
+	test("waits and retries a rate limit when only one account exists, bounded by maxRetries", () => {
 		expect(classifyError(error({ status: 429 }), context())).toEqual({
 			action: "retry",
 			status: 429,
 			retryAfterMs: 60_000,
 		});
+		expect(
+			classifyError(error({ status: 429 }), context({ retryCount: 2, maxRetries: 3 })),
+		).toEqual({ action: "retry", status: 429, retryAfterMs: 60_000 });
+		expect(
+			classifyError(error({ status: 429 }), context({ retryCount: 3, maxRetries: 3 })),
+		).toEqual({ action: "fail", status: 429, terminalStatus: 429 });
 	});
 
 	test("backs off 500 responses four times then switches on the fifth", () => {

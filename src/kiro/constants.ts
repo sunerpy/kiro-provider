@@ -38,14 +38,11 @@ export function extractRegionFromArn(arn: string | undefined): KiroRegion | unde
 export const KIRO_CONSTANTS = {
   REFRESH_URL: 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken',
   REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',
-  BASE_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
   RUNTIME_ENDPOINT: 'https://runtime.{{region}}.kiro.dev',
   USAGE_LIMITS_URL: 'https://q.{{region}}.amazonaws.com/getUsageLimits',
   DEFAULT_REGION: 'us-east-1' as KiroRegion,
-  AXIOS_TIMEOUT: 120000,
   USER_AGENT: 'KiroIDE',
   SDK_VERSION: '3.738.0',
-  SDK_VERSION_USAGE: '3.0.0',
   CHAT_TRIGGER_TYPE_MANUAL: 'MANUAL',
   ORIGIN_AI_EDITOR: 'AI_EDITOR'
 }
@@ -104,16 +101,11 @@ export const MODEL_MAPPING: Record<string, string> = {
 
 export const SUPPORTED_MODELS = Object.keys(MODEL_MAPPING)
 
-const LONG_CONTEXT_MODELS = new Set(Object.keys(MODEL_MAPPING).filter((k) => k.includes('-1m')))
-
-export function isLongContextModel(model: string): boolean {
-  return LONG_CONTEXT_MODELS.has(model)
-}
-
-// SSOT for token accounting, keyed by BASE model id (effort/thinking suffix
-// stripped). Values MUST equal the limit.context advertised in src/plugin.ts —
-// enforced by context-window.test.ts. Drift makes OpenCode under-count usage and
-// skip auto-compaction until Kiro hard-rejects with 400 "Input is too long."
+// SSOT for static context limits, keyed by BASE model id (effort/thinking suffix
+// stripped). MODEL_CATALOG in model-catalog.ts advertises these through
+// getModelContextLimit, and models.ts uses the same lookup for request-side
+// accounting, so the two cannot drift. A live per-account catalog snapshot
+// overrides both when dynamic_model_catalog is enabled.
 export const DEFAULT_MODEL_CONTEXT_LIMIT = 200000
 
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
@@ -146,10 +138,8 @@ export function getModelContextLimit(baseModel: string): number {
 }
 
 export const KIRO_AUTH_SERVICE = {
-  ENDPOINT: 'https://prod.{{region}}.auth.desktop.kiro.dev',
   SSO_OIDC_ENDPOINT: 'https://oidc.{{region}}.amazonaws.com',
   BUILDER_ID_START_URL: 'https://view.awsapps.com/start',
-  USER_INFO_URL: 'https://view.awsapps.com/api/user/info',
   SCOPES: [
     'codewhisperer:completions',
     'codewhisperer:analysis',

@@ -29,8 +29,40 @@ const KIRO_CONTEXT_OVERFLOW_PATTERNS = [
 	/input is too long/i,
 	/CONTENT_LENGTH_EXCEEDS_THRESHOLD/i,
 ] as const;
+/**
+ * Transport-level failure codes. Node/Bun socket errors expose `code`; Smithy's
+ * NodeHttpHandler reports its request/connection timeout as `name: "TimeoutError"`
+ * and an aborted socket as `name: "AbortError"`. The pipeline checks its own
+ * deadline and cancellation signals before classifying, so an AbortError that
+ * reaches this classifier did not originate from the caller.
+ */
+const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ECONNABORTED",
+	"ETIMEDOUT",
+	"ENOTFOUND",
+	"EAI_AGAIN",
+	"EPIPE",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"ENETDOWN",
+	"UND_ERR_SOCKET",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_HEADERS_TIMEOUT",
+	"UND_ERR_BODY_TIMEOUT",
+	"TimeoutError",
+	"AbortError",
+]);
+/** Message fallback for transports that only expose free text. */
 const NETWORK_ERROR_PATTERN =
-	/econnreset|etimedout|enotfound|network|fetch failed|socket/i;
+	/econnreset|econnrefused|etimedout|enotfound|eai_again|epipe|ehostunreach|enetunreach|timed out|network|fetch failed|socket/i;
+/** Constructor names that carry no classification signal on their own. */
+const GENERIC_ERROR_NAMES: ReadonlySet<string> = new Set(["Error", "TypeError"]);
+/** Upstream statuses that are retried on the same account before switching. */
+const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([
+	500, 502, 503, 504,
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,6 +99,24 @@ function readHeaders(
 	return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
+/**
+ * Prefer the error's own `code`/`name`; when that is only a generic constructor
+ * name (Bun's `TypeError: fetch failed`, Smithy wrappers), fall back to the
+ * socket-level `cause` so ECONNREFUSED and friends stay classifiable.
+ */
+function readCode(record: Record<string, unknown>): string | undefined {
+	const own = readString(record, "code") ?? readString(record, "name");
+	if (own !== undefined && !GENERIC_ERROR_NAMES.has(own)) return own;
+	const cause = record.cause;
+	if (isRecord(cause)) {
+		const causeCode = readString(cause, "code") ?? readString(cause, "name");
+		if (causeCode !== undefined && !GENERIC_ERROR_NAMES.has(causeCode)) {
+			return causeCode;
+		}
+	}
+	return own;
+}
+
 export function normalizeSdkError(error: unknown): NormalizedSdkError {
 	if (!isRecord(error)) {
 		return { message: error instanceof Error ? error.message : String(error) };
@@ -74,7 +124,7 @@ export function normalizeSdkError(error: unknown): NormalizedSdkError {
 
 	const status = readStatus(error);
 	const message = readString(error, "message") ?? String(error);
-	const code = readString(error, "code") ?? readString(error, "name");
+	const code = readCode(error);
 	const reason = readString(error, "reason");
 	const headers = readHeaders(error);
 	return {
@@ -100,6 +150,17 @@ export function isKiroContextOverflowBody(message: string): boolean {
 	return KIRO_CONTEXT_OVERFLOW_PATTERNS.some((pattern) =>
 		pattern.test(message),
 	);
+}
+
+/** 500/502/503/504: bounded same-account retry, then switch accounts. */
+export function isRetryableServerStatus(status: number | undefined): boolean {
+	return status !== undefined && RETRYABLE_SERVER_STATUSES.has(status);
+}
+
+/** Transport failure without an upstream HTTP status. */
+export function isNetworkError(error: NormalizedSdkError): boolean {
+	if (error.code !== undefined && NETWORK_ERROR_CODES.has(error.code)) return true;
+	return NETWORK_ERROR_PATTERN.test(error.message);
 }
 
 export function classifyError(
@@ -163,21 +224,29 @@ export function classifyError(
 				: { action: "fail", status: 403, terminalStatus: 403 };
 		case 429: {
 			const waitMs = retryAfterMs(error.headers);
-			return context.accountCount > 1
-				? { action: "switch", status: 429, retryAfterMs: waitMs }
-				: { action: "retry", status: 429, retryAfterMs: waitMs };
+			if (context.accountCount > 1) {
+				return { action: "switch", status: 429, retryAfterMs: waitMs };
+			}
+			// Bounded by rate_limit_max_retries so the client sees the upstream 429
+			// instead of a deadline-induced 504 after repeated 60 s waits.
+			return context.retryCount < context.maxRetries
+				? { action: "retry", status: 429, retryAfterMs: waitMs }
+				: { action: "fail", status: 429, terminalStatus: 429 };
 		}
 		case 500:
+		case 502:
+		case 503:
+		case 504:
 			return context.serverErrorCount < 5
 				? {
 						action: "retry",
-						status: 500,
+						status: error.status,
 						retryAfterMs:
 							1_000 * 2 ** Math.max(0, context.serverErrorCount - 1),
 					}
-				: { action: "switch", status: 500 };
+				: { action: "switch", status: error.status };
 		case undefined:
-			if (NETWORK_ERROR_PATTERN.test(error.message)) {
+			if (isNetworkError(error)) {
 				return context.retryCount < context.maxRetries
 					? {
 							action: "retry",
