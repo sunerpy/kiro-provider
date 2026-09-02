@@ -8,6 +8,8 @@ export interface ToolCallState {
   readonly toolUseId: string
   readonly name: string
   input: string
+  /** True once any fragment carried an `input` key, even an empty string. */
+  inputReceived: boolean
   stopped: boolean
   fragmentCount: number
 }
@@ -353,6 +355,7 @@ export function appendToolFragment(
       )
     }
     existing.input += event.input ?? ''
+    existing.inputReceived ||= event.input !== undefined
     existing.stopped ||= event.stop === true
     existing.fragmentCount += 1
     return
@@ -362,6 +365,7 @@ export function appendToolFragment(
     toolUseId: event.toolUseId,
     name: event.name,
     input: event.input ?? '',
+    inputReceived: event.input !== undefined,
     stopped: event.stop === true,
     fragmentCount: 1
   })
@@ -381,6 +385,14 @@ export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCa
           fragmentCount: toolCall.fragmentCount
         }
       )
+    }
+    // Probe evidence (2026-09-02): a zero-parameter Kiro tool call arrives as
+    // `{toolUseId, name}` then `{toolUseId, name, stop: true}` with no `input`
+    // key at all. Only that shape is projected as `{}`; any received fragment,
+    // including an empty or whitespace-only string, must still parse as JSON.
+    if (!toolCall.inputReceived) {
+      toolCall.input = '{}'
+      continue
     }
     try {
       JSON.parse(toolCall.input)
