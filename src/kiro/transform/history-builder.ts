@@ -204,33 +204,6 @@ export function buildHistory(
   return history;
 }
 
-export function historyHasToolCalling(history: readonly CodeWhispererMessage[]): boolean {
-  return history.some(
-    (entry) =>
-      Boolean(entry.assistantResponseMessage?.toolUses) ||
-      Boolean(entry.userInputMessage?.userInputMessageContext?.toolResults),
-  );
-}
-
-export function extractToolNamesFromHistory(
-  history: readonly CodeWhispererMessage[],
-): Set<string> {
-  const names = new Set<string>();
-  for (const entry of history) {
-    for (const toolUse of entry.assistantResponseMessage?.toolUses ?? []) {
-      if (toolUse.name) names.add(toolUse.name);
-    }
-  }
-  return names;
-}
-
 export function currentUserInput(message: CanonicalMessage, resolved: string): UserInput {
   return asUserInput(message, resolved);
-}
-
-export function currentAssistantResponse(
-  message: CanonicalMessage,
-  replay?: ResolvedReasoningReplay,
-): AssistantResponse {
-  return asAssistantResponse(message, replay);
 }

@@ -203,8 +203,6 @@ describe("safe and legacy instruction projection", () => {
 			request,
 			TEST_MODEL,
 			TEST_AUTH,
-			false,
-			20_000,
 			{ conversationId: "conv-test" },
 		);
 
