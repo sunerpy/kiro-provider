@@ -1,58 +1,58 @@
-import { getModelContextLimit, MODEL_MAPPING, SUPPORTED_MODELS } from './constants.js'
-import type { Effort } from './types.js'
+import { getModelContextLimit, MODEL_MAPPING, SUPPORTED_MODELS } from "./constants.js";
+import type { Effort } from "./types.js";
 
-const dynamicModelMapping = new Map<string, string>()
+const dynamicModelMapping = new Map<string, string>();
 
 function modelMapping(model: string): string | undefined {
-  return MODEL_MAPPING[model] ?? dynamicModelMapping.get(model)
+  return MODEL_MAPPING[model] ?? dynamicModelMapping.get(model);
 }
 
 export function registerDynamicWireModels(modelIds: Iterable<string>): void {
   for (const modelId of modelIds) {
-    const normalized = modelId.trim()
-    if (normalized.length === 0) continue
-    dynamicModelMapping.set(normalized, normalized)
+    const normalized = modelId.trim();
+    if (normalized.length === 0) continue;
+    dynamicModelMapping.set(normalized, normalized);
   }
 }
 
 export function clearDynamicModelRegistry(): void {
-  dynamicModelMapping.clear()
+  dynamicModelMapping.clear();
 }
 
 export function isKnownModel(model: string): boolean {
   try {
-    resolveModelVariant(model)
-    return true
+    resolveModelVariant(model);
+    return true;
   } catch {
-    return false
+    return false;
   }
 }
 
 export function resolveKiroModel(model: string): string {
-  const resolved = modelMapping(model)
+  const resolved = modelMapping(model);
   if (!resolved) {
-    const supported = [...SUPPORTED_MODELS, ...dynamicModelMapping.keys()]
-    throw new Error(`Unsupported model: ${model}. Supported models: ${supported.join(', ')}`)
+    const supported = [...SUPPORTED_MODELS, ...dynamicModelMapping.keys()];
+    throw new Error(`Unsupported model: ${model}. Supported models: ${supported.join(", ")}`);
   }
-  return resolved
+  return resolved;
 }
 
 export const VARIANT_BASE_ALLOWLIST = new Set<string>([
-  'claude-opus-5',
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-sonnet-5',
-  'claude-sonnet-4-6',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna'
-])
+  "claude-opus-5",
+  "claude-opus-4-8",
+  "claude-opus-4-7",
+  "claude-sonnet-5",
+  "claude-sonnet-4-6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
 
-const EFFORT_SUFFIXES: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+const EFFORT_SUFFIXES: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export interface ResolvedModelVariant {
-  wireId: string
-  effort?: Effort
+  wireId: string;
+  effort?: Effort;
 }
 
 /**
@@ -72,36 +72,36 @@ export interface ResolvedModelVariant {
  */
 export function resolveModelVariant(model: string): ResolvedModelVariant {
   for (const suffix of EFFORT_SUFFIXES) {
-    const marker = `-${suffix}`
+    const marker = `-${suffix}`;
     if (model.endsWith(marker)) {
-      const base = model.slice(0, -marker.length)
+      const base = model.slice(0, -marker.length);
       if (VARIANT_BASE_ALLOWLIST.has(base)) {
-        return { wireId: resolveKiroModel(base), effort: suffix }
+        return { wireId: resolveKiroModel(base), effort: suffix };
       }
     }
   }
-  return { wireId: resolveKiroModel(model), effort: undefined }
+  return { wireId: resolveKiroModel(model), effort: undefined };
 }
 
 export function stripModelSuffix(model: string): string {
   for (const suffix of EFFORT_SUFFIXES) {
-    const marker = `-${suffix}`
+    const marker = `-${suffix}`;
     if (model.endsWith(marker)) {
-      const base = model.slice(0, -marker.length)
+      const base = model.slice(0, -marker.length);
       if (VARIANT_BASE_ALLOWLIST.has(base)) {
-        return base
+        return base;
       }
     }
   }
-  if (model.endsWith('-thinking')) {
-    const base = model.slice(0, -'-thinking'.length)
+  if (model.endsWith("-thinking")) {
+    const base = model.slice(0, -"-thinking".length);
     if (modelMapping(base)) {
-      return base
+      return base;
     }
   }
-  return model
+  return model;
 }
 
 export function getContextWindowSize(model: string): number {
-  return getModelContextLimit(stripModelSuffix(model))
+  return getModelContextLimit(stripModelSuffix(model));
 }

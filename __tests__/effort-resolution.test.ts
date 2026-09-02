@@ -1,186 +1,183 @@
-import { describe, expect, test } from 'bun:test'
-import {
-  buildEffortRequestFields,
-  resolveEffectiveEffort
-} from '../src/kiro/effort.js'
-import { resolveModelVariant } from '../src/kiro/models.js'
-import type { Effort } from '../src/kiro/types.js'
+import { describe, expect, test } from "bun:test";
+import { buildEffortRequestFields, resolveEffectiveEffort } from "../src/kiro/effort.js";
+import { resolveModelVariant } from "../src/kiro/models.js";
+import type { Effort } from "../src/kiro/types.js";
 
 function requireEffort(effort: Effort | undefined): Effort {
-  expect(effort).toBeDefined()
+  expect(effort).toBeDefined();
   if (effort === undefined) {
-    throw new Error('Expected an effective effort')
+    throw new Error("Expected an effective effort");
   }
-  return effort
+  return effort;
 }
 
-describe('resolveEffectiveEffort', () => {
-  test('variant effort overrides request, global config, and budget mapping', () => {
+describe("resolveEffectiveEffort", () => {
+  test("variant effort overrides request, global config, and budget mapping", () => {
     const effort = resolveEffectiveEffort({
-      model: 'claude-opus-5-max',
-      reasoningEffort: 'low',
-      configEffort: 'high',
+      model: "claude-opus-5-max",
+      reasoningEffort: "low",
+      configEffort: "high",
       think: true,
       budget: 16384,
-      autoEffortMapping: true
-    })
+      autoEffortMapping: true,
+    });
 
-    expect(effort).toBe('max')
-  })
+    expect(effort).toBe("max");
+  });
 
-  test('request effort overrides global config and budget mapping', () => {
+  test("request effort overrides global config and budget mapping", () => {
     const effort = resolveEffectiveEffort({
-      model: 'claude-opus-4-8',
-      reasoningEffort: 'low',
-      configEffort: 'high',
+      model: "claude-opus-4-8",
+      reasoningEffort: "low",
+      configEffort: "high",
       think: true,
       budget: 16384,
-      autoEffortMapping: true
-    })
+      autoEffortMapping: true,
+    });
 
-    expect(effort).toBe('low')
-  })
+    expect(effort).toBe("low");
+  });
 
-  test('global config effort overrides budget mapping', () => {
+  test("global config effort overrides budget mapping", () => {
     const effort = resolveEffectiveEffort({
-      model: 'claude-opus-4-8',
-      configEffort: 'high',
+      model: "claude-opus-4-8",
+      configEffort: "high",
       think: true,
       budget: 5000,
-      autoEffortMapping: true
-    })
+      autoEffortMapping: true,
+    });
 
-    expect(effort).toBe('high')
-  })
+    expect(effort).toBe("high");
+  });
 
-  test('invalid internal effort values fall through to the next precedence level', () => {
+  test("invalid internal effort values fall through to the next precedence level", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
-        reasoningEffort: 'invalid-request-effort',
-        configEffort: 'high',
+        model: "claude-opus-4-8",
+        reasoningEffort: "invalid-request-effort",
+        configEffort: "high",
         think: true,
         budget: 5000,
-        autoEffortMapping: true
-      })
-    ).toBe('high')
+        autoEffortMapping: true,
+      }),
+    ).toBe("high");
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
-        reasoningEffort: 'invalid-request-effort',
-        configEffort: 'invalid-config-effort',
+        model: "claude-opus-4-8",
+        reasoningEffort: "invalid-request-effort",
+        configEffort: "invalid-config-effort",
         think: true,
         budget: 5000,
-        autoEffortMapping: true
-      })
-    ).toBe('low')
-  })
+        autoEffortMapping: true,
+      }),
+    ).toBe("low");
+  });
 
-  test('budget mapping applies only to thinking requests with auto mapping enabled', () => {
+  test("budget mapping applies only to thinking requests with auto mapping enabled", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
+        model: "claude-opus-4-8",
         think: true,
         budget: 24576,
-        autoEffortMapping: true
-      })
-    ).toBe('high')
+        autoEffortMapping: true,
+      }),
+    ).toBe("high");
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
+        model: "claude-opus-4-8",
         think: false,
         budget: 24576,
-        autoEffortMapping: true
-      })
-    ).toBeUndefined()
-  })
+        autoEffortMapping: true,
+      }),
+    ).toBeUndefined();
+  });
 
-  test('thinking without auto mapping or explicit effort falls back to medium', () => {
+  test("thinking without auto mapping or explicit effort falls back to medium", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
+        model: "claude-opus-4-8",
         think: true,
         budget: 128000,
-        autoEffortMapping: false
-      })
-    ).toBe('medium')
-  })
+        autoEffortMapping: false,
+      }),
+    ).toBe("medium");
+  });
 
-  test('non-thinking without explicit effort returns undefined', () => {
+  test("non-thinking without explicit effort returns undefined", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-opus-4-8',
+        model: "claude-opus-4-8",
         think: false,
         budget: 128000,
-        autoEffortMapping: false
-      })
-    ).toBeUndefined()
-  })
+        autoEffortMapping: false,
+      }),
+    ).toBeUndefined();
+  });
 
-  test('dispatches Claude effort through output_config using the resolved wire id', () => {
-    const resolved = resolveModelVariant('claude-opus-5-high')
+  test("dispatches Claude effort through output_config using the resolved wire id", () => {
+    const resolved = resolveModelVariant("claude-opus-5-high");
     const effort = requireEffort(
       resolveEffectiveEffort({
-        model: 'claude-opus-5-high',
+        model: "claude-opus-5-high",
         think: false,
         budget: 20000,
-        autoEffortMapping: true
-      })
-    )
+        autoEffortMapping: true,
+      }),
+    );
 
     expect(buildEffortRequestFields(resolved.wireId, effort)).toEqual({
-      output_config: { effort: 'high' }
-    })
-  })
+      output_config: { effort: "high" },
+    });
+  });
 
-  test('dispatches GPT effort through reasoning using the resolved wire id', () => {
-    const resolved = resolveModelVariant('gpt-5.6-sol-high')
+  test("dispatches GPT effort through reasoning using the resolved wire id", () => {
+    const resolved = resolveModelVariant("gpt-5.6-sol-high");
     const effort = requireEffort(
       resolveEffectiveEffort({
-        model: 'gpt-5.6-sol-high',
+        model: "gpt-5.6-sol-high",
         think: false,
         budget: 20000,
-        autoEffortMapping: true
-      })
-    )
+        autoEffortMapping: true,
+      }),
+    );
 
     expect(buildEffortRequestFields(resolved.wireId, effort)).toEqual({
-      reasoning: { effort: 'high' }
-    })
-  })
+      reasoning: { effort: "high" },
+    });
+  });
 
-  test('clamps xhigh variants to max when the resolved model lacks xhigh support', () => {
+  test("clamps xhigh variants to max when the resolved model lacks xhigh support", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-sonnet-4-6-xhigh',
+        model: "claude-sonnet-4-6-xhigh",
         think: false,
         budget: 20000,
-        autoEffortMapping: true
-      })
-    ).toBe('max')
-  })
+        autoEffortMapping: true,
+      }),
+    ).toBe("max");
+  });
 
-  test('returns undefined for models that do not support effort', () => {
+  test("returns undefined for models that do not support effort", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-haiku-4-5-thinking',
-        reasoningEffort: 'max',
-        configEffort: 'high',
+        model: "claude-haiku-4-5-thinking",
+        reasoningEffort: "max",
+        configEffort: "high",
         think: true,
         budget: 128000,
-        autoEffortMapping: true
-      })
-    ).toBeUndefined()
-  })
+        autoEffortMapping: true,
+      }),
+    ).toBeUndefined();
+  });
 
-  test('does not derive effort from Claude Code adaptive thinking for Sonnet 4.5', () => {
+  test("does not derive effort from Claude Code adaptive thinking for Sonnet 4.5", () => {
     expect(
       resolveEffectiveEffort({
-        model: 'claude-sonnet-4-5',
+        model: "claude-sonnet-4-5",
         think: true,
         budget: 20_000,
-        autoEffortMapping: true
-      })
-    ).toBeUndefined()
-  })
-})
+        autoEffortMapping: true,
+      }),
+    ).toBeUndefined();
+  });
+});

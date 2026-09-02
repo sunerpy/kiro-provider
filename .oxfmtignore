@@ -5,7 +5,7 @@ dist/
 # Tool and agent state
 .omo/
 
-# Documentation is owned by the parallel README/metadata task
+# Documentation (prose wrapping is hand-tuned)
 README.md
 docs/
 
@@ -13,7 +13,7 @@ docs/
 bun.lock
 package.json
 
-# Existing release automation and example config are owned by parallel tasks
+# Release automation and example config
 .release-please-manifest.json
 release-please-config.json
 .github/workflows/release*.yml

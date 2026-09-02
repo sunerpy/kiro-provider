@@ -368,12 +368,19 @@ describe("POST /v1/responses", () => {
     const metadata = { zuno_session_id: "zuno-stream-session" };
 
     // When
-    const response = await postResponse(server, { model: MODEL, input: "hello", stream: true, metadata });
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      stream: true,
+      metadata,
+    });
     const frames = parseSseFrames(await response.text());
 
     // Then
     expect(response.headers.get("Content-Type")).toContain("text/event-stream");
-    expect(frames.find((frame) => frame.type === "response.created")).toMatchObject({ response: { metadata } });
+    expect(frames.find((frame) => frame.type === "response.created")).toMatchObject({
+      response: { metadata },
+    });
     const completed = frames.filter((frame) => frame.type === "response.completed");
     expect(completed).toHaveLength(1);
     expect(completed[0]).toMatchObject({
@@ -409,16 +416,13 @@ describe("POST /v1/responses", () => {
     expect(response.status).toBe(200);
     expect(
       frames.some(
-        (frame) =>
-          typeof frame.type === "string" &&
-          frame.type.startsWith("response.reasoning_"),
+        (frame) => typeof frame.type === "string" && frame.type.startsWith("response.reasoning_"),
       ),
     ).toBe(false);
     expect(
       frames.some(
         (frame) =>
-          frame.type === "response.output_item.done" &&
-          typeOfNested(frame, "item") === "reasoning",
+          frame.type === "response.output_item.done" && typeOfNested(frame, "item") === "reasoning",
       ),
     ).toBe(false);
     expect(frames.find((frame) => frame.type === "response.completed")).toMatchObject({
@@ -457,7 +461,7 @@ describe("POST /v1/responses", () => {
       id: expect.any(String),
       role: "assistant",
       status: "completed",
-      content: [{ type: "output_text", text: "default JSON", annotations: [] }],
+      content: [{ type: "output_text", text: "default JSON", annotations: [], logprobs: [] }],
     });
   });
 
@@ -577,19 +581,22 @@ describe("POST /v1/responses", () => {
           { headers: { "Content-Type": "application/octet-stream" } },
         );
       }
-      return new Response(JSON.stringify({
-        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
-        conversationId: "next-conversation",
-        model: MODEL,
-        createdAt: 1_700_000_000,
-        text: "next request",
-        reasoning: { text: "queue released" },
-        toolCalls: [],
-        finishReason: "stop",
-        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
-      }), {
-        headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
-      });
+      return new Response(
+        JSON.stringify({
+          canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+          conversationId: "next-conversation",
+          model: MODEL,
+          createdAt: 1_700_000_000,
+          text: "next request",
+          reasoning: { text: "queue released" },
+          toolCalls: [],
+          finishReason: "stop",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        }),
+        {
+          headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
+        },
+      );
     };
     // When
     const routeDependencies = {
@@ -931,6 +938,7 @@ describe("POST /v1/responses", () => {
       call_id: tool.id,
       name: tool.name,
       arguments: tool.arguments,
+      status: "completed",
     });
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,
@@ -999,6 +1007,7 @@ describe("POST /v1/responses", () => {
       call_id: "call_exec",
       name: "exec",
       input: "printf ok",
+      status: "completed",
     });
     expect(functionCall).toEqual({
       id: functionCall.id,
@@ -1006,6 +1015,7 @@ describe("POST /v1/responses", () => {
       call_id: "call_spawn",
       name: "spawn_agent",
       arguments: '{"task_name":"review"}',
+      status: "completed",
     });
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,
@@ -1027,22 +1037,25 @@ describe("POST /v1/responses", () => {
       });
       if (pipelineCalls === 2) bothEntered.resolve();
       await bothEntered.promise;
-      return new Response(JSON.stringify({
-        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
-        conversationId: "bridge-conversation",
-        model: MODEL,
-        createdAt: 1_700_000_000,
-        text: "",
-        toolCalls: [
-          {
-            id: "call_shared",
-            name: "kiro_custom_0",
-            input: '{"input":"ok"}',
-          },
-        ],
-        finishReason: "tool_calls",
-        usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
-      }), { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } });
+      return new Response(
+        JSON.stringify({
+          canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+          conversationId: "bridge-conversation",
+          model: MODEL,
+          createdAt: 1_700_000_000,
+          text: "",
+          toolCalls: [
+            {
+              id: "call_shared",
+              name: "kiro_custom_0",
+              input: '{"input":"ok"}',
+            },
+          ],
+          finishReason: "tool_calls",
+          usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+        }),
+        { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } },
+      );
     };
     const routeDependencies = {
       accountManager: new FakeAccountManager(),
@@ -1139,13 +1152,17 @@ describe("POST /v1/responses", () => {
       model: MODEL,
       input: "run tools",
       stream: false,
-      tools: [{ type: "custom", name: "exec" }],
+      tools: [
+        { type: "function", name: "plain", parameters: { type: "object" } },
+        { type: "custom", name: "exec" },
+      ],
     });
     const body: unknown = await response.json();
 
+    // Non-stream restore failures carry the same typed code as the SSE path.
     expect(response.status).toBe(502);
     expect(body).toMatchObject({
-      error: { code: "upstream_protocol_error" },
+      error: { type: "upstream_error", code: "invalid_custom_tool_input" },
     });
     expect(body).not.toHaveProperty("output");
   });

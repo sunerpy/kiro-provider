@@ -46,10 +46,7 @@ function toAnthropicFailure(
 ): AnthropicTerminalFailure {
   return {
     message,
-    type:
-      failure.disposition === "retryable"
-        ? "overloaded_error"
-        : "api_error",
+    type: failure.disposition === "retryable" ? "overloaded_error" : "api_error",
   };
 }
 
@@ -78,10 +75,7 @@ function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>
   }
 }
 
-export function anthropicMessageResponse(
-  completion: CanonicalCompletion,
-  model: string,
-): Response {
+export function anthropicMessageResponse(completion: CanonicalCompletion, model: string): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
   const reasoning = completion.reasoning;
   if (
@@ -145,33 +139,68 @@ export function anthropicMessageResponse(
 }
 
 // allow: SIZE_OK — this state machine owns Anthropic SSE ordering and exactly-once cleanup.
-export function anthropicSseAdapter(
-  pipelineResponse: Response,
-  options: AdapterOptions,
-): Response {
+export function anthropicSseAdapter(pipelineResponse: Response, options: AdapterOptions): Response {
   const upstream =
-    pipelineResponse.body ?? new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    pipelineResponse.body ??
+    new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
   const reader = upstream.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const messageId = `msg_${randomUUID()}`;
   const tools = new Map<number, ToolAccumulator>();
+  const pendingFrames: Uint8Array[] = [];
   let buffer = "";
   let nextContentIndex = 0;
   let textIndex: number | undefined;
   let reasoningIndex: number | undefined;
   let reasoningStarted = false;
   let reasoningStopped = false;
-  let deferredReasoningSignature: string | undefined;
+  let reasoningSigned = false;
+  // A signature that has not been written into an open thinking block yet.
+  let pendingSignature: string | undefined;
+  // Visible reasoning that arrived after text started; it becomes a new block
+  // in complete() so no delta ever targets a stopped block.
+  let deferredReasoningText = "";
+  // Redacted envelopes that arrived while a text block was open.
+  const deferredRedacted: string[] = [];
+  let redactedEmitted = false;
   let textStarted = false;
+  let textStopped = false;
   let canonicalStarted = false;
   let canonicalCompleted = false;
-  let textStopped = false;
   let terminalOutcome: AdapterOutcome | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let streamClosed = false;
 
   const emit = (event: string, payload: unknown): void => {
-    streamController?.enqueue(encoder.encode(formatEvent(event, payload)));
+    pendingFrames.push(encoder.encode(formatEvent(event, payload)));
+  };
+  const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    if (
+      streamClosed ||
+      terminalOutcome === undefined ||
+      terminalOutcome === "consumer-cancel" ||
+      pendingFrames.length > 0
+    ) {
+      return;
+    }
+    streamClosed = true;
+    controller.close();
+  };
+  // One frame per pull: the runtime only pulls while desiredSize > 0, so a slow
+  // reader never receives a burst and complete() cannot overfill the queue.
+  const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
+    if (streamClosed) return false;
+    const desiredSize = controller.desiredSize;
+    if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
+      const frame = pendingFrames.shift();
+      if (!frame) return false;
+      controller.enqueue(frame);
+      closeIfDrained(controller);
+      return true;
+    }
+    closeIfDrained(controller);
+    return false;
   };
   const claimTerminal = (outcome: AdapterOutcome): boolean => {
     if (terminalOutcome !== undefined) return false;
@@ -190,21 +219,20 @@ export function anthropicSseAdapter(
     failure?: AnthropicTerminalFailure,
   ): void => {
     if (!claimTerminal(outcome)) return;
+    if (outcome === "consumer-cancel") pendingFrames.length = 0;
     runCleanupSteps(
       removeDeadlineListener,
       removeClientListener,
       () => {
-        if (!failure || !streamController) return;
-        streamController.enqueue(
-          encoder.encode(
-            anthropicStreamError(failure.message, failure.type ?? "api_error"),
-          ),
+        if (!failure) return;
+        pendingFrames.push(
+          encoder.encode(anthropicStreamError(failure.message, failure.type ?? "api_error")),
         );
       },
-      () => {
-        if (outcome !== "consumer-cancel") streamController?.close();
-      },
       options.finalize,
+      () => {
+        if (streamController) flushOne(streamController);
+      },
     );
     void boundedCleanup(() => reader.cancel(reason));
   };
@@ -213,6 +241,15 @@ export function anthropicSseAdapter(
       "upstream-protocol-error",
       undefined,
       toAnthropicFailure(streamFailure("upstream_protocol_error"), message),
+    );
+  };
+  // Same disposition as the non-stream 502: a thinking block that completes
+  // without a signature cannot be replayed and must not be handed to clients.
+  const failReasoning = (message: string): void => {
+    beginTerminal(
+      "upstream-protocol-error",
+      undefined,
+      toAnthropicFailure(streamFailure("invalid_upstream_reasoning"), message),
     );
   };
   const failIncomplete = (): void => {
@@ -250,16 +287,17 @@ export function anthropicSseAdapter(
   };
   const stopReasoning = (): void => {
     if (!reasoningStarted || reasoningStopped || reasoningIndex === undefined) return;
-    if (deferredReasoningSignature !== undefined) {
+    if (pendingSignature !== undefined) {
       emit("content_block_delta", {
         type: "content_block_delta",
         index: reasoningIndex,
         delta: {
           type: "signature_delta",
-          signature: deferredReasoningSignature,
+          signature: pendingSignature,
         },
       });
-      deferredReasoningSignature = undefined;
+      pendingSignature = undefined;
+      reasoningSigned = true;
     }
     reasoningStopped = true;
     emit("content_block_stop", {
@@ -267,12 +305,33 @@ export function anthropicSseAdapter(
       index: reasoningIndex,
     });
   };
-  const addEvent = (event: CanonicalOutputEvent): boolean => {
+  const visibleReasoningSeen = (): boolean =>
+    reasoningStarted || pendingSignature !== undefined || deferredReasoningText.length > 0;
+  const emitRedactedBlock = (data: string): void => {
+    const index = nextContentIndex;
+    nextContentIndex += 1;
+    emit("content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: { type: "redacted_thinking", data },
+    });
+    emit("content_block_stop", { type: "content_block_stop", index });
+    redactedEmitted = true;
+  };
+  const addEvent = (event: CanonicalOutputEvent): void => {
     switch (event.type) {
       case "started":
       case "completed":
-        return false;
+        return;
       case "reasoning_delta": {
+        if (redactedEmitted || deferredRedacted.length > 0) {
+          failProtocol("Upstream mixed visible and redacted reasoning payloads");
+          return;
+        }
+        if (reasoningStopped || textStarted) {
+          deferredReasoningText += event.text;
+          return;
+        }
         if (!reasoningStarted) {
           reasoningIndex = nextContentIndex;
           nextContentIndex += 1;
@@ -288,7 +347,7 @@ export function anthropicSseAdapter(
           index: reasoningIndex,
           delta: { type: "thinking_delta", thinking: event.text },
         });
-        return true;
+        return;
       }
       case "reasoning_signature":
         if (reasoningStarted && !reasoningStopped && reasoningIndex !== undefined) {
@@ -297,27 +356,25 @@ export function anthropicSseAdapter(
             index: reasoningIndex,
             delta: { type: "signature_delta", signature: event.signature },
           });
+          reasoningSigned = true;
         } else {
-          deferredReasoningSignature = event.signature;
+          pendingSignature = event.signature;
         }
-        return false;
+        return;
       case "reasoning_redacted": {
-        if (reasoningStarted || deferredReasoningSignature !== undefined) {
+        if (visibleReasoningSeen()) {
           failProtocol("Upstream mixed visible and redacted reasoning payloads");
-          return false;
+          return;
         }
-        const index = nextContentIndex;
-        nextContentIndex += 1;
-        emit("content_block_start", {
-          type: "content_block_start",
-          index,
-          content_block: { type: "redacted_thinking", data: event.data },
-        });
-        emit("content_block_stop", { type: "content_block_stop", index });
-        return true;
+        if (textStarted) {
+          deferredRedacted.push(event.data);
+          return;
+        }
+        emitRedactedBlock(event.data);
+        return;
       }
       case "reasoning_encrypted":
-        return false;
+        return;
       case "text_delta": {
         stopReasoning();
         if (!textStarted) {
@@ -335,7 +392,7 @@ export function anthropicSseAdapter(
           index: textIndex,
           delta: { type: "text_delta", text: event.text },
         });
-        return true;
+        return;
       }
       case "tool_call_delta": {
         stopReasoning();
@@ -348,14 +405,39 @@ export function anthropicSseAdapter(
         if (tool.name.length === 0 && event.name !== undefined) tool.name = event.name;
         tool.arguments += event.arguments;
         tools.set(event.index, tool);
-        return false;
+        return;
       }
     }
   };
-  const complete = (
-    usage: CanonicalOutputUsage,
-    finishReason: "stop" | "tool_calls",
-  ): void => {
+  // Returns false when the deferred block had no signature to carry.
+  const flushDeferredReasoning = (): boolean => {
+    if (deferredReasoningText.length === 0) return true;
+    const index = nextContentIndex;
+    nextContentIndex += 1;
+    emit("content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    });
+    emit("content_block_delta", {
+      type: "content_block_delta",
+      index,
+      delta: { type: "thinking_delta", thinking: deferredReasoningText },
+    });
+    deferredReasoningText = "";
+    const signed = pendingSignature !== undefined;
+    if (pendingSignature !== undefined) {
+      emit("content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "signature_delta", signature: pendingSignature },
+      });
+      pendingSignature = undefined;
+    }
+    emit("content_block_stop", { type: "content_block_stop", index });
+    return signed;
+  };
+  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
     const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
@@ -363,11 +445,7 @@ export function anthropicSseAdapter(
       return;
     }
     const invalidTool = orderedTools.some(([, tool]) => {
-      return (
-        tool.id.length === 0 ||
-        tool.name.length === 0 ||
-        !parseToolInput(tool.arguments)
-      );
+      return tool.id.length === 0 || tool.name.length === 0 || !parseToolInput(tool.arguments);
     });
     if (invalidTool) {
       failProtocol("Malformed upstream tool call");
@@ -375,18 +453,20 @@ export function anthropicSseAdapter(
     }
     stopText();
     stopReasoning();
+    const deferredSigned = flushDeferredReasoning();
+    if (
+      (reasoningStarted && !reasoningSigned) ||
+      !deferredSigned ||
+      pendingSignature !== undefined
+    ) {
+      failReasoning("Upstream returned incomplete signed reasoning metadata");
+      return;
+    }
+    for (const data of deferredRedacted) emitRedactedBlock(data);
+    deferredRedacted.length = 0;
     for (const [, tool] of orderedTools) {
       const contentIndex = nextContentIndex;
       nextContentIndex += 1;
-      const input = parseToolInput(tool.arguments);
-      if (
-        !input ||
-        tool.id.length === 0 ||
-        tool.name.length === 0
-      ) {
-        failProtocol("Malformed upstream tool call");
-        return;
-      }
       emit("content_block_start", {
         type: "content_block_start",
         index: contentIndex,
@@ -418,7 +498,7 @@ export function anthropicSseAdapter(
         stop_reason: orderedTools.length > 0 ? "tool_use" : "end_turn",
         stop_sequence: null,
       },
-      usage: { output_tokens: usage.outputTokens },
+      usage: usagePayload(usage),
     });
     emit("message_stop", { type: "message_stop" });
     beginTerminal("normal-complete");
@@ -454,8 +534,10 @@ export function anthropicSseAdapter(
         });
         if (options.signals.deadline.aborted) onDeadlineAbort();
         else if (options.signals.client.aborted) onClientAbort();
+        flushOne(controller);
       },
-      async pull() {
+      async pull(controller) {
+        if (flushOne(controller)) return;
         if (terminalOutcome !== undefined) return;
         try {
           while (terminalOutcome === undefined) {
@@ -470,11 +552,7 @@ export function anthropicSseAdapter(
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -490,9 +568,9 @@ export function anthropicSseAdapter(
                 complete(event.usage, event.finishReason);
                 return;
               }
-              const emitted = addEvent(event);
+              addEvent(event);
               if (terminalOutcome !== undefined) return;
-              if (emitted) return;
+              if (flushOne(controller)) return;
               continue;
             }
             const next = await reader.read();
@@ -511,11 +589,7 @@ export function anthropicSseAdapter(
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -539,9 +613,7 @@ export function anthropicSseAdapter(
           if (terminalOutcome !== undefined) return;
           const failure = normalizeStreamFailure(error);
           beginTerminal(
-            failure.disposition === "fatal"
-              ? "upstream-protocol-error"
-              : "upstream-error",
+            failure.disposition === "fatal" ? "upstream-protocol-error" : "upstream-error",
             error,
             toAnthropicFailure(failure),
           );

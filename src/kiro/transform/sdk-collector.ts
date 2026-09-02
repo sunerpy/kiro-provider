@@ -1,144 +1,153 @@
-import { assistantOutputFingerprint } from '../../protocol/canonical.js'
 import {
   CANONICAL_OUTPUT_VERSION,
   type CanonicalCompletion,
-  type CanonicalOutputReasoning
-} from '../../protocol/output.js'
+  type CanonicalOutputEvent,
+  type CanonicalOutputReasoning,
+  type CanonicalOutputToolCall,
+} from "../../protocol/output.js";
 import {
-  appendReasoningCapture,
-  appendToolFragment,
-  assertSupportedSdkEvent,
-  createReasoningCaptureState,
-  isCompletionMetadataEvent,
-  isCompletionMeteringEvent,
-  nextSdkEvent,
-  resolveReasoningCapture,
-  resolveUsage,
-  type SdkOutputCaptureHandler,
-  type SdkOutputFingerprint,
-  type SdkReasoningCaptureHandler,
+  type TransformSdkOutputOptions,
+  transformSdkOutputStream,
+} from "./streaming/sdk-output-transformer.js";
+import {
+  SdkStreamProtocolError,
   type SdkStreamResponse,
   SemanticStreamTruncationError,
-  type ToolCallState,
-  type UsageState,
-  updateUsageState,
-  validateCompletedToolCalls
-} from './streaming/sdk-stream-runtime.js'
+} from "./streaming/sdk-stream-runtime.js";
 
-export interface CollectSdkResponseOptions {
-  readonly captureReasoning?: SdkReasoningCaptureHandler
-  readonly emitEncryptedReasoning?: boolean
-  readonly emitAnthropicReasoningMetadata?: boolean
-  readonly fingerprintOutput?: SdkOutputFingerprint
-  readonly captureOutput?: SdkOutputCaptureHandler
-}
+/**
+ * Options for the non-stream collector. They are the transformer's options:
+ * reasoning capture, output fingerprint, and lineage callbacks fire from the
+ * transformer exactly as on the streaming path, and `onRawEvent` /
+ * `onCompletionWitness` expose the same raw-stream audit hooks.
+ */
+export type CollectSdkResponseOptions = TransformSdkOutputOptions;
 
 export class MissingSdkEventStreamError extends Error {
-  readonly name = 'MissingSdkEventStreamError'
+  readonly name = "MissingSdkEventStreamError";
 
   constructor() {
-    super('SDK response has no event stream')
+    super("SDK response has no event stream");
   }
 }
 
+type CompletedEvent = Extract<CanonicalOutputEvent, { readonly type: "completed" }>;
+
+interface ToolCallAccumulator {
+  id: string | undefined;
+  name: string | undefined;
+  arguments: string;
+}
+
+/**
+ * Drain the canonical output stream for one SDK response and fold it into a
+ * single completion. Every validation (completion witness, tool structure,
+ * reasoning metadata) lives in the transformer, so non-stream and stream
+ * requests fail with the same typed errors.
+ */
 export async function collectSdkResponse(
   sdkResponse: SdkStreamResponse,
   model: string,
   conversationId: string,
   signal?: AbortSignal,
-  options: CollectSdkResponseOptions = {}
+  options: CollectSdkResponseOptions = {},
 ): Promise<CanonicalCompletion> {
-  const eventStream = sdkResponse.generateAssistantResponseResponse
-  if (!eventStream) throw new MissingSdkEventStreamError()
+  if (!sdkResponse.generateAssistantResponseResponse) throw new MissingSdkEventStreamError();
 
-  const iterator = eventStream[Symbol.asyncIterator]()
-  const toolCalls = new Map<string, ToolCallState>()
-  const usage: UsageState = {}
-  let content = ''
-  const reasoning = createReasoningCaptureState()
-  let iteratorFinished = false
-  let iteratorClosed = false
-  let completionWitnessSeen = false
+  let createdAt: number | undefined;
+  let text = "";
+  let reasoningText = "";
+  let signature: string | undefined;
+  let redactedContent: string | undefined;
+  let encryptedContent: string | undefined;
+  const toolCalls = new Map<number, ToolCallAccumulator>();
+  let completed: CompletedEvent | undefined;
 
   try {
-    while (true) {
-      const next = await nextSdkEvent(iterator, signal)
-      if (next.kind === 'aborted') {
-        if (iterator.return) await iterator.return()
-        iteratorClosed = true
-        break
-      }
-      if (next.result.done) {
-        iteratorFinished = true
-        break
-      }
-
-      const event = next.result.value
-      assertSupportedSdkEvent(event)
-      updateUsageState(usage, event)
-      appendReasoningCapture(reasoning, event.reasoningContentEvent)
-      if (isCompletionMetadataEvent(event)) {
-        completionWitnessSeen = true
-        iteratorClosed = true
-        try {
-          const closing = iterator.return?.()
-          if (closing) void Promise.resolve(closing).catch(() => undefined)
-        } catch {
-          // Completion metadata is authoritative; cleanup failures must not erase it.
+    for await (const event of transformSdkOutputStream(
+      sdkResponse,
+      model,
+      conversationId,
+      signal,
+      options,
+    )) {
+      switch (event.type) {
+        case "started":
+          createdAt = event.createdAt;
+          break;
+        case "reasoning_delta":
+          reasoningText += event.text;
+          break;
+        case "reasoning_signature":
+          signature = event.signature;
+          break;
+        case "reasoning_redacted":
+          redactedContent = event.data;
+          break;
+        case "reasoning_encrypted":
+          encryptedContent = event.encryptedContent;
+          break;
+        case "text_delta":
+          text += event.text;
+          break;
+        case "tool_call_delta": {
+          const existing = toolCalls.get(event.index);
+          if (existing) {
+            existing.arguments += event.arguments;
+            if (event.id !== undefined) existing.id = event.id;
+            if (event.name !== undefined) existing.name = event.name;
+          } else {
+            toolCalls.set(event.index, {
+              id: event.id,
+              name: event.name,
+              arguments: event.arguments,
+            });
+          }
+          break;
         }
-        break
+        case "completed":
+          completed = event;
+          break;
       }
-      if (isCompletionMeteringEvent(event)) completionWitnessSeen = true
-      content += event.assistantResponseEvent?.content ?? ''
-      appendToolFragment(toolCalls, event.toolUseEvent)
     }
-  } finally {
-    if (!iteratorFinished && !iteratorClosed && iterator.return) await iterator.return()
+  } catch (error) {
+    // A client abort that races clean EOF is reported as the abort, not as an
+    // upstream truncation, matching the pipeline's own precedence.
+    if (error instanceof SemanticStreamTruncationError && signal?.aborted) throw signal.reason;
+    throw error;
   }
 
-  if (signal?.aborted) throw signal.reason
-  if (!completionWitnessSeen) throw new SemanticStreamTruncationError()
-  validateCompletedToolCalls(toolCalls)
+  // The transformer returns early on abort without a completion event.
+  if (signal?.aborted) throw signal.reason;
+  if (completed === undefined) throw new SemanticStreamTruncationError();
 
-  const resolvedUsage = resolveUsage(usage, content, model)
-  const captured = resolveReasoningCapture(reasoning)
-  const output = {
-    text: content,
-    toolCalls: Array.from(toolCalls.values(), (toolCall) => ({
-      id: toolCall.toolUseId,
-      name: toolCall.name,
-      input: toolCall.input
-    }))
+  const outputToolCalls: CanonicalOutputToolCall[] = [];
+  for (const call of toolCalls.values()) {
+    if (call.id === undefined || call.name === undefined) {
+      throw new SdkStreamProtocolError(
+        "Canonical tool call completed without an id and name",
+        "upstream_protocol_error",
+      );
+    }
+    outputToolCalls.push({ id: call.id, name: call.name, input: call.arguments });
   }
-  const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output)
-  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint)
-  options.captureOutput?.(output, outputFingerprint)
-  const canonicalReasoning: CanonicalOutputReasoning = {
-    ...(captured.text ? { text: captured.text } : {}),
-    ...(options.emitAnthropicReasoningMetadata && captured.signature !== undefined
-      ? { signature: captured.signature }
-      : {}),
-    ...(options.emitAnthropicReasoningMetadata && captured.redactedContent !== undefined
-      ? { redactedContent: Buffer.from(captured.redactedContent).toString('base64') }
-      : {}),
-    ...(options.emitEncryptedReasoning && encryptedContent !== undefined
-      ? { encryptedContent }
-      : {})
-  }
+
+  const reasoning: CanonicalOutputReasoning = {
+    ...(reasoningText ? { text: reasoningText } : {}),
+    ...(signature !== undefined ? { signature } : {}),
+    ...(redactedContent !== undefined ? { redactedContent } : {}),
+    ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+  };
 
   return {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     conversationId,
     model,
-    createdAt: Math.floor(Date.now() / 1000),
-    text: content,
-    ...(Object.keys(canonicalReasoning).length > 0 ? { reasoning: canonicalReasoning } : {}),
-    toolCalls: output.toolCalls,
-    finishReason: toolCalls.size > 0 ? 'tool_calls' : 'stop',
-    usage: {
-      inputTokens: resolvedUsage.inputTokens,
-      outputTokens: resolvedUsage.outputTokens,
-      totalTokens: resolvedUsage.inputTokens + resolvedUsage.outputTokens
-    }
-  }
+    createdAt: createdAt ?? Math.floor(Date.now() / 1000),
+    text,
+    ...(Object.keys(reasoning).length > 0 ? { reasoning } : {}),
+    toolCalls: outputToolCalls,
+    finishReason: completed.finishReason,
+    usage: completed.usage,
+  };
 }

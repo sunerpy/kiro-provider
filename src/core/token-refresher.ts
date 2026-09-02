@@ -1,70 +1,117 @@
-import { accessTokenExpired } from '../kiro/auth.js'
-import { refreshAccessToken } from '../kiro/token.js'
-import type { KiroAuthDetails, ManagedAccount } from '../kiro/types.js'
-import type { StoredAccount } from '../storage/accounts-db.js'
-import type { AccountManager } from './account-manager.js'
+import { accessTokenExpired } from "../kiro/auth.js";
+import { isRefreshTokenDead, toDeadReason } from "../kiro/health.js";
+import { refreshAccessToken } from "../kiro/token.js";
+import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
+import type { StoredAccount } from "../storage/accounts-db.js";
+import { errorReason } from "./account-errors.js";
+import type { AccountManager } from "./account-manager.js";
+import { abortable } from "./pipeline-runtime.js";
+
+/** Upper bound for one shared network refresh; independent of any caller's signal. */
+export const DEFAULT_REFRESH_TIMEOUT_MS = 30_000;
 
 export class AccountUnavailableError extends Error {
   constructor(readonly accountId: string) {
-    super(`Account ${accountId} is no longer available`)
-    this.name = 'AccountUnavailableError'
+    super(`Account ${accountId} is no longer available`);
+    this.name = "AccountUnavailableError";
   }
 }
 
+function sameTokenSnapshot(left: ManagedAccount, right: ManagedAccount): boolean {
+  return (
+    left.accessToken === right.accessToken &&
+    left.refreshToken === right.refreshToken &&
+    left.expiresAt === right.expiresAt
+  );
+}
+
+/**
+ * Local-mode token refresher.
+ *
+ * One network refresh is shared per account id regardless of which account
+ * generation each caller holds. The shared refresh owns its own bounded
+ * lifetime: a caller's AbortSignal only detaches that caller from the result,
+ * it never cancels the refresh other callers are waiting on.
+ */
 export class TokenRefresher {
-  private readonly inFlight = new Map<string, Promise<StoredAccount>>()
+  private readonly inFlight = new Map<string, Promise<StoredAccount>>();
 
   constructor(
     private readonly accountManager: AccountManager,
     private readonly tokenExpiryBufferMs: number,
-    private readonly proxyUrl?: string
+    private readonly proxyUrl?: string,
+    private readonly refreshTimeoutMs: number = DEFAULT_REFRESH_TIMEOUT_MS,
   ) {}
 
   async refreshIfNeeded(
     account: ManagedAccount,
-    auth: KiroAuthDetails,
-    signal?: AbortSignal
+    _auth: KiroAuthDetails,
+    signal?: AbortSignal,
   ): Promise<StoredAccount> {
-    if (!accessTokenExpired(auth, this.tokenExpiryBufferMs)) {
-      const current = this.accountManager.getAccounts().find(({ id }) => id === account.id)
-      if (!current) throw new AccountUnavailableError(account.id)
-      return current
+    const current = this.latestAccount(account.id);
+    if (!accessTokenExpired(this.accountManager.toAuthDetails(current), this.tokenExpiryBufferMs)) {
+      return current;
     }
-    return this.startOrJoinRefresh(account, auth, signal)
+    return this.startOrJoinRefresh(current, false, signal);
   }
 
   async forceRefresh(account: ManagedAccount, signal?: AbortSignal): Promise<StoredAccount> {
-    return this.startOrJoinRefresh(account, this.accountManager.toAuthDetails(account), signal)
+    return this.startOrJoinRefresh(account, true, signal);
+  }
+
+  private latestAccount(accountId: string): StoredAccount {
+    const current = this.accountManager.getLatestAccount(accountId);
+    if (!current) throw new AccountUnavailableError(accountId);
+    return current;
   }
 
   private startOrJoinRefresh(
     account: ManagedAccount,
-    auth: KiroAuthDetails,
-    signal?: AbortSignal
+    force: boolean,
+    signal?: AbortSignal,
   ): Promise<StoredAccount> {
-    if (!('generation' in account) || typeof account.generation !== 'number') {
-      throw new AccountUnavailableError(account.id)
-    }
-    const refreshAccount: StoredAccount = { ...account, generation: account.generation }
-    const refreshKey = `${refreshAccount.id}:${refreshAccount.generation}`
-    const existing = this.inFlight.get(refreshKey)
-    if (existing) return existing
-
-    const refresh = this.runRefresh(refreshAccount, auth, signal).finally(() => {
-      if (this.inFlight.get(refreshKey) === refresh) this.inFlight.delete(refreshKey)
-    })
-    this.inFlight.set(refreshKey, refresh)
-    return refresh
+    const existing = this.inFlight.get(account.id);
+    const refresh = existing ?? this.beginRefresh(account, force);
+    return signal ? abortable(refresh, signal) : refresh;
   }
 
-  private async runRefresh(
-    account: StoredAccount,
-    auth: KiroAuthDetails,
-    signal?: AbortSignal
-  ): Promise<StoredAccount> {
-    const refreshedAuth = await refreshAccessToken(auth, signal, this.proxyUrl)
-    const updated = this.accountManager.updateFromAuth(account, refreshedAuth)
-    if (!updated) throw new AccountUnavailableError(account.id)
-    return updated
+  private beginRefresh(account: ManagedAccount, force: boolean): Promise<StoredAccount> {
+    const refresh = this.runRefresh(account, force).finally(() => {
+      if (this.inFlight.get(account.id) === refresh) this.inFlight.delete(account.id);
+    });
+    // A joiner may detach before settlement; keep the shared promise from
+    // surfacing as an unhandled rejection when nobody is left awaiting it.
+    refresh.catch(() => undefined);
+    this.inFlight.set(account.id, refresh);
+    return refresh;
+  }
+
+  private async runRefresh(started: ManagedAccount, force: boolean): Promise<StoredAccount> {
+    const latest = this.latestAccount(started.id);
+    const latestAuth = this.accountManager.toAuthDetails(latest);
+    const alreadyRotated = force
+      ? !sameTokenSnapshot(started, latest)
+      : !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
+    if (alreadyRotated) return latest;
+    try {
+      const refreshedAuth = await refreshAccessToken(
+        latestAuth,
+        AbortSignal.timeout(this.refreshTimeoutMs),
+        this.proxyUrl,
+      );
+      const updated = this.accountManager.updateFromAuth(latest, refreshedAuth);
+      if (!updated) throw new AccountUnavailableError(started.id);
+      return updated;
+    } catch (error) {
+      const reason = errorReason(error);
+      if (isRefreshTokenDead(reason)) {
+        try {
+          this.accountManager.markUnhealthy(latest, toDeadReason(reason));
+        } catch {
+          // The account may have been removed while the refresh was in flight.
+        }
+      }
+      throw error;
+    }
   }
 }

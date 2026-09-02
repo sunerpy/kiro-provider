@@ -1,13 +1,13 @@
-import { resolveModelVariant } from './models.js'
-import type { Effort } from './types.js'
+import { resolveModelVariant } from "./models.js";
+import type { Effort } from "./types.js";
 
 /**
  * Effort levels ordered from lowest to highest reasoning depth.
  */
-export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+export const EFFORT_LEVELS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"] as const;
 
 function isEffort(value: unknown): value is Effort {
-  return typeof value === 'string' && EFFORT_LEVELS.some((effort) => effort === value)
+  return typeof value === "string" && EFFORT_LEVELS.some((effort) => effort === value);
 }
 
 /**
@@ -16,47 +16,47 @@ function isEffort(value: unknown): value is Effort {
  * All five levels (incl. xhigh/max) are probe-confirmed: credit usage scales
  * monotonically low<medium<high<xhigh<max (.omo/evidence/task-gpt56-effort-probe.txt).
  */
-const GPT_REASONING_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
+const GPT_REASONING_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 
 /**
  * Models that support the 5-value effort enum (including xhigh).
  * These models support up to 128k thinking tokens with max effort.
  */
 const XHIGH_CAPABLE_MODELS = new Set([
-  'claude-opus-5',
-  'claude-opus-4.7',
-  'claude-opus-4.8',
-  'claude-sonnet-5',
-  ...GPT_REASONING_MODELS
-])
+  "claude-opus-5",
+  "claude-opus-4.7",
+  "claude-opus-4.8",
+  "claude-sonnet-5",
+  ...GPT_REASONING_MODELS,
+]);
 
 /**
  * Models that support the 4-value effort enum (no xhigh).
  * xhigh requests on these models are clamped to max.
  */
 const EFFORT_CAPABLE_MODELS = new Set([
-  'claude-opus-4.5',
-  'claude-opus-4.6',
-  'claude-opus-4.6-1m',
+  "claude-opus-4.5",
+  "claude-opus-4.6",
+  "claude-opus-4.6-1m",
   // GenerateAssistantResponse rejects additionalModelRequestFields for Sonnet 4.5.
   // Keep adaptive-thinking requests usable by omitting effort for this model family.
-  'claude-sonnet-4.6',
-  'claude-sonnet-4.6-1m',
-  ...XHIGH_CAPABLE_MODELS
-])
+  "claude-sonnet-4.6",
+  "claude-sonnet-4.6-1m",
+  ...XHIGH_CAPABLE_MODELS,
+]);
 
 /**
  * Check if a model supports the effort parameter.
  */
 export function supportsEffort(kiroModel: string): boolean {
-  return EFFORT_CAPABLE_MODELS.has(kiroModel)
+  return EFFORT_CAPABLE_MODELS.has(kiroModel);
 }
 
 /**
  * Check if a model supports xhigh effort level.
  */
 export function supportsXHighEffort(kiroModel: string): boolean {
-  return XHIGH_CAPABLE_MODELS.has(kiroModel)
+  return XHIGH_CAPABLE_MODELS.has(kiroModel);
 }
 
 /**
@@ -69,12 +69,12 @@ export function supportsXHighEffort(kiroModel: string): boolean {
  */
 export function buildEffortRequestFields(
   kiroModel: string,
-  effort: Effort
+  effort: Effort,
 ): Record<string, unknown> {
   if (GPT_REASONING_MODELS.has(kiroModel)) {
-    return { reasoning: { effort } }
+    return { reasoning: { effort } };
   }
-  return { output_config: { effort } }
+  return { output_config: { effort } };
 }
 
 /**
@@ -84,15 +84,15 @@ export function buildEffortRequestFields(
  */
 export function resolveEffort(kiroModel: string, requested: Effort): Effort | undefined {
   if (!supportsEffort(kiroModel)) {
-    return undefined
+    return undefined;
   }
 
   // xhigh is only preserved for models in the probe-backed xhigh allowlist.
-  if (requested === 'xhigh' && !supportsXHighEffort(kiroModel)) {
-    return 'max'
+  if (requested === "xhigh" && !supportsXHighEffort(kiroModel)) {
+    return "max";
   }
 
-  return requested
+  return requested;
 }
 
 /**
@@ -113,30 +113,30 @@ export function resolveEffort(kiroModel: string, requested: Effort): Effort | un
  */
 export function budgetToEffort(budget: number, kiroModel: string): Effort | undefined {
   if (!supportsEffort(kiroModel)) {
-    return undefined
+    return undefined;
   }
 
-  let effort: Effort
+  let effort: Effort;
   if (budget <= 10000) {
-    effort = 'low'
+    effort = "low";
   } else if (budget <= 20000) {
-    effort = 'medium'
+    effort = "medium";
   } else if (budget <= 28000) {
-    effort = 'high'
+    effort = "high";
   } else {
-    effort = 'max'
+    effort = "max";
   }
 
-  return effort
+  return effort;
 }
 
 export interface EffectiveEffortOptions {
-  readonly model: string
-  readonly think: boolean
-  readonly budget: number
-  readonly reasoningEffort?: string | null | undefined
-  readonly configEffort?: string | null | undefined
-  readonly autoEffortMapping?: boolean | undefined
+  readonly model: string;
+  readonly think: boolean;
+  readonly budget: number;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly configEffort?: string | null | undefined;
+  readonly autoEffortMapping?: boolean | undefined;
 }
 
 /**
@@ -150,44 +150,40 @@ export interface EffectiveEffortOptions {
  * rejects an invalid reasoning_effort with 400 before this resolver is called.
  */
 export function resolveEffectiveEffort(options: EffectiveEffortOptions): Effort | undefined {
-  let resolved: ReturnType<typeof resolveModelVariant>
+  let resolved: ReturnType<typeof resolveModelVariant>;
   if (supportsEffort(options.model)) {
-    resolved = { wireId: options.model, effort: undefined }
+    resolved = { wireId: options.model, effort: undefined };
   } else {
     try {
-      resolved = resolveModelVariant(options.model)
+      resolved = resolveModelVariant(options.model);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('Unsupported model:')) {
-        return undefined
+      if (error instanceof Error && error.message.startsWith("Unsupported model:")) {
+        return undefined;
       }
-      throw error
+      throw error;
     }
   }
 
   if (!supportsEffort(resolved.wireId)) {
-    return undefined
+    return undefined;
   }
 
-  const explicitEfforts = [
-    resolved.effort,
-    options.reasoningEffort,
-    options.configEffort
-  ] as const
+  const explicitEfforts = [resolved.effort, options.reasoningEffort, options.configEffort] as const;
   for (const effort of explicitEfforts) {
     if (isEffort(effort)) {
-      return resolveEffort(resolved.wireId, effort)
+      return resolveEffort(resolved.wireId, effort);
     }
   }
 
   if (!options.think) {
-    return undefined
+    return undefined;
   }
 
   if (options.autoEffortMapping ?? true) {
-    return budgetToEffort(options.budget, resolved.wireId)
+    return budgetToEffort(options.budget, resolved.wireId);
   }
 
-  return 'medium'
+  return "medium";
 }
 
 /**
@@ -199,13 +195,13 @@ export function getEffectiveEffort(
   thinking: boolean,
   budget: number,
   configEffort?: Effort,
-  autoEffortMapping = true
+  autoEffortMapping = true,
 ): Effort | undefined {
   return resolveEffectiveEffort({
     model: kiroModel,
     think: thinking,
     budget,
     configEffort,
-    autoEffortMapping
-  })
+    autoEffortMapping,
+  });
 }

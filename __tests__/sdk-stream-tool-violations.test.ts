@@ -15,12 +15,7 @@ function malformedFragments(): SdkStreamEvent[] {
     toolUseEvent: {
       name: "secret_tool_name",
       toolUseId: "secret_tool_id",
-      input:
-        index === 0
-          ? '{"secret":"'
-          : index === 17
-            ? '"'
-            : "x",
+      input: index === 0 ? '{"secret":"' : index === 17 ? '"' : "x",
       ...(index === 17 ? { stop: true } : {}),
     },
   }));
@@ -138,9 +133,7 @@ describe("streamed tool-call violations", () => {
     const text = await response.text();
 
     expect(text).toContain('"delta":"partial text"');
-    expect(text).toContain(
-      '"code":"malformed_upstream_tool_arguments"',
-    );
+    expect(text).toContain('"code":"malformed_upstream_tool_arguments"');
     expect(text).toContain('"type":"response.failed"');
     expect(text).not.toContain('"type":"response.completed"');
     expect(text).not.toContain('"type":"function_call"');

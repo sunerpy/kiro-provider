@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -12,6 +13,7 @@ import {
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 
 const ContentBlockSchema = z.object({ type: z.string().min(1) }).passthrough();
 
@@ -102,10 +104,6 @@ const REQUEST_KEYS = new Set([
   "metadata",
 ]);
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function failure(message: string, code?: string, param?: string): AnthropicFailure {
   return {
     ok: false,
@@ -123,11 +121,7 @@ function validateAllowedKeys(
 ): AnthropicFailure | undefined {
   for (const key of Object.keys(value)) {
     if (allowed.has(key)) continue;
-    return failure(
-      `Invalid request: ${path}.${key} is not supported`,
-      code,
-      `${path}.${key}`,
-    );
+    return failure(`Invalid request: ${path}.${key} is not supported`, code, `${path}.${key}`);
   }
   return undefined;
 }
@@ -143,10 +137,6 @@ function formatIssues(error: z.ZodError): string {
       return `${path}: ${issue.message}`;
     })
     .join(", ");
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
 }
 
 function systemParts(
@@ -175,6 +165,8 @@ function toolResultContent(
   value: unknown,
   path: string,
 ): AnthropicFailure | readonly CanonicalTextPart[] {
+  // Anthropic's tool_result.content is optional; an omitted result is empty.
+  if (value === undefined) return [];
   if (typeof value === "string") return [textPart(value, path)];
   if (!Array.isArray(value)) {
     return failure(
@@ -216,6 +208,16 @@ function reasoningContent(
         `Invalid request: ${path} requires thinking text and signature`,
         "invalid_reasoning_replay",
         path,
+      );
+    }
+    // An empty signature only exists transiently at the start of a stream; a
+    // replayed block must carry the signature Kiro emitted, or Kiro cannot
+    // verify it. Reject explicitly instead of forwarding an unsigned block.
+    if (block.signature.length === 0) {
+      return failure(
+        `Invalid request: ${path}.signature must be the non-empty signature returned with the thinking block`,
+        "invalid_reasoning_replay",
+        `${path}.signature`,
       );
     }
     return { kind: "reasoning_text", text: block.thinking, signature: block.signature };
@@ -450,41 +452,28 @@ function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): AnthropicFailure | undefined {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, number>();
-  const outputs = new Set<string>();
-  for (const [index, message] of messages.entries()) {
-    for (const call of message.toolCalls) {
-      if (!declarations.has(call.name)) {
-        return failure(
-          `Invalid request: tool call ${call.id} has no exact declaration for ${call.name}`,
-          "missing_tool_declaration",
-          call.path,
-        );
-      }
-      if (calls.has(call.id)) {
-        return failure(
-          `Invalid request: duplicate tool call id ${call.id}`,
-          "invalid_tool_history",
-          call.path,
-        );
-      }
-      calls.set(call.id, index);
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const callIndex = calls.get(part.toolCallId);
-      if (callIndex === undefined || callIndex >= index || outputs.has(part.toolCallId)) {
-        return failure(
-          `Invalid request: tool result ${part.toolCallId} has no earlier unique call`,
-          "invalid_tool_history",
-          part.path,
-        );
-      }
-      outputs.add(part.toolCallId);
-    }
+  const violation = findToolHistoryViolation(messages, tools);
+  if (!violation) return undefined;
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      return failure(
+        `Invalid request: tool call ${violation.callId} has no exact declaration for ${violation.toolName}`,
+        violation.code,
+        violation.path,
+      );
+    case "duplicate_tool_call":
+      return failure(
+        `Invalid request: duplicate tool call id ${violation.callId}`,
+        violation.code,
+        violation.path,
+      );
+    case "orphan_tool_result":
+      return failure(
+        `Invalid request: tool result ${violation.toolCallId} has no earlier unique call`,
+        violation.code,
+        violation.path,
+      );
   }
-  return undefined;
 }
 
 export function adaptAnthropicMessagesRequest(
@@ -515,10 +504,7 @@ export function adaptAnthropicMessagesRequest(
     return failure("Invalid request: max_tokens is required", undefined, "max_tokens");
   }
   if (request.max_tokens !== undefined) {
-    const outputLimit = resolveOutputTokenLimit(
-      request.model,
-      request.max_tokens,
-    );
+    const outputLimit = resolveOutputTokenLimit(request.model, request.max_tokens);
     if (!outputLimit.ok) {
       return failure(
         `Invalid request: max_tokens: ${outputLimit.message}`,
@@ -664,9 +650,7 @@ export function adaptAnthropicMessagesRequest(
           },
         }
       : {}),
-    ...(request.max_tokens !== undefined
-      ? { outputTokenLimit: request.max_tokens }
-      : {}),
+    ...(request.max_tokens !== undefined ? { outputTokenLimit: request.max_tokens } : {}),
     reasoningReplays,
     includeEncryptedReasoning: false,
   };

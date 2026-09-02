@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { textPart } from "../../protocol/adapter-utils.js";
 import {
-  type CanonicalContentPart,
   type CanonicalMessage,
   type CanonicalRequest,
   type CanonicalToolDeclaration,
   isCanonicalRequest,
   type ResolvedReasoningReplay,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { KIRO_CONSTANTS } from "../constants.js";
 import { resolveModelVariant } from "../models.js";
 import type {
@@ -16,12 +17,7 @@ import type {
   KiroAuthDetails,
 } from "../types.js";
 import { RequestTransformError } from "./errors.js";
-import {
-  buildHistory,
-  currentUserInput,
-  extractToolNamesFromHistory,
-  historyHasToolCalling,
-} from "./history-builder.js";
+import { buildHistory, currentUserInput } from "./history-builder.js";
 
 export interface RequestTransformResult {
   readonly request: CodeWhispererRequest;
@@ -33,10 +29,6 @@ export interface RequestTransformResult {
 export interface RequestTransformIdentity {
   readonly conversationId?: string;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
-}
-
-function sourceTextPart(text: string, path: string): CanonicalContentPart {
-  return { type: "text", text, path };
 }
 
 function cloneMessage(message: CanonicalMessage): CanonicalMessage {
@@ -55,10 +47,7 @@ function validateContentBlockProjection(messages: readonly CanonicalMessage[]): 
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
     const textParts = message.content.filter((part) => part.type === "text");
-    if (
-      textParts.length <= 1 ||
-      message.content.every((part) => part.type === "text")
-    ) {
+    if (textParts.length <= 1 || message.content.every((part) => part.type === "text")) {
       continue;
     }
     const firstUnprojectable = textParts[1];
@@ -84,7 +73,10 @@ function projectMessages(request: CanonicalRequest): {
     );
   }
   for (const instruction of instructions) {
-    if (instruction.content.some((part) => part.type !== "text") || instruction.toolCalls.length > 0) {
+    if (
+      instruction.content.some((part) => part.type !== "text") ||
+      instruction.toolCalls.length > 0
+    ) {
       throw new RequestTransformError(
         `Instruction ${instruction.path} contains non-text content that legacy projection cannot represent`,
         "unsupported_instruction_projection",
@@ -102,15 +94,13 @@ function projectMessages(request: CanonicalRequest): {
   if (instructions.length === 0) return { messages, projectedIndexByOriginal };
 
   const prefix = instructions
-    .flatMap((message) =>
-      message.content.map((part) => (part.type === "text" ? part.text : "")),
-    )
+    .flatMap((message) => message.content.map((part) => (part.type === "text" ? part.text : "")))
     .join("\n\n");
   const firstUserIndex = messages.findIndex((message) => message.role === "user");
   if (firstUserIndex < 0) {
     messages.unshift({
       role: "user",
-      content: [sourceTextPart(prefix, "legacy-user-prefix")],
+      content: [textPart(prefix, "legacy-user-prefix")],
       toolCalls: [],
       path: "legacy-user-prefix",
     });
@@ -123,10 +113,7 @@ function projectMessages(request: CanonicalRequest): {
   if (!firstUser) return { messages, projectedIndexByOriginal };
   messages[firstUserIndex] = {
     ...firstUser,
-    content: [
-      sourceTextPart(`${prefix}\n\n`, "legacy-user-prefix"),
-      ...firstUser.content,
-    ],
+    content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
   };
   return { messages, projectedIndexByOriginal };
 }
@@ -135,44 +122,23 @@ function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): void {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, { readonly name: string; readonly index: number }>();
-  const results = new Set<string>();
-  for (const [index, message] of messages.entries()) {
-    const messageCalls = [
-      ...message.toolCalls,
-      ...message.content.flatMap((part) =>
-        part.type === "tool_use"
-          ? [{ id: part.id, name: part.name, input: part.input, path: part.path }]
-          : [],
-      ),
-    ];
-    for (const call of messageCalls) {
-      if (!declarations.has(call.name)) {
-        throw new RequestTransformError(
-          `Tool call ${call.id} references ${call.name} without an exact declaration`,
-          "missing_tool_declaration",
-        );
-      }
-      if (calls.has(call.id)) {
-        throw new RequestTransformError(
-          `Duplicate tool call id ${call.id}`,
-          "invalid_tool_history",
-        );
-      }
-      calls.set(call.id, { name: call.name, index });
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const call = calls.get(part.toolCallId);
-      if (!call || call.index >= index || results.has(part.toolCallId)) {
-        throw new RequestTransformError(
-          `Tool result ${part.toolCallId} has no earlier unique matching call`,
-          "invalid_tool_history",
-        );
-      }
-      results.add(part.toolCallId);
-    }
+  // The projection is the last line of defence, so it also scans `tool_use`
+  // content parts; adapters validate only the `toolCalls` they produce.
+  const violation = findToolHistoryViolation(messages, tools, { includeToolUseParts: true });
+  if (!violation) return;
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      throw new RequestTransformError(
+        `Tool call ${violation.callId} references ${violation.toolName} without an exact declaration`,
+        violation.code,
+      );
+    case "duplicate_tool_call":
+      throw new RequestTransformError(`Duplicate tool call id ${violation.callId}`, violation.code);
+    case "orphan_tool_result":
+      throw new RequestTransformError(
+        `Tool result ${violation.toolCallId} has no earlier unique matching call`,
+        violation.code,
+      );
   }
 }
 
@@ -196,8 +162,6 @@ export function buildCodeWhispererRequest(
   body: CanonicalRequest,
   model: string,
   auth: KiroAuthDetails,
-  _think = false,
-  _budget = 20_000,
   identity: RequestTransformIdentity = {},
 ): RequestTransformResult {
   if (!isCanonicalRequest(body)) {
@@ -236,9 +200,7 @@ export function buildCodeWhispererRequest(
   validateToolHistory(projection.messages, canonical.tools);
 
   const projectedReplays = (identity.resolvedReasoningReplays ?? []).map((replay) => {
-    const insertBeforeMessage = projection.projectedIndexByOriginal.get(
-      replay.insertBeforeMessage,
-    );
+    const insertBeforeMessage = projection.projectedIndexByOriginal.get(replay.insertBeforeMessage);
     if (insertBeforeMessage === undefined) {
       throw new RequestTransformError(
         "Reasoning replay does not reference an assistant output message",
@@ -270,16 +232,6 @@ export function buildCodeWhispererRequest(
   if (suppliedTools.length > 0) {
     currentInput.userInputMessageContext ??= {};
     currentInput.userInputMessageContext.tools = suppliedTools;
-  }
-  if (historyHasToolCalling(history) && canonical.toolChoice === "auto") {
-    const names = new Set(suppliedTools.map((tool) => tool.toolSpecification.name));
-    const missing = [...extractToolNamesFromHistory(history)].filter((name) => !names.has(name));
-    if (missing.length > 0) {
-      throw new RequestTransformError(
-        `Tool history is missing exact declarations for: ${missing.join(", ")}`,
-        "missing_tool_declaration",
-      );
-    }
   }
 
   const convId = identity.conversationId ?? randomUUID();

@@ -24,10 +24,7 @@ describe("probe-backed Kiro output-token limits", () => {
   test.each(["claude-sonnet-5", "claude-opus-5"])(
     "rejects out-of-range %s max_tokens values before Kiro",
     (model) => {
-      for (const limit of [
-        KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1,
-        KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1,
-      ]) {
+      for (const limit of [KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1]) {
         expect(resolveOutputTokenLimit(model, limit)).toMatchObject({
           ok: false,
           code: "invalid_output_token_limit",

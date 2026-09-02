@@ -4,10 +4,7 @@ import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
 } from "../src/protocol/output.js";
-import {
-  canonicalCompletionToChat,
-  canonicalOutputToChatSse,
-} from "../src/server/chat-output.js";
+import { canonicalCompletionToChat, canonicalOutputToChatSse } from "../src/server/chat-output.js";
 
 function activeSignals(): {
   readonly combined: AbortSignal;
@@ -23,10 +20,7 @@ function activeSignals(): {
   };
 }
 
-function canonicalStream(
-  events: readonly CanonicalOutputEvent[],
-  finalNewline = true,
-): Response {
+function canonicalStream(events: readonly CanonicalOutputEvent[], finalNewline = true): Response {
   const body = events.map((event) => JSON.stringify(event)).join("\n");
   return new Response(`${body}${finalNewline ? "\n" : ""}`);
 }
@@ -41,9 +35,7 @@ function started(model = "claude-sonnet-5"): CanonicalOutputEvent {
   };
 }
 
-function completed(
-  finishReason: "stop" | "tool_calls",
-): CanonicalOutputEvent {
+function completed(finishReason: "stop" | "tool_calls"): CanonicalOutputEvent {
   return {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     type: "completed",
@@ -73,7 +65,7 @@ describe("canonical Chat output", () => {
         redactedContent: "redacted",
         encryptedContent: "kr1_token",
       },
-      toolCalls: [{ id: "call-1", name: "lookup", input: "{\"q\":\"x\"}" }],
+      toolCalls: [{ id: "call-1", name: "lookup", input: '{"q":"x"}' }],
       finishReason: "tool_calls",
       usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
     };
@@ -97,7 +89,7 @@ describe("canonical Chat output", () => {
         {
           id: "call-1",
           type: "function",
-          function: { name: "lookup", arguments: "{\"q\":\"x\"}" },
+          function: { name: "lookup", arguments: '{"q":"x"}' },
         },
       ],
     });
@@ -107,6 +99,34 @@ describe("canonical Chat output", () => {
       completion_tokens: 2,
       total_tokens: 5,
     });
+  });
+
+  test("returns null content for a tool-call-only completion like OpenAI", async () => {
+    const toolOnly: CanonicalCompletion = {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      conversationId: "conversation-1",
+      model: "claude-sonnet-5",
+      createdAt: 1_700_000_000,
+      text: "",
+      toolCalls: [{ id: "call-1", name: "lookup", input: "{}" }],
+      finishReason: "tool_calls",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    };
+    const emptyText: CanonicalCompletion = { ...toolOnly, toolCalls: [], finishReason: "stop" };
+
+    const toolPayload = (await canonicalCompletionToChat(toolOnly).json()) as {
+      choices: Array<{ message: Record<string, unknown> }>;
+    };
+    const emptyPayload = (await canonicalCompletionToChat(emptyText).json()) as {
+      choices: Array<{ message: Record<string, unknown> }>;
+    };
+
+    expect(toolPayload.choices[0]?.message).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call-1", type: "function" }],
+    });
+    expect(emptyPayload.choices[0]?.message).toMatchObject({ role: "assistant", content: "" });
   });
 
   test("encodes every canonical delta and one separate usage frame", async () => {
@@ -144,13 +164,13 @@ describe("canonical Chat output", () => {
         index: 0,
         id: "call-1",
         name: "lookup",
-        arguments: "{\"q\":",
+        arguments: '{"q":',
       },
       {
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
         type: "tool_call_delta",
         index: 0,
-        arguments: "\"x\"}",
+        arguments: '"x"}',
       },
       completed("tool_calls"),
     ];
@@ -271,12 +291,9 @@ describe("canonical Chat output", () => {
       }),
     );
 
-    const text = await canonicalOutputToChatSse(
-      response,
-      activeSignals(),
-      () => undefined,
-      { expectedModel: "claude-sonnet-5" },
-    ).text();
+    const text = await canonicalOutputToChatSse(response, activeSignals(), () => undefined, {
+      expectedModel: "claude-sonnet-5",
+    }).text();
 
     expect(text).toContain('"type":"upstream_error"');
     expect(text).toContain('"code":"upstream_stream_idle_timeout"');

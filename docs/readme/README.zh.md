@@ -78,17 +78,10 @@ v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静�
 - Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
   搜索或引用事件。
 
-2026-08-29 的 RC.4 编译后二进制门禁保留 RC.3 协议矩阵，并新增 Provider
-自有认证生命周期验证。隔离本地账号库从一次性导入开始，随后故意设置过期
-access token、陈旧 usage 和不存在的 OpenCode 数据库路径；编译服务仍独立
-完成 token 与 usage 刷新。OpenAI JavaScript SDK 7.5.0 随后完成两轮标准
-Responses，OpenCode 1.18.18 完成真实 bash/write/read 工具循环，全程没有
-实时共享数据库或跨进程锁。因为 OpenCode 会发送 Kiro 无法保真投影的
-developer instructions，它仍需显式 `legacy-user-prefix`。RC.3 已知协议阻塞
-不变：Codex 在调用 Kiro 前被 `reasoning.summary` 阻塞，Claude Code 2.1.209
-被 `context_management` 阻塞，OpenCode Chat 被客户端的非标准
-`messages.0.cache_control` 阻塞。Zuno 未修改也未重跑。这些是 RC 结论；
-稳定版 v0.5.0 继续保持门禁，不会靠静默丢弃不支持字段换取“通过”。
+当前已验证子集的状态、每次发布背后的编译后二进制验收记录，以及
+2026-09-02 的全面代码审视与修复方案，均记录在
+[`docs/audits/`](../audits/README.md)。稳定版继续以这些记录为门禁，
+不会靠静默丢弃不支持字段换取“通过”。
 
 完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
 [`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
@@ -128,7 +121,15 @@ Windows（PowerShell）：
 irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
-两个脚本都会从 `releases/latest/download/` 拉取对应资产，默认安装到 `~/.local/bin`（可用 `KIRO_PROVIDER_INSTALL_DIR` 覆盖）。
+两个脚本都会同时下载对应平台资产和该发布的 `SHA256SUMS`，校验通过后才安装到 `~/.local/bin`（可用 `KIRO_PROVIDER_INSTALL_DIR` 覆盖），校验不一致会直接中止。默认跟随 `releases/latest`；常驻服务或需要可复现安装时，建议用 `KIRO_PROVIDER_VERSION` 固定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=0.5.1 sh
+```
+
+```powershell
+$env:KIRO_PROVIDER_VERSION = "0.5.1"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+```
 
 ### 3. 从源码构建（开发者）
 
@@ -153,15 +154,28 @@ bun run src/cli/bin.ts --help
 
 ## 快速开始
 
-1. **创建配置文件并写入你自己的 API Key。**
+1. **创建配置文件并写入你自己的 API Key。** 只有 `api_keys` 是必填项，
+   其余字段都有生产默认值（`auth_source: "local"`、`host: "127.0.0.1"`、
+   `port: 8787`）。
 
    ```bash
    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
-   cp config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
-   # 编辑 config.json，把 "sk-REPLACE-ME" 换成一个私有的随机 Key
+   cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF'
+   {
+     "api_keys": ["sk-your-private-key"]
+   }
+   EOF
+   chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
    ```
 
-   示例已经使用生产默认值 `"auth_source": "local"`。
+   把 `sk-your-private-key` 换成一个私有的随机值（例如 `openssl rand -hex 24`）。
+   仓库中带完整注释的 [`config.example.json`](../../config.example.json) 与
+   [`docs/readme/CONFIGURATION.zh.md`](CONFIGURATION.zh.md) 列出了全部字段。
+
+   **Windows 路径。** Windows 上默认配置文件为
+   `%APPDATA%\kiro-provider\config.json`，`accounts.db`、实例锁和 reasoning
+   密钥环也位于同一目录（POSIX 上这些文件统一放在
+   `~/.config/kiro-provider`）。需要其他位置时使用 `--config <path>`。
 
 2. **填充 provider 自有认证库。** 如果此前通过 OpenCode 和
    `opencode-kiro-auth` 完成认证，只需导入一次：
@@ -257,7 +271,8 @@ Kiro 模型调用 socket 默认新建（`sdk_http_keep_alive: false`）；即使
 
 - Linux 二进制：`~/.local/bin/kiro-provider`；
 - Windows 二进制：`%USERPROFILE%\.local\bin\kiro-provider.exe`；
-- 配置文件：`~/.config/kiro-provider/config.json`；
+- 配置文件：Linux 为 `~/.config/kiro-provider/config.json`，Windows 为
+  `%APPDATA%\kiro-provider\config.json`；
 - 服务/任务名称：`kiro-provider`。
 
 一次性导入与常驻服务应由**同一个系统用户**执行，使服务读取同一份
@@ -340,8 +355,8 @@ Manager 接口，因此不要直接用 `sc.exe` 注册。无需第三方依赖�
 
 ```powershell
 $Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $HOME ".config\kiro-provider\config.json"
-$ServiceDir = Join-Path $HOME ".config\kiro-provider"
+$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
+$ServiceDir = Join-Path $env:APPDATA "kiro-provider"
 $LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
 $Launcher = Join-Path $ServiceDir "service.ps1"
 
@@ -356,7 +371,7 @@ New-Item -ItemType Directory -Force -Path $ServiceDir, $LogDir | Out-Null
 @'
 $ErrorActionPreference = "Stop"
 $Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $HOME ".config\kiro-provider\config.json"
+$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
 $LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
 $Log = Join-Path $LogDir "service.log"
 $PreviousLog = Join-Path $LogDir "service.previous.log"
@@ -415,7 +430,7 @@ Get-Content "$env:LOCALAPPDATA\kiro-provider\service.log" -Tail 100 -Wait
 ```powershell
 Stop-ScheduledTask -TaskName "kiro-provider" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "kiro-provider" -Confirm:$false
-Remove-Item "$HOME\.config\kiro-provider\service.ps1"
+Remove-Item "$env:APPDATA\kiro-provider\service.ps1"
 ```
 
 这个任务有意只在当前用户的交互式会话中运行，因此无需保存 Windows 密码，
@@ -456,7 +471,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 
 ## 配置
 
-配置默认从 `~/.config/kiro-provider/config.json`（或 `$XDG_CONFIG_HOME/kiro-provider/config.json`）加载，可被 `KIRO_PROVIDER_*` 环境变量覆盖；`serve` 命令还支持部分 CLI 参数覆盖。优先级为 **CLI 参数 > 环境变量 > 配置文件 > schema 默认值**。
+配置默认从 `~/.config/kiro-provider/config.json`（或 `$XDG_CONFIG_HOME/kiro-provider/config.json`；Windows 为 `%APPDATA%\kiro-provider\config.json`，旧的 `~/.config` 位置仍作为兜底读取）加载，可被 `KIRO_PROVIDER_*` 环境变量覆盖；`serve` 命令还支持部分 CLI 参数覆盖。配置文件中的未知键会被拒绝并给出相近键提示，数值字段有范围校验，空字符串环境变量视为未设置。优先级为 **CLI 参数 > 环境变量 > 配置文件 > schema 默认值**。
 
 | 字段 | 默认值 | 环境变量 |
 | --- | --- | --- |
@@ -507,7 +522,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 - **默认只监听本机。** `host` 默认为 `127.0.0.1`；只有在放在防火墙或带认证的反向代理之后时才应绑定 `0.0.0.0`。
 - **认证事实源唯一。** 共享模式读写 OpenCode 现有 Kiro 数据库；schema 不兼容时默认拒绝启动，不会对该数据库执行 provider 自有迁移。
 - **默认单一服务所有者。** 编译服务监听前会取得平台配置目录中的进程锁，避免进程内账号/会话队列与 SDK 池被意外拆分。
-- **Provider 状态权限收紧。** `accounts.db`（及其 WAL / SHM 文件）创建时权限为 `0600`；共享模式下它保存亲和状态，而不是权威凭据。
+- **Provider 状态权限收紧。** `accounts.db`（及其 WAL / SHM 文件）创建时权限为 `0600`；默认本地模式下它保存凭据、用量、健康状态、会话亲和以及加密的 reasoning 回放状态。
 - **Reasoning 回放带认证加密。** 数据库只保存令牌/指纹哈希和 AES-256-GCM 密文，不保存原始 `kr1_...`；缺少活动解密密钥时启动失败。
 - **日志不打印敏感正文。** 网关/账号密钥、回放令牌、签名、reasoning 与请求提示词不会写入日志；结构化审计只记录哈希和字段名。不要提交真实配置文件、账号数据库、密钥环或网关 Key。
 
@@ -550,7 +565,7 @@ Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境验�
 - `kiro-provider accounts list [--details | --json]` —— 对齐显示账号健康与用量；details/JSON 会显示稳定账号 ID，但绝不输出凭证。
 - `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` —— 绕过用量缓存，立即读取 Kiro 权威用量，并仅在 access token 到期或被上游拒绝时刷新。
 - `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` —— 经 Kiro 身份校验后重新认证选定账号，同时保留内部账号 ID 与会话亲和引用。
-- `kiro-provider accounts import [--from <path>] [--config <path>]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库，不保留实时数据库链接。
+- `kiro-provider accounts import [--from <path>] [--force]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库；本地副本更新的行会被跳过，除非加 `--force`；不保留实时数据库链接。
 - `kiro-provider accounts remove <id|email> [--yes]` —— 删除账号及其亲和、lineage、reasoning 状态；除非显式传入 `--yes`，否则必须交互确认。
 
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models`、`GET /health` 与需鉴权的 `GET /ready` 返回结构化 JSON。
@@ -692,6 +707,11 @@ bun run build
 bun run build:binary
 bash scripts/security-check.sh   # 安全回归测试（Linux，需要 openssl/curl/ss）
 ```
+
+`make ci` 会依次执行类型检查、lint、shell 脚本语法检查和测试套件。
+`make fmt-check`（以及 `make fmt`）还需要 `oxfmt` 来格式化 YAML/JSON/Markdown，
+请安装与 CI 相同的版本：`bun install --global oxfmt@0.59.0`。
+`bun run scripts/smoke.ts --help` 说明了针对运行中网关的端到端冒烟检查。
 
 ## 许可证
 

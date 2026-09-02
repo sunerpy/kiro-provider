@@ -86,21 +86,11 @@ Key boundaries:
 - stateful Responses fields and native Web Search remain unsupported, and the
   provider never fabricates search/citation events.
 
-Current compiled-binary RC.4 acceptance on 2026-08-29 retains the RC.3
-protocol matrix and adds provider-owned authentication lifecycle validation.
-Starting from a one-time import, an isolated local store deliberately used an
-expired access token, stale usage, and a nonexistent OpenCode database path.
-The compiled service independently refreshed the token and usage, then OpenAI
-JavaScript SDK 7.5.0 completed two standard Responses turns and OpenCode
-1.18.18 completed a real bash/write/read tool loop. No live shared database or
-cross-process lock was used. OpenCode still requires explicit
-`legacy-user-prefix` because it sends developer instructions that Kiro cannot
-project losslessly. The known RC.3 protocol blockers are unchanged: Codex is
-blocked before Kiro by `reasoning.summary`, Claude Code 2.1.209 by
-`context_management`, and OpenCode Chat by the client's nonstandard
-`messages.0.cache_control`. Zuno was intentionally not changed or rerun.
-These are RC findings; stable v0.5.0 remains gated rather than silently
-discarding unsupported fields.
+The current state of the verified subset, the compiled-binary acceptance runs
+behind each release, and the 2026-09-02 full code review with its remediation
+plan are recorded in [`docs/audits/`](docs/audits/README.md). Stable releases
+stay gated on those records rather than on silently discarding unsupported
+fields.
 
 For the complete capability matrix, error codes, reasoning replay contract,
 and v0.4 migration steps, see
@@ -141,7 +131,15 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
-Both scripts pull the matching asset from `releases/latest/download/` and install it to `~/.local/bin` (override with `KIRO_PROVIDER_INSTALL_DIR`).
+Both scripts download the platform asset together with the release's `SHA256SUMS`, verify the checksum, and abort on a mismatch before installing to `~/.local/bin` (override with `KIRO_PROVIDER_INSTALL_DIR`). By default they follow `releases/latest`; for reproducible or service installs, pin a release with `KIRO_PROVIDER_VERSION` (recommended):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=0.5.1 sh
+```
+
+```powershell
+$env:KIRO_PROVIDER_VERSION = "0.5.1"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+```
 
 ### 3. From source (developers)
 
@@ -166,15 +164,30 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
 
 ## Quickstart
 
-1. **Create a config with your own API key.**
+1. **Create a config with your own API key.** Only `api_keys` is required;
+   every other field has a production default (`auth_source: "local"`,
+   `host: "127.0.0.1"`, `port: 8787`).
 
    ```bash
    mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
-   cp config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
-   # edit config.json and replace "sk-REPLACE-ME" with a private, random key
+   cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF'
+   {
+     "api_keys": ["sk-your-private-key"]
+   }
+   EOF
+   chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
    ```
 
-   The example already uses the production default, `"auth_source": "local"`.
+   Replace `sk-your-private-key` with a private, random value (for example
+   `openssl rand -hex 24`). The fully annotated
+   [`config.example.json`](config.example.json) in the repository and
+   [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) describe every field.
+
+   **Windows locations.** On Windows the default config path is
+   `%APPDATA%\kiro-provider\config.json`, and `accounts.db`, the instance
+   lock, and the reasoning keyring live in that same directory (POSIX uses
+   `~/.config/kiro-provider` for all of them). Pass `--config <path>` to use a
+   different file.
 
 2. **Populate the provider-owned authentication store.** If you previously
    authenticated through OpenCode plus `opencode-kiro-auth`, import that
@@ -276,7 +289,8 @@ defaults:
 
 - binary: `~/.local/bin/kiro-provider` on Linux,
   `%USERPROFILE%\.local\bin\kiro-provider.exe` on Windows;
-- config: `~/.config/kiro-provider/config.json`;
+- config: `~/.config/kiro-provider/config.json` on Linux,
+  `%APPDATA%\kiro-provider\config.json` on Windows;
 - service/task name: `kiro-provider`.
 
 Run the one-time import and the service as the **same OS user** so the service
@@ -362,8 +376,8 @@ stdout/stderr are retained under `%LOCALAPPDATA%\kiro-provider`:
 
 ```powershell
 $Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $HOME ".config\kiro-provider\config.json"
-$ServiceDir = Join-Path $HOME ".config\kiro-provider"
+$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
+$ServiceDir = Join-Path $env:APPDATA "kiro-provider"
 $LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
 $Launcher = Join-Path $ServiceDir "service.ps1"
 
@@ -378,7 +392,7 @@ New-Item -ItemType Directory -Force -Path $ServiceDir, $LogDir | Out-Null
 @'
 $ErrorActionPreference = "Stop"
 $Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $HOME ".config\kiro-provider\config.json"
+$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
 $LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
 $Log = Join-Path $LogDir "service.log"
 $PreviousLog = Join-Path $LogDir "service.previous.log"
@@ -437,7 +451,7 @@ To remove the task and launcher:
 ```powershell
 Stop-ScheduledTask -TaskName "kiro-provider" -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "kiro-provider" -Confirm:$false
-Remove-Item "$HOME\.config\kiro-provider\service.ps1"
+Remove-Item "$env:APPDATA\kiro-provider\service.ps1"
 ```
 
 This task intentionally runs only in the current user's interactive session,
@@ -481,7 +495,7 @@ with the stable base URL and gateway API key.
 
 ## Configuration
 
-Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Precedence is **CLI flag > environment variable > config file > schema default**.
+Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`; on Windows `%APPDATA%\kiro-provider\config.json`, with the legacy `~/.config` location still read as a fallback), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Unknown keys in the file are rejected with a suggestion, numeric fields are range-checked, and an empty environment variable counts as unset. Precedence is **CLI flag > environment variable > config file > schema default**.
 
 | Field | Default | Env var |
 | --- | --- | --- |
@@ -580,7 +594,7 @@ resend the complete input.
 - `kiro-provider accounts list [--details | --json]` — show aligned account health/usage; details and JSON include the stable account ID but never credentials.
 - `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` — bypass the usage cache, refresh authoritative Kiro usage, and renew an access token only when needed or rejected upstream.
 - `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` — re-authenticate a selected account after Kiro identity verification while preserving its internal ID and session-affinity references.
-- `kiro-provider accounts import [--from <path>] [--config <path>]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; no live database link remains.
+- `kiro-provider accounts import [--from <path>] [--force]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; rows whose local copy is newer are skipped unless `--force` is given; no live database link remains.
 - `kiro-provider accounts remove <id|email> [--yes]` — remove one account and its affinity/lineage/reasoning state; interactive confirmation is required unless `--yes` is supplied.
 
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.
@@ -732,6 +746,12 @@ bun run build
 bun run build:binary
 bash scripts/security-check.sh   # security regression suite (Linux, needs openssl/curl/ss)
 ```
+
+`make ci` runs typecheck, lint, shell-script syntax checks, and the test suite.
+`make fmt-check` (and `make fmt`) additionally require the `oxfmt` formatter
+for YAML/JSON/Markdown; install the version CI uses with
+`bun install --global oxfmt@0.59.0`. `bun run scripts/smoke.ts --help` describes
+the live end-to-end checks against a running gateway.
 
 ## License
 

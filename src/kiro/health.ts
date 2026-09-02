@@ -19,20 +19,36 @@
 // refresh-token-dead account IS permanent. invalid-bearer is deliberately NOT
 // in this set, so it is no longer treated as permanent.
 
-/** REFRESH-token-dead signals (needs re-login). Historical permanent set. */
+/**
+ * Structured signals that the REFRESH token (or the OIDC client registration)
+ * is permanently dead. Only service-issued codes and their canonical messages
+ * qualify. token.ts emits a bare `HTTP_<status>` code whenever the response
+ * body carried no service error code (HTML from a proxy / WAF, an empty body,
+ * or JSON without `error` / `__type`); such reasons are transient and must never
+ * park an account permanently, even for 401 / 403.
+ */
+const REFRESH_TOKEN_DEAD_MARKERS: readonly string[] = [
+  // OAuth2 / AWS SSO OIDC `error` codes
+  "invalid_grant",
+  "invalid_client",
+  "unauthorized_client",
+  // AWS JSON protocol `__type` exception names
+  "InvalidGrantException",
+  "InvalidClientException",
+  "UnauthorizedClientException",
+  "ExpiredTokenException",
+  "InvalidTokenException",
+  "ExpiredClientException",
+  // Kiro desktop auth service messages
+  "Invalid refresh token",
+  "Invalid grant provided",
+  "Client is expired",
+];
+
+/** REFRESH-token-dead signals (needs re-login). */
 export function isRefreshTokenDead(reason?: string): boolean {
-  if (!reason) return false
-  return (
-    reason.includes('Invalid refresh token') ||
-    reason.includes('Invalid grant provided') ||
-    reason.includes('invalid_grant') ||
-    reason.includes('ExpiredTokenException') ||
-    reason.includes('InvalidTokenException') ||
-    reason.includes('ExpiredClientException') ||
-    reason.includes('Client is expired') ||
-    reason.includes('HTTP_401') ||
-    reason.includes('HTTP_403')
-  )
+  if (!reason) return false;
+  return REFRESH_TOKEN_DEAD_MARKERS.some((marker) => reason.includes(marker));
 }
 
 /**
@@ -42,32 +58,32 @@ export function isRefreshTokenDead(reason?: string): boolean {
  * capitalization drift on the wire does not misclassify it as dead.
  */
 export function isAccessTokenError(reason?: string): boolean {
-  if (!reason) return false
-  const lower = reason.toLowerCase()
+  if (!reason) return false;
+  const lower = reason.toLowerCase();
   return (
-    lower.includes('bearer token included in the request is invalid') ||
-    lower.includes('access token has expired') ||
-    lower.includes('access_token expired') ||
-    lower.includes('the access token expired')
-  )
+    lower.includes("bearer token included in the request is invalid") ||
+    lower.includes("access token has expired") ||
+    lower.includes("access_token expired") ||
+    lower.includes("the access token expired")
+  );
 }
 
 export function isQuotaExhausted(account: {
-  readonly usedCount?: number
-  readonly limitCount?: number
-  readonly overageCount?: number
+  readonly usedCount?: number;
+  readonly limitCount?: number;
+  readonly overageCount?: number;
 }): boolean {
-  const overageCount = account.overageCount ?? 0
-  if (Number.isFinite(overageCount) && overageCount > 0) return true
+  const overageCount = account.overageCount ?? 0;
+  if (Number.isFinite(overageCount) && overageCount > 0) return true;
 
-  const usedCount = account.usedCount ?? 0
-  const limitCount = account.limitCount ?? 0
+  const usedCount = account.usedCount ?? 0;
+  const limitCount = account.limitCount ?? 0;
   return (
     Number.isFinite(usedCount) &&
     Number.isFinite(limitCount) &&
     limitCount > 0 &&
     usedCount >= limitCount
-  )
+  );
 }
 
 /**
@@ -76,7 +92,7 @@ export function isQuotaExhausted(account: {
  * "permanent" keep working unchanged.
  */
 export function isPermanentError(reason?: string): boolean {
-  return isRefreshTokenDead(reason)
+  return isRefreshTokenDead(reason);
 }
 
 /**
@@ -87,6 +103,6 @@ export function isPermanentError(reason?: string): boolean {
  * isRefreshTokenDead / isPermanentError.
  */
 export function toDeadReason(reason?: string): string {
-  const base = reason && reason.length > 0 ? reason : 'Account needs re-authentication'
-  return isRefreshTokenDead(base) ? base : `InvalidTokenException: ${base}`
+  const base = reason && reason.length > 0 ? reason : "Account needs re-authentication";
+  return isRefreshTokenDead(base) ? base : `InvalidTokenException: ${base}`;
 }

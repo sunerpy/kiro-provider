@@ -3,10 +3,7 @@ import { resolveModelVariant } from "./models.js";
 export const KIRO_OUTPUT_TOKEN_LIMIT_MIN = 1_024;
 export const KIRO_OUTPUT_TOKEN_LIMIT_MAX = 128_000;
 
-const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set([
-  "claude-sonnet-5",
-  "claude-opus-5",
-]);
+const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set(["claude-sonnet-5", "claude-opus-5"]);
 
 export type OutputTokenLimitResult =
   | {
@@ -16,9 +13,7 @@ export type OutputTokenLimitResult =
     }
   | {
       readonly ok: false;
-      readonly code:
-        | "unsupported_output_token_limit"
-        | "invalid_output_token_limit";
+      readonly code: "unsupported_output_token_limit" | "invalid_output_token_limit";
       readonly message: string;
     };
 
@@ -28,10 +23,7 @@ export type OutputTokenLimitResult =
  * max_tokens from 1,024 through 128,000. GPT 5.6 rejected every tested
  * standard spelling, so it remains fail-closed.
  */
-export function resolveOutputTokenLimit(
-  model: string,
-  limit: number,
-): OutputTokenLimitResult {
+export function resolveOutputTokenLimit(model: string, limit: number): OutputTokenLimitResult {
   let wireModel: string;
   try {
     wireModel = resolveModelVariant(model).wireId;

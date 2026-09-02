@@ -1,12 +1,10 @@
+import { isRecord } from "./adapter-utils.js";
+
 export const CANONICAL_OUTPUT_VERSION = 1 as const;
-export const CANONICAL_OUTPUT_JSON_MEDIA_TYPE =
-  "application/x-kiro-provider-output+json";
-export const CANONICAL_OUTPUT_STREAM_MEDIA_TYPE =
-  "application/x-kiro-provider-output+ndjson";
-export const CANONICAL_OUTPUT_JSON_CONTENT_TYPE =
-  `${CANONICAL_OUTPUT_JSON_MEDIA_TYPE}; charset=utf-8`;
-export const CANONICAL_OUTPUT_STREAM_CONTENT_TYPE =
-  `${CANONICAL_OUTPUT_STREAM_MEDIA_TYPE}; charset=utf-8`;
+export const CANONICAL_OUTPUT_JSON_MEDIA_TYPE = "application/x-kiro-provider-output+json";
+export const CANONICAL_OUTPUT_STREAM_MEDIA_TYPE = "application/x-kiro-provider-output+ndjson";
+export const CANONICAL_OUTPUT_JSON_CONTENT_TYPE = `${CANONICAL_OUTPUT_JSON_MEDIA_TYPE}; charset=utf-8`;
+export const CANONICAL_OUTPUT_STREAM_CONTENT_TYPE = `${CANONICAL_OUTPUT_STREAM_MEDIA_TYPE}; charset=utf-8`;
 
 export interface CanonicalOutputUsage {
   readonly inputTokens: number;
@@ -83,10 +81,6 @@ export type CanonicalOutputEvent =
       readonly usage: CanonicalOutputUsage;
     });
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function hasOnlyKeys(
   value: Readonly<Record<string, unknown>>,
   allowed: ReadonlySet<string>,
@@ -124,28 +118,18 @@ function parseReasoning(value: unknown): CanonicalOutputReasoning | undefined {
   if (value === undefined) return undefined;
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(
-      value,
-      new Set(["text", "signature", "redactedContent", "encryptedContent"]),
-    )
+    !hasOnlyKeys(value, new Set(["text", "signature", "redactedContent", "encryptedContent"]))
   ) {
     return undefined;
   }
-  for (const key of [
-    "text",
-    "signature",
-    "redactedContent",
-    "encryptedContent",
-  ] as const) {
+  for (const key of ["text", "signature", "redactedContent", "encryptedContent"] as const) {
     if (value[key] !== undefined && !isNonEmptyString(value[key])) {
       return undefined;
     }
   }
   return {
     ...(typeof value.text === "string" ? { text: value.text } : {}),
-    ...(typeof value.signature === "string"
-      ? { signature: value.signature }
-      : {}),
+    ...(typeof value.signature === "string" ? { signature: value.signature } : {}),
     ...(typeof value.redactedContent === "string"
       ? { redactedContent: value.redactedContent }
       : {}),
@@ -168,9 +152,7 @@ function parseToolCall(value: unknown): CanonicalOutputToolCall | undefined {
   return { id: value.id, name: value.name, input: value.input };
 }
 
-export function parseCanonicalCompletion(
-  value: unknown,
-): CanonicalCompletion | undefined {
+export function parseCanonicalCompletion(value: unknown): CanonicalCompletion | undefined {
   if (
     !isRecord(value) ||
     !hasOnlyKeys(
@@ -224,9 +206,7 @@ export function parseCanonicalCompletion(
   };
 }
 
-export function parseCanonicalOutputEvent(
-  value: unknown,
-): CanonicalOutputEvent | undefined {
+export function parseCanonicalOutputEvent(value: unknown): CanonicalOutputEvent | undefined {
   if (
     !isRecord(value) ||
     value.canonicalOutputVersion !== CANONICAL_OUTPUT_VERSION ||
@@ -240,13 +220,7 @@ export function parseCanonicalOutputEvent(
       if (
         !hasOnlyKeys(
           value,
-          new Set([
-            "canonicalOutputVersion",
-            "type",
-            "conversationId",
-            "model",
-            "createdAt",
-          ]),
+          new Set(["canonicalOutputVersion", "type", "conversationId", "model", "createdAt"]),
         ) ||
         !isNonEmptyString(value.conversationId) ||
         !isNonEmptyString(value.model) ||
@@ -264,10 +238,7 @@ export function parseCanonicalOutputEvent(
     case "reasoning_delta":
     case "text_delta":
       if (
-        !hasOnlyKeys(
-          value,
-          new Set(["canonicalOutputVersion", "type", "text"]),
-        ) ||
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "text"])) ||
         !isNonEmptyString(value.text)
       ) {
         return undefined;
@@ -275,10 +246,7 @@ export function parseCanonicalOutputEvent(
       return { ...base, type: value.type, text: value.text };
     case "reasoning_signature":
       if (
-        !hasOnlyKeys(
-          value,
-          new Set(["canonicalOutputVersion", "type", "signature"]),
-        ) ||
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "signature"])) ||
         !isNonEmptyString(value.signature)
       ) {
         return undefined;
@@ -286,10 +254,7 @@ export function parseCanonicalOutputEvent(
       return { ...base, type: "reasoning_signature", signature: value.signature };
     case "reasoning_redacted":
       if (
-        !hasOnlyKeys(
-          value,
-          new Set(["canonicalOutputVersion", "type", "data"]),
-        ) ||
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "data"])) ||
         !isNonEmptyString(value.data)
       ) {
         return undefined;
@@ -297,10 +262,7 @@ export function parseCanonicalOutputEvent(
       return { ...base, type: "reasoning_redacted", data: value.data };
     case "reasoning_encrypted":
       if (
-        !hasOnlyKeys(
-          value,
-          new Set(["canonicalOutputVersion", "type", "encryptedContent"]),
-        ) ||
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "encryptedContent"])) ||
         !isNonEmptyString(value.encryptedContent)
       ) {
         return undefined;
@@ -314,14 +276,7 @@ export function parseCanonicalOutputEvent(
       if (
         !hasOnlyKeys(
           value,
-          new Set([
-            "canonicalOutputVersion",
-            "type",
-            "index",
-            "id",
-            "name",
-            "arguments",
-          ]),
+          new Set(["canonicalOutputVersion", "type", "index", "id", "name", "arguments"]),
         ) ||
         !Number.isSafeInteger(value.index) ||
         (value.index as number) < 0 ||
@@ -342,15 +297,7 @@ export function parseCanonicalOutputEvent(
     }
     case "completed": {
       if (
-        !hasOnlyKeys(
-          value,
-          new Set([
-            "canonicalOutputVersion",
-            "type",
-            "finishReason",
-            "usage",
-          ]),
-        ) ||
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "finishReason", "usage"])) ||
         (value.finishReason !== "stop" && value.finishReason !== "tool_calls")
       ) {
         return undefined;
@@ -369,9 +316,7 @@ export function parseCanonicalOutputEvent(
   }
 }
 
-export function parseCanonicalOutputEventLine(
-  line: string,
-): CanonicalOutputEvent | undefined {
+export function parseCanonicalOutputEventLine(line: string): CanonicalOutputEvent | undefined {
   try {
     return parseCanonicalOutputEvent(JSON.parse(line));
   } catch (error) {

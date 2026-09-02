@@ -1,3 +1,4 @@
+import { auditHash, auditLog } from "../../core/audit-log.js";
 import { canonicalFingerprint } from "../../protocol/canonical.js";
 import type {
   ResponsesAdditionalToolsItem,
@@ -67,14 +68,40 @@ export type BridgeFailure = {
   readonly ok: false;
   readonly code: BridgeErrorCode;
   readonly message: string;
+  /** Wire name of the upstream tool call that failed restoration, for hashed audit fields. */
+  readonly toolName?: string;
 };
+
+/** Public error surfaced to clients when restoring an upstream tool call fails. */
+export type ToolRestoreFailure = {
+  readonly code: string;
+  readonly message: string;
+};
+
+/**
+ * Map a `restoreCalls` failure to its public error code and record the
+ * `upstream_tool_restore_failed` audit event. Shared by the SSE adapter
+ * (`response.failed`) and the non-stream route (HTTP 502) so both paths emit
+ * the same codes. Model-output tool failures keep a fatal disposition for now;
+ * the typed codes exist so real traffic can be observed before any retry policy
+ * is decided. `unknown_tool_alias` is internal and surfaces as
+ * `unknown_upstream_tool`; the raw tool name is only ever logged hashed.
+ */
+export function reportToolRestoreFailure(failure: BridgeFailure): ToolRestoreFailure {
+  const code = failure.code === "unknown_tool_alias" ? "unknown_upstream_tool" : failure.code;
+  auditLog("warn", "upstream_tool_restore_failed", {
+    protocol: "responses",
+    error_code: code,
+    error_disposition: "fatal",
+    bridge_code: failure.code,
+    ...(failure.toolName !== undefined ? { tool_name_hash: auditHash(failure.toolName) } : {}),
+  });
+  return { code, message: failure.message };
+}
 
 type BridgeBuildFailure = {
   readonly ok: false;
-  readonly code:
-    | "invalid_tool_declaration"
-    | "invalid_tool_history"
-    | "missing_tool_declaration";
+  readonly code: "invalid_tool_declaration" | "invalid_tool_history" | "missing_tool_declaration";
   readonly message: string;
 };
 
@@ -179,12 +206,9 @@ function isOutputItem(
   return item.type === "function_call_output" || item.type === "custom_tool_call_output";
 }
 
-function normalizedFunctionArguments(argumentsText: string): string {
-  return argumentsText.trim().length === 0 ? "{}" : argumentsText;
-}
-
 function exactCustomInput(
   argumentsText: string,
+  toolName: string,
 ): { readonly ok: true; readonly input: string } | BridgeFailure {
   let parsed: unknown;
   try {
@@ -195,6 +219,7 @@ function exactCustomInput(
         ok: false,
         code: "invalid_custom_tool_input",
         message: "Custom tool arguments must be valid JSON",
+        toolName,
       };
     }
     throw error;
@@ -210,6 +235,7 @@ function exactCustomInput(
       ok: false,
       code: "invalid_custom_tool_input",
       message: 'Custom tool arguments must contain exactly {"input": string}',
+      toolName,
     };
   }
   return { ok: true, input: (parsed as { readonly input: string }).input };
@@ -258,10 +284,11 @@ export class ResponsesToolBridge {
           ok: false,
           code: "unknown_tool_alias",
           message: `Upstream returned undeclared tool ${call.name}`,
+          toolName: call.name,
         };
       }
       if (isCustomIdentity(identity)) {
-        const parsed = exactCustomInput(call.arguments);
+        const parsed = exactCustomInput(call.arguments, call.name);
         if (!parsed.ok) return parsed;
         items.push({
           id: call.itemId,
@@ -279,7 +306,7 @@ export class ResponsesToolBridge {
         call_id: call.id,
         ...(identity.kind === "namespace" ? { namespace: identity.namespace } : {}),
         name: identity.name,
-        arguments: normalizedFunctionArguments(call.arguments),
+        arguments: call.arguments,
       });
     }
     return { ok: true, items };
@@ -353,9 +380,7 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
               ? { description: descriptions(tool.description, child.description) }
               : {}),
             parameters:
-              child.type === "custom"
-                ? customSchema()
-                : (child.parameters ?? { type: "object" }),
+              child.type === "custom" ? customSchema() : (child.parameters ?? { type: "object" }),
           },
         };
         const failure = registerDeclaration({

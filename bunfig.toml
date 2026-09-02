@@ -1,0 +1,6 @@
+# Bun runtime and package-manager configuration for kiro-provider.
+
+[install]
+# Resolve and download every package from the canonical npm registry so that
+# bun.lock never records mirror URLs (CI rejects any non-npmjs registry host).
+registry = "https://registry.npmjs.org"

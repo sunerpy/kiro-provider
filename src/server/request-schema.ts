@@ -96,6 +96,9 @@ function isParseableJson(value: string): boolean {
   }
 }
 
+// Client-supplied history only: some OpenAI SDKs send `arguments: ""` for a
+// zero-argument call. Upstream zero-input tool calls are projected as `{}` by
+// the stream transformer (validateCompletedToolCalls), not here.
 function normalizeFunctionArguments(value: string): string {
   return value.trim().length === 0 ? "{}" : value;
 }
@@ -184,15 +187,14 @@ export const ChatCompletionRequestSchema = z
   .object({
     model: z.string().trim().min(1),
     stream: z.boolean().default(false),
-    stream_options: z
-      .object({ include_usage: z.boolean().optional() })
-      .passthrough()
-      .optional(),
+    stream_options: z.object({ include_usage: z.boolean().optional() }).passthrough().optional(),
     messages: z.array(ChatMessageSchema).min(1),
     tools: z.array(z.union([OpenAiToolSchema, AnthropicToolSchema])).optional(),
     user: z.string().optional(),
     prompt_cache_key: z.string().optional(),
-    reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    reasoning_effort: z
+      .enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+      .optional(),
     tool_choice: z
       .union([
         z.enum(["auto", "none", "required"]),
@@ -552,9 +554,7 @@ export const ResponsesRequestSchema = z
     instructions: z.string().optional(),
     stream: z.boolean().default(false),
     tools: z.array(ResponsesToolSchema).optional(),
-    tool_choice: z
-      .union([z.enum(["auto", "none", "required"]), z.record(z.unknown())])
-      .optional(),
+    tool_choice: z.union([z.enum(["auto", "none", "required"]), z.record(z.unknown())]).optional(),
     parallel_tool_calls: z.boolean().optional(),
     reasoning: ResponsesReasoningConfigSchema.nullable().optional(),
     include: z.array(z.string()).optional(),

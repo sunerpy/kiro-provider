@@ -13,5 +13,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["src", "__tests__"]
+  "include": ["src", "scripts", "__tests__"]
 }

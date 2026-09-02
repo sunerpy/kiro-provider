@@ -28,7 +28,8 @@ import {
   type ReasoningOutputItem,
   type ResponseOutputItem,
   type ResponsesEvent,
-  type ResponseUsage,
+  reasoningSummaryPartAdded,
+  reasoningSummaryPartDone,
   reasoningSummaryTextDelta,
   reasoningSummaryTextDone,
   responseCompleted,
@@ -40,8 +41,17 @@ import {
   couldStillBeGptSolReasoningPlaceholder,
   isGptSolReasoningPlaceholder,
 } from "./reasoning.js";
-import type { ResponseRequestConfiguration } from "./state.js";
-import type { ResponsesToolBridge } from "./tool-bridge.js";
+import {
+  outputTextContent,
+  type ResponseRequestConfiguration,
+  type ResponseUsage,
+  responseUsage,
+} from "./state.js";
+import {
+  type BridgeFailure,
+  type ResponsesToolBridge,
+  reportToolRestoreFailure,
+} from "./tool-bridge.js";
 
 type AdapterOptions = {
   readonly model: string;
@@ -108,6 +118,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let activeReasoning: ReasoningRun | undefined;
   let deferredReasoningText = "";
   let reasoningEncryptedContent: string | undefined;
+  let encryptedContentAttached = false;
   let nextOutputIndex = 0;
   let sequenceNumber = 0;
   let terminalOutcome: AdapterOutcome | undefined;
@@ -118,16 +129,11 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let canonicalStarted = false;
   let canonicalCompleted = false;
 
-  const emit = (
-    _controller: ReadableStreamDefaultController<Uint8Array>,
-    create: (sequence: number) => ResponsesEvent,
-  ): void => {
+  const emit = (create: (sequence: number) => ResponsesEvent): void => {
     pendingFrames.push(encoder.encode(formatSseEvent(create(sequenceNumber))));
     sequenceNumber += 1;
   };
-  const closeIfDrained = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): void => {
+  const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
     if (
       streamClosed ||
       terminalOutcome === undefined ||
@@ -139,9 +145,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     streamClosed = true;
     controller.close();
   };
-  const flushOne = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): boolean => {
+  const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     if (streamClosed) return false;
     const desiredSize = controller.desiredSize;
     if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
@@ -182,7 +186,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           if (!terminalCompletion) {
             throw new TypeError("Responses stream completed without terminal data");
           }
-          emit(streamController, (sequence) =>
+          emit((sequence) =>
             responseCompleted({
               responseId,
               model: options.model,
@@ -207,7 +211,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             code: "upstream_stream_error",
             message: "Upstream stream error",
           };
-          emit(streamController, (sequence) =>
+          emit((sequence) =>
             responseFailed({
               responseId,
               model: options.model,
@@ -231,6 +235,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     code: StreamFailureCode = "upstream_protocol_error",
   ): void => {
     beginTerminal("upstream-protocol-error", undefined, { code, message });
+  };
+  const failToolRestore = (failure: BridgeFailure): void => {
+    beginTerminal("upstream-protocol-error", undefined, reportToolRestoreFailure(failure));
   };
   const failIncomplete = (): void => {
     beginTerminal(
@@ -256,23 +263,29 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         : new DOMException("Client closed request", "AbortError");
     beginTerminal("client-abort", reason);
   };
-  const startReasoning = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    run: ReasoningRun,
-  ): void => {
+  const startReasoning = (run: ReasoningRun): void => {
     if (run.emitted) return;
     const outputIndex = nextOutputIndex;
     nextOutputIndex += 1;
     run.outputIndex = outputIndex;
     run.emitted = true;
-    emit(controller, (sequence) =>
+    emit((sequence) =>
       outputItemAdded({
         item: { id: run.id, type: "reasoning", summary: [] },
         outputIndex,
         sequenceNumber: sequence,
       }),
     );
-    emit(controller, (sequence) =>
+    emit((sequence) =>
+      reasoningSummaryPartAdded({
+        itemId: run.id,
+        outputIndex,
+        summaryIndex: 0,
+        part: { type: "summary_text", text: "" },
+        sequenceNumber: sequence,
+      }),
+    );
+    emit((sequence) =>
       reasoningSummaryTextDelta({
         itemId: run.id,
         outputIndex,
@@ -282,41 +295,43 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       }),
     );
   };
-  const finishReasoning = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    run: ReasoningRun,
-  ): void => {
+  // Exactly one reasoning item per turn carries the replay token, so replaying
+  // every returned item still resolves to a single Kiro reasoning envelope.
+  const claimEncryptedContent = (): string | undefined => {
+    if (reasoningEncryptedContent === undefined || encryptedContentAttached) return undefined;
+    encryptedContentAttached = true;
+    return reasoningEncryptedContent;
+  };
+  const finishReasoning = (run: ReasoningRun): void => {
     if (isGptSolReasoningPlaceholder(options.model, run.text)) {
       if (!options.includeEncryptedReasoning) return;
       const outputIndex = nextOutputIndex;
       nextOutputIndex += 1;
+      const encryptedContent = claimEncryptedContent();
       const item: ReasoningOutputItem = {
         id: run.id,
         type: "reasoning",
         summary: [],
-        ...(reasoningEncryptedContent !== undefined
-          ? { encrypted_content: reasoningEncryptedContent }
-          : {}),
+        ...(encryptedContent !== undefined ? { encrypted_content: encryptedContent } : {}),
       };
-      emit(controller, (sequence) =>
+      emit((sequence) =>
         outputItemAdded({
           item: { id: run.id, type: "reasoning", summary: [] },
           outputIndex,
           sequenceNumber: sequence,
         }),
       );
-      emit(controller, (sequence) =>
-        outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-      );
+      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
       completedOutput.set(outputIndex, item);
       return;
     }
-    startReasoning(controller, run);
+    startReasoning(run);
     const outputIndex = run.outputIndex;
     if (outputIndex === undefined) {
       throw new TypeError("Reasoning output index was not allocated");
     }
-    emit(controller, (sequence) =>
+    const summary = { type: "summary_text" as const, text: run.text };
+    emit((sequence) =>
       reasoningSummaryTextDone({
         itemId: run.id,
         outputIndex,
@@ -325,28 +340,40 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         sequenceNumber: sequence,
       }),
     );
+    emit((sequence) =>
+      reasoningSummaryPartDone({
+        itemId: run.id,
+        outputIndex,
+        summaryIndex: 0,
+        part: summary,
+        sequenceNumber: sequence,
+      }),
+    );
+    const encryptedContent = claimEncryptedContent();
     const item: ReasoningOutputItem = {
       id: run.id,
       type: "reasoning",
-      summary: [{ type: "summary_text", text: run.text }],
-      ...(reasoningEncryptedContent !== undefined
-        ? { encrypted_content: reasoningEncryptedContent }
-        : {}),
+      summary: [summary],
+      ...(encryptedContent !== undefined ? { encrypted_content: encryptedContent } : {}),
     };
-    emit(controller, (sequence) =>
-      outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-    );
+    emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
     completedOutput.set(outputIndex, item);
   };
-  const closeReasoning = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+  const closeReasoning = (): void => {
     if (!activeReasoning) return;
     const run = activeReasoning;
     activeReasoning = undefined;
-    finishReasoning(controller, run);
+    finishReasoning(run);
   };
-  const flushDeferredReasoning = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-  ): void => {
+  // With encrypted replay the token arrives only after every tool delta, so the
+  // reasoning item stays open (deltas keep streaming) and completes in
+  // complete() where output_item.done can carry the same encrypted_content as
+  // response.completed. Without encrypted replay the item closes eagerly.
+  const closeReasoningBeforeOutput = (): void => {
+    if (options.includeEncryptedReasoning) return;
+    closeReasoning();
+  };
+  const flushDeferredReasoning = (): void => {
     if (deferredReasoningText.length === 0) return;
     const run: ReasoningRun = {
       id: `rs_${randomUUID()}`,
@@ -354,12 +381,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       emitted: false,
     };
     deferredReasoningText = "";
-    finishReasoning(controller, run);
+    finishReasoning(run);
   };
-  const addEvent = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    event: CanonicalOutputEvent,
-  ): void => {
+  const addEvent = (event: CanonicalOutputEvent): void => {
     switch (event.type) {
       case "started":
       case "completed":
@@ -387,7 +411,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           if (outputIndex === undefined) {
             throw new TypeError("Reasoning output index was not allocated");
           }
-          emit(controller, (sequence) =>
+          emit((sequence) =>
             reasoningSummaryTextDelta({
               itemId: run.id,
               outputIndex,
@@ -396,10 +420,8 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               sequenceNumber: sequence,
             }),
           );
-        } else if (
-          !couldStillBeGptSolReasoningPlaceholder(options.model, run.text)
-        ) {
-          startReasoning(controller, run);
+        } else if (!couldStillBeGptSolReasoningPlaceholder(options.model, run.text)) {
+          startReasoning(run);
         }
         return;
       }
@@ -412,11 +434,11 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       case "reasoning_redacted":
         return;
       case "text_delta": {
-        closeReasoning(controller);
+        closeReasoningBeforeOutput();
         if (messageIndex === undefined) {
           messageIndex = nextOutputIndex;
           nextOutputIndex += 1;
-          emit(controller, (sequence) =>
+          emit((sequence) =>
             outputItemAdded({
               item: {
                 id: messageId,
@@ -429,18 +451,18 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               sequenceNumber: sequence,
             }),
           );
-          emit(controller, (sequence) =>
+          emit((sequence) =>
             contentPartAdded({
               itemId: messageId,
               outputIndex: messageIndex ?? 0,
               contentIndex: 0,
-              part: { type: "output_text", text: "", annotations: [] },
+              part: outputTextContent(""),
               sequenceNumber: sequence,
             }),
           );
         }
         text += event.text;
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           outputTextDelta({
             itemId: messageId,
             outputIndex: messageIndex ?? 0,
@@ -452,7 +474,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         return;
       }
       case "tool_call_delta": {
-        closeReasoning(controller);
+        closeReasoningBeforeOutput();
         const existing = tools.get(event.index) ?? {
           itemId: `fc_${randomUUID()}`,
           id: "",
@@ -468,11 +490,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     }
   };
 
-  const complete = (
-    controller: ReadableStreamDefaultController<Uint8Array>,
-    usage: CanonicalOutputUsage,
-    finishReason: "stop" | "tool_calls",
-  ): void => {
+  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
     const invalidTool = [...tools.values()].some(
       (tool) => tool.id.length === 0 || tool.name.length === 0,
     );
@@ -481,18 +499,19 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       return;
     }
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
-    const expectedFinishReason =
-      orderedTools.length > 0 ? "tool_calls" : "stop";
+    const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
       failProtocol("Upstream finish reason does not match its output");
       return;
     }
+    // The canonical stream only carries validated JSON arguments; a no-argument
+    // Kiro tool call already arrives as "{}" from the SDK transformer.
     const restorableTools = orderedTools.map(([, tool]) => ({
-        itemId: tool.itemId,
-        id: tool.id,
-        name: tool.name,
-        arguments: tool.arguments.trim().length === 0 ? "{}" : tool.arguments,
-      }));
+      itemId: tool.itemId,
+      id: tool.id,
+      name: tool.name,
+      arguments: tool.arguments,
+    }));
     const restored = options.bridge?.restoreCalls(restorableTools) ?? {
       ok: true as const,
       items: restorableTools.map((tool) => ({
@@ -504,19 +523,22 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       })),
     };
     if (!restored.ok) {
-      failProtocol(restored.message, "upstream_protocol_error");
+      failToolRestore(restored);
       return;
     }
-    closeReasoning(controller);
+    // Item-level done events follow output order (reasoning, message, later
+    // reasoning, tool calls) so history assembled from output_item.done matches
+    // response.completed.output even though the reasoning done was deferred.
+    closeReasoning();
     if (messageIndex !== undefined) {
       const item: MessageOutputItem = {
         id: messageId,
         type: "message",
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
+        content: [outputTextContent(text)],
       };
-      emit(controller, (sequence) =>
+      emit((sequence) =>
         outputTextDone({
           itemId: messageId,
           outputIndex: messageIndex ?? 0,
@@ -525,65 +547,53 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           sequenceNumber: sequence,
         }),
       );
-      emit(controller, (sequence) =>
+      emit((sequence) =>
         contentPartDone({
           itemId: messageId,
           outputIndex: messageIndex ?? 0,
           contentIndex: 0,
-          part: { type: "output_text", text, annotations: [] },
+          part: outputTextContent(text),
           sequenceNumber: sequence,
         }),
       );
-      emit(controller, (sequence) =>
+      emit((sequence) =>
         outputItemDone({ item, outputIndex: messageIndex ?? 0, sequenceNumber: sequence }),
       );
       completedOutput.set(messageIndex, item);
     }
-    flushDeferredReasoning(controller);
-    if (reasoningEncryptedContent !== undefined) {
-      let attached = false;
-      for (const [index, item] of completedOutput) {
-        if (item.type !== "reasoning") continue;
-        completedOutput.set(index, {
-          ...item,
-          encrypted_content: reasoningEncryptedContent,
-        });
-        attached = true;
-      }
-      if (!attached) {
-        const outputIndex = nextOutputIndex;
-        nextOutputIndex += 1;
-        const item: ReasoningOutputItem = {
-          id: `rs_${randomUUID()}`,
-          type: "reasoning",
-          summary: [],
-          encrypted_content: reasoningEncryptedContent,
-        };
-        emit(controller, (sequence) =>
-          outputItemAdded({
-            item: { id: item.id, type: "reasoning", summary: [] },
-            outputIndex,
-            sequenceNumber: sequence,
-          }),
-        );
-        emit(controller, (sequence) =>
-          outputItemDone({ item, outputIndex, sequenceNumber: sequence }),
-        );
-        completedOutput.set(outputIndex, item);
-      }
+    flushDeferredReasoning();
+    const unattachedEncryptedContent = claimEncryptedContent();
+    if (unattachedEncryptedContent !== undefined) {
+      const outputIndex = nextOutputIndex;
+      nextOutputIndex += 1;
+      const item: ReasoningOutputItem = {
+        id: `rs_${randomUUID()}`,
+        type: "reasoning",
+        summary: [],
+        encrypted_content: unattachedEncryptedContent,
+      };
+      emit((sequence) =>
+        outputItemAdded({
+          item: { id: item.id, type: "reasoning", summary: [] },
+          outputIndex,
+          sequenceNumber: sequence,
+        }),
+      );
+      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
+      completedOutput.set(outputIndex, item);
     }
     for (const item of restored.items) {
       const outputIndex = nextOutputIndex;
       nextOutputIndex += 1;
       const addedItem =
         item.type === "function_call"
-          ? { ...item, arguments: "" }
-          : { ...item, input: "" };
-      emit(controller, (sequence) =>
+          ? { ...item, arguments: "", status: "in_progress" as const }
+          : { ...item, input: "", status: "in_progress" as const };
+      emit((sequence) =>
         outputItemAdded({ item: addedItem, outputIndex, sequenceNumber: sequence }),
       );
       if (item.type === "function_call") {
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           functionCallArgumentsDelta({
             itemId: item.id,
             outputIndex,
@@ -591,7 +601,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             sequenceNumber: sequence,
           }),
         );
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           functionCallArgumentsDone({
             itemId: item.id,
             outputIndex,
@@ -600,7 +610,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           }),
         );
       } else {
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           customToolCallInputDelta({
             itemId: item.id,
             outputIndex,
@@ -608,7 +618,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             sequenceNumber: sequence,
           }),
         );
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           customToolCallInputDone({
             itemId: item.id,
             outputIndex,
@@ -618,7 +628,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         );
       }
       const completedItem = { ...item, status: "completed" as const };
-      emit(controller, (sequence) =>
+      emit((sequence) =>
         outputItemDone({ item: completedItem, outputIndex, sequenceNumber: sequence }),
       );
       completedOutput.set(outputIndex, completedItem);
@@ -626,14 +636,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     const output = [...completedOutput.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
-    terminalCompletion = {
-      output,
-      usage: {
-        input_tokens: usage.inputTokens,
-        output_tokens: usage.outputTokens,
-        total_tokens: usage.totalTokens,
-      },
-    };
+    terminalCompletion = { output, usage: responseUsage(usage) };
     beginTerminal("normal-complete");
   };
 
@@ -641,7 +644,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     new ReadableStream<Uint8Array>({
       start(controller) {
         streamController = controller;
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           responseCreated({
             responseId,
             model: options.model,
@@ -650,7 +653,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             configuration: options.configuration,
           }),
         );
-        emit(controller, (sequence) =>
+        emit((sequence) =>
           responseInProgress({
             responseId,
             model: options.model,
@@ -681,11 +684,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -698,10 +697,10 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               }
               if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(controller, event.usage, event.finishReason);
+                complete(event.usage, event.finishReason);
                 return;
               }
-              addEvent(controller, event);
+              addEvent(event);
               if (flushOne(controller)) return;
               continue;
             }
@@ -721,11 +720,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               }
               if (event.type === "started") {
-                if (
-                  canonicalStarted ||
-                  canonicalCompleted ||
-                  event.model !== options.model
-                ) {
+                if (canonicalStarted || canonicalCompleted || event.model !== options.model) {
                   failProtocol("Malformed upstream stream start");
                   return;
                 }
@@ -735,10 +730,10 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               } else if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(controller, event.usage, event.finishReason);
+                complete(event.usage, event.finishReason);
                 return;
               } else {
-                addEvent(controller, event);
+                addEvent(event);
               }
             }
             failIncomplete();
@@ -748,9 +743,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           if (terminalOutcome !== undefined) return;
           const failure = normalizeStreamFailure(error);
           beginTerminal(
-            failure.disposition === "fatal"
-              ? "upstream-protocol-error"
-              : "upstream-error",
+            failure.disposition === "fatal" ? "upstream-protocol-error" : "upstream-error",
             error,
             toTerminalFailure(failure),
           );

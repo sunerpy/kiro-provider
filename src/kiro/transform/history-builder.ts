@@ -24,14 +24,19 @@ function dataUrlImage(url: string, path: string): UnifiedImage {
     throw new RequestTransformError(
       `Image ${path} must use a data URL because Kiro cannot fetch remote image URLs`,
       "unsupported_image_source",
+      path,
     );
   }
   const [header = "", data] = url.split(",", 2);
   if (!data) {
-    throw new RequestTransformError(`Image ${path} contains an invalid data URL`, "invalid_image");
+    throw new RequestTransformError(
+      `Image ${path} contains an invalid data URL`,
+      "invalid_image_data",
+      path,
+    );
   }
   const mediaType = header.split(";")[0]?.replace("data:", "") || "image/jpeg";
-  return { mediaType, data };
+  return { mediaType, data, path };
 }
 
 function canonicalImages(parts: readonly CanonicalContentPart[]): UnifiedImage[] {
@@ -39,7 +44,7 @@ function canonicalImages(parts: readonly CanonicalContentPart[]): UnifiedImage[]
   for (const part of parts) {
     if (part.type !== "image") continue;
     if (part.data !== undefined) {
-      images.push({ mediaType: part.mediaType ?? "image/jpeg", data: part.data });
+      images.push({ mediaType: part.mediaType ?? "image/jpeg", data: part.data, path: part.path });
       continue;
     }
     if (part.url !== undefined) images.push(dataUrlImage(part.url, part.path));
@@ -97,6 +102,7 @@ function asUserInput(message: CanonicalMessage, resolved: string): UserInput {
       throw new RequestTransformError(
         `Message ${message.path} exceeds Kiro's limit of 4 images and 3.75 MB of base64 image data`,
         "too_many_images",
+        message.path,
       );
     }
     userInput.images = converted.images;
@@ -131,9 +137,7 @@ function asAssistantResponse(
   };
   const toolUses = [
     ...message.content.flatMap((part) =>
-      part.type === "tool_use"
-        ? [{ toolUseId: part.id, name: part.name, input: part.input }]
-        : [],
+      part.type === "tool_use" ? [{ toolUseId: part.id, name: part.name, input: part.input }] : [],
     ),
     ...message.toolCalls.map((call) => ({
       toolUseId: call.id,
@@ -145,14 +149,50 @@ function asAssistantResponse(
   return assistant;
 }
 
+function sameReplayContent(
+  left: ResolvedReasoningReplay["content"],
+  right: ResolvedReasoningReplay["content"],
+): boolean {
+  if (left.kind === "reasoning_text" && right.kind === "reasoning_text") {
+    return left.text === right.text && left.signature === right.signature;
+  }
+  if (left.kind === "redacted_content" && right.kind === "redacted_content") {
+    return (
+      left.bytes.byteLength === right.bytes.byteLength &&
+      left.bytes.every((byte, index) => byte === right.bytes[index])
+    );
+  }
+  return false;
+}
+
+function replaysByMessage(
+  resolvedReplays: readonly ResolvedReasoningReplay[],
+): Map<number, ResolvedReasoningReplay> {
+  const replayByMessage = new Map<number, ResolvedReasoningReplay>();
+  for (const replay of resolvedReplays) {
+    const existing = replayByMessage.get(replay.insertBeforeMessage);
+    if (existing === undefined) {
+      replayByMessage.set(replay.insertBeforeMessage, replay);
+      continue;
+    }
+    // Identical envelopes for one assistant message collapse to a single
+    // reasoningContent; distinct envelopes cannot both be projected, so fail
+    // instead of silently dropping one.
+    if (sameReplayContent(existing.content, replay.content)) continue;
+    throw new RequestTransformError(
+      "Multiple distinct reasoning replays target the same assistant message",
+      "invalid_reasoning_replay",
+    );
+  }
+  return replayByMessage;
+}
+
 export function buildHistory(
   messages: readonly CanonicalMessage[],
   resolved: string,
   resolvedReplays: readonly ResolvedReasoningReplay[] = [],
 ): CodeWhispererMessage[] {
-  const replayByMessage = new Map(
-    resolvedReplays.map((replay) => [replay.insertBeforeMessage, replay] as const),
-  );
+  const replayByMessage = replaysByMessage(resolvedReplays);
   const history: CodeWhispererMessage[] = [];
   for (const [index, message] of messages.entries()) {
     if (message.role === "assistant") {
@@ -168,33 +208,6 @@ export function buildHistory(
   return history;
 }
 
-export function historyHasToolCalling(history: readonly CodeWhispererMessage[]): boolean {
-  return history.some(
-    (entry) =>
-      Boolean(entry.assistantResponseMessage?.toolUses) ||
-      Boolean(entry.userInputMessage?.userInputMessageContext?.toolResults),
-  );
-}
-
-export function extractToolNamesFromHistory(
-  history: readonly CodeWhispererMessage[],
-): Set<string> {
-  const names = new Set<string>();
-  for (const entry of history) {
-    for (const toolUse of entry.assistantResponseMessage?.toolUses ?? []) {
-      if (toolUse.name) names.add(toolUse.name);
-    }
-  }
-  return names;
-}
-
 export function currentUserInput(message: CanonicalMessage, resolved: string): UserInput {
   return asUserInput(message, resolved);
-}
-
-export function currentAssistantResponse(
-  message: CanonicalMessage,
-  replay?: ResolvedReasoningReplay,
-): AssistantResponse {
-  return asAssistantResponse(message, replay);
 }

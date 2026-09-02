@@ -1,4 +1,5 @@
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -10,11 +11,9 @@ import {
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import type { ChatCompletionRequest } from "../request-schema.js";
-import {
-  type ProtocolResult,
-  protocolFailure,
-} from "./adaptation.js";
+import { allowedKeysValidator, type ProtocolResult, protocolFailure } from "./adaptation.js";
 
 const CHAT_REQUEST_KEYS = new Set([
   "model",
@@ -52,7 +51,6 @@ const UNSUPPORTED_CHAT_FIELDS = [
   "temperature",
   "top_p",
   "response_format",
-  "n",
   "stop",
   "seed",
   "presence_penalty",
@@ -69,29 +67,7 @@ const UNSUPPORTED_CHAT_FIELDS = [
 
 type ChatMessage = ChatCompletionRequest["messages"][number];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateAllowedKeys(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  allowed: ReadonlySet<string>,
-): ProtocolResult<undefined> {
-  for (const key of Object.keys(value)) {
-    if (allowed.has(key)) continue;
-    return protocolFailure(
-      "unsupported_parameter",
-      `Chat field ${path}.${key} is not supported`,
-      `${path}.${key}`,
-    );
-  }
-  return { ok: true, value: undefined };
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
-}
+const validateAllowedKeys = allowedKeysValidator("Chat field");
 
 function mapContent(
   content: ChatMessage["content"],
@@ -161,19 +137,13 @@ function mapContent(
         mapped.push({
           type: "image",
           data: part.source.data,
-          ...(part.source.media_type !== undefined
-            ? { mediaType: part.source.media_type }
-            : {}),
+          ...(part.source.media_type !== undefined ? { mediaType: part.source.media_type } : {}),
           path: `${partPath}.source`,
         });
         break;
       }
       case "tool_use": {
-        const keys = validateAllowedKeys(
-          part,
-          partPath,
-          new Set(["type", "id", "name", "input"]),
-        );
+        const keys = validateAllowedKeys(part, partPath, new Set(["type", "id", "name", "input"]));
         if (!keys.ok) return keys;
         mapped.push({
           type: "tool_use",
@@ -331,7 +301,9 @@ function mapTools(
           : undefined;
     const inputSchema =
       openAiFunction !== undefined
-        ? (isRecord(openAiFunction.parameters) ? openAiFunction.parameters : {})
+        ? isRecord(openAiFunction.parameters)
+          ? openAiFunction.parameters
+          : {}
         : isRecord(tool.input_schema)
           ? tool.input_schema
           : {};
@@ -348,45 +320,41 @@ function mapTools(
   return { ok: true, value: mapped };
 }
 
+/** Mirrors the Responses adapter: `minimal` lowers to `low`, `none` requests no effort. */
+function normalizedChatEffort(
+  effort: ChatCompletionRequest["reasoning_effort"],
+): CanonicalRequest["reasoningEffort"] | undefined {
+  if (effort === undefined || effort === "none") return undefined;
+  if (effort === "minimal") return "low";
+  return effort;
+}
+
 function validateHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): ProtocolResult<undefined> {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, { readonly name: string; readonly index: number }>();
-  const outputs = new Set<string>();
-  for (const [messageIndex, message] of messages.entries()) {
-    for (const call of message.toolCalls) {
-      if (!declarations.has(call.name)) {
-        return protocolFailure(
-          "missing_tool_declaration",
-          `Tool call ${call.id} references ${call.name} without an exact tool declaration`,
-          call.path,
-        );
-      }
-      if (calls.has(call.id)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Duplicate tool call id ${call.id}`,
-          call.path,
-        );
-      }
-      calls.set(call.id, { name: call.name, index: messageIndex });
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const call = calls.get(part.toolCallId);
-      if (!call || call.index >= messageIndex || outputs.has(part.toolCallId)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Tool result ${part.toolCallId} has no earlier unique matching call`,
-          part.path,
-        );
-      }
-      outputs.add(part.toolCallId);
-    }
+  const violation = findToolHistoryViolation(messages, tools);
+  if (!violation) return { ok: true, value: undefined };
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      return protocolFailure(
+        violation.code,
+        `Tool call ${violation.callId} references ${violation.toolName} without an exact tool declaration`,
+        violation.path,
+      );
+    case "duplicate_tool_call":
+      return protocolFailure(
+        violation.code,
+        `Duplicate tool call id ${violation.callId}`,
+        violation.path,
+      );
+    case "orphan_tool_result":
+      return protocolFailure(
+        violation.code,
+        `Tool result ${violation.toolCallId} has no earlier unique matching call`,
+        violation.path,
+      );
   }
-  return { ok: true, value: undefined };
 }
 
 export function chatToCanonical(
@@ -426,6 +394,13 @@ export function chatToCanonical(
       );
     }
   }
+  if (request.n !== undefined && request.n !== 1) {
+    return protocolFailure(
+      "unsupported_parameter",
+      "Chat parameter n must be 1 because the Kiro upstream returns a single choice",
+      "n",
+    );
+  }
   if (request.store === true) {
     return protocolFailure(
       "unsupported_parameter",
@@ -433,30 +408,20 @@ export function chatToCanonical(
       "store",
     );
   }
-  if (
-    request.max_tokens !== undefined &&
-    request.max_completion_tokens !== undefined
-  ) {
+  if (request.max_tokens !== undefined && request.max_completion_tokens !== undefined) {
     return protocolFailure(
       "conflicting_output_token_limits",
       "Chat max_tokens and max_completion_tokens cannot both be supplied",
       "max_completion_tokens",
     );
   }
-  const outputTokenLimit =
-    request.max_completion_tokens ?? request.max_tokens;
+  const outputTokenLimit = request.max_completion_tokens ?? request.max_tokens;
   const outputTokenLimitParam =
-    request.max_completion_tokens !== undefined
-      ? "max_completion_tokens"
-      : "max_tokens";
+    request.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
   if (outputTokenLimit !== undefined) {
     const outputLimit = resolveOutputTokenLimit(request.model, outputTokenLimit);
     if (!outputLimit.ok) {
-      return protocolFailure(
-        outputLimit.code,
-        outputLimit.message,
-        outputTokenLimitParam,
-      );
+      return protocolFailure(outputLimit.code, outputLimit.message, outputTokenLimitParam);
     }
   }
   if (
@@ -502,10 +467,7 @@ export function chatToCanonical(
         );
       }
     }
-    if (
-      projectionMode === "safe" &&
-      (message.role === "system" || message.role === "developer")
-    ) {
+    if (projectionMode === "safe" && (message.role === "system" || message.role === "developer")) {
       return protocolFailure(
         "unsupported_instruction_projection",
         `${message.role} messages cannot be projected losslessly to Kiro; use legacy-user-prefix explicitly to migrate`,
@@ -524,8 +486,9 @@ export function chatToCanonical(
     }
     let content = contentResult.value;
     if (message.role === "tool") {
-      const resultContent = content
-        .filter((part): part is CanonicalTextPart => part.type === "text");
+      const resultContent = content.filter(
+        (part): part is CanonicalTextPart => part.type === "text",
+      );
       if (resultContent.length !== content.length) {
         return protocolFailure(
           "unsupported_tool_result_content",
@@ -584,6 +547,7 @@ export function chatToCanonical(
     );
   }
 
+  const reasoningEffort = normalizedChatEffort(request.reasoning_effort);
   return {
     ok: true,
     value: {
@@ -595,11 +559,9 @@ export function chatToCanonical(
       messages,
       tools: toolsResult.value,
       toolChoice: request.tool_choice === "none" ? "none" : "auto",
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       ...(request.reasoning_effort !== undefined
-        ? {
-            reasoningEffort: request.reasoning_effort,
-            requestedReasoningEffort: request.reasoning_effort,
-          }
+        ? { requestedReasoningEffort: request.reasoning_effort }
         : {}),
       ...(outputTokenLimit !== undefined ? { outputTokenLimit } : {}),
       reasoningReplays,

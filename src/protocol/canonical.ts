@@ -153,7 +153,9 @@ function stableValue(value: unknown): unknown {
 }
 
 export function canonicalFingerprint(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(stableValue(value)))
+    .digest("hex");
 }
 
 export function assistantOutputFingerprint(output: CanonicalAssistantOutput): string {
@@ -179,9 +181,7 @@ function lineageOutputForRequest(
   request: CanonicalRequest,
   output: CanonicalAssistantOutput,
 ): unknown {
-  const toolsByWireName = new Map(
-    request.tools.map((tool) => [tool.wireName, tool] as const),
-  );
+  const toolsByWireName = new Map(request.tools.map((tool) => [tool.wireName, tool] as const));
   return {
     text: output.text,
     toolCalls: output.toolCalls.map((call) => {
@@ -213,9 +213,7 @@ export function assistantLineageFingerprint(
   return canonicalFingerprint(lineageOutputForRequest(request, output));
 }
 
-export function latestAssistantLineageFingerprint(
-  request: CanonicalRequest,
-): string | undefined {
+export function latestAssistantLineageFingerprint(request: CanonicalRequest): string | undefined {
   let latest: CanonicalMessage[] = [];
   let current: CanonicalMessage[] = [];
   for (const message of request.messages) {

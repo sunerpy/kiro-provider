@@ -20,6 +20,11 @@ export interface PipelineStreamResult {
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
+  /**
+   * Aborts the upstream HTTP request behind sdkResponse. Invoked for every
+   * abnormal terminal outcome; never for a normal completion.
+   */
+  readonly abortUpstream?: (reason?: unknown) => void;
 }
 
 class StreamIdleTimeoutError extends Error {
@@ -49,9 +54,7 @@ export function createPipelineStreamResponse(
   let lastEventType: string | undefined;
   const eventTypeCountsJson = (): string =>
     JSON.stringify(Object.fromEntries([...eventTypeCounts.entries()].sort()));
-  const streamAuditFields = (): Readonly<
-    Record<string, string | number | undefined>
-  > => ({
+  const streamAuditFields = (): Readonly<Record<string, string | number | undefined>> => ({
     model: result.model,
     conversation_hash: auditHash(result.conversationId),
     raw_event_count: rawEventCount,
@@ -66,14 +69,10 @@ export function createPipelineStreamResponse(
     result.conversationId,
     composedSignal,
     {
-      ...(result.captureReasoning
-        ? { captureReasoning: result.captureReasoning }
-        : {}),
+      ...(result.captureReasoning ? { captureReasoning: result.captureReasoning } : {}),
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
-      ...(result.fingerprintOutput
-        ? { fingerprintOutput: result.fingerprintOutput }
-        : {}),
+      ...(result.fingerprintOutput ? { fingerprintOutput: result.fingerprintOutput } : {}),
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
       onCompletionWitness: (kind) => {
         auditLog("info", "sdk_stream_completion_witness", {
@@ -117,6 +116,11 @@ export function createPipelineStreamResponse(
       () => {
         if (outcome === "normal-complete") streamController?.close();
         else if (outcome !== "consumer-cancel") streamController?.error(reason);
+      },
+      () => {
+        // Destroy the upstream socket before the account lease is released so
+        // the next request on this account never overlaps a still-open stream.
+        if (outcome !== "normal-complete") result.abortUpstream?.(reason);
       },
       finalize,
     );

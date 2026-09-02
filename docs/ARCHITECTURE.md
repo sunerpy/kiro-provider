@@ -8,7 +8,7 @@ English only — a Chinese translation was left out to keep this contribution fo
 OpenAI Responses / Anthropic Messages / explicitly enabled legacy Chat
         │
         ▼
-API-key gate (Bearer; Anthropic routes also accept x-api-key)
+API-key gate (Authorization: Bearer or x-api-key, accepted on every route)
         │
         ▼
 Route dispatch (/v1/responses, /v1/messages, optional /v1/chat/completions)
@@ -53,7 +53,7 @@ contract, so protocol-specific encoders cannot silently reinterpret Kiro
 events through another public API's semantics.
 
 The gateway's own HTTP surface (`src/server/app.ts`) is a small `fetch`-style
-handler: it checks the Bearer key, dispatches on method + path, and delegates
+handler: it checks the API key, dispatches on method + path, and delegates
 to a route handler. There is no framework in the middle — request handling,
 account selection, and the upstream call are explicit function calls, which
 keeps the retry/failover logic (see below) easy to follow.
@@ -74,20 +74,28 @@ support is a transport-layer concern applied uniformly to every SDK call
 (chat requests, token refresh, and device-code login all reuse the same
 resolution).
 
-SDK clients are cached by account, region, endpoint, proxy, effort, and the
-current access token. Token rotation invalidates the credential-bound client
-immediately while retaining the account-scoped `NodeHttpHandler`.
-Effort-specific clients for one account share that transport. By default its
-direct and proxy agents use fresh sockets
-(`sdk_http_keep_alive: false`); setting the option to `true` explicitly opts
-into pooled socket reuse. Transport reuse therefore survives token refresh,
-but no mode promises a specific physical TCP connection.
+SDK clients are cached by account, region, endpoint, proxy, and the current
+access token. Token rotation invalidates the credential-bound client
+immediately while retaining the account-scoped `NodeHttpHandler`; the client
+is configured with a single SDK attempt (`maxAttempts: 1`) because the
+pipeline owns retries. Effort is no longer part of the cache key: it is merged
+into each command's `additionalModelRequestFields`, so one client per account
+transport serves every effort level. When an account disappears from the
+store its clients and transport are evicted. By default the direct and proxy
+agents use fresh sockets (`sdk_http_keep_alive: false`); setting the option
+to `true` explicitly opts into pooled socket reuse. Transport reuse therefore
+survives token refresh, but no mode promises a specific physical TCP
+connection. On idle timeout, consumer cancel, or a failed non-stream
+collection the pipeline aborts the upstream request and destroys the response
+body (Bun drops the SDK's own abort listener once a response starts), so a
+released account lease never leaves a Kiro stream running.
 
 ## Authentication authority and provider state
 
 The production default is `auth_source: "local"`.
-`~/.config/kiro-provider/accounts.db` is the single authority for credentials,
-usage, health, and provider state. Operators may authenticate directly with
+`~/.config/kiro-provider/accounts.db` (`%APPDATA%\kiro-provider\accounts.db`
+on Windows) is the single authority for credentials, usage, health, and
+provider state. Operators may authenticate directly with
 `kiro-provider login` or copy existing `opencode-kiro-auth` accounts once with
 `kiro-provider accounts import`. Import does not establish a live database
 link or shared lock.
@@ -112,7 +120,8 @@ The same database also stores provider state:
   Requests without one receive a fresh Kiro conversation and do not collide
   merely because their prompt text is identical.
 - The database file and its WAL/SHM siblings are created with `0600`
-  permissions.
+  permissions on POSIX only; Windows has no equivalent mode bits, so the
+  per-user profile directory provides the isolation there.
 
 The explicit `auth_source: "opencode-shared"` compatibility mode retains the
 older live OpenCode integration. It validates the v0.20.7 account/tombstone
@@ -155,9 +164,46 @@ Authenticated `GET /ready` verifies that the configured authority can be
 read and has at least one active account. `GET /health` remains a liveness
 check only.
 
+## HTTP surface details
+
+- Route dispatch tolerates one trailing slash. A known path with the wrong
+  method returns `405` with an `Allow` header in the protocol's error envelope;
+  `OPTIONS` is treated the same way (CORS is out of scope for a loopback
+  gateway). `HEAD /health` returns `200` without a body.
+- `401` responses carry `WWW-Authenticate: Bearer`; the `Bearer` scheme is
+  matched case-insensitively and `x-api-key` is accepted on every route.
+- `Bun.serve` runs with `development: false`, `maxRequestBodySize` equal to
+  `max_request_body_bytes` (Bun answers oversized bodies with a plain `413`
+  before the JSON envelope), and a fixed `500` envelope for unhandled errors.
+  Internal exception text is never returned; responses carry a `request_id`
+  that is also written to the audit log with a hashed detail.
+- Request-body failures are classified: a client that disconnects mid-upload
+  ends the request without a response (`499` internally), a malformed body is
+  `400 malformed_request_body`, and a genuine read error is the fixed `500`.
+- `429` responses include `Retry-After` when the upstream delay is known. On
+  `/v1/messages`, quota exhaustion maps to `429 rate_limit_error` (a retryable
+  class) with the structured code preserved in the message.
+- `GET /ready` distinguishes `authentication_store_unavailable`,
+  `reasoning_replay_store_unavailable`, and `model_catalog_unavailable`.
+
+## Process lifecycle
+
+- The single-instance lock uses `stale: 15s` / `update: 5s`. Acquisition
+  retries for up to 20 × 1s so a restart after `SIGKILL` succeeds once the stale
+  window passes; the final error names the lock path and the stale window.
+- If the lock is compromised (for example the lock directory is deleted), the
+  provider fails closed: it logs `single_instance_lock_compromised`, stops
+  accepting requests, drains in-flight requests for up to 10s, stops
+  maintenance, and exits with code 1 so the service manager restarts it. It
+  never keeps serving without the lock.
+- `SIGTERM` / `SIGINT` run the same shutdown routine and exit 0. Repeated
+  signals join the in-progress shutdown.
+
 ## Where to look in the code
 
 - `src/server/app.ts` — HTTP entry point and route dispatch.
+- `src/server/ingress.ts` — shared request ingress: body-size limit, request
+  deadlines, and the abort signals handed to every route.
 - `src/server/routes/` — per-endpoint handlers (`responses.ts`, `messages.ts`,
   `chat-completions.ts`, `models.ts`, `health.ts`, `readiness.ts`).
 - `src/protocol/output.ts` — strict, versioned canonical completion/event

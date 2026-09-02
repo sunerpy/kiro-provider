@@ -183,13 +183,8 @@ function chunk(
         type: "tool_call_delta",
         index: candidate.index,
         ...(typeof candidate.id === "string" ? { id: candidate.id } : {}),
-        ...(typeof functionValue.name === "string"
-          ? { name: functionValue.name }
-          : {}),
-        arguments:
-          typeof functionValue.arguments === "string"
-            ? functionValue.arguments
-            : "",
+        ...(typeof functionValue.name === "string" ? { name: functionValue.name } : {}),
+        arguments: typeof functionValue.arguments === "string" ? functionValue.arguments : "",
       });
     }
   }
@@ -497,8 +492,9 @@ function bridgeFor(tools: readonly Record<string, unknown>[]): ResponsesToolBrid
 async function adaptFull(
   harness: ReturnType<typeof makeHarness>,
   bridge?: ResponsesToolBridge,
-  configuration: typeof DEFAULT_RESPONSE_CONFIGURATION | typeof RICH_RESPONSE_CONFIGURATION =
-    DEFAULT_RESPONSE_CONFIGURATION,
+  configuration:
+    | typeof DEFAULT_RESPONSE_CONFIGURATION
+    | typeof RICH_RESPONSE_CONFIGURATION = DEFAULT_RESPONSE_CONFIGURATION,
   model = "gpt-5.6-sol",
   includeEncryptedReasoning = false,
 ): Promise<ParsedEvent[]> {
@@ -519,6 +515,8 @@ const EXTENDED_LIFECYCLE_TYPES = new Set([
   "response.content_part.added",
   "response.output_text.done",
   "response.content_part.done",
+  "response.reasoning_summary_part.added",
+  "response.reasoning_summary_part.done",
   "response.function_call_arguments.done",
   "response.custom_tool_call_input.done",
 ]);
@@ -573,14 +571,10 @@ describe("responsesSseAdapter", () => {
       "response.output_item.done",
       "response.completed",
     ]);
-    expect(events.map((event) => event.sequenceNumber)).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8,
-    ]);
+    expect(events.map((event) => event.sequenceNumber)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     const states = events
       .filter((event) =>
-        ["response.created", "response.in_progress", "response.completed"].includes(
-          event.type,
-        ),
+        ["response.created", "response.in_progress", "response.completed"].includes(event.type),
       )
       .map((event) => event.body.response)
       .filter(isRecord);
@@ -697,7 +691,9 @@ describe("responsesSseAdapter", () => {
     });
   });
 
-  test("normalizes a no-argument function call before streaming and replay", async () => {
+  test("streams a no-argument function call exactly as the canonical {} arguments", async () => {
+    // The SDK transformer already projects a Kiro tool call that never carried an
+    // input chunk as "{}"; the adapter must not re-normalize other payloads.
     const lines = [
       chunk({
         tool_calls: [
@@ -705,7 +701,7 @@ describe("responsesSseAdapter", () => {
             index: 0,
             id: "call_no_args",
             type: "function",
-            function: { name: "list_resources", arguments: "" },
+            function: { name: "list_resources", arguments: "{}" },
           },
         ],
       }),
@@ -800,7 +796,10 @@ describe("responsesSseAdapter", () => {
   });
 
   test("fails atomically when a valid call precedes an invalid custom wrapper", async () => {
-    const bridge = bridgeFor([{ type: "custom", name: "exec" }]);
+    const bridge = bridgeFor([
+      { type: "function", name: "plain", parameters: { type: "object" } },
+      { type: "custom", name: "exec" },
+    ]);
     const lines = [
       chunk({
         tool_calls: [
@@ -827,7 +826,7 @@ describe("responsesSseAdapter", () => {
     expect(terminalTypes(events)).toEqual(["response.failed"]);
     expect(events.some((event) => event.type === "response.completed")).toBe(false);
     expect(events.at(-1)?.body).toMatchObject({
-      response: { error: { code: "upstream_protocol_error" } },
+      response: { error: { code: "invalid_custom_tool_input" } },
     });
   });
 
@@ -939,11 +938,7 @@ describe("responsesSseAdapter", () => {
       type: "reasoning_encrypted",
       encryptedContent: "kr1_test-token",
     });
-    const input = [
-      chunk({ reasoning_content: "..." }),
-      encrypted,
-      chunk({}, "stop"),
-    ].join("\n");
+    const input = [chunk({ reasoning_content: "..." }), encrypted, chunk({}, "stop")].join("\n");
 
     const events = await adaptFull(
       makeHarness([encoder.encode(`${input}\n`)], "stall"),
@@ -953,9 +948,9 @@ describe("responsesSseAdapter", () => {
       true,
     );
 
-    expect(
-      events.some((event) => event.type.startsWith("response.reasoning_summary_")),
-    ).toBe(false);
+    expect(events.some((event) => event.type.startsWith("response.reasoning_summary_"))).toBe(
+      false,
+    );
     expect(
       events.find(
         (event) =>
@@ -1013,12 +1008,7 @@ describe("responsesSseAdapter", () => {
 
   test("preserves a typed upstream stream failure code", async () => {
     const events = await adapt(
-      makeHarness(
-        [],
-        "error",
-        "gpt-5.6-sol",
-        new SemanticStreamTruncationError(),
-      ),
+      makeHarness([], "error", "gpt-5.6-sol", new SemanticStreamTruncationError()),
     );
 
     expect(events.at(-1)?.body).toMatchObject({
@@ -1037,10 +1027,7 @@ describe("responsesSseAdapter", () => {
         [],
         "error",
         "gpt-5.6-sol",
-        new SdkStreamProtocolError(
-          "private tool detail",
-          "invalid_upstream_tool_call",
-        ),
+        new SdkStreamProtocolError("private tool detail", "invalid_upstream_tool_call"),
       ),
     );
 

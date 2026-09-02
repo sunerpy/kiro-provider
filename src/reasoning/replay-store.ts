@@ -7,18 +7,9 @@ import {
 } from "node:crypto";
 import type { Config } from "../config/schema.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
-import type {
-  KiroReasoningContent,
-  ResolvedReasoningReplay,
-} from "../protocol/canonical.js";
-import type {
-  AccountsDatabase,
-  ReasoningReplayRecord,
-} from "../storage/accounts-db.js";
-import {
-  loadReasoningReplayKeyring,
-  type ReasoningReplayKeyring,
-} from "./keyring.js";
+import type { KiroReasoningContent, ResolvedReasoningReplay } from "../protocol/canonical.js";
+import type { AccountsDatabase, ReasoningReplayRecord } from "../storage/accounts-db.js";
+import { loadReasoningReplayKeyring, type ReasoningReplayKeyring } from "./keyring.js";
 
 interface StoredEnvelope {
   readonly version: 1;
@@ -90,20 +81,13 @@ function fingerprintHash(fingerprint: string): string {
 }
 
 function chatLookupHash(reasoningText: string, outputFingerprint: string): string {
-  return hash(
-    "kiro-provider-reasoning-chat-lookup-v1",
-    reasoningText,
-    outputFingerprint,
-  );
+  return hash("kiro-provider-reasoning-chat-lookup-v1", reasoningText, outputFingerprint);
 }
 
 function constantEqual(left: string, right: string): boolean {
   const leftBytes = Buffer.from(left);
   const rightBytes = Buffer.from(right);
-  return (
-    leftBytes.byteLength === rightBytes.byteLength &&
-    timingSafeEqual(leftBytes, rightBytes)
-  );
+  return leftBytes.byteLength === rightBytes.byteLength && timingSafeEqual(leftBytes, rightBytes);
 }
 
 function aad(record: {
@@ -144,9 +128,7 @@ function parseEnvelope(value: string): StoredEnvelope {
   }
   const text = "text" in parsed && typeof parsed.text === "string" ? parsed.text : undefined;
   const signature =
-    "signature" in parsed && typeof parsed.signature === "string"
-      ? parsed.signature
-      : undefined;
+    "signature" in parsed && typeof parsed.signature === "string" ? parsed.signature : undefined;
   const redactedContent =
     "redactedContent" in parsed && typeof parsed.redactedContent === "string"
       ? parsed.redactedContent
@@ -339,9 +321,7 @@ export class ReasoningReplayStore {
       records = records.filter((record) => record.accountId === context.accountId);
     }
     if (context.conversationId !== undefined) {
-      records = records.filter(
-        (record) => record.conversationId === context.conversationId,
-      );
+      records = records.filter((record) => record.conversationId === context.conversationId);
     }
     if (records.length === 0) {
       auditLog("info", "reasoning_replay_miss", {
@@ -381,8 +361,7 @@ export class ReasoningReplayStore {
       record.model !== context.model ||
       !constantEqual(record.fingerprintHash, expectedFingerprint) ||
       (context.accountId !== undefined && record.accountId !== context.accountId) ||
-      (context.conversationId !== undefined &&
-        record.conversationId !== context.conversationId)
+      (context.conversationId !== undefined && record.conversationId !== context.conversationId)
     ) {
       throw new ReasoningReplayError(
         "Reasoning replay context does not match tenant, model, account, conversation, or output",

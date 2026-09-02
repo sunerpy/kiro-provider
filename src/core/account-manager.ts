@@ -1,30 +1,28 @@
-import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth.js'
-import { isAccessTokenError, isPermanentError, isQuotaExhausted } from '../kiro/health.js'
+import { decodeRefreshToken, encodeRefreshToken } from "../kiro/auth.js";
+import { isQuotaExhausted } from "../kiro/health.js";
 import type {
   AccountSelectionStrategy,
   KiroAuthDetails,
   KiroUsageSnapshot,
-  ManagedAccount
-} from '../kiro/types.js'
-import type { AccountsDatabase, StoredAccount } from '../storage/accounts-db.js'
+  ManagedAccount,
+} from "../kiro/types.js";
+import type { AccountsDatabase, StoredAccount } from "../storage/accounts-db.js";
+import { AccountSelector, countSelectable, selectableCandidates } from "./account-selection.js";
+import { evictSdkClientsForAccount } from "./sdk-client.js";
 
-const MAX_CAS_ATTEMPTS = 4
+const MAX_CAS_ATTEMPTS = 4;
 
-type AccountPatch = (account: StoredAccount) => StoredAccount
+type AccountPatch = (account: StoredAccount) => StoredAccount;
 
 export class AccountConcurrentUpdateError extends Error {
   constructor(readonly accountId: string) {
-    super(`Account ${accountId} changed too frequently to update`)
-    this.name = 'AccountConcurrentUpdateError'
+    super(`Account ${accountId} changed too frequently to update`);
+    this.name = "AccountConcurrentUpdateError";
   }
 }
 
-function assertNever(value: never): never {
-  throw new TypeError(`Unsupported account selection strategy: ${String(value)}`)
-}
-
 function cloneAccount(account: StoredAccount): StoredAccount {
-  return { ...account }
+  return { ...account };
 }
 
 export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
@@ -34,7 +32,7 @@ export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
       authMethod: account.authMethod,
       ...(account.clientId ? { clientId: account.clientId } : {}),
       ...(account.clientSecret ? { clientSecret: account.clientSecret } : {}),
-      ...(account.profileArn ? { profileArn: account.profileArn } : {})
+      ...(account.profileArn ? { profileArn: account.profileArn } : {}),
     }),
     access: account.accessToken,
     expires: account.expiresAt,
@@ -44,65 +42,77 @@ export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
     ...(account.clientId ? { clientId: account.clientId } : {}),
     ...(account.clientSecret ? { clientSecret: account.clientSecret } : {}),
     ...(account.email ? { email: account.email } : {}),
-    ...(account.profileArn ? { profileArn: account.profileArn } : {})
-  }
+    ...(account.profileArn ? { profileArn: account.profileArn } : {}),
+  };
 }
 
 export class AccountManager {
-  private accounts: StoredAccount[]
-  private stickyId: string | undefined
-  private roundRobinCursor = 0
+  private accounts: StoredAccount[];
+  private readonly selector: AccountSelector;
 
   constructor(
     accounts: readonly StoredAccount[],
-    private readonly strategy: AccountSelectionStrategy,
-    private readonly database: AccountsDatabase
+    strategy: AccountSelectionStrategy,
+    private readonly database: AccountsDatabase,
   ) {
-    this.accounts = accounts.map(cloneAccount)
+    this.accounts = accounts.map(cloneAccount);
+    this.selector = new AccountSelector(strategy);
   }
 
   getAccountCount(): number {
-    return this.accounts.length
+    return this.accounts.length;
   }
 
   getAccounts(): StoredAccount[] {
-    return this.accounts.map(cloneAccount)
+    return this.accounts.map(cloneAccount);
+  }
+
+  /**
+   * Re-reads one account row from the database and publishes it to the
+   * in-memory snapshot. Returns undefined when the account no longer exists.
+   */
+  getLatestAccount(id: string): StoredAccount | undefined {
+    const latest = this.database.getById(id);
+    if (!latest) {
+      this.dropAccount(id);
+      return undefined;
+    }
+    const current = this.accounts.find((account) => account.id === id);
+    if (current?.generation !== latest.generation) this.replaceAccount(cloneAccount(latest));
+    return cloneAccount(latest);
   }
 
   getMinWaitTime(): number {
-    const now = Date.now()
+    const now = Date.now();
     const waits = this.accounts
       .map(({ rateLimitResetTime }) => rateLimitResetTime - now)
-      .filter((wait) => wait > 0)
-    return waits.length === 0 ? 0 : Math.min(...waits)
+      .filter((wait) => wait > 0);
+    return waits.length === 0 ? 0 : Math.min(...waits);
   }
 
   reconcileFromDb(database: AccountsDatabase = this.database): StoredAccount[] {
-    const currentById = new Map(this.accounts.map((account) => [account.id, account]))
+    const currentById = new Map(this.accounts.map((account) => [account.id, account]));
     this.accounts = database.getAccounts().map((row) => {
-      const current = currentById.get(row.id)
-      return current?.generation === row.generation ? current : cloneAccount(row)
-    })
-    if (this.stickyId && !this.accounts.some(({ id }) => id === this.stickyId)) {
-      this.stickyId = undefined
+      const current = currentById.get(row.id);
+      return current?.generation === row.generation ? current : cloneAccount(row);
+    });
+    const survivingIds = new Set(this.accounts.map(({ id }) => id));
+    for (const id of currentById.keys()) {
+      if (!survivingIds.has(id)) evictSdkClientsForAccount(id);
     }
-    return this.getAccounts()
+    this.selector.retainSticky(this.accounts);
+    return this.getAccounts();
   }
 
   selectHealthyAccount(
     preferredAccountId?: string,
-    eligibleAccountIds?: ReadonlySet<string>
+    eligibleAccountIds?: ReadonlySet<string>,
   ): StoredAccount | null {
-    const now = Date.now()
-    const candidates = this.accounts
-      .filter((account) => this.isSelectable(account, now))
-      .filter((account) => eligibleAccountIds?.has(account.id) ?? true)
-      .sort((left, right) => left.id.localeCompare(right.id))
-    if (candidates.length === 0) return null
+    const now = Date.now();
+    const candidates = selectableCandidates(this.accounts, now, eligibleAccountIds);
+    if (candidates.length === 0) return null;
 
-    const selected =
-      candidates.find(({ id }) => id === preferredAccountId) ??
-      this.selectCandidate(candidates)
+    const selected = this.selector.pick(candidates, preferredAccountId);
     return (
       this.patchAccount(selected.id, (latest) => ({
         ...latest,
@@ -110,67 +120,70 @@ export class AccountManager {
         unhealthyReason: undefined,
         recoveryTime: undefined,
         lastUsed: now,
-        usedCount: (latest.usedCount ?? 0) + 1
+        usedCount: (latest.usedCount ?? 0) + 1,
       })) ?? null
-    )
+    );
   }
 
   getCurrentOrNext(): StoredAccount | null {
-    return this.selectHealthyAccount()
+    return this.selectHealthyAccount();
+  }
+
+  /**
+   * Number of accounts selectHealthyAccount could return right now (healthy,
+   * not rate-limited, not quota-exhausted), optionally restricted to the
+   * given eligible ids. Used as the failover alternative count.
+   */
+  countSelectableAccounts(eligibleAccountIds?: ReadonlySet<string>, now = Date.now()): number {
+    return countSelectable(this.accounts, now, eligibleAccountIds);
   }
 
   markRateLimited(account: ManagedAccount, resetTime: number): StoredAccount | undefined {
     return this.patchAccount(account.id, (latest) => ({
       ...latest,
-      rateLimitResetTime: resetTime
-    }))
+      rateLimitResetTime: resetTime,
+    }));
   }
 
-  markQuotaExhausted(
-    account: ManagedAccount,
-    recheckAfter: number
-  ): StoredAccount | undefined {
+  markQuotaExhausted(account: ManagedAccount, recheckAfter: number): StoredAccount | undefined {
     return this.patchAccount(account.id, (latest) => ({
       ...latest,
       usedCount:
         (latest.limitCount ?? 0) > 0
           ? Math.max(latest.usedCount ?? 0, latest.limitCount ?? 0)
           : latest.usedCount,
-      rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter)
-    }))
+      rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter),
+    }));
   }
 
-  scheduleQuotaRecheck(
-    account: ManagedAccount,
-    recheckAfter: number
-  ): StoredAccount | undefined {
+  scheduleQuotaRecheck(account: ManagedAccount, recheckAfter: number): StoredAccount | undefined {
     return this.patchAccount(account.id, (latest) =>
       isQuotaExhausted(latest)
         ? {
             ...latest,
-            rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter)
+            rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter),
           }
-        : latest
-    )
+        : latest,
+    );
   }
 
   updateQuotaUsage(
     account: ManagedAccount,
     usage: KiroUsageSnapshot & { readonly lastSync: number },
-    nextRecheckAt: number
+    nextRecheckAt: number,
   ): StoredAccount | undefined {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-      const current = this.database.getById(account.id)
+      const current = this.database.getById(account.id);
       if (!current) {
-        this.accounts = this.accounts.filter((candidate) => candidate.id !== account.id)
-        return undefined
+        this.dropAccount(account.id);
+        return undefined;
       }
       if ((current.lastSync ?? 0) > usage.lastSync) {
-        this.replaceAccount(current)
-        return cloneAccount(current)
+        this.replaceAccount(current);
+        return cloneAccount(current);
       }
-      const wasExhausted = isQuotaExhausted(current)
-      const snapshotExhausted = isQuotaExhausted(usage)
+      const wasExhausted = isQuotaExhausted(current);
+      const snapshotExhausted = isQuotaExhausted(usage);
       const updated: StoredAccount = {
         ...current,
         email: usage.email ?? current.email,
@@ -182,145 +195,121 @@ export class AccountManager {
           ? Math.max(current.rateLimitResetTime, nextRecheckAt)
           : wasExhausted
             ? 0
-            : current.rateLimitResetTime
-      }
+            : current.rateLimitResetTime,
+      };
       if (this.database.updateExistingAccounts([updated]) === 1) {
-        const persisted = { ...updated, generation: current.generation + 1 }
-        this.replaceAccount(persisted)
-        return cloneAccount(persisted)
+        const persisted = { ...updated, generation: current.generation + 1 };
+        this.replaceAccount(persisted);
+        return cloneAccount(persisted);
       }
     }
-    this.reconcileFromDb()
-    throw new AccountConcurrentUpdateError(account.id)
+    this.reconcileFromDb();
+    throw new AccountConcurrentUpdateError(account.id);
   }
 
-  markUnhealthy(
-    account: ManagedAccount,
-    reason: string,
-    recoveryTime?: number
-  ): StoredAccount | undefined {
-    const now = Date.now()
-    return this.patchAccount(account.id, (latest) => {
-      if (isPermanentError(reason)) {
-        return {
-          ...latest,
-          failCount: 10,
-          isHealthy: false,
-          unhealthyReason: reason,
-          recoveryTime: undefined,
-          lastUsed: now
-        }
-      }
-
-      const failCount = latest.failCount + 1
-      return {
-        ...latest,
-        failCount,
-        isHealthy: failCount < 10,
-        unhealthyReason: reason,
-        recoveryTime: failCount >= 10 ? (recoveryTime ?? now + 3_600_000) : undefined,
-        lastUsed: now
-      }
-    })
+  /**
+   * Marks an account unhealthy until a later successful refresh heals it
+   * (updateFromAuth resets isHealthy/failCount). Every production caller
+   * passes a refresh-token-dead reason, so the former transient fail-count
+   * ladder (unreachable, and never reset) is gone: failCount is a binary
+   * marker, 10 when marked and 0 when healed.
+   */
+  markUnhealthy(account: ManagedAccount, reason: string): StoredAccount | undefined {
+    const now = Date.now();
+    return this.patchAccount(account.id, (latest) => ({
+      ...latest,
+      failCount: 10,
+      isHealthy: false,
+      unhealthyReason: reason,
+      recoveryTime: undefined,
+      lastUsed: now,
+    }));
   }
 
   updateFromAuth(account: StoredAccount, auth: KiroAuthDetails): StoredAccount | undefined {
-    const refresh = decodeRefreshToken(auth.refresh)
+    const refresh = decodeRefreshToken(auth.refresh);
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-      const current = attempt === 0 ? account : this.database.getById(account.id)
+      const current = attempt === 0 ? account : this.database.getById(account.id);
       if (!current || !this.isSameLogin(account, current)) {
-        this.reconcileFromDb()
-        return undefined
+        this.reconcileFromDb();
+        return undefined;
+      }
+      if (attempt > 0 && !this.sameCredentials(account, current)) {
+        // Another writer already rotated this login's credentials; adopt the
+        // newer row instead of overwriting it with this refresh result.
+        this.replaceAccount(cloneAccount(current));
+        return cloneAccount(current);
       }
       const updated: StoredAccount = {
         ...current,
         refreshToken: refresh.refreshToken,
         accessToken: auth.access,
-        expiresAt: auth.expires
-      }
+        expiresAt: auth.expires,
+        ...(auth.email ? { email: auth.email } : {}),
+        isHealthy: true,
+        failCount: 0,
+        unhealthyReason: undefined,
+        recoveryTime: undefined,
+      };
       if (this.database.updateExistingAccounts([updated]) === 1) {
-        const persisted = { ...updated, generation: current.generation + 1 }
-        this.replaceAccount(persisted)
-        return cloneAccount(persisted)
+        const persisted = { ...updated, generation: current.generation + 1 };
+        this.replaceAccount(persisted);
+        return cloneAccount(persisted);
       }
     }
-    this.reconcileFromDb()
-    return undefined
+    this.reconcileFromDb();
+    return undefined;
   }
 
   toAuthDetails(account: ManagedAccount): KiroAuthDetails {
-    return toAuthDetails(account)
-  }
-
-  private isSelectable(account: StoredAccount, now: number): boolean {
-    if (isPermanentError(account.unhealthyReason)) return false
-    if (isQuotaExhausted(account)) return false
-    if (account.rateLimitResetTime > now) return false
-    if (account.isHealthy || isAccessTokenError(account.unhealthyReason)) return true
-    return account.recoveryTime !== undefined && account.recoveryTime <= now
+    return toAuthDetails(account);
   }
 
   private isSameLogin(started: StoredAccount, current: StoredAccount): boolean {
     return (
-      current.refreshToken === started.refreshToken &&
       current.authMethod === started.authMethod &&
       current.clientId === started.clientId &&
       current.email === started.email &&
       current.startUrl === started.startUrl
-    )
+    );
   }
 
-  private selectCandidate(candidates: readonly StoredAccount[]): StoredAccount {
-    switch (this.strategy) {
-      case 'sticky': {
-        const sticky = candidates.find(({ id }) => id === this.stickyId)
-        const selected = sticky ?? candidates[0]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        this.stickyId = selected.id
-        return selected
-      }
-      case 'round-robin': {
-        const selected = candidates[this.roundRobinCursor % candidates.length]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        this.roundRobinCursor += 1
-        return selected
-      }
-      case 'lowest-usage': {
-        const selected = [...candidates].sort(
-          (left, right) =>
-            (left.usedCount ?? 0) - (right.usedCount ?? 0) ||
-            (left.lastUsed ?? 0) - (right.lastUsed ?? 0) ||
-            left.id.localeCompare(right.id)
-        )[0]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        return selected
-      }
-      default:
-        return assertNever(this.strategy)
-    }
+  private sameCredentials(started: StoredAccount, current: StoredAccount): boolean {
+    return (
+      current.refreshToken === started.refreshToken &&
+      current.accessToken === started.accessToken &&
+      current.expiresAt === started.expiresAt
+    );
   }
 
   private patchAccount(id: string, patch: AccountPatch): StoredAccount | undefined {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
-      const latest = this.database.getById(id)
+      const latest = this.database.getById(id);
       if (!latest) {
-        this.accounts = this.accounts.filter((account) => account.id !== id)
-        return undefined
+        this.dropAccount(id);
+        return undefined;
       }
-      const updated = patch(latest)
+      const updated = patch(latest);
       if (this.database.updateExistingAccounts([updated]) === 1) {
-        const persisted = { ...updated, generation: latest.generation + 1 }
-        this.replaceAccount(persisted)
-        return cloneAccount(persisted)
+        const persisted = { ...updated, generation: latest.generation + 1 };
+        this.replaceAccount(persisted);
+        return cloneAccount(persisted);
       }
     }
-    this.reconcileFromDb()
-    throw new AccountConcurrentUpdateError(id)
+    this.reconcileFromDb();
+    throw new AccountConcurrentUpdateError(id);
+  }
+
+  /** Forgets an account that vanished from the database and releases its SDK transports. */
+  private dropAccount(id: string): void {
+    this.accounts = this.accounts.filter((account) => account.id !== id);
+    this.selector.forget(id);
+    evictSdkClientsForAccount(id);
   }
 
   private replaceAccount(account: StoredAccount): void {
-    const index = this.accounts.findIndex(({ id }) => id === account.id)
-    if (index === -1) this.accounts.push(account)
-    else this.accounts[index] = account
+    const index = this.accounts.findIndex(({ id }) => id === account.id);
+    if (index === -1) this.accounts.push(account);
+    else this.accounts[index] = account;
   }
 }
