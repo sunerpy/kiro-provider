@@ -153,7 +153,11 @@ export function canonicalCompletionToChat(
         index: 0,
         message: {
           role: "assistant",
-          content: completion.text,
+          // OpenAI returns `content: null` for a tool-call-only assistant turn.
+          content:
+            completion.text.length === 0 && completion.toolCalls.length > 0
+              ? null
+              : completion.text,
           ...(reasoning?.text ? { reasoning_content: reasoning.text } : {}),
           ...(reasoning?.signature
             ? { reasoning_signature: reasoning.signature }

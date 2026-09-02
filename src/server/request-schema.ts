@@ -192,7 +192,9 @@ export const ChatCompletionRequestSchema = z
     tools: z.array(z.union([OpenAiToolSchema, AnthropicToolSchema])).optional(),
     user: z.string().optional(),
     prompt_cache_key: z.string().optional(),
-    reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+    reasoning_effort: z
+      .enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+      .optional(),
     tool_choice: z
       .union([
         z.enum(["auto", "none", "required"]),

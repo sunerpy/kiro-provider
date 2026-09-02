@@ -11,6 +11,7 @@ import {
 	buildServeOptions,
 	buildServerDeps,
 	createApp,
+	handleServeError,
 } from "../src/server/app.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
@@ -242,6 +243,35 @@ describe("buildServeOptions", () => {
 		expect(options.port).toBe(parsed.port);
 		expect(options.fetch).toBeFunction();
 	});
+
+	test("hardens the runtime: no development pages, bounded bodies, fixed error envelope", async () => {
+		const parsed = ConfigSchema.parse({
+			api_keys: ["sk-test"],
+			max_request_body_bytes: 2_048,
+		});
+		const options = buildServeOptions(parsed, {
+			accountManager: new ThrowingAccountManager(),
+			tokenRefresher: passThroughRefresher,
+		});
+
+		expect(options.development).toBe(false);
+		expect(options.maxRequestBodySize).toBe(2_048);
+		expect(options.error).toBe(handleServeError);
+
+		const response = handleServeError(new Error("sqlite: /var/lib/accounts.db is locked"));
+		const text = await response.text();
+		expect(response.status).toBe(500);
+		expect(response.headers.get("Content-Type")).toBe("application/json");
+		expect(text).not.toContain("accounts.db");
+		expect(JSON.parse(text)).toMatchObject({
+			error: {
+				type: "internal_error",
+				code: "internal_error",
+				message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+				request_id: expect.stringMatching(/^req_/),
+			},
+		});
+	});
 });
 
 describe("createApp", () => {
@@ -346,7 +376,7 @@ describe("createApp", () => {
 		expect(body).toMatchObject({ error: { code: "Error", message: "selection failed" } });
 	});
 
-	test("converts a request-body stream failure into an internal error response", async () => {
+	test("converts a request-body stream failure into a fixed 500 with a request id", async () => {
 		const failedBody = new ReadableStream<Uint8Array>({
 			pull() {
 				throw new Error("body stream failed");
@@ -359,11 +389,65 @@ describe("createApp", () => {
 				body: failedBody,
 			}),
 		);
-		const body: unknown = await response.json();
+		const text = await response.text();
 
 		expect(response.status).toBe(500);
-		expect(body).toMatchObject({
-			error: { code: "internal_error", message: "body stream failed" },
+		expect(text).not.toContain("body stream failed");
+		expect(JSON.parse(text)).toMatchObject({
+			error: {
+				code: "internal_error",
+				message: expect.stringMatching(/^Internal server error \(request_id: req_[0-9a-f-]+\)$/),
+				request_id: expect.stringMatching(/^req_[0-9a-f-]+$/),
+			},
+		});
+	});
+
+	test("hides unexpected route exceptions behind the protocol's fixed 500 envelope", async () => {
+		const throwingApp = createApp(config(null), {
+			accountManager: new ThrowingAccountManager(),
+			tokenRefresher: passThroughRefresher,
+			createRequestIdleTimeoutLease: () => {
+				throw new Error("lease factory exploded with /secret/path");
+			},
+		});
+		const server = { timeout() {} } as unknown as Bun.Server<undefined>;
+		const openAi = await throwingApp(
+			new Request("http://x/v1/responses", {
+				method: "POST",
+				headers: { ...authorization, "Content-Type": "application/json" },
+				body: JSON.stringify({ model: "gpt-5.6-sol", input: "hello" }),
+			}),
+			server,
+		);
+		const anthropic = await throwingApp(
+			new Request("http://x/v1/messages", {
+				method: "POST",
+				headers: { ...authorization, "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: "claude-sonnet-5",
+					max_tokens: 1_024,
+					messages: [{ role: "user", content: "hello" }],
+				}),
+			}),
+			server,
+		);
+		const openAiText = await openAi.text();
+		const anthropicText = await anthropic.text();
+
+		expect(openAi.status).toBe(500);
+		expect(openAiText).not.toContain("/secret/path");
+		expect(JSON.parse(openAiText)).toMatchObject({
+			error: { code: "internal_error", request_id: expect.stringMatching(/^req_/) },
+		});
+		expect(anthropic.status).toBe(500);
+		expect(anthropicText).not.toContain("/secret/path");
+		expect(JSON.parse(anthropicText)).toMatchObject({
+			type: "error",
+			error: {
+				type: "api_error",
+				message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+			},
+			request_id: expect.stringMatching(/^req_/),
 		});
 	});
 });

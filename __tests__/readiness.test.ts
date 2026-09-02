@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type {
 	PipelineAccountManager,
+	PipelineModelCapabilities,
 	PipelineReasoningReplayStore,
 } from "../src/core/pipeline.js";
 import { handleReadiness } from "../src/server/routes/readiness.js";
@@ -79,6 +80,30 @@ describe("readiness route", () => {
 		expect(await body(unavailable)).toEqual({
 			status: "not_ready",
 			reason: "authentication_store_unavailable",
+		});
+	});
+
+	test("labels replay-store and model-catalog failures distinctly from the auth store", async () => {
+		const replayFailure = handleReadiness(accountManager(1), {
+			readiness: () => {
+				throw new TypeError("replay database locked");
+			},
+		} as unknown as PipelineReasoningReplayStore);
+		expect(replayFailure.status).toBe(503);
+		expect(await body(replayFailure)).toEqual({
+			status: "not_ready",
+			reason: "reasoning_replay_store_unavailable",
+		});
+
+		const catalogFailure = handleReadiness(accountManager(1), replayStore(true, true), {
+			readiness: () => {
+				throw new TypeError("catalog snapshot corrupt");
+			},
+		} as unknown as PipelineModelCapabilities);
+		expect(catalogFailure.status).toBe(503);
+		expect(await body(catalogFailure)).toEqual({
+			status: "not_ready",
+			reason: "model_catalog_unavailable",
 		});
 	});
 

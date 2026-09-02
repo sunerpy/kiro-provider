@@ -76,4 +76,30 @@ describe("checkApiKey", () => {
       await expectEnvelope(result.response, 401, "authentication_error")
     }
   })
+
+  test("matches the Bearer scheme case-insensitively", () => {
+    expect(checkApiKey(requestWithAuth("bearer sk-valid-key"), API_KEYS).ok).toBe(true)
+    expect(checkApiKey(requestWithAuth("BEARER sk-valid-key"), API_KEYS).ok).toBe(true)
+    expect(checkApiKey(requestWithAuth("Bearersk-valid-key"), API_KEYS).ok).toBe(false)
+  })
+
+  test("advertises the Bearer challenge on every 401", () => {
+    for (const header of [undefined, "Basic sk-valid-key", "Bearer wrong-key"]) {
+      const result = checkApiKey(requestWithAuth(header), API_KEYS)
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.response.headers.get("WWW-Authenticate")).toBe("Bearer")
+      }
+    }
+  })
+
+  test("keeps the challenge header with a custom error factory", () => {
+    const result = checkApiKey(requestWithAuth(undefined), API_KEYS, (status, message, type) =>
+      Response.json({ type: "error", error: { type, message } }, { status }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.response.headers.get("WWW-Authenticate")).toBe("Bearer")
+    }
+  })
 })

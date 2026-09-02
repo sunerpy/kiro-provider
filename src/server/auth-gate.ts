@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { openAiError } from "./errors.js"
 
-const BEARER_PREFIX = "Bearer "
+const BEARER_SCHEME = "bearer "
 
 export type AuthGateResult =
   | { ok: true; tenantId: string }
@@ -34,10 +34,27 @@ function tenantId(apiKey: string): string {
     .digest("hex")
 }
 
+/** RFC 7235 auth-scheme tokens are case-insensitive. */
+function hasBearerScheme(header: string): boolean {
+  return header.slice(0, BEARER_SCHEME.length).toLowerCase() === BEARER_SCHEME
+}
+
+function unauthorized(makeError: AuthErrorFactory, message: string, code: string): Response {
+  const response = makeError(401, message, "authentication_error", code)
+  try {
+    response.headers.set("WWW-Authenticate", "Bearer")
+  } catch {
+    // A factory returning immutable headers still yields the correct envelope.
+  }
+  return response
+}
+
 /**
  * Validates either `Authorization: Bearer <key>` or `x-api-key: <key>` against
  * the configured api_keys. Authorization takes precedence when both headers
  * are present so a malformed explicit Bearer header cannot be bypassed.
+ * `x-api-key` is accepted on every route so Anthropic-style clients can reach
+ * the OpenAI-compatible surfaces with the same credential.
  */
 export function checkApiKey(
   req: Request,
@@ -54,39 +71,32 @@ export function checkApiKey(
     }
     return {
       ok: false,
-      response: makeError(
-        401,
+      response: unauthorized(
+        makeError,
         "Missing Authorization or x-api-key header.",
-        "authentication_error",
         "missing_api_key",
       ),
     }
   }
 
-  if (!header.startsWith(BEARER_PREFIX)) {
+  if (!hasBearerScheme(header)) {
     return {
       ok: false,
-      response: makeError(
-        401,
+      response: unauthorized(
+        makeError,
         "Authorization header must use the Bearer scheme.",
-        "authentication_error",
         "invalid_api_key",
       ),
     }
   }
 
-  const key = header.slice(BEARER_PREFIX.length)
+  const key = header.slice(BEARER_SCHEME.length)
 
   const matched = matchingApiKey(key, apiKeys)
   if (matched === undefined) {
     return {
       ok: false,
-      response: makeError(
-        401,
-        "Incorrect API key provided.",
-        "authentication_error",
-        "invalid_api_key",
-      ),
+      response: unauthorized(makeError, "Incorrect API key provided.", "invalid_api_key"),
     }
   }
 
