@@ -495,7 +495,7 @@ with the stable base URL and gateway API key.
 
 ## Configuration
 
-Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Precedence is **CLI flag > environment variable > config file > schema default**.
+Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`; on Windows `%APPDATA%\kiro-provider\config.json`, with the legacy `~/.config` location still read as a fallback), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Unknown keys in the file are rejected with a suggestion, numeric fields are range-checked, and an empty environment variable counts as unset. Precedence is **CLI flag > environment variable > config file > schema default**.
 
 | Field | Default | Env var |
 | --- | --- | --- |
@@ -594,7 +594,7 @@ resend the complete input.
 - `kiro-provider accounts list [--details | --json]` — show aligned account health/usage; details and JSON include the stable account ID but never credentials.
 - `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` — bypass the usage cache, refresh authoritative Kiro usage, and renew an access token only when needed or rejected upstream.
 - `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` — re-authenticate a selected account after Kiro identity verification while preserving its internal ID and session-affinity references.
-- `kiro-provider accounts import [--from <path>] [--config <path>]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; no live database link remains.
+- `kiro-provider accounts import [--from <path>] [--force]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; rows whose local copy is newer are skipped unless `--force` is given; no live database link remains.
 - `kiro-provider accounts remove <id|email> [--yes]` — remove one account and its affinity/lineage/reasoning state; interactive confirmation is required unless `--yes` is supplied.
 
 Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.

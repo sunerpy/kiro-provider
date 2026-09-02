@@ -471,7 +471,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 
 ## 配置
 
-配置默认从 `~/.config/kiro-provider/config.json`（或 `$XDG_CONFIG_HOME/kiro-provider/config.json`）加载，可被 `KIRO_PROVIDER_*` 环境变量覆盖；`serve` 命令还支持部分 CLI 参数覆盖。优先级为 **CLI 参数 > 环境变量 > 配置文件 > schema 默认值**。
+配置默认从 `~/.config/kiro-provider/config.json`（或 `$XDG_CONFIG_HOME/kiro-provider/config.json`；Windows 为 `%APPDATA%\kiro-provider\config.json`，旧的 `~/.config` 位置仍作为兜底读取）加载，可被 `KIRO_PROVIDER_*` 环境变量覆盖；`serve` 命令还支持部分 CLI 参数覆盖。配置文件中的未知键会被拒绝并给出相近键提示，数值字段有范围校验，空字符串环境变量视为未设置。优先级为 **CLI 参数 > 环境变量 > 配置文件 > schema 默认值**。
 
 | 字段 | 默认值 | 环境变量 |
 | --- | --- | --- |
@@ -565,7 +565,7 @@ Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境验�
 - `kiro-provider accounts list [--details | --json]` —— 对齐显示账号健康与用量；details/JSON 会显示稳定账号 ID，但绝不输出凭证。
 - `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` —— 绕过用量缓存，立即读取 Kiro 权威用量，并仅在 access token 到期或被上游拒绝时刷新。
 - `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` —— 经 Kiro 身份校验后重新认证选定账号，同时保留内部账号 ID 与会话亲和引用。
-- `kiro-provider accounts import [--from <path>] [--config <path>]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库，不保留实时数据库链接。
+- `kiro-provider accounts import [--from <path>] [--force]` —— 将 OpenCode Kiro 账号一次性复制到 provider 自有本地认证库；本地副本更新的行会被跳过，除非加 `--force`；不保留实时数据库链接。
 - `kiro-provider accounts remove <id|email> [--yes]` —— 删除账号及其亲和、lineage、reasoning 状态；除非显式传入 `--yes`，否则必须交互确认。
 
 契约：人类可读的状态行输出到 stdout，错误输出到 stderr，失败时返回非零退出码；`GET /v1/models`、`GET /health` 与需鉴权的 `GET /ready` 返回结构化 JSON。

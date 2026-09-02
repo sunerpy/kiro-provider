@@ -157,6 +157,41 @@ Authenticated `GET /ready` verifies that the configured authority can be
 read and has at least one active account. `GET /health` remains a liveness
 check only.
 
+## HTTP surface details
+
+- Route dispatch tolerates one trailing slash. A known path with the wrong
+  method returns `405` with an `Allow` header in the protocol's error envelope;
+  `OPTIONS` is treated the same way (CORS is out of scope for a loopback
+  gateway). `HEAD /health` returns `200` without a body.
+- `401` responses carry `WWW-Authenticate: Bearer`; the `Bearer` scheme is
+  matched case-insensitively and `x-api-key` is accepted on every route.
+- `Bun.serve` runs with `development: false`, `maxRequestBodySize` equal to
+  `max_request_body_bytes` (Bun answers oversized bodies with a plain `413`
+  before the JSON envelope), and a fixed `500` envelope for unhandled errors.
+  Internal exception text is never returned; responses carry a `request_id`
+  that is also written to the audit log with a hashed detail.
+- Request-body failures are classified: a client that disconnects mid-upload
+  ends the request without a response (`499` internally), a malformed body is
+  `400 malformed_request_body`, and a genuine read error is the fixed `500`.
+- `429` responses include `Retry-After` when the upstream delay is known. On
+  `/v1/messages`, quota exhaustion maps to `429 rate_limit_error` (a retryable
+  class) with the structured code preserved in the message.
+- `GET /ready` distinguishes `authentication_store_unavailable`,
+  `reasoning_replay_store_unavailable`, and `model_catalog_unavailable`.
+
+## Process lifecycle
+
+- The single-instance lock uses `stale: 15s` / `update: 5s`. Acquisition
+  retries for up to 20 × 1s so a restart after `SIGKILL` succeeds once the stale
+  window passes; the final error names the lock path and the stale window.
+- If the lock is compromised (for example the lock directory is deleted), the
+  provider fails closed: it logs `single_instance_lock_compromised`, stops
+  accepting requests, drains in-flight requests for up to 10s, stops
+  maintenance, and exits with code 1 so the service manager restarts it. It
+  never keeps serving without the lock.
+- `SIGTERM` / `SIGINT` run the same shutdown routine and exit 0. Repeated
+  signals join the in-progress shutdown.
+
 ## Where to look in the code
 
 - `src/server/app.ts` — HTTP entry point and route dispatch.
