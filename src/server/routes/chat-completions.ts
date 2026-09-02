@@ -18,6 +18,7 @@ import {
   openAiIngressErrors,
   type RouteDependencies,
   readJsonBody,
+  withRetryAfter,
 } from "../ingress.js";
 import { chatToCanonical } from "../protocol/chat-adapter.js";
 import { parseChatCompletionRequest } from "../request-schema.js";
@@ -92,7 +93,7 @@ export async function handleChatCompletions(
       return openAiIngressErrors.clientClosed();
     }
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (!pipelineResponse.ok) return pipelineResponse;
+    if (!pipelineResponse.ok) return await withRetryAfter(pipelineResponse);
     if (!parsed.value.stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
         void boundedCleanup(() => pipelineResponse.body?.cancel());

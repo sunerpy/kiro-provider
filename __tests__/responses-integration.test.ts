@@ -457,7 +457,7 @@ describe("POST /v1/responses", () => {
       id: expect.any(String),
       role: "assistant",
       status: "completed",
-      content: [{ type: "output_text", text: "default JSON", annotations: [] }],
+      content: [{ type: "output_text", text: "default JSON", annotations: [], logprobs: [] }],
     });
   });
 
@@ -931,6 +931,7 @@ describe("POST /v1/responses", () => {
       call_id: tool.id,
       name: tool.name,
       arguments: tool.arguments,
+      status: "completed",
     });
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,
@@ -999,6 +1000,7 @@ describe("POST /v1/responses", () => {
       call_id: "call_exec",
       name: "exec",
       input: "printf ok",
+      status: "completed",
     });
     expect(functionCall).toEqual({
       id: functionCall.id,
@@ -1006,6 +1008,7 @@ describe("POST /v1/responses", () => {
       call_id: "call_spawn",
       name: "spawn_agent",
       arguments: '{"task_name":"review"}',
+      status: "completed",
     });
     expect(body.output.some((entry) => isReadonlyRecord(entry) && entry.type === "message")).toBe(
       false,

@@ -6,6 +6,7 @@ import type {
 } from "../src/core/pipeline.js";
 import { CLEANUP_GRACE_MS } from "../src/core/stream-cleanup.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import { openAiError } from "../src/server/errors.js";
 import {
   anthropicIngressErrors,
   buildPipelineOptions,
@@ -15,6 +16,7 @@ import {
   openAiIngressErrors,
   type RouteDependencies,
   readJsonBody,
+  withRetryAfter,
 } from "../src/server/ingress.js";
 import type { RequestIdleTimeoutLease } from "../src/server/request-lifecycle.js";
 import { handleChatCompletions } from "../src/server/routes/chat-completions.js";
@@ -418,6 +420,40 @@ describe("buildPipelineOptions", () => {
   });
 });
 
+describe("withRetryAfter", () => {
+  test("promotes a retry_after_ms hint into Retry-After on 429 responses", async () => {
+    const hinted = Response.json(
+      { error: { message: "slow down", type: "upstream_error", code: "rate_limited", retry_after_ms: 2_500 } },
+      { status: 429 },
+    );
+
+    const result = await withRetryAfter(hinted);
+
+    expect(result.status).toBe(429);
+    expect(result.headers.get("Retry-After")).toBe("3");
+    expect(await result.json()).toMatchObject({ error: { code: "rate_limited" } });
+  });
+
+  test("accepts a retry_after seconds hint", async () => {
+    const result = await withRetryAfter(
+      Response.json({ error: { message: "slow", retry_after: 7 } }, { status: 429 }),
+    );
+
+    expect(result.headers.get("Retry-After")).toBe("7");
+  });
+
+  test("leaves responses without a known delay or with an existing header untouched", async () => {
+    const existing = new Response("{}", { status: 429, headers: { "Retry-After": "42" } });
+    const plain = openAiError(429, "no hint", "rate_limit_error");
+    const other = Response.json({ error: { retry_after_ms: 1_000 } }, { status: 503 });
+
+    expect(await withRetryAfter(existing)).toBe(existing);
+    expect(await withRetryAfter(plain)).toBe(plain);
+    expect(await withRetryAfter(other)).toBe(other);
+    expect(other.headers.has("Retry-After")).toBe(false);
+  });
+});
+
 describe("routes on the shared ingress", () => {
   const dependencies: RouteDependencies = {
     accountManager: new StubAccountManager(),
@@ -473,4 +509,27 @@ describe("routes on the shared ingress", () => {
       expect(unhandled).toEqual([]);
     });
   }
+
+  test("adds Retry-After to a hinted 429 from the pipeline on the Chat route", async () => {
+    const response = await handleChatCompletions(
+      new Request("http://gateway/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "auto", messages: [{ role: "user", content: "hi" }] }),
+      }),
+      config({ max_request_body_bytes: 16_384 }),
+      {
+        ...dependencies,
+        async runPipeline() {
+          return Response.json(
+            { error: { message: "busy", type: "upstream_error", code: "rate_limited", retry_after_ms: 900 } },
+            { status: 429 },
+          );
+        },
+      },
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("1");
+  });
 });

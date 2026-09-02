@@ -327,3 +327,44 @@ export function buildPipelineOptions(input: PipelineOptionsInput): RunChatComple
     ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
   };
 }
+
+function retryAfterHintMs(value: unknown): number | undefined {
+  if (typeof value !== "object" || value === null || !("error" in value)) return undefined;
+  const error = value.error;
+  if (typeof error !== "object" || error === null) return undefined;
+  if ("retry_after_ms" in error && typeof error.retry_after_ms === "number") {
+    return error.retry_after_ms >= 0 ? error.retry_after_ms : undefined;
+  }
+  if ("retry_after" in error && typeof error.retry_after === "number") {
+    return error.retry_after >= 0 ? error.retry_after * 1_000 : undefined;
+  }
+  return undefined;
+}
+
+export function retryAfterHeaderValue(delayMs: number): string {
+  return String(Math.max(1, Math.ceil(delayMs / 1_000)));
+}
+
+/**
+ * Adds `Retry-After` to a 429 pipeline response when the delay is known: an
+ * existing header passes through untouched, otherwise an `error.retry_after_ms`
+ * (or `error.retry_after` seconds) hint in the JSON envelope is promoted to
+ * the header. Other statuses and hint-less responses are returned unchanged.
+ */
+export async function withRetryAfter(response: Response): Promise<Response> {
+  if (response.status !== 429 || response.headers.has("Retry-After")) return response;
+  let delayMs: number | undefined;
+  try {
+    delayMs = retryAfterHintMs(await response.clone().json());
+  } catch {
+    return response;
+  }
+  if (delayMs === undefined) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Retry-After", retryAfterHeaderValue(delayMs));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

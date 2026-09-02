@@ -7,6 +7,7 @@ import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
   type CanonicalCompletion,
+  type CanonicalOutputUsage,
   parseCanonicalCompletion,
 } from "../../protocol/output.js";
 import { openAiError } from "../errors.js";
@@ -16,12 +17,15 @@ import {
   openAiIngressErrors,
   type RouteDependencies,
   readJsonBody,
+  withRetryAfter,
 } from "../ingress.js";
 import { parseResponsesRequest } from "../request-schema.js";
 import type {
   MessageOutputItem,
+  OutputTextContent,
   ReasoningOutputItem,
   ResponseOutputItem,
+  ResponseToolCallItem,
   ResponseUsage,
 } from "../responses/events.js";
 import { isGptSolReasoningPlaceholder } from "../responses/reasoning.js";
@@ -39,6 +43,35 @@ import {
 } from "../session-affinity.js";
 
 export type ResponsesDependencies = RouteDependencies;
+
+/**
+ * Responses `usage` from a canonical completion. Kiro reports no cache or
+ * reasoning token split, so the detail objects the Responses API always
+ * carries are present with zero counts rather than omitted.
+ */
+export function responsesUsage(usage: CanonicalOutputUsage): ResponseUsage {
+  return {
+    input_tokens: usage.inputTokens,
+    output_tokens: usage.outputTokens,
+    total_tokens: usage.totalTokens,
+    input_tokens_details: { cached_tokens: 0 },
+    output_tokens_details: { reasoning_tokens: 0 },
+  };
+}
+
+/** A completed `output_text` part with the always-present empty `logprobs`. */
+export function outputTextContent(
+  text: string,
+): OutputTextContent & { readonly logprobs: readonly [] } {
+  return { type: "output_text", text, annotations: [], logprobs: [] };
+}
+
+/** Restored tool-call items are terminal in a non-stream response. */
+export function completedToolCallItems(
+  items: readonly ResponseToolCallItem[],
+): readonly ResponseToolCallItem[] {
+  return items.map((item) => ({ ...item, status: "completed" as const }));
+}
 
 function completedResponse(
   payload: CanonicalCompletion,
@@ -81,24 +114,18 @@ function completedResponse(
       type: "message",
       role: "assistant",
       status: "completed",
-      content: [
-        { type: "output_text", text: payload.text, annotations: [] },
-      ],
+      content: [outputTextContent(payload.text)],
     };
     output.push(message);
   }
-  output.push(...restored.items);
+  output.push(...completedToolCallItems(restored.items));
   return Response.json(
     responseState({
       id: `resp_${randomUUID()}`,
       status: "completed",
       model,
       output,
-      usage: {
-        input_tokens: payload.usage.inputTokens,
-        output_tokens: payload.usage.outputTokens,
-        total_tokens: payload.usage.totalTokens,
-      } satisfies ResponseUsage,
+      usage: responsesUsage(payload.usage),
       configuration,
     }),
   );
@@ -175,7 +202,7 @@ export async function handleResponses(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (!pipelineResponse.ok) return pipelineResponse;
+    if (!pipelineResponse.ok) return await withRetryAfter(pipelineResponse);
     if (stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
         void boundedCleanup(() => pipelineResponse.body?.cancel());

@@ -20,6 +20,7 @@ import {
   createIngress,
   type RouteDependencies,
   readJsonBody,
+  withRetryAfter,
 } from "../ingress.js";
 import {
   anthropicSessionAffinity,
@@ -38,25 +39,53 @@ function pipelineErrorType(status: number): AnthropicErrorType {
   return "api_error";
 }
 
-async function translatePipelineError(response: Response): Promise<Response> {
+function pipelineErrorDetails(value: unknown): {
+  readonly message?: string;
+  readonly code?: string;
+} {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("error" in value) ||
+    typeof value.error !== "object" ||
+    value.error === null
+  ) {
+    return {};
+  }
+  const error = value.error;
+  return {
+    ...("message" in error && typeof error.message === "string"
+      ? { message: error.message }
+      : {}),
+    ...("code" in error && typeof error.code === "string" ? { code: error.code } : {}),
+  };
+}
+
+export async function translatePipelineError(response: Response): Promise<Response> {
   let message = `Upstream request failed with HTTP ${response.status}`;
+  let code: string | undefined;
   try {
-    const value: unknown = await response.json();
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "error" in value &&
-      typeof value.error === "object" &&
-      value.error !== null &&
-      "message" in value.error &&
-      typeof value.error.message === "string"
-    ) {
-      message = value.error.message;
-    }
+    const details = pipelineErrorDetails(await response.json());
+    if (details.message !== undefined) message = details.message;
+    code = details.code;
   } catch {
     // Preserve the status-derived fallback when the upstream body is not JSON.
   }
-  return anthropicError(response.status, message, pipelineErrorType(response.status));
+  // Kiro quota exhaustion (402) is a capacity condition that clears when a
+  // quota window resets, so Anthropic clients see the retryable rate-limit
+  // class instead of a permanent invalid-request rejection. The structured
+  // provider code stays visible in the message for operators.
+  const translated =
+    response.status === 402
+      ? anthropicError(
+          429,
+          code !== undefined ? `${message} (code: ${code})` : message,
+          "rate_limit_error",
+        )
+      : anthropicError(response.status, message, pipelineErrorType(response.status));
+  const retryAfter = response.headers.get("Retry-After");
+  if (retryAfter !== null) translated.headers.set("Retry-After", retryAfter);
+  return translated;
 }
 
 function estimateInputTokens(value: unknown): number {
@@ -126,7 +155,9 @@ export async function handleMessages(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (!pipelineResponse.ok) return await translatePipelineError(pipelineResponse);
+    if (!pipelineResponse.ok) {
+      return await translatePipelineError(await withRetryAfter(pipelineResponse));
+    }
     if (adapted.value.source.stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
         void boundedCleanup(() => pipelineResponse.body?.cancel());
