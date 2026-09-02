@@ -9,7 +9,7 @@ import {
 	type PipelineAccountMaintenance,
 } from "../core/account-maintenance.js";
 import { AccountManager } from "../core/account-manager.js";
-import { auditLog } from "../core/audit-log.js";
+import { auditHash, auditLog } from "../core/audit-log.js";
 import {
 	OpenCodeAccountManager,
 	OpenCodeTokenRefresher,
@@ -39,7 +39,13 @@ import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
 import { anthropicError } from "./anthropic/errors.js";
 import { checkApiKey } from "./auth-gate.js";
-import { openAiError } from "./errors.js";
+import {
+  anthropicInternalError,
+  newRequestId,
+  openAiError,
+  openAiInternalError,
+} from "./errors.js";
+import type { RouteDependencies } from "./ingress.js";
 import type {
   RequestIdleTimeoutLease,
   RequestIdleTimeoutLeaseMaker,
@@ -138,15 +144,74 @@ export type ServerDependencyFactories = {
 	) => PipelineModelCapabilities;
 };
 
+type RouteName =
+  | "health"
+  | "ready"
+  | "models"
+  | "chat"
+  | "responses"
+  | "messages"
+  | "count_tokens";
+
+interface RouteDefinition {
+  readonly name: RouteName;
+  readonly methods: readonly string[];
+  readonly protocol: "openai" | "anthropic";
+}
+
+/**
+ * Method + path table for the public HTTP surface. One trailing slash is
+ * tolerated. A known path with an unsupported method answers 405 with `Allow`;
+ * that includes OPTIONS, because CORS preflight handling is out of scope for
+ * this gateway (a same-origin client or the reverse proxy in front of it owns
+ * CORS policy).
+ */
+const ROUTES: ReadonlyMap<string, RouteDefinition> = new Map<string, RouteDefinition>([
+  ["/health", { name: "health", methods: ["GET", "HEAD"], protocol: "openai" }],
+  ["/ready", { name: "ready", methods: ["GET"], protocol: "openai" }],
+  ["/v1/models", { name: "models", methods: ["GET"], protocol: "openai" }],
+  ["/v1/chat/completions", { name: "chat", methods: ["POST"], protocol: "openai" }],
+  ["/v1/responses", { name: "responses", methods: ["POST"], protocol: "openai" }],
+  ["/v1/messages", { name: "messages", methods: ["POST"], protocol: "anthropic" }],
+  [
+    "/v1/messages/count_tokens",
+    { name: "count_tokens", methods: ["POST"], protocol: "anthropic" },
+  ],
+]);
+
+export function normalizeRoutePath(pathname: string): string {
+  return pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+}
+
+function methodNotAllowed(route: RouteDefinition, method: string): Response {
+  const message = `Method ${method} is not allowed for this route`;
+  const response =
+    route.protocol === "anthropic"
+      ? anthropicError(405, message, "invalid_request_error")
+      : openAiError(405, message, "invalid_request_error", "method_not_allowed");
+  response.headers.set("Allow", route.methods.join(", "));
+  return response;
+}
+
+function healthHead(): Response {
+  return new Response(null, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 export function createApp(config: Config, dependencies: AppDependencies): AppFetchHandler {
   return async (request: Request, server?: Bun.Server<undefined>): Promise<Response> => {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/health") {
-      return handleHealth();
+    const pathname = normalizeRoutePath(url.pathname);
+    const route = ROUTES.get(pathname);
+    const anthropicRoute = route?.protocol === "anthropic";
+    if (route && !route.methods.includes(request.method)) {
+      return methodNotAllowed(route, request.method);
     }
-    const anthropicRoute =
-      url.pathname === "/v1/messages" ||
-      url.pathname === "/v1/messages/count_tokens";
+    if (route?.name === "health") {
+      return request.method === "HEAD" ? healthHead() : handleHealth();
+    }
     const auth = anthropicRoute
       ? checkApiKey(request, config.api_keys, (status, message) =>
           anthropicError(status, message, "authentication_error"),
@@ -159,7 +224,7 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
     const leaseFactory: (() => RequestIdleTimeoutLease | undefined) | undefined = server
       ? () => maker(request, server)
       : undefined;
-    const routeDependencies = {
+    const routeDependencies: RouteDependencies = {
       accountManager: dependencies.accountManager,
       tokenRefresher: dependencies.tokenRefresher,
       ...(dependencies.quotaRechecker
@@ -179,52 +244,52 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
       ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
     };
     try {
-      if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
-        if (!config.enable_legacy_chat_completions) {
-          return openAiError(
-            404,
-            "Legacy Chat Completions is disabled; set enable_legacy_chat_completions to true",
-            "invalid_request_error",
-            "legacy_chat_completions_disabled",
+      switch (route?.name) {
+        case "chat":
+          if (!config.enable_legacy_chat_completions) {
+            return openAiError(
+              404,
+              "Legacy Chat Completions is disabled; set enable_legacy_chat_completions to true",
+              "invalid_request_error",
+              "legacy_chat_completions_disabled",
+            );
+          }
+          return await handleChatCompletions(request, config, routeDependencies);
+        case "responses":
+          return await handleResponses(request, config, routeDependencies);
+        case "messages":
+          return await handleMessages(request, config, routeDependencies);
+        case "count_tokens":
+          return await handleMessageTokenCount(request, config);
+        case "models":
+          return await handleModels(
+            dependencies.modelCapabilities,
+            dependencies.accountManager,
+            dependencies.tokenRefresher,
+            request.signal,
+            dependencies.quotaRechecker,
           );
-        }
-        return await handleChatCompletions(request, config, routeDependencies);
+        case "ready":
+          return handleReadiness(
+            dependencies.accountManager,
+            dependencies.reasoningReplayStore,
+            dependencies.modelCapabilities,
+          );
+        default:
+          return openAiError(404, "Route not found", "invalid_request_error", "not_found");
       }
-      if (request.method === "POST" && url.pathname === "/v1/responses") {
-        return await handleResponses(request, config, routeDependencies);
-      }
-      if (request.method === "POST" && url.pathname === "/v1/messages") {
-        return await handleMessages(request, config, routeDependencies);
-      }
-      if (
-        request.method === "POST" &&
-        url.pathname === "/v1/messages/count_tokens"
-      ) {
-        return await handleMessageTokenCount(request, config);
-      }
-      if (request.method === "GET" && url.pathname === "/v1/models") {
-        return await handleModels(
-          dependencies.modelCapabilities,
-          dependencies.accountManager,
-          dependencies.tokenRefresher,
-          request.signal,
-          dependencies.quotaRechecker,
-        );
-      }
-      if (request.method === "GET" && url.pathname === "/ready") {
-        return handleReadiness(
-          dependencies.accountManager,
-          dependencies.reasoningReplayStore,
-          dependencies.modelCapabilities,
-        );
-      }
-      return openAiError(404, "Route not found", "invalid_request_error", "not_found");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Internal server error";
-      if (anthropicRoute) {
-        return anthropicError(500, message, "api_error");
-      }
-      return openAiError(500, message, "internal_error", "internal_error");
+      // Fixed text plus a correlation id: exception prose can carry storage
+      // paths, account ids, or upstream payloads and stays in the audit log.
+      const requestId = newRequestId();
+      auditLog("error", "request_handler_failed", {
+        request_id: requestId,
+        route: pathname,
+        method: request.method,
+        error_type: error instanceof Error ? error.name : typeof error,
+        detail_hash: auditHash(error instanceof Error ? error.message : String(error)),
+      });
+      return anthropicRoute ? anthropicInternalError(requestId) : openAiInternalError(requestId);
     }
   };
 }
