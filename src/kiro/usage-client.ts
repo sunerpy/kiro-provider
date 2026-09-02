@@ -190,7 +190,15 @@ export async function fetchUsageLimits(
 				lastError = error;
 				continue;
 			}
-			if (response.status === 401 || response.status === 403) throw error;
+			// Credential failures and throttling apply to every parameter variant;
+			// cycling through the remaining ones would only hammer the endpoint.
+			if (
+				response.status === 401 ||
+				response.status === 403 ||
+				response.status === 429
+			) {
+				throw error;
+			}
 			lastError = error;
 			continue;
 		}
