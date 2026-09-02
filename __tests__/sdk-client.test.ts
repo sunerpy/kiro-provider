@@ -6,7 +6,13 @@ import {
 } from '@aws/codewhisperer-streaming-client'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
-import { buildClientConfig, clearSdkClientCache, createSdkClient } from '../src/core/sdk-client.js'
+import {
+  buildClientConfig,
+  clearSdkClientCache,
+  createSdkClient,
+  evictSdkClientsForAccount,
+  mergeModelRequestFields
+} from '../src/core/sdk-client.js'
 import type { KiroAuthDetails } from '../src/kiro/types.js'
 
 class CapturedRequestError extends Error {
@@ -128,40 +134,20 @@ describe('createSdkClient', () => {
     expect(request.hostname).toBe('127.0.0.1')
     expect(request.port).toBe(43127)
     expect(request.path.startsWith('/mock')).toBe(true)
-    expect(await client.config.maxAttempts()).toBe(3)
+    // The pipeline owns retries; the SDK must not add a second retry layer.
+    expect(await client.config.maxAttempts()).toBe(1)
     const retryMode = client.config.retryMode
     expect(typeof retryMode === 'function' ? await retryMode() : retryMode).toBe('standard')
     clearSdkClientCache()
   })
 
-  test('injects GPT effort using reasoning.effort for the wire model', async () => {
-    clearSdkClientCache()
-    const client = createSdkClient(makeAuth(), 'us-east-1', 'high')
-
-    const request = await captureBuiltRequest(client, 'gpt-5.6-sol')
-    const body = parseRequestBody(request)
-
-    expect(body.additionalModelRequestFields).toEqual({ reasoning: { effort: 'high' } })
-    clearSdkClientCache()
-  })
-
-  test('injects Claude effort using output_config.effort for the wire model', async () => {
-    clearSdkClientCache()
-    const client = createSdkClient(makeAuth(), 'us-east-1', 'max')
-
-    const request = await captureBuiltRequest(client, 'claude-opus-5')
-    const body = parseRequestBody(request)
-
-    expect(body.additionalModelRequestFields).toEqual({ output_config: { effort: 'max' } })
-    clearSdkClientCache()
-  })
-
-  test('merges Claude effort with request-scoped max_tokens instead of overwriting it', async () => {
+  test('sends the command additionalModelRequestFields verbatim without an effort middleware', async () => {
     clearSdkClientCache()
     const client = createSdkClient(makeAuth(), 'us-east-1', 'high')
 
     const request = await captureBuiltRequest(client, 'claude-opus-5', {
-      max_tokens: 4096
+      max_tokens: 4096,
+      output_config: { effort: 'high' }
     })
     const body = parseRequestBody(request)
 
@@ -169,7 +155,25 @@ describe('createSdkClient', () => {
       max_tokens: 4096,
       output_config: { effort: 'high' }
     })
+    const plainClient = createSdkClient(makeAuth(), 'us-east-1', 'high', undefined, undefined, 'plain')
+    const plain = await captureBuiltRequest(plainClient, 'gpt-5.6-sol')
+    expect('additionalModelRequestFields' in parseRequestBody(plain)).toBe(false)
     clearSdkClientCache()
+  })
+
+  test('mergeModelRequestFields deep-merges additions without dropping existing keys', () => {
+    expect(mergeModelRequestFields(undefined, { output_config: { effort: 'max' } })).toEqual({
+      output_config: { effort: 'max' }
+    })
+    expect(
+      mergeModelRequestFields(
+        { max_tokens: 4096, output_config: { verbosity: 'low' } },
+        { output_config: { effort: 'high' } }
+      )
+    ).toEqual({ max_tokens: 4096, output_config: { verbosity: 'low', effort: 'high' } })
+    expect(mergeModelRequestFields({ reasoning: 'scalar' }, { reasoning: { effort: 'low' } })).toEqual({
+      reasoning: { effort: 'low' }
+    })
   })
 
   test('configures the same fresh-socket proxy agent for HTTP and HTTPS endpoints', async () => {
@@ -380,14 +384,49 @@ describe('createSdkClient', () => {
     clearSdkClientCache()
   })
 
-  test('shares one account transport pool across effort-specific clients', () => {
+  test('reuses one client and transport across effort levels for one account', () => {
     clearSdkClientCache()
     const auth = makeAuth()
     const low = createSdkClient(auth, 'us-east-1', 'low', undefined, undefined, 'account-a')
     const high = createSdkClient(auth, 'us-east-1', 'high', undefined, undefined, 'account-a')
 
-    expect(high).not.toBe(low)
+    expect(high).toBe(low)
     expect(high.config.requestHandler).toBe(low.config.requestHandler)
+    clearSdkClientCache()
+  })
+
+  test('evicting an account destroys its transports and drops its clients', () => {
+    clearSdkClientCache()
+    const auth = makeAuth()
+    const direct = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-a')
+    const keepAlive = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-a', true)
+    const other = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-b')
+    const directHandler = direct.config.requestHandler
+    const keepAliveHandler = keepAlive.config.requestHandler
+    const otherHandler = other.config.requestHandler
+    if (
+      !(directHandler instanceof NodeHttpHandler) ||
+      !(keepAliveHandler instanceof NodeHttpHandler) ||
+      !(otherHandler instanceof NodeHttpHandler)
+    ) {
+      throw new TypeError('expected NodeHttpHandler transports')
+    }
+    const directDestroy = spyOn(directHandler, 'destroy')
+    const keepAliveDestroy = spyOn(keepAliveHandler, 'destroy')
+    const otherDestroy = spyOn(otherHandler, 'destroy')
+
+    evictSdkClientsForAccount('account-a')
+
+    expect(directDestroy).toHaveBeenCalledTimes(1)
+    expect(keepAliveDestroy).toHaveBeenCalledTimes(1)
+    expect(otherDestroy).not.toHaveBeenCalled()
+    const rebuilt = createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-a')
+    expect(rebuilt).not.toBe(direct)
+    expect(rebuilt.config.requestHandler).not.toBe(directHandler)
+    expect(
+      createSdkClient(auth, 'us-east-1', undefined, undefined, undefined, 'account-b')
+    ).toBe(other)
+    evictSdkClientsForAccount('never-created')
     clearSdkClientCache()
   })
 })

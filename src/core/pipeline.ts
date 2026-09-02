@@ -14,6 +14,7 @@ import { CANONICAL_OUTPUT_JSON_CONTENT_TYPE } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { KIRO_CONSTANTS } from "../kiro/constants.js";
+import { buildEffortRequestFields } from "../kiro/effort.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   isAccessTokenError,
@@ -52,7 +53,7 @@ import {
 import { createPipelineStreamResponse } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type { RunChatCompletionOptions } from "./pipeline-types.js";
-import { createSdkClient } from "./sdk-client.js";
+import { createSdkClient, mergeModelRequestFields } from "./sdk-client.js";
 import { normalizeStreamFailure } from "./stream-error.js";
 import { AccountUnavailableError } from "./token-refresher.js";
 
@@ -810,15 +811,21 @@ async function executeLoop(
         account.id,
         options.config.sdk_http_keep_alive,
       );
+      // Effort travels in the command input (B7); the SDK client no longer
+      // re-parses and re-serializes the request body to inject it.
+      const wireModel =
+        prepared.conversationState.currentMessage.userInputMessage?.modelId ??
+        prepared.effectiveModel;
+      const additionalModelRequestFields = prepared.effort
+        ? mergeModelRequestFields(
+            prepared.additionalModelRequestFields,
+            buildEffortRequestFields(wireModel, prepared.effort),
+          )
+        : prepared.additionalModelRequestFields;
       const commandInput: unknown = {
         conversationState: prepared.conversationState,
         ...(prepared.profileArn ? { profileArn: prepared.profileArn } : {}),
-        ...(prepared.additionalModelRequestFields
-          ? {
-              additionalModelRequestFields:
-                prepared.additionalModelRequestFields,
-            }
-          : {}),
+        ...(additionalModelRequestFields ? { additionalModelRequestFields } : {}),
       };
       if (!isSdkCommandInput(commandInput)) {
         throw new TypeError("Transformed request is not a valid SDK command input");

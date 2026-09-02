@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 import {
   AccountConcurrentUpdateError,
   AccountManager,
   toAuthDetails
 } from '../src/core/account-manager.js'
+import { clearSdkClientCache, createSdkClient } from '../src/core/sdk-client.js'
 import type { ManagedAccount } from '../src/kiro/types.js'
 import { AccountsDatabase } from '../src/storage/accounts-db.js'
 
@@ -331,6 +333,34 @@ describe('AccountManager selection metrics', () => {
 })
 
 describe('AccountManager reconcileFromDb', () => {
+  test('destroys the SDK transport of an account that disappeared from the database', () => {
+    // Given
+    const [managerDb, externalDb] = createDatabasePair()
+    const stored = managerDb.insertAccount(account('A'))
+    const kept = managerDb.insertAccount(account('B'))
+    const manager = new AccountManager([stored, kept], 'sticky', managerDb)
+    clearSdkClientCache()
+    const removedClient = createSdkClient(toAuthDetails(stored), 'us-east-1', undefined, undefined, undefined, 'A')
+    const keptClient = createSdkClient(toAuthDetails(kept), 'us-east-1', undefined, undefined, undefined, 'B')
+    const removedHandler = removedClient.config.requestHandler
+    const keptHandler = keptClient.config.requestHandler
+    if (!(removedHandler instanceof NodeHttpHandler) || !(keptHandler instanceof NodeHttpHandler)) {
+      throw new TypeError('expected NodeHttpHandler transports')
+    }
+    const removedDestroy = spyOn(removedHandler, 'destroy')
+    const keptDestroy = spyOn(keptHandler, 'destroy')
+    externalDb.removeAccount('A')
+
+    // When
+    manager.reconcileFromDb(managerDb)
+
+    // Then
+    expect(removedDestroy).toHaveBeenCalledTimes(1)
+    expect(keptDestroy).not.toHaveBeenCalled()
+    expect(manager.getAccounts().map(({ id }) => id)).toEqual(['B'])
+    clearSdkClientCache()
+  })
+
   test('makes an externally inserted account visible', () => {
     // Given
     const [managerDb, externalDb] = createDatabasePair()

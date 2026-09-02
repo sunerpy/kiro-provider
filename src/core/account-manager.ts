@@ -7,6 +7,7 @@ import type {
   ManagedAccount
 } from '../kiro/types.js'
 import type { AccountsDatabase, StoredAccount } from '../storage/accounts-db.js'
+import { evictSdkClientsForAccount } from './sdk-client.js'
 
 const MAX_CAS_ATTEMPTS = 4
 
@@ -76,7 +77,7 @@ export class AccountManager {
   getLatestAccount(id: string): StoredAccount | undefined {
     const latest = this.database.getById(id)
     if (!latest) {
-      this.accounts = this.accounts.filter((account) => account.id !== id)
+      this.dropAccount(id)
       return undefined
     }
     const current = this.accounts.find((account) => account.id === id)
@@ -98,6 +99,10 @@ export class AccountManager {
       const current = currentById.get(row.id)
       return current?.generation === row.generation ? current : cloneAccount(row)
     })
+    const survivingIds = new Set(this.accounts.map(({ id }) => id))
+    for (const id of currentById.keys()) {
+      if (!survivingIds.has(id)) evictSdkClientsForAccount(id)
+    }
     if (this.stickyId && !this.accounts.some(({ id }) => id === this.stickyId)) {
       this.stickyId = undefined
     }
@@ -189,7 +194,7 @@ export class AccountManager {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const current = this.database.getById(account.id)
       if (!current) {
-        this.accounts = this.accounts.filter((candidate) => candidate.id !== account.id)
+        this.dropAccount(account.id)
         return undefined
       }
       if ((current.lastSync ?? 0) > usage.lastSync) {
@@ -349,7 +354,7 @@ export class AccountManager {
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const latest = this.database.getById(id)
       if (!latest) {
-        this.accounts = this.accounts.filter((account) => account.id !== id)
+        this.dropAccount(id)
         return undefined
       }
       const updated = patch(latest)
@@ -361,6 +366,13 @@ export class AccountManager {
     }
     this.reconcileFromDb()
     throw new AccountConcurrentUpdateError(id)
+  }
+
+  /** Forgets an account that vanished from the database and releases its SDK transports. */
+  private dropAccount(id: string): void {
+    this.accounts = this.accounts.filter((account) => account.id !== id)
+    if (this.stickyId === id) this.stickyId = undefined
+    evictSdkClientsForAccount(id)
   }
 
   private replaceAccount(account: StoredAccount): void {
