@@ -7,7 +7,7 @@ import type {
 	KiroUsageSnapshot,
 	ManagedAccount,
 } from "../kiro/types.js";
-import { validatedRegions } from "../storage/account-record.js";
+import { rowToManagedAccount } from "../storage/account-record.js";
 
 const DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const WRITE_LOCK_DEADLINE_MS = 30_000;
@@ -97,37 +97,34 @@ function blockingBackoff(attempt: number, remainingMs: number): void {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
 }
 
-/** Returns undefined (after an audit warning) when a region column is invalid. */
+/**
+ * Returns undefined (after an audit warning) when a region column is invalid.
+ *
+ * The OpenCode schema leaves its bookkeeping columns nullable, which the local
+ * schema does not: a NULL is_healthy means healthy and every other NULL counter
+ * means 0. Those defaults are applied here so the column mapping itself is
+ * shared with the local store.
+ */
 function rowToAccount(row: OpenCodeAccountRow): ManagedAccount | undefined {
-	const regions = validatedRegions(row);
-	if (regions === undefined) return undefined;
-	return {
-		id: row.id,
-		email: row.email,
-		authMethod: row.auth_method,
-		region: regions.region,
-		oidcRegion: regions.oidcRegion,
-		clientId: row.client_id ?? undefined,
-		clientSecret: row.client_secret ?? undefined,
-		profileArn: row.profile_arn ?? undefined,
-		startUrl: row.start_url ?? undefined,
-		refreshToken: row.refresh_token,
-		accessToken: row.access_token,
-		expiresAt: row.expires_at,
-		rateLimitResetTime: row.rate_limit_reset ?? 0,
-		isHealthy: (row.is_healthy ?? 1) === 1,
-		unhealthyReason: row.unhealthy_reason ?? undefined,
-		recoveryTime: row.recovery_time ?? undefined,
-		failCount: row.fail_count ?? 0,
-		lastUsed: row.last_used ?? 0,
-		usedCount: row.used_count ?? 0,
-		limitCount: row.limit_count ?? 0,
-		lastSync: row.last_sync ?? 0,
-		overageCount: row.overage_count ?? 0,
-	};
+	return rowToManagedAccount({
+		...row,
+		rate_limit_reset: row.rate_limit_reset ?? 0,
+		is_healthy: row.is_healthy ?? 1,
+		fail_count: row.fail_count ?? 0,
+		last_used: row.last_used ?? 0,
+		used_count: row.used_count ?? 0,
+		limit_count: row.limit_count ?? 0,
+		last_sync: row.last_sync ?? 0,
+		overage_count: row.overage_count ?? 0,
+	});
 }
 
-function sameTokenSnapshot(
+/**
+ * Compare-and-swap identity for a shared row: the credential fields another
+ * OpenCode writer rotates on refresh or re-login. Used by the store before
+ * persisting a refresh and by the runtime to detect a concurrent rotation.
+ */
+export function sameTokenSnapshot(
 	expected: ManagedAccount,
 	current: ManagedAccount,
 ): boolean {

@@ -1,5 +1,8 @@
 import type { OpenCodeAuthStore } from "../auth/opencode-auth-store.js";
-import { openCodePluginDirForDatabase } from "../auth/opencode-auth-store.js";
+import {
+	openCodePluginDirForDatabase,
+	sameTokenSnapshot,
+} from "../auth/opencode-auth-store.js";
 import { withOpenCodeRefreshLock } from "../auth/opencode-refresh-lock.js";
 import { accessTokenExpired, decodeRefreshToken } from "../kiro/auth.js";
 import {
@@ -25,23 +28,6 @@ function cloneAccount(account: ManagedAccount): ManagedAccount {
 
 function assertNever(value: never): never {
 	throw new TypeError(`Unsupported account selection strategy: ${String(value)}`);
-}
-
-function sameTokenSnapshot(
-	left: ManagedAccount,
-	right: ManagedAccount,
-): boolean {
-	return (
-		left.refreshToken === right.refreshToken &&
-		left.accessToken === right.accessToken &&
-		left.expiresAt === right.expiresAt &&
-		left.authMethod === right.authMethod &&
-		left.clientId === right.clientId &&
-		left.clientSecret === right.clientSecret &&
-		left.profileArn === right.profileArn &&
-		left.email === right.email &&
-		left.startUrl === right.startUrl
-	);
 }
 
 export class OpenCodeAccountManager {
