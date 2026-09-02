@@ -1,5 +1,5 @@
 import { decodeRefreshToken, encodeRefreshToken } from '../kiro/auth.js'
-import { isAccessTokenError, isPermanentError, isQuotaExhausted } from '../kiro/health.js'
+import { isQuotaExhausted } from '../kiro/health.js'
 import type {
   AccountSelectionStrategy,
   KiroAuthDetails,
@@ -7,6 +7,7 @@ import type {
   ManagedAccount
 } from '../kiro/types.js'
 import type { AccountsDatabase, StoredAccount } from '../storage/accounts-db.js'
+import { AccountSelector, countSelectable, selectableCandidates } from './account-selection.js'
 import { evictSdkClientsForAccount } from './sdk-client.js'
 
 const MAX_CAS_ATTEMPTS = 4
@@ -18,10 +19,6 @@ export class AccountConcurrentUpdateError extends Error {
     super(`Account ${accountId} changed too frequently to update`)
     this.name = 'AccountConcurrentUpdateError'
   }
-}
-
-function assertNever(value: never): never {
-  throw new TypeError(`Unsupported account selection strategy: ${String(value)}`)
 }
 
 function cloneAccount(account: StoredAccount): StoredAccount {
@@ -51,15 +48,15 @@ export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
 
 export class AccountManager {
   private accounts: StoredAccount[]
-  private stickyId: string | undefined
-  private roundRobinCursor = 0
+  private readonly selector: AccountSelector
 
   constructor(
     accounts: readonly StoredAccount[],
-    private readonly strategy: AccountSelectionStrategy,
+    strategy: AccountSelectionStrategy,
     private readonly database: AccountsDatabase
   ) {
     this.accounts = accounts.map(cloneAccount)
+    this.selector = new AccountSelector(strategy)
   }
 
   getAccountCount(): number {
@@ -103,9 +100,7 @@ export class AccountManager {
     for (const id of currentById.keys()) {
       if (!survivingIds.has(id)) evictSdkClientsForAccount(id)
     }
-    if (this.stickyId && !this.accounts.some(({ id }) => id === this.stickyId)) {
-      this.stickyId = undefined
-    }
+    this.selector.retainSticky(this.accounts)
     return this.getAccounts()
   }
 
@@ -114,15 +109,10 @@ export class AccountManager {
     eligibleAccountIds?: ReadonlySet<string>
   ): StoredAccount | null {
     const now = Date.now()
-    const candidates = this.accounts
-      .filter((account) => this.isSelectable(account, now))
-      .filter((account) => eligibleAccountIds?.has(account.id) ?? true)
-      .sort((left, right) => left.id.localeCompare(right.id))
+    const candidates = selectableCandidates(this.accounts, now, eligibleAccountIds)
     if (candidates.length === 0) return null
 
-    const selected =
-      candidates.find(({ id }) => id === preferredAccountId) ??
-      this.selectCandidate(candidates)
+    const selected = this.selector.pick(candidates, preferredAccountId)
     return (
       this.patchAccount(selected.id, (latest) => ({
         ...latest,
@@ -145,10 +135,7 @@ export class AccountManager {
    * given eligible ids. Used as the failover alternative count.
    */
   countSelectableAccounts(eligibleAccountIds?: ReadonlySet<string>, now = Date.now()): number {
-    return this.accounts.filter(
-      (account) =>
-        this.isSelectable(account, now) && (eligibleAccountIds?.has(account.id) ?? true)
-    ).length
+    return countSelectable(this.accounts, now, eligibleAccountIds)
   }
 
   markRateLimited(account: ManagedAccount, resetTime: number): StoredAccount | undefined {
@@ -284,14 +271,6 @@ export class AccountManager {
     return toAuthDetails(account)
   }
 
-  private isSelectable(account: StoredAccount, now: number): boolean {
-    if (isPermanentError(account.unhealthyReason)) return false
-    if (isQuotaExhausted(account)) return false
-    if (account.rateLimitResetTime > now) return false
-    if (account.isHealthy || isAccessTokenError(account.unhealthyReason)) return true
-    return account.recoveryTime !== undefined && account.recoveryTime <= now
-  }
-
   private isSameLogin(started: StoredAccount, current: StoredAccount): boolean {
     return (
       current.authMethod === started.authMethod &&
@@ -307,36 +286,6 @@ export class AccountManager {
       current.accessToken === started.accessToken &&
       current.expiresAt === started.expiresAt
     )
-  }
-
-  private selectCandidate(candidates: readonly StoredAccount[]): StoredAccount {
-    switch (this.strategy) {
-      case 'sticky': {
-        const sticky = candidates.find(({ id }) => id === this.stickyId)
-        const selected = sticky ?? candidates[0]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        this.stickyId = selected.id
-        return selected
-      }
-      case 'round-robin': {
-        const selected = candidates[this.roundRobinCursor % candidates.length]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        this.roundRobinCursor += 1
-        return selected
-      }
-      case 'lowest-usage': {
-        const selected = [...candidates].sort(
-          (left, right) =>
-            (left.usedCount ?? 0) - (right.usedCount ?? 0) ||
-            (left.lastUsed ?? 0) - (right.lastUsed ?? 0) ||
-            left.id.localeCompare(right.id)
-        )[0]
-        if (!selected) throw new RangeError('Candidate list cannot be empty')
-        return selected
-      }
-      default:
-        return assertNever(this.strategy)
-    }
   }
 
   private patchAccount(id: string, patch: AccountPatch): StoredAccount | undefined {
@@ -360,7 +309,7 @@ export class AccountManager {
   /** Forgets an account that vanished from the database and releases its SDK transports. */
   private dropAccount(id: string): void {
     this.accounts = this.accounts.filter((account) => account.id !== id)
-    if (this.stickyId === id) this.stickyId = undefined
+    this.selector.forget(id)
     evictSdkClientsForAccount(id)
   }
 
