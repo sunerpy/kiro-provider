@@ -15,15 +15,28 @@ export interface ErrorClassificationContext {
 	readonly maxRetries: number;
 	readonly serverErrorCount: number;
 	readonly retryDelayMs: number;
-	readonly forcedRefreshAccountIds: Set<string>;
+	/**
+	 * Accounts already force-refreshed during this request. The classifier only
+	 * reads this set; the caller records `forcedRefreshAccountId` from a
+	 * `refresh-then-retry` decision before acting on it.
+	 */
+	readonly forcedRefreshAccountIds: ReadonlySet<string>;
 }
 
-export type ErrorClassification = {
-	readonly action: "retry" | "switch" | "refresh-then-retry" | "fail";
-	readonly status?: number;
-	readonly retryAfterMs?: number;
-	readonly terminalStatus?: number;
-};
+export type ErrorClassification =
+	| {
+			readonly action: "retry" | "switch" | "fail";
+			readonly status?: number;
+			readonly retryAfterMs?: number;
+			readonly terminalStatus?: number;
+	  }
+	| {
+			/** Force one token refresh for the account, then retry on it. */
+			readonly action: "refresh-then-retry";
+			readonly status: number;
+			/** Account the caller must add to `forcedRefreshAccountIds`. */
+			readonly forcedRefreshAccountId: string;
+	  };
 
 const KIRO_CONTEXT_OVERFLOW_PATTERNS = [
 	/input is too long/i,
@@ -163,6 +176,27 @@ export function isNetworkError(error: NormalizedSdkError): boolean {
 	return NETWORK_ERROR_PATTERN.test(error.message);
 }
 
+/**
+ * 401 or invalid-bearer 403: one forced token refresh per account per request,
+ * then switch accounts or fail. Pure: classifying the same rejection twice
+ * without the caller recording the first decision yields the same decision.
+ */
+function classifyRejectedCredentials(
+	status: 401 | 403,
+	context: ErrorClassificationContext,
+): ErrorClassification {
+	if (!context.forcedRefreshAccountIds.has(context.accountId)) {
+		return {
+			action: "refresh-then-retry",
+			status,
+			forcedRefreshAccountId: context.accountId,
+		};
+	}
+	return context.accountCount > 1
+		? { action: "switch", status }
+		: { action: "fail", status, terminalStatus: status };
+}
+
 export function classifyError(
 	error: NormalizedSdkError,
 	context: ErrorClassificationContext,
@@ -193,26 +227,14 @@ export function classifyError(
 					terminalStatus: isKiroContextOverflowBody(error.message) ? 413 : 400,
 				};
 			case 401:
-				if (!context.forcedRefreshAccountIds.has(context.accountId)) {
-					context.forcedRefreshAccountIds.add(context.accountId);
-					return { action: "refresh-then-retry", status: 401 };
-				}
-				return context.accountCount > 1
-					? { action: "switch", status: 401 }
-					: { action: "fail", status: 401, terminalStatus: 401 };
+				return classifyRejectedCredentials(401, context);
 			case 402:
 				return context.accountCount > 1
 					? { action: "switch", status: 402 }
 					: { action: "fail", status: 402, terminalStatus: 402 };
 		case 403:
 			if (isAccessTokenError(error.message)) {
-				if (!context.forcedRefreshAccountIds.has(context.accountId)) {
-					context.forcedRefreshAccountIds.add(context.accountId);
-					return { action: "refresh-then-retry", status: 403 };
-				}
-				return context.accountCount > 1
-					? { action: "switch", status: 403 }
-					: { action: "fail", status: 403, terminalStatus: 403 };
+				return classifyRejectedCredentials(403, context);
 			}
 			if (context.accountCount > 1) return { action: "switch", status: 403 };
 			return context.retryCount < context.maxRetries

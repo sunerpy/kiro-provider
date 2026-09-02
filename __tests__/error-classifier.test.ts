@@ -111,11 +111,15 @@ describe("normalizeSdkError", () => {
 
 describe("classifyError HTTP decisions", () => {
 	test("force-refreshes a 401 once, then switches or fails explicitly", () => {
+		// The classifier is pure: the caller records the returned account id.
 		const forcedRefreshAccountIds = new Set<string>();
 		const first = classifyError(
 			error({ status: 401 }),
 			context({ accountCount: 2, forcedRefreshAccountIds }),
 		);
+		if (first.action === "refresh-then-retry") {
+			forcedRefreshAccountIds.add(first.forcedRefreshAccountId);
+		}
 		const second = classifyError(
 			error({ status: 401 }),
 			context({ accountCount: 2, forcedRefreshAccountIds }),
@@ -128,7 +132,11 @@ describe("classifyError HTTP decisions", () => {
 			}),
 		);
 
-		expect(first).toEqual({ action: "refresh-then-retry", status: 401 });
+		expect(first).toEqual({
+			action: "refresh-then-retry",
+			status: 401,
+			forcedRefreshAccountId: "account-a",
+		});
 		expect(second).toEqual({ action: "switch", status: 401 });
 		expect(terminal).toEqual({
 			action: "fail",
@@ -152,10 +160,17 @@ describe("classifyError HTTP decisions", () => {
 
 		// When
 		const first = classifyError(invalidBearer, classificationContext);
+		if (first.action === "refresh-then-retry") {
+			forcedRefreshAccountIds.add(first.forcedRefreshAccountId);
+		}
 		const second = classifyError(invalidBearer, classificationContext);
 
 		// Then
-		expect(first).toEqual({ action: "refresh-then-retry", status: 403 });
+		expect(first).toEqual({
+			action: "refresh-then-retry",
+			status: 403,
+			forcedRefreshAccountId: "account-a",
+		});
 		expect(second).toEqual({ action: "switch", status: 403 });
 		expect(forcedRefreshAccountIds).toEqual(new Set(["account-a"]));
 	});

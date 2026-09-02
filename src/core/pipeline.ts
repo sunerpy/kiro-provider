@@ -1089,6 +1089,10 @@ async function applyClassification(
 
   switch (classification.action) {
     case "refresh-then-retry":
+      // Record the forced refresh before attempting it: the classifier reads
+      // this set and turns the next credential rejection on the same account
+      // into a switch or terminal failure, so this path runs once per account.
+      state.forcedRefreshAccountIds.add(classification.forcedRefreshAccountId);
       try {
         await abortable(options.tokenRefresher.forceRefresh(account, signal), signal);
       } catch (refreshError) {
