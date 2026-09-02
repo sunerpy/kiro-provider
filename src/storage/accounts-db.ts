@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { auditLog } from "../core/audit-log.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import {
 	type AccountRow,
@@ -23,6 +24,10 @@ interface TombstoneRow {
 
 interface TableColumnRow {
 	name: string;
+}
+
+interface UserVersionRow {
+	user_version: number;
 }
 
 interface SessionAffinityRow {
@@ -145,115 +150,170 @@ function defaultDatabasePath(): string {
 
 export const ACCOUNTS_DB_PATH = defaultDatabasePath();
 
+function hasColumn(db: Database, table: string, column: string): boolean {
+	return db
+		.query<TableColumnRow, []>(`PRAGMA table_info(${table})`)
+		.all()
+		.some(({ name }) => name === column);
+}
+
+type Migration = (db: Database) => void;
+
+/**
+ * Ordered, idempotent schema migrations. `PRAGMA user_version` records how many
+ * have been applied. Databases created before versioning report 0 and are
+ * brought forward by the same steps: every step uses IF NOT EXISTS or a column
+ * probe, so re-applying it to an already-shaped legacy schema is a no-op, after
+ * which the version is stamped. Append new steps; never reorder or edit old ones.
+ */
+const MIGRATIONS: readonly Migration[] = [
+	// v1: accounts with generation-based CAS, plus removal tombstones.
+	(db) => {
+		db.run(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL, auth_method TEXT NOT NULL,
+        region TEXT NOT NULL, oidc_region TEXT, client_id TEXT, client_secret TEXT,
+        profile_arn TEXT, start_url TEXT, refresh_token TEXT NOT NULL,
+        access_token TEXT NOT NULL, expires_at INTEGER NOT NULL,
+        rate_limit_reset INTEGER DEFAULT 0, is_healthy INTEGER DEFAULT 1,
+        unhealthy_reason TEXT, recovery_time INTEGER, fail_count INTEGER DEFAULT 0,
+        last_used INTEGER DEFAULT 0, used_count INTEGER DEFAULT 0,
+        limit_count INTEGER DEFAULT 0, last_sync INTEGER DEFAULT 0,
+        overage_count INTEGER DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+		db.run(`
+      CREATE TABLE IF NOT EXISTS removed_accounts (
+        id TEXT PRIMARY KEY,
+        removed_at INTEGER NOT NULL,
+        last_generation INTEGER NOT NULL
+      )
+    `);
+	},
+	// v2: generation column for databases created before CAS updates existed.
+	(db) => {
+		if (!hasColumn(db, "accounts", "generation")) {
+			db.run(
+				"ALTER TABLE accounts ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
+			);
+		}
+	},
+	// v3: tenant-isolated session affinity.
+	(db) => {
+		db.run(`
+      CREATE TABLE IF NOT EXISTS session_affinity (
+        key_hash TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS session_affinity_expires_at_idx
+      ON session_affinity (expires_at)
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
+      ON session_affinity (last_seen)
+    `);
+	},
+	// v4: output lineage for implicit conversation continuation.
+	(db) => {
+		db.run(`
+      CREATE TABLE IF NOT EXISTS output_lineage (
+        key_hash TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (key_hash, account_id, conversation_id)
+      )
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS output_lineage_lookup_idx
+      ON output_lineage (key_hash, expires_at)
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS output_lineage_lru_idx
+      ON output_lineage (last_seen, key_hash)
+    `);
+	},
+	// v5: encrypted reasoning replay records.
+	(db) => {
+		db.run(`
+      CREATE TABLE IF NOT EXISTS reasoning_replay (
+        token_hash TEXT PRIMARY KEY,
+        chat_lookup_hash TEXT,
+        fingerprint_hash TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        ciphertext BLOB NOT NULL,
+        auth_tag BLOB NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS reasoning_replay_lookup_idx
+      ON reasoning_replay (tenant_id, model, chat_lookup_hash, expires_at)
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS reasoning_replay_lru_idx
+      ON reasoning_replay (last_seen, token_hash)
+    `);
+		db.run(`
+      CREATE INDEX IF NOT EXISTS reasoning_replay_key_id_idx
+      ON reasoning_replay (key_id, expires_at)
+    `);
+	},
+];
+
+export const ACCOUNTS_DB_SCHEMA_VERSION = MIGRATIONS.length;
+
+function errnoCode(error: unknown): string | undefined {
+	return typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		typeof error.code === "string"
+		? error.code
+		: undefined;
+}
+
 export class AccountsDatabase {
 	private readonly db: Database;
 	private readonly path: string;
 
 	constructor(path: string = ACCOUNTS_DB_PATH) {
 		this.path = path;
-		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+		if (path !== ":memory:") {
+			mkdirSync(dirname(path), { recursive: true });
+			// Create the file 0600 before SQLite opens it: SQLite derives the mode of
+			// the -wal and -shm sidecars from the main database file.
+			closeSync(openSync(path, "a", 0o600));
+		}
 		this.db = new Database(path, { create: true, strict: true });
 		this.tightenPermissions();
 		this.db.run("PRAGMA busy_timeout = 5000");
 		this.db.run("PRAGMA journal_mode = WAL");
-		this.withImmediateTransaction(() => {
-			this.db.run(`
-        CREATE TABLE IF NOT EXISTS accounts (
-          id TEXT PRIMARY KEY, email TEXT NOT NULL, auth_method TEXT NOT NULL,
-          region TEXT NOT NULL, oidc_region TEXT, client_id TEXT, client_secret TEXT,
-          profile_arn TEXT, start_url TEXT, refresh_token TEXT NOT NULL,
-          access_token TEXT NOT NULL, expires_at INTEGER NOT NULL,
-          rate_limit_reset INTEGER DEFAULT 0, is_healthy INTEGER DEFAULT 1,
-          unhealthy_reason TEXT, recovery_time INTEGER, fail_count INTEGER DEFAULT 0,
-          last_used INTEGER DEFAULT 0, used_count INTEGER DEFAULT 0,
-          limit_count INTEGER DEFAULT 0, last_sync INTEGER DEFAULT 0,
-          overage_count INTEGER DEFAULT 0, generation INTEGER NOT NULL DEFAULT 1
-        )
-      `);
-			const hasGeneration = this.db
-				.query<TableColumnRow, []>("PRAGMA table_info(accounts)")
-				.all()
-				.some(({ name }) => name === "generation");
-			if (!hasGeneration) {
-				this.db.run(
-					"ALTER TABLE accounts ADD COLUMN generation INTEGER NOT NULL DEFAULT 1",
-				);
-			}
-				this.db.run(`
-	        CREATE TABLE IF NOT EXISTS removed_accounts (
-	          id TEXT PRIMARY KEY,
-	          removed_at INTEGER NOT NULL,
-	          last_generation INTEGER NOT NULL
-	        )
-	      `);
-				this.db.run(`
-	        CREATE TABLE IF NOT EXISTS session_affinity (
-	          key_hash TEXT PRIMARY KEY,
-	          account_id TEXT NOT NULL,
-	          conversation_id TEXT NOT NULL,
-	          created_at INTEGER NOT NULL,
-	          last_seen INTEGER NOT NULL,
-	          expires_at INTEGER NOT NULL
-	        )
-	      `);
-				this.db.run(`
-	        CREATE INDEX IF NOT EXISTS session_affinity_expires_at_idx
-	        ON session_affinity (expires_at)
-	      `);
-					this.db.run(`
-		        CREATE INDEX IF NOT EXISTS session_affinity_last_seen_idx
-		        ON session_affinity (last_seen)
-		      `);
-					this.db.run(`
-		        CREATE TABLE IF NOT EXISTS output_lineage (
-		          key_hash TEXT NOT NULL,
-		          account_id TEXT NOT NULL,
-		          conversation_id TEXT NOT NULL,
-		          created_at INTEGER NOT NULL,
-		          last_seen INTEGER NOT NULL,
-		          expires_at INTEGER NOT NULL,
-		          PRIMARY KEY (key_hash, account_id, conversation_id)
-		        )
-		      `);
-					this.db.run(`
-		        CREATE INDEX IF NOT EXISTS output_lineage_lookup_idx
-		        ON output_lineage (key_hash, expires_at)
-		      `);
-					this.db.run(`
-		        CREATE INDEX IF NOT EXISTS output_lineage_lru_idx
-		        ON output_lineage (last_seen, key_hash)
-		      `);
-					this.db.run(`
-		        CREATE TABLE IF NOT EXISTS reasoning_replay (
-	          token_hash TEXT PRIMARY KEY,
-	          chat_lookup_hash TEXT,
-	          fingerprint_hash TEXT NOT NULL,
-	          tenant_id TEXT NOT NULL,
-	          account_id TEXT NOT NULL,
-	          conversation_id TEXT NOT NULL,
-	          model TEXT NOT NULL,
-	          key_id TEXT NOT NULL,
-	          nonce BLOB NOT NULL,
-	          ciphertext BLOB NOT NULL,
-	          auth_tag BLOB NOT NULL,
-	          created_at INTEGER NOT NULL,
-	          last_seen INTEGER NOT NULL,
-	          expires_at INTEGER NOT NULL
-	        )
-	      `);
-				this.db.run(`
-	        CREATE INDEX IF NOT EXISTS reasoning_replay_lookup_idx
-	        ON reasoning_replay (tenant_id, model, chat_lookup_hash, expires_at)
-	      `);
-				this.db.run(`
-	        CREATE INDEX IF NOT EXISTS reasoning_replay_lru_idx
-	        ON reasoning_replay (last_seen, token_hash)
-	      `);
-				this.db.run(`
-	        CREATE INDEX IF NOT EXISTS reasoning_replay_key_id_idx
-	        ON reasoning_replay (key_id, expires_at)
-	      `);
-			});
+		this.withImmediateTransaction(() => this.migrate());
+		// Sidecars created by the first write above inherit the main file's mode; this
+		// second pass only matters for pre-existing sidecars left by older versions.
+		this.tightenPermissions();
+	}
+
+	schemaVersion(): number {
+		return (
+			this.db.query<UserVersionRow, []>("PRAGMA user_version").get()
+				?.user_version ?? 0
+		);
 	}
 
 	getAccounts(): StoredAccount[] {
@@ -778,6 +838,13 @@ export class AccountsDatabase {
 		return changes;
 	}
 
+	private migrate(): void {
+		const current = this.schemaVersion();
+		if (current >= ACCOUNTS_DB_SCHEMA_VERSION) return;
+		for (const migration of MIGRATIONS.slice(current)) migration(this.db);
+		this.db.run(`PRAGMA user_version = ${ACCOUNTS_DB_SCHEMA_VERSION}`);
+	}
+
 	private withImmediateTransaction<T>(operation: () => T): T {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
@@ -787,15 +854,26 @@ export class AccountsDatabase {
 		} catch (error) {
 			this.db.exec("ROLLBACK");
 			throw error;
-		} finally {
-			this.tightenPermissions();
 		}
 	}
 
+	/**
+	 * Runs once at open. A chmod failure (foreign ownership, read-only mount,
+	 * non-POSIX filesystem) is reported rather than thrown: the database is
+	 * already usable and the mode is best effort at this point.
+	 */
 	private tightenPermissions(): void {
 		if (this.path === ":memory:") return;
 		for (const path of [this.path, `${this.path}-wal`, `${this.path}-shm`]) {
-			if (existsSync(path)) chmodSync(path, 0o600);
+			if (!existsSync(path)) continue;
+			try {
+				chmodSync(path, 0o600);
+			} catch (error) {
+				auditLog("warn", "accounts_db_chmod_failed", {
+					path,
+					code: errnoCode(error),
+				});
+			}
 		}
 	}
 }
