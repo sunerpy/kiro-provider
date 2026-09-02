@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
+import { auditHash } from "../src/core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineClientFactory,
@@ -2085,33 +2086,57 @@ describe("runChatCompletion projection and terminal errors", () => {
     expect(manager.unhealthy).toEqual([stale.id]);
   });
 
-  test("maps an unexpected token refresh error to an internal OpenAI error", async () => {
+  test("maps an unexpected internal error to a fixed message with an audited request id", async () => {
     // Given
     const refresher = new FakeTokenRefresher();
     refresher.refreshHandler = async () => {
-      throw new RangeError("refresh state is corrupt");
+      throw new RangeError("refresh state is corrupt /home/op/.config/kiro-provider/accounts.db");
     };
+    const consoleError = spyOn(console, "error").mockImplementation(() => undefined);
 
     // When
-    const response = await runChatCompletion({
-      body: REQUEST_BODY,
-      model: "auto",
-      stream: false,
-      config: config(),
-      accountManager: new FakeAccountManager([account("account-a")]),
-      tokenRefresher: refresher,
-      makeClient: () => clientWith(async () => responseFrom([])),
-    });
+    let response: Response;
+    let events: Record<string, unknown>[];
+    try {
+      response = await runChatCompletion({
+        body: REQUEST_BODY,
+        model: "auto",
+        stream: false,
+        config: config(),
+        accountManager: new FakeAccountManager([account("account-a")]),
+        tokenRefresher: refresher,
+        makeClient: () => clientWith(async () => responseFrom([])),
+      });
+      events = consoleError.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((event) => event.event === "pipeline_internal_error");
+    } finally {
+      consoleError.mockRestore();
+    }
 
-    // Then
+    // Then: the client sees a fixed message, a stable code, and a correlation id
     expect(response.status).toBe(500);
-    expect(await errorBody(response)).toEqual({
-      error: {
-        message: "refresh state is corrupt",
-        type: "internal_error",
-        code: "RangeError",
-      },
+    const body = (await response.json()) as {
+      error: { message: string; type: string; code?: string; request_id?: string };
+    };
+    expect(body.error).toEqual({
+      message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+      type: "internal_error",
+      code: "internal_error",
+      request_id: expect.stringMatching(/^req_[0-9a-f-]{36}$/),
     });
+    expect(body.error.message).not.toContain("accounts.db");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      request_id: body.error.request_id,
+      error_type: "RangeError",
+      error_code: "RangeError",
+      error_message_hash: auditHash(
+        "refresh state is corrupt /home/op/.config/kiro-provider/accounts.db",
+      ),
+    });
+    expect(JSON.stringify(events[0])).not.toContain("accounts.db");
   });
 
   test("returns the exact status in a standard OpenAI error envelope", async () => {

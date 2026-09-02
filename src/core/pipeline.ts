@@ -121,6 +121,28 @@ function terminalError(status: number, message: string, code?: string): Response
   return openAiError(status, message, "upstream_error", code);
 }
 
+// Mirrors the server layer's internal-error envelope (src/server/errors.ts on
+// the server branch) so both halves of B16 present one shape to clients.
+export const INTERNAL_ERROR_MESSAGE = "Internal server error";
+
+function newRequestId(): string {
+  return `req_${randomUUID()}`;
+}
+
+function internalErrorResponse(requestId: string): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: `${INTERNAL_ERROR_MESSAGE} (request_id: ${requestId})`,
+        type: "internal_error",
+        code: "internal_error",
+        request_id: requestId,
+      },
+    }),
+    { status: 500, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 // Kept local so this branch compiles standalone; the classifier exports
 // isRetryableServerStatus with the same set and replaces this at integration.
 const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([500, 502, 503, 504]);
@@ -1088,7 +1110,20 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       return openAiError(504, "Request deadline exceeded", "timeout_error", "request_timeout");
     }
     const normalized = normalizeSdkError(error);
-    return openAiError(500, normalized.message, "internal_error", normalized.code);
+    if (normalized.status !== undefined) {
+      // A status-bearing upstream error that escaped the loop keeps its envelope.
+      return openAiError(500, normalized.message, "internal_error", normalized.code);
+    }
+    // B16: never echo arbitrary exception text (paths, ids, SQL) to the client.
+    // The correlation id ties the fixed response to the hashed audit record.
+    const requestId = newRequestId();
+    auditLog("error", "pipeline_internal_error", {
+      request_id: requestId,
+      error_type: error instanceof Error ? error.name : typeof error,
+      error_code: normalized.code,
+      error_message_hash: auditHash(normalized.message),
+    });
+    return internalErrorResponse(requestId);
   } finally {
     if (!streamOwnsResources) {
       releaseAccount?.();
