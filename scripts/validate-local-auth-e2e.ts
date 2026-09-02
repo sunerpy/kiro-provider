@@ -18,9 +18,10 @@ const binaryPath =
 const sourceDbPath =
 	process.env.KIRO_PROVIDER_E2E_SOURCE_DB ??
 	join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? "", ".config"), "opencode", "kiro.db");
-const sdkRoot =
-	process.env.KIRO_PROVIDER_E2E_OPENAI_SDK_DIR ??
-	"/tmp/kiro-provider-rc3.e5Wbxy/sdk";
+const sdkRoot = requireEnvironment(
+	"KIRO_PROVIDER_E2E_OPENAI_SDK_DIR",
+	"the directory whose node_modules/openai holds the OpenAI JavaScript SDK (7.x) used for the Responses turns",
+);
 const keepArtifacts = process.env.KIRO_PROVIDER_E2E_KEEP === "1";
 const staleAccessToken = "kiro-provider-local-auth-e2e-stale-access";
 
@@ -43,6 +44,16 @@ function requireFile(path: string, label: string): void {
 	}
 }
 
+function requireEnvironment(name: string, purpose: string): string {
+	const value = process.env[name];
+	if (value === undefined || value.trim().length === 0) {
+		throw new Error(
+			`${name} is required (no default): set it to ${purpose}`,
+		);
+	}
+	return value;
+}
+
 function childEnvironment(configRoot: string, home: string): NodeJS.ProcessEnv {
 	return {
 		...process.env,
@@ -56,7 +67,7 @@ async function runCommand(
 	env: NodeJS.ProcessEnv,
 	timeoutMs = 30_000,
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
-	const child = Bun.spawn(command, {
+	const child = Bun.spawn([...command], {
 		cwd: process.cwd(),
 		env,
 		stdout: "pipe",
@@ -108,7 +119,7 @@ function selectImportedAccount(databasePath: string): ImportedAccount {
 		if (!selected) {
 			throw new Error("No healthy, non-exhausted imported Kiro account is available");
 		}
-		database.run("DELETE FROM accounts WHERE id <> ?", selected.id);
+		database.run("DELETE FROM accounts WHERE id <> ?", [selected.id]);
 		database.run("DELETE FROM removed_accounts");
 		database.run(
 			`UPDATE accounts
@@ -124,8 +135,7 @@ function selectImportedAccount(databasePath: string): ImportedAccount {
 			     overage_count = 0,
 			     last_sync = 0
 			 WHERE id = ?`,
-			staleAccessToken,
-			selected.id,
+			[staleAccessToken, selected.id],
 		);
 		return selected;
 	} finally {
@@ -175,6 +185,9 @@ async function allocatePort(): Promise<number> {
 	});
 	const port = server.port;
 	server.stop(true);
+	if (port === undefined) {
+		throw new Error("Failed to allocate an ephemeral port");
+	}
 	return port;
 }
 
@@ -352,7 +365,7 @@ async function main(): Promise<void> {
 	const logPath = join(temporaryRoot, "provider.stderr.log");
 	const tracePath = join(temporaryRoot, "provider.open.trace");
 	const apiKey = `sk-e2e-${randomBytes(24).toString("hex")}`;
-	let provider: ReturnType<typeof Bun.spawn> | undefined;
+	let provider: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
 	let providerStderr: Promise<string> | undefined;
 	let providerStdout: Promise<string> | undefined;
 
