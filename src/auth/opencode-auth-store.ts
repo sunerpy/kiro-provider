@@ -7,6 +7,7 @@ import type {
 	KiroUsageSnapshot,
 	ManagedAccount,
 } from "../kiro/types.js";
+import { validatedRegions } from "../storage/account-record.js";
 
 const DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const WRITE_LOCK_DEADLINE_MS = 30_000;
@@ -50,8 +51,8 @@ interface OpenCodeAccountRow {
 	readonly id: string;
 	readonly email: string;
 	readonly auth_method: ManagedAccount["authMethod"];
-	readonly region: ManagedAccount["region"];
-	readonly oidc_region: ManagedAccount["oidcRegion"] | null;
+	readonly region: string;
+	readonly oidc_region: string | null;
 	readonly client_id: string | null;
 	readonly client_secret: string | null;
 	readonly profile_arn: string | null;
@@ -96,13 +97,16 @@ function blockingBackoff(attempt: number, remainingMs: number): void {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
 }
 
-function rowToAccount(row: OpenCodeAccountRow): ManagedAccount {
+/** Returns undefined (after an audit warning) when a region column is invalid. */
+function rowToAccount(row: OpenCodeAccountRow): ManagedAccount | undefined {
+	const regions = validatedRegions(row);
+	if (regions === undefined) return undefined;
 	return {
 		id: row.id,
 		email: row.email,
 		authMethod: row.auth_method,
-		region: row.region,
-		oidcRegion: row.oidc_region ?? undefined,
+		region: regions.region,
+		oidcRegion: regions.oidcRegion,
 		clientId: row.client_id ?? undefined,
 		clientSecret: row.client_secret ?? undefined,
 		profileArn: row.profile_arn ?? undefined,
@@ -179,7 +183,10 @@ export class OpenCodeAuthStore {
 				)
 			`)
 			.all()
-			.map(rowToAccount);
+			.flatMap((row) => {
+				const account = rowToAccount(row);
+				return account === undefined ? [] : [account];
+			});
 	}
 
 	getById(id: string): ManagedAccount | undefined {
@@ -251,6 +258,7 @@ export class OpenCodeAuthStore {
 			const currentRow = this.selectById(id);
 			if (currentRow === undefined) return undefined;
 			const current = rowToAccount(currentRow);
+			if (current === undefined) return undefined;
 			if (!isQuotaExhausted(current)) return current;
 			this.db
 				.query(`
@@ -273,6 +281,7 @@ export class OpenCodeAuthStore {
 			const currentRow = this.selectById(id);
 			if (currentRow === undefined) return undefined;
 			const current = rowToAccount(currentRow);
+			if (current === undefined) return undefined;
 			if ((current.lastSync ?? 0) > usage.lastSync) return current;
 			const wasExhausted = isQuotaExhausted(current);
 			const snapshotExhausted = isQuotaExhausted(usage);
@@ -357,6 +366,7 @@ export class OpenCodeAuthStore {
 			const currentRow = this.selectById(expected.id);
 			if (currentRow === undefined) return undefined;
 			const current = rowToAccount(currentRow);
+			if (current === undefined) return undefined;
 			if (!sameTokenSnapshot(expected, current)) return current;
 
 			this.db

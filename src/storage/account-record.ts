@@ -1,15 +1,56 @@
-import type { ManagedAccount } from '../kiro/types.js'
+import { auditHash, auditLog } from '../core/audit-log.js'
+import { isValidRegion } from '../kiro/constants.js'
+import type { KiroRegion, ManagedAccount } from '../kiro/types.js'
 
 export interface StoredAccount extends ManagedAccount {
   generation: number
+}
+
+/** The region columns as SQLite hands them back: untrusted strings. */
+export interface AccountRegionColumns {
+  readonly id: string
+  readonly region: string
+  readonly oidc_region: string | null
+}
+
+export interface ValidatedRegions {
+  readonly region: KiroRegion
+  readonly oidcRegion: KiroRegion | undefined
+}
+
+/**
+ * Validate persisted region columns before they are interpolated into upstream
+ * hostnames (q.<region>.amazonaws.com, oidc.<region>.amazonaws.com, ...). Rows
+ * written by this process always pass; a tampered or corrupted database must not
+ * be able to redirect credentials to another host. Invalid rows are skipped and
+ * reported once per read.
+ */
+export function validatedRegions(row: AccountRegionColumns): ValidatedRegions | undefined {
+  const invalidColumn = !isValidRegion(row.region)
+    ? 'region'
+    : row.oidc_region !== null && !isValidRegion(row.oidc_region)
+      ? 'oidc_region'
+      : undefined
+  if (invalidColumn !== undefined) {
+    auditLog('warn', 'account_row_invalid_region', {
+      account_hash: auditHash(row.id),
+      column: invalidColumn,
+      value: String(invalidColumn === 'region' ? row.region : row.oidc_region).slice(0, 64)
+    })
+    return undefined
+  }
+  return {
+    region: row.region as KiroRegion,
+    oidcRegion: row.oidc_region === null ? undefined : (row.oidc_region as KiroRegion)
+  }
 }
 
 export interface AccountRow {
   id: string
   email: string
   auth_method: ManagedAccount['authMethod']
-  region: ManagedAccount['region']
-  oidc_region: ManagedAccount['oidcRegion'] | null
+  region: string
+  oidc_region: string | null
   client_id: string | null
   client_secret: string | null
   profile_arn: string | null
@@ -58,13 +99,16 @@ export function accountToRow(account: ManagedAccount, generation: number): Accou
   }
 }
 
-export function rowToAccount(row: AccountRow): StoredAccount {
+/** Returns undefined (after an audit warning) when a region column is invalid. */
+export function rowToAccount(row: AccountRow): StoredAccount | undefined {
+  const regions = validatedRegions(row)
+  if (regions === undefined) return undefined
   return {
     id: row.id,
     email: row.email,
     authMethod: row.auth_method,
-    region: row.region,
-    oidcRegion: row.oidc_region ?? undefined,
+    region: regions.region,
+    oidcRegion: regions.oidcRegion,
     clientId: row.client_id ?? undefined,
     clientSecret: row.client_secret ?? undefined,
     profileArn: row.profile_arn ?? undefined,

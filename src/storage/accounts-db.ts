@@ -265,7 +265,10 @@ export class AccountsDatabase {
         )
       `)
 			.all()
-			.map(rowToAccount);
+			.flatMap((row) => {
+				const account = rowToAccount(row);
+				return account === undefined ? [] : [account];
+			});
 	}
 
 	getById(id: string): StoredAccount | undefined {
@@ -296,6 +299,10 @@ export class AccountsDatabase {
 				Math.max(existing?.generation ?? 0, tombstone?.last_generation ?? 0) +
 				1;
 			const row = accountToRow(account, generation);
+			const stored = rowToAccount(row);
+			if (stored === undefined) {
+				throw new TypeError(`Account ${account.id} has an invalid region and was not stored`);
+			}
 			this.db
 				.query(`
           INSERT OR REPLACE INTO accounts (
@@ -307,7 +314,7 @@ export class AccountsDatabase {
         `)
 				.run(...rowBindings(row));
 			this.clearRemovedAccountInternal(account.id);
-			return rowToAccount(row);
+			return stored;
 		});
 	}
 
