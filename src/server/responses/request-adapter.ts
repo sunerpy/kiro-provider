@@ -461,18 +461,84 @@ function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<unde
   return { ok: true, value: undefined };
 }
 
-function outputFingerprintAfter(
+function isAssistantOutputItem(item: ResponsesInputItem): boolean {
+  return (
+    (isMessageItem(item) && item.role === "assistant") ||
+    isFunctionCallItem(item) ||
+    isCustomToolCallItem(item)
+  );
+}
+
+function isTurnGroupItem(item: ResponsesInputItem): boolean {
+  return isReasoningItem(item) || isAssistantOutputItem(item);
+}
+
+type ReplayGroup = {
+  readonly start: number;
+  readonly end: number;
+  readonly firstOutputIndex: number | undefined;
+};
+
+// A reasoning item belongs to the maximal run of adjacent assistant-output items
+// (reasoning, assistant messages, function/custom tool calls) around it. Every
+// reasoning item in that run describes the same Kiro turn, so the run shares one
+// output fingerprint and resolves to at most one replay envelope.
+function replayGroupAt(
   items: readonly ResponsesInputItem[],
+  reasoningIndex: number,
+): ReplayGroup {
+  let start = reasoningIndex;
+  while (start > 0) {
+    const previous = items[start - 1];
+    if (!previous || !isTurnGroupItem(previous)) break;
+    start -= 1;
+  }
+  let end = reasoningIndex;
+  while (end + 1 < items.length) {
+    const next = items[end + 1];
+    if (!next || !isTurnGroupItem(next)) break;
+    end += 1;
+  }
+  let firstOutputIndex: number | undefined;
+  for (let index = start; index <= end; index += 1) {
+    const item = items[index];
+    if (item && isAssistantOutputItem(item)) {
+      firstOutputIndex = index;
+      break;
+    }
+  }
+  return { start, end, firstOutputIndex };
+}
+
+function replayTokenOf(item: ResponsesReasoningItem): string | undefined {
+  return typeof item.encrypted_content === "string" && item.encrypted_content.startsWith("kr1_")
+    ? item.encrypted_content
+    : undefined;
+}
+
+function groupHasReplayToken(
+  items: readonly ResponsesInputItem[],
+  group: ReplayGroup,
+): boolean {
+  for (let index = group.start; index <= group.end; index += 1) {
+    const item = items[index];
+    if (item && isReasoningItem(item) && replayTokenOf(item) !== undefined) return true;
+  }
+  return false;
+}
+
+function groupOutputFingerprint(
+  items: readonly ResponsesInputItem[],
+  group: ReplayGroup,
   reasoningIndex: number,
 ): ProtocolResult<string> {
   let text = "";
   const toolCalls: Array<{ id: string; name: string; input: string }> = [];
   let outputSeen = false;
-  for (let index = reasoningIndex + 1; index < items.length; index += 1) {
+  for (let index = group.start; index <= group.end; index += 1) {
     const item = items[index];
     if (!item) continue;
     if (isMessageItem(item)) {
-      if (item.role !== "assistant") break;
       const content = mapMessageContent(item.content, `input.${index}.content`);
       if (!content.ok) return content;
       text += textFromParts(content.value);
@@ -495,10 +561,7 @@ function outputFingerprintAfter(
         input: item.input,
       });
       outputSeen = true;
-      continue;
     }
-    if (isReasoningItem(item)) continue;
-    break;
   }
   if (!outputSeen) {
     return protocolFailure(
@@ -711,6 +774,8 @@ export function adaptResponsesRequest(
   }
 
   let executableInputSeen = false;
+  const canonicalIndexByInput = new Map<number, number>();
+  const replayByGroup = new Map<number, { readonly token: string; readonly path: string }>();
   if (typeof request.input === "string") {
     messages.push({
       role: "user",
@@ -727,7 +792,11 @@ export function adaptResponsesRequest(
       if (isReasoningItem(item)) {
         const hasSummary = item.summary !== undefined && item.summary !== null && item.summary.length > 0;
         const hasContent = item.content !== undefined && item.content !== null && item.content.length > 0;
+        const group = replayGroupAt(request.input, index);
         if (item.encrypted_content === undefined || item.encrypted_content === null) {
+          // The provider attaches the replay token to one reasoning item per
+          // turn; the turn's other reasoning items are output metadata only.
+          if (groupHasReplayToken(request.input, group)) continue;
           if (hasSummary || hasContent) {
             return protocolFailure(
               "unsupported_reasoning_plaintext_replay",
@@ -751,17 +820,34 @@ export function adaptResponsesRequest(
             `${path}.encrypted_content`,
           );
         }
-        const fingerprint = outputFingerprintAfter(request.input, index);
+        const existingReplay = replayByGroup.get(group.start);
+        if (existingReplay !== undefined) {
+          if (existingReplay.token === item.encrypted_content) continue;
+          return protocolFailure(
+            "invalid_reasoning_replay",
+            `Reasoning item ${path} carries a different replay token than ${existingReplay.path} for the same assistant turn`,
+            `${path}.encrypted_content`,
+          );
+        }
+        const fingerprint = groupOutputFingerprint(request.input, group, index);
         if (!fingerprint.ok) return fingerprint;
+        const insertBeforeMessage =
+          group.firstOutputIndex !== undefined && group.firstOutputIndex < index
+            ? canonicalIndexByInput.get(group.firstOutputIndex)
+            : messages.length;
+        if (insertBeforeMessage === undefined) {
+          throw new TypeError(`Assistant output for reasoning item ${path} was not projected`);
+        }
         reasoningReplays.push({
           lookup: {
             kind: "responses-token",
             encryptedContent: item.encrypted_content,
           },
           outputFingerprint: fingerprint.value,
-          insertBeforeMessage: messages.length,
+          insertBeforeMessage,
           ...canonicalSource(item, path),
         });
+        replayByGroup.set(group.start, { token: item.encrypted_content, path });
         continue;
       }
       if (isFunctionCallItem(item) || isCustomToolCallItem(item)) {
@@ -784,6 +870,7 @@ export function adaptResponsesRequest(
             path,
           );
         }
+        canonicalIndexByInput.set(index, messages.length);
         messages.push({
           role: "assistant",
           content: [],
@@ -813,6 +900,7 @@ export function adaptResponsesRequest(
         }
         const content = mapMessageContent(item.content, `${path}.content`);
         if (!content.ok) return content;
+        canonicalIndexByInput.set(index, messages.length);
         messages.push({
           role: item.role,
           content: content.value,

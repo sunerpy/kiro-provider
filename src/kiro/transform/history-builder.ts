@@ -145,14 +145,50 @@ function asAssistantResponse(
   return assistant;
 }
 
+function sameReplayContent(
+  left: ResolvedReasoningReplay["content"],
+  right: ResolvedReasoningReplay["content"],
+): boolean {
+  if (left.kind === "reasoning_text" && right.kind === "reasoning_text") {
+    return left.text === right.text && left.signature === right.signature;
+  }
+  if (left.kind === "redacted_content" && right.kind === "redacted_content") {
+    return (
+      left.bytes.byteLength === right.bytes.byteLength &&
+      left.bytes.every((byte, index) => byte === right.bytes[index])
+    );
+  }
+  return false;
+}
+
+function replaysByMessage(
+  resolvedReplays: readonly ResolvedReasoningReplay[],
+): Map<number, ResolvedReasoningReplay> {
+  const replayByMessage = new Map<number, ResolvedReasoningReplay>();
+  for (const replay of resolvedReplays) {
+    const existing = replayByMessage.get(replay.insertBeforeMessage);
+    if (existing === undefined) {
+      replayByMessage.set(replay.insertBeforeMessage, replay);
+      continue;
+    }
+    // Identical envelopes for one assistant message collapse to a single
+    // reasoningContent; distinct envelopes cannot both be projected, so fail
+    // instead of silently dropping one.
+    if (sameReplayContent(existing.content, replay.content)) continue;
+    throw new RequestTransformError(
+      "Multiple distinct reasoning replays target the same assistant message",
+      "invalid_reasoning_replay",
+    );
+  }
+  return replayByMessage;
+}
+
 export function buildHistory(
   messages: readonly CanonicalMessage[],
   resolved: string,
   resolvedReplays: readonly ResolvedReasoningReplay[] = [],
 ): CodeWhispererMessage[] {
-  const replayByMessage = new Map(
-    resolvedReplays.map((replay) => [replay.insertBeforeMessage, replay] as const),
-  );
+  const replayByMessage = replaysByMessage(resolvedReplays);
   const history: CodeWhispererMessage[] = [];
   for (const [index, message] of messages.entries()) {
     if (message.role === "assistant") {
