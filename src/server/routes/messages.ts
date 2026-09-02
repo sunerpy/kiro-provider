@@ -1,17 +1,7 @@
 import type { Config } from "../../config/schema.js";
 import { auditLog } from "../../core/audit-log.js";
-import {
-  type PipelineAccountManager,
-  type PipelineAffinityStore,
-  type PipelineClientFactory,
-  type PipelineModelCapabilities,
-  type PipelineQuotaRechecker,
-  type PipelineReasoningReplayStore,
-  type PipelineTokenRefresher,
-  type RunChatCompletionOptions,
-  runChatCompletion,
-} from "../../core/pipeline.js";
-import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
+import { runChatCompletion } from "../../core/pipeline.js";
+import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { estimateTokens } from "../../kiro/transform/response.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
@@ -24,136 +14,19 @@ import {
   anthropicMessageResponse,
   anthropicSseAdapter,
 } from "../anthropic/response-adapter.js";
-import type {
-  IngressSignals,
-  RequestIdleTimeoutLease,
-} from "../request-lifecycle.js";
+import {
+  anthropicIngressErrors,
+  buildPipelineOptions,
+  createIngress,
+  type RouteDependencies,
+  readJsonBody,
+} from "../ingress.js";
 import {
   anthropicSessionAffinity,
   canonicalSessionLineage,
 } from "../session-affinity.js";
 
-export type MessagesDependencies = {
-  readonly accountManager: PipelineAccountManager;
-  readonly tokenRefresher: PipelineTokenRefresher;
-  readonly quotaRechecker?: PipelineQuotaRechecker;
-  readonly tenantId?: string;
-  readonly affinityStore?: PipelineAffinityStore;
-  readonly reasoningReplayStore?: PipelineReasoningReplayStore;
-  readonly modelCapabilities?: PipelineModelCapabilities;
-  readonly makeClient?: PipelineClientFactory;
-  readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
-  readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
-};
-
-type BodyReadResult =
-  | { readonly ok: true; readonly text: string }
-  | { readonly ok: false; readonly response: Response };
-
-type JsonReadResult =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly response: Response };
-
-class RequestBodyTooLargeError extends Error {
-  readonly name = "RequestBodyTooLargeError";
-
-  constructor(readonly limit: number) {
-    super(`Request body exceeds the ${limit} byte limit`);
-  }
-}
-
-function abortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException("Request deadline exceeded", "TimeoutError");
-}
-
-async function readRequestBody(
-  request: Request,
-  limit: number,
-  signals: IngressSignals,
-): Promise<BodyReadResult> {
-  const reader = request.body?.getReader();
-  if (!reader) return { ok: true, text: "" };
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let rejectAbort: ((reason: Error) => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject;
-  });
-  const onAbort = (): void => {
-    const reason = abortReason(signals.combined);
-    rejectAbort?.(reason);
-    void boundedCleanup(() => reader.cancel(reason));
-  };
-  signals.combined.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    while (true) {
-      if (signals.combined.aborted) throw abortReason(signals.combined);
-      const next = await Promise.race([reader.read(), aborted]);
-      if (signals.combined.aborted) throw abortReason(signals.combined);
-      if (next.done) break;
-      size += next.value.byteLength;
-      if (size > limit) throw new RequestBodyTooLargeError(limit);
-      chunks.push(next.value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return { ok: true, text: new TextDecoder().decode(bytes) };
-  } catch (error) {
-    if (error instanceof RequestBodyTooLargeError) {
-      void boundedCleanup(() => reader.cancel(error));
-      return {
-        ok: false,
-        response: anthropicError(413, error.message, "request_too_large"),
-      };
-    }
-    if (signals.deadline.aborted) {
-      void boundedCleanup(() => reader.cancel(error));
-      return {
-        ok: false,
-        response: anthropicError(504, "Request deadline exceeded", "api_error"),
-      };
-    }
-    if (signals.client.aborted) {
-      void boundedCleanup(() => reader.cancel(error));
-      return {
-        ok: false,
-        response: anthropicError(499, "Client closed request", "api_error"),
-      };
-    }
-    throw error;
-  } finally {
-    signals.combined.removeEventListener("abort", onAbort);
-  }
-}
-
-async function readJsonBody(
-  request: Request,
-  config: Config,
-  signals: IngressSignals,
-): Promise<JsonReadResult> {
-  const body = await readRequestBody(request, config.max_request_body_bytes, signals);
-  if (!body.ok) return body;
-  try {
-    return { ok: true, value: JSON.parse(body.text) };
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
-    return {
-      ok: false,
-      response: anthropicError(
-        400,
-        "Request body must contain valid JSON",
-        "invalid_request_error",
-      ),
-    };
-  }
-}
+export type MessagesDependencies = RouteDependencies;
 
 function pipelineErrorType(status: number): AnthropicErrorType {
   if (status === 429) return "rate_limit_error";
@@ -186,25 +59,6 @@ async function translatePipelineError(response: Response): Promise<Response> {
   return anthropicError(response.status, message, pipelineErrorType(response.status));
 }
 
-function createIngress(request: Request, config: Config): {
-  readonly signals: IngressSignals;
-  readonly finalize: () => void;
-} {
-  const deadlineController = new AbortController();
-  const deadlineTimer = setTimeout(
-    () => deadlineController.abort(new DOMException("Request deadline exceeded", "TimeoutError")),
-    config.request_timeout_ms,
-  );
-  return {
-    signals: {
-      combined: AbortSignal.any([deadlineController.signal, request.signal]),
-      deadline: deadlineController.signal,
-      client: request.signal,
-    },
-    finalize: () => clearTimeout(deadlineTimer),
-  };
-}
-
 function estimateInputTokens(value: unknown): number {
   return Math.max(1, estimateTokens(JSON.stringify(value)));
 }
@@ -215,8 +69,13 @@ export async function handleMessages(
   config: Config,
   dependencies: MessagesDependencies,
 ): Promise<Response> {
-  const ingress = createIngress(request, config);
-  const bodyResult = await readJsonBody(request, config, ingress.signals);
+  const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
+  const bodyResult = await readJsonBody(
+    request,
+    config,
+    ingress.signals,
+    anthropicIngressErrors,
+  );
   if (!bodyResult.ok) {
     ingress.finalize();
     return bodyResult.response;
@@ -244,46 +103,26 @@ export async function handleMessages(
     dependencies.tenantId,
   );
 
-  let lease: RequestIdleTimeoutLease | undefined;
   let streamOwnsRouteResources = false;
-  const routeFinalize = (): void => {
-    runCleanupSteps(
-      ingress.finalize,
-      () => lease?.restore(),
-    );
-  };
-
   try {
-    lease = dependencies.createRequestIdleTimeoutLease?.();
-    lease?.disable();
-    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
-      body: adapted.value.body,
-      model: adapted.value.body.model,
-      stream: adapted.value.source.stream,
-      config,
-      accountManager: dependencies.accountManager,
-      tokenRefresher: dependencies.tokenRefresher,
-      ...(dependencies.quotaRechecker
-        ? { quotaRechecker: dependencies.quotaRechecker }
-        : {}),
-      ...(affinity ? { affinity } : {}),
-      ...(lineage ? { lineage } : {}),
-      ...(dependencies.affinityStore
-        ? { affinityStore: dependencies.affinityStore }
-        : {}),
-      tenantId: dependencies.tenantId,
-      ...(dependencies.reasoningReplayStore
-        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
-        : {}),
-      ...(dependencies.modelCapabilities
-        ? { modelCapabilities: dependencies.modelCapabilities }
-        : {}),
-      deadlineSignal: ingress.signals.combined,
-      ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
-    });
+    ingress.disableIdleTimeout();
+    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
+      buildPipelineOptions({
+        body: adapted.value.body,
+        model: adapted.value.body.model,
+        stream: adapted.value.source.stream,
+        config,
+        dependencies,
+        affinity,
+        lineage,
+        deadlineSignal: ingress.signals.combined,
+      }),
+    );
+    // Re-read the live request signal: a client that left while the pipeline
+    // ran must not receive a body that would keep the account lease busy.
     if (request.signal.aborted && !ingress.signals.deadline.aborted) {
       void boundedCleanup(() => pipelineResponse.body?.cancel());
-      return anthropicError(499, "Client closed request", "api_error");
+      return anthropicIngressErrors.clientClosed();
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
@@ -301,7 +140,7 @@ export async function handleMessages(
         model: adapted.value.body.model,
         inputTokens: estimateInputTokens(adapted.value.body),
         signals: ingress.signals,
-        finalize: routeFinalize,
+        finalize: ingress.finalize,
       });
       streamOwnsRouteResources = true;
       return streaming;
@@ -320,7 +159,7 @@ export async function handleMessages(
     void boundedCleanup(() => pipelineResponse.body?.cancel());
     return anthropicError(502, "Pipeline returned an unsupported response", "api_error");
   } finally {
-    if (!streamOwnsRouteResources) routeFinalize();
+    if (!streamOwnsRouteResources) ingress.finalize();
   }
 }
 
@@ -330,7 +169,12 @@ export async function handleMessageTokenCount(
 ): Promise<Response> {
   const ingress = createIngress(request, config);
   try {
-    const bodyResult = await readJsonBody(request, config, ingress.signals);
+    const bodyResult = await readJsonBody(
+      request,
+      config,
+      ingress.signals,
+      anthropicIngressErrors,
+    );
     if (!bodyResult.ok) return bodyResult.response;
     const adapted = adaptAnthropicMessagesRequest(
       bodyResult.value,
