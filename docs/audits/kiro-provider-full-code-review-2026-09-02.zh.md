@@ -325,3 +325,82 @@
 - 主审对全部 P0 与 P1 高结论回读源码逐条核实；对 A5、A6、A7、A8、B15、B20、B21、B23、B28 等在 Bun 1.3.14 下用探针脚本复现；探针脚本位于 `/tmp` 且已删除。
 - 修订版 2 依据外部复核意见调整了分级、场景范围与修复边界；复核意见确认 `typecheck`、`lint`、`896 pass` 基线，独立复现了 B31 的 6 个类型错误与 B32 的 34 个镜像 URL。
 - 依赖上游 Kiro 行为的结论统一列入第 4 节"待取证清单"，取得证据前不作为实施依据或发布门禁。
+
+## 7. 实施状态（2026-09-02）
+
+本节记录报告中每一项在 `release/hardening-2026-09` 集成分支上的落地情况。验收基线：`make ci`（typecheck、lint、1331 个测试）、`make fmt-check`、`make security`（七项）、`make codex-smoke-security`、`make coverage-gate`（94.84%，门槛 93%）、`make coverage-parity`、`bun run build:binary` 均通过。
+
+### P0 / P1 高
+
+| 条目 | 状态 | 说明 |
+| --- | --- | --- |
+| A5 | 已修复 | `onCompromised` 接入；锁失效时审计、排水、`exit(1)`，由服务管理器重启；stale/update 改为 15s/5s，启动时有界重试 |
+| A6 | 已修复 | 加密 reasoning 的 `output_item.done` 推迟到 `complete()`，与 `response.completed` 携带同一 `encrypted_content` |
+| A1 | 已修复 | 每次尝试独立 `AbortController`；异常结局中止上游；Bun 下 SDK 的 abort 监听在响应开始后失效，新增可中止响应体的 HTTP handler，并用真实回环上游验证 |
+| A7 | 已修复 | Anthropic 编码器延后 text 之后的 reasoning，redacted 前先 `stopText()`，signature 允许后到 |
+| A8 | 已修复 | 每轮仅首个 reasoning item 携带 token；request-adapter 按 assistant 轮次分组比对指纹 |
+| A2 + A3 + A4 | 已修复（原子提交） | 按账户 id 去重、重读最新行、共享刷新自带超时不绑定调用方信号、`isSameLogin` 去掉 refreshToken、刷新失败切换账户并标记健康 |
+
+### P1
+
+| 条目 | 状态 | 说明 |
+| --- | --- | --- |
+| B1、B2 | 已修复 | 按 `error.code`/状态分类；502/503/504 同 500；补 socket 错误码；429 受 `rate_limit_max_retries` 约束 |
+| B3 | 已修复 | `countSelectableAccounts` 计数可选账户；短限流在 deadline 内等待而非 503 |
+| B4 | 已修复 | 非流式按 `normalizeStreamFailure().disposition` 分支，fatal 统一 502 |
+| B5 | 已修复 | 仅结构化 OIDC/Kiro 错误判死；裸 `HTTP_4xx` 视为瞬时 |
+| B6 | 已修复 | 有可用账户时配额复查后台执行 |
+| B7、B8、B9 | 已修复 | `maxAttempts: 1`；effort 合并进 `additionalModelRequestFields`，中间件删除；账户消失时驱逐 transport |
+| B10 | 已修复 | 失败退避窗口内使用 stale 快照；stale-while-revalidate |
+| B11 | 未改动 | `bun:sqlite` 固有限制；范围已在报告中限定为 `opencode-shared`，保留后续评估 |
+| B12 | 已修复（取证后） | 解析 `nextDateReset`；复查时间 `min(max(resetAt, lastSync+interval), lastSync+max(interval, 24h))` |
+| B13 | 已修复 | `linkSync`/`wx` 独占创建，EEXIST 重读 |
+| B14 | 已修复 | 两处 `rowToAccount` 校验 region，非法行跳过并告警 |
+| B15 | 已修复 | `src/server/ingress.ts` 统一 ingress；所有 `reader.cancel` 走 `boundedCleanup` |
+| B16 | 已修复 | 固定文案 + `request_id`；请求体失败分为断开 / 400 / 500 三类 |
+| B17 | 已修复 | Anthropic SSE 改为每次 `pull` 刷一帧 |
+| B18 | 已修复 | 见 A5 |
+| B19 | 已修复 | `development: false`、`maxRequestBodySize`、`error` 回调；SIGTERM/SIGINT 优雅关停（10 秒排水） |
+| B20 | 已修复（取证后） | 从未收到 `input` 且已 stop 的工具调用视为 `{}`；片段无法解析仍判损坏；删除适配层不可达归一化 |
+| B21 | 无需改动（取证后） | Kiro 接受拆分投影；证据记入 PROTOCOL_COMPATIBILITY |
+| B22 | 已修复 | 完成后仍无 signature 以 `invalid_upstream_reasoning` 失败；输入侧拒绝空签名 |
+| B23、B24 | 已修复 | 图片 base64 与 media type 校验为 400 级错误；`tool_result` 缺 `content` 视为 `[]` |
+| B25 | 已修复（取证后） | `anthropic-direct` 回放不再要求绑定；Kiro 400 `Invalid signature` 映射为 400 `invalid_reasoning_signature`，不重试不切换 |
+| B26 | 部分（首步） | 新增 `unknown_upstream_tool` 类型化错误码与审计事件，登记为 fatal；disposition 待生产流量数据 |
+| B27 | 已修复 | `message_delta.usage` 携带真实 `input_tokens` |
+| B28、B30 | 已修复 | 数值边界与 enum；空环境变量视为未设；未知键报错并提示相近键；配置文件权限告警 |
+| B29 | 已修复 | `log_level` 接入 `auditLog` 阈值，新增 `debug` 级 |
+| B31 | 已修复 | `scripts/` 纳入类型检查，6 个类型错误修复 |
+| B32 | 已修复 | 锁文件去镜像 URL（版本与 integrity 不变）；`bunfig.toml` 固定 registry；CI 门禁 |
+| B33 | 已修复 | 安装脚本校验 `SHA256SUMS`；文档化版本固定 |
+| B34 | 已修复 | npm 版本固定；macOS/Windows 二进制冒烟 job；`permissions`；Dependabot；CodeQL |
+| B35 | 已修复 | 首次登录拉取用量取真实邮箱并去重 |
+
+### P2
+
+| 条目 | 状态 | 说明 |
+| --- | --- | --- |
+| C1 | 已完成 | 启用 Biome formatter（2 空格、双引号、分号、尾逗号、100 列），全仓一次性格式化 |
+| C2 | 已完成 | `executeLoop` 拆分为 binding / selection / affinity / attempt / classification 五段 |
+| C3 | 已完成 | `src/protocol/tool-history.ts` 统一三处校验；`sdk-collector` 消费 transformer；非流式工具错误码与 SSE 对齐 |
+| C4 | 已完成 | `platformConfigRoot` 统一路径；`account-selection.ts`、`account-errors.ts` 去重；opencode 运行时补齐计数与驱逐 |
+| C5 | 已完成 | 内部未使用代码删除；`src/index.ts` 导出未动 |
+| C6 | 已完成 | `classifyError` 纯函数化，记账移到 pipeline |
+| C7 | 已完成 | `abortableSleep` 清理计时器 |
+| C8 | 已完成 | `PRAGMA user_version` 有序迁移；权限一次性收紧并容忍 EPERM |
+| C9、C10 | 已完成 | 405 + `Allow`、`HEAD /health`、尾部斜杠、`WWW-Authenticate`、Bearer 大小写不敏感 |
+| C11、C12、C14 | 已完成 | `n: 1`、`none`/`minimal`、tool-only `content: null`、`Retry-After`、Anthropic 402→429 `rate_limit_error`、readiness 分类、legacy affinity 匹配 |
+| C13 | 已完成 | `status`、`logprobs: []`、usage details、`reasoning_summary_part.*`；stop reason 限制已文档化 |
+| C15、C16、C17 | 已完成 | `import --config` 移除、`--force`、`login --help`、并发参数统一、`default_region` enum、Windows 路径与旧位置兜底、OIDC 轮询容错 |
+| C18、C19 | 已完成 | `.gitkeep`、`bunfig.toml`、占位测试、`.oxfmtignore` 注释、`.gitignore`、changelog 尾巴、`build:npm`（实测 `--banner` 会产生第二个 shebang，已一并移除并加构建测试）、`engines.bun >= 1.3.14` |
+| C20、C21 | 已完成 | README/zh 去 RC 叙事、Quickstart 内联配置、Windows 位置、`docs/audits/README.md` 索引；smoke 覆盖 Responses/Messages；security-check 扩展扫描 |
+
+### 待取证项结论
+
+见 [Kiro 协议取证探针（2026-09-02）](kiro-protocol-evidence-probe-2026-09-02.zh.md)。B12、B20、B25 据证据实现，B21 据证据确认无需改动，B26 完成类型化错误码首步。
+
+### 未纳入本次的项
+
+- B11：`bun:sqlite` 同步等待属于运行时固有限制，`opencode-shared` 模式 30 秒上限的缩短留待单独评估。
+- B26 的 disposition 调整：需要生产环境 `upstream_tool_restore_failed` 审计事件的统计数据。
+- C17 中"回放 keyring 丢失时的运维逃生口"：需要新增 CLI 命令与存储 API，留待后续版本。
