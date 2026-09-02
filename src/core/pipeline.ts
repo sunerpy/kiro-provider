@@ -127,6 +127,17 @@ function refreshFailureReason(failure: RefreshFailure): string {
   return code ? `${code}: ${failure.message}` : failure.message;
 }
 
+const INVALID_REASONING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
+
+/**
+ * Kiro rejects a tampered or foreign thinking signature with HTTP 400
+ * `ValidationException: ... Invalid `signature` in `thinking` block`. That is
+ * a client input error, never an account or transient fault.
+ */
+function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
+  return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
+}
+
 function refreshFailureResponse(): CompletionResult {
   return {
     kind: "response",
@@ -240,28 +251,26 @@ function resolveReplayState(
   if (options.body.reasoningReplays.length === 0) {
     return { replays: [] };
   }
-  if (!options.tenantId) {
-    throw new ReasoningReplayError(
-      "Reasoning replay requires an authenticated tenant context",
-      "reasoning_replay_context_required",
-    );
-  }
   let accountId = binding?.accountId;
   let conversationId = binding?.conversationId;
   const replays: ResolvedReasoningReplay[] = [];
   for (const replay of options.body.reasoningReplays) {
     if (replay.lookup.kind === "anthropic-direct") {
-      if (accountId === undefined || conversationId === undefined) {
-        throw new ReasoningReplayError(
-          "Anthropic signed thinking replay requires an existing account/conversation affinity",
-          "reasoning_replay_context_required",
-        );
-      }
+      // Kiro validates replayed thinking signatures itself and accepts a valid
+      // signature in any conversation and on any account (probe evidence,
+      // docs/audits/kiro-protocol-evidence-probe-2026-09-02.zh.md), so the
+      // signed block is forwarded as-is without an affinity requirement.
       replays.push({
         insertBeforeMessage: replay.insertBeforeMessage,
         content: replay.lookup.content,
       });
       continue;
+    }
+    if (!options.tenantId) {
+      throw new ReasoningReplayError(
+        "Reasoning replay requires an authenticated tenant context",
+        "reasoning_replay_context_required",
+      );
     }
     const store = options.reasoningReplayStore;
     if (!store) {
@@ -837,6 +846,17 @@ async function executeLoop(
           if (!options.affinityStore) requestConversationId = undefined;
           continue;
         case "fail":
+          if (isInvalidReasoningSignature(error)) {
+            return {
+              kind: "response",
+              response: openAiError(
+                400,
+                error.message,
+                "invalid_request_error",
+                "invalid_reasoning_signature",
+              ),
+            };
+          }
           if (error.status === 402) {
             persistQuotaExhaustion(options, account);
           }
