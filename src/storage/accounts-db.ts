@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { platformConfigRoot } from "../config/paths.js";
 import { auditLog } from "../core/audit-log.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import {
@@ -141,11 +141,7 @@ function rowToReasoningReplay(row: ReasoningReplayRow): ReasoningReplayRecord {
 }
 
 function defaultDatabasePath(): string {
-	const configRoot =
-		process.platform === "win32"
-			? (process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"))
-			: (process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"));
-	return join(configRoot, "kiro-provider", "accounts.db");
+	return join(platformConfigRoot(), "kiro-provider", "accounts.db");
 }
 
 export const ACCOUNTS_DB_PATH = defaultDatabasePath();

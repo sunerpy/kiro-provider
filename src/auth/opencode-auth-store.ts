@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { platformConfigRoot } from "../config/paths.js";
 import { isQuotaExhausted } from "../kiro/health.js";
 import type {
 	KiroUsageSnapshot,
@@ -147,11 +147,7 @@ function sameTokenSnapshot(
 export function defaultOpenCodeAuthDbPath(
 	env: Record<string, string | undefined> = process.env,
 ): string {
-	const configRoot =
-		process.platform === "win32"
-			? (env.APPDATA ?? join(homedir(), "AppData", "Roaming"))
-			: (env.XDG_CONFIG_HOME ?? join(homedir(), ".config"));
-	return join(configRoot, "opencode", "kiro.db");
+	return join(platformConfigRoot({ env }), "opencode", "kiro.db");
 }
 
 export function openCodePluginDirForDatabase(databasePath: string): string {

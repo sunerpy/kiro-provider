@@ -11,8 +11,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { platformConfigRoot } from "../config/paths.js";
 import type { Config } from "../config/schema.js";
 
 export interface ReasoningReplayKey {
@@ -33,11 +33,7 @@ interface KeyFile {
 }
 
 function defaultKeyPath(): string {
-  const configRoot =
-    process.platform === "win32"
-      ? (process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"))
-      : (process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"));
-  return join(configRoot, "kiro-provider", "reasoning-replay-keys.json");
+  return join(platformConfigRoot(), "kiro-provider", "reasoning-replay-keys.json");
 }
 
 export const REASONING_REPLAY_KEY_PATH = defaultKeyPath();

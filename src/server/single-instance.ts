@@ -5,9 +5,9 @@ import {
 	mkdirSync,
 	openSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
+import { platformConfigRoot } from "../config/paths.js";
 import type { Config } from "../config/schema.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
 
@@ -70,14 +70,7 @@ function errorCode(error: unknown): string | undefined {
 export function defaultInstanceLockPath(
 	options: InstanceLockPathOptions = {},
 ): string {
-	const env = options.env ?? process.env;
-	const platform = options.platform ?? process.platform;
-	const homeDirectory = options.homeDirectory ?? homedir();
-	const configRoot =
-		platform === "win32"
-			? (env.APPDATA ?? join(homeDirectory, "AppData", "Roaming"))
-			: (env.XDG_CONFIG_HOME ?? join(homeDirectory, ".config"));
-	return join(configRoot, "kiro-provider", "service.instance");
+	return join(platformConfigRoot(options), "kiro-provider", "service.instance");
 }
 
 function ensureLockTarget(path: string): void {
