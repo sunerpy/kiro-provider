@@ -24,14 +24,19 @@ function dataUrlImage(url: string, path: string): UnifiedImage {
     throw new RequestTransformError(
       `Image ${path} must use a data URL because Kiro cannot fetch remote image URLs`,
       "unsupported_image_source",
+      path,
     );
   }
   const [header = "", data] = url.split(",", 2);
   if (!data) {
-    throw new RequestTransformError(`Image ${path} contains an invalid data URL`, "invalid_image");
+    throw new RequestTransformError(
+      `Image ${path} contains an invalid data URL`,
+      "invalid_image_data",
+      path,
+    );
   }
   const mediaType = header.split(";")[0]?.replace("data:", "") || "image/jpeg";
-  return { mediaType, data };
+  return { mediaType, data, path };
 }
 
 function canonicalImages(parts: readonly CanonicalContentPart[]): UnifiedImage[] {
@@ -39,7 +44,7 @@ function canonicalImages(parts: readonly CanonicalContentPart[]): UnifiedImage[]
   for (const part of parts) {
     if (part.type !== "image") continue;
     if (part.data !== undefined) {
-      images.push({ mediaType: part.mediaType ?? "image/jpeg", data: part.data });
+      images.push({ mediaType: part.mediaType ?? "image/jpeg", data: part.data, path: part.path });
       continue;
     }
     if (part.url !== undefined) images.push(dataUrlImage(part.url, part.path));
@@ -97,6 +102,7 @@ function asUserInput(message: CanonicalMessage, resolved: string): UserInput {
       throw new RequestTransformError(
         `Message ${message.path} exceeds Kiro's limit of 4 images and 3.75 MB of base64 image data`,
         "too_many_images",
+        message.path,
       );
     }
     userInput.images = converted.images;
