@@ -20,6 +20,9 @@ import {
 	type StoredAccount,
 } from "../storage/accounts-db.js";
 
+/** Email reported by the device-code token endpoint before usage lookup. */
+const PLACEHOLDER_EMAIL = "builder-id@aws.amazon.com";
+
 export type LoginOptions = {
 	readonly startUrl?: string;
 	readonly region?: string;
@@ -42,6 +45,7 @@ export type LoginDependencies = {
 		"getAccounts" | "insertAccount" | "removeAccount" | "close"
 	>;
 	readonly stdout?: (message: string) => void;
+	readonly stderr?: (message: string) => void;
 };
 
 export class ReloginIdentityMismatchError extends Error {
@@ -85,7 +89,10 @@ function normalizedIdentityStartUrl(value: string | undefined): string {
 
 function isSameLoginIdentity(
 	account: StoredAccount,
-	reference: ManagedAccount,
+	reference: Pick<
+		ManagedAccount,
+		"email" | "authMethod" | "startUrl" | "profileArn"
+	>,
 ): boolean {
 	return (
 		normalizedEmail(account.email) === normalizedEmail(reference.email) &&
@@ -120,6 +127,10 @@ function usageAuth(
 	};
 }
 
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export async function runLogin(
 	config: Config,
 	options: LoginOptions = {},
@@ -129,6 +140,7 @@ export async function runLogin(
 	const poll = dependencies.poll ?? pollKiroIDCToken;
 	const fetchUsage = dependencies.fetchUsage ?? fetchUsageLimits;
 	const stdout = dependencies.stdout ?? console.log;
+	const stderr = dependencies.stderr ?? console.error;
 	const replaceAccount = options.replaceAccount;
 	const startUrl = normalizeStartUrl(
 		options.startUrl ?? replaceAccount?.startUrl,
@@ -153,18 +165,36 @@ export async function runLogin(
 		undefined,
 		proxyUrl,
 	);
-	let usage: KiroUsageSnapshot | undefined;
-	let email = token.email;
 	const refreshedAt = Date.now();
-	if (replaceAccount) {
+
+	// The token endpoint only yields a placeholder email. Always ask Kiro for
+	// the authoritative usage snapshot so the real identity is known before the
+	// account ID is derived; a fresh login degrades to the placeholder on
+	// failure, a re-login must verify identity and therefore fails closed.
+	let usage: KiroUsageSnapshot | undefined;
+	try {
 		usage = await fetchUsage(
-			usageAuth(token, region, replaceAccount.profileArn),
+			usageAuth(token, region, replaceAccount?.profileArn),
 			{
 				proxyUrl,
 				timeoutMs: config.quota_recheck_timeout_ms,
 			},
 		);
-		if (!usage.email) {
+	} catch (error) {
+		if (replaceAccount) {
+			throw new Error(
+				`Kiro usage verification failed: ${errorMessage(error)}. No credentials were changed.`,
+				{ cause: error },
+			);
+		}
+		stderr(
+			`Warning: could not fetch Kiro usage to determine the account email (${errorMessage(error)}); storing the placeholder ${token.email}. Run "kiro-provider accounts refresh --all" once the network recovers.`,
+		);
+	}
+
+	let email = token.email;
+	if (replaceAccount) {
+		if (!usage?.email) {
 			throw new Error(
 				"Kiro usage verification did not return an account email. No credentials were changed.",
 			);
@@ -172,45 +202,27 @@ export async function runLogin(
 		email = usage.email;
 		const selectedEmail = normalizedEmail(replaceAccount.email);
 		if (
-			selectedEmail !== "builder-id@aws.amazon.com" &&
+			selectedEmail !== PLACEHOLDER_EMAIL &&
 			selectedEmail !== normalizedEmail(email)
 		) {
 			throw new ReloginIdentityMismatchError(replaceAccount.email, email);
 		}
+	} else if (usage?.email) {
+		email = usage.email;
+	} else if (usage) {
+		stderr(
+			`Warning: Kiro usage did not include an account email; storing the placeholder ${token.email}.`,
+		);
 	}
-	const account: ManagedAccount = {
-		id: replaceAccount?.id ?? accountId(email, token.clientId),
-		email,
-		authMethod: "idc",
-		region,
-		oidcRegion: region,
-		clientId: token.clientId,
-		clientSecret: token.clientSecret,
-		...(startUrl ? { startUrl } : {}),
-		...(replaceAccount?.profileArn
-			? { profileArn: replaceAccount.profileArn }
-			: {}),
-		refreshToken: token.refreshToken,
-		accessToken: token.accessToken,
-		expiresAt: token.expiresAt,
-		rateLimitResetTime:
-			usage && isQuotaExhausted(usage)
-				? refreshedAt + config.quota_recheck_interval_ms
-				: 0,
-		isHealthy: true,
-		failCount: 0,
-		lastUsed: replaceAccount?.lastUsed ?? 0,
-		usedCount: usage?.usedCount ?? replaceAccount?.usedCount ?? 0,
-		limitCount: usage?.limitCount ?? replaceAccount?.limitCount ?? 0,
-		overageCount: usage?.overageCount ?? replaceAccount?.overageCount ?? 0,
-		lastSync: usage ? refreshedAt : (replaceAccount?.lastSync ?? 0),
-	};
+	const identityVerified =
+		usage?.email !== undefined && normalizedEmail(usage.email) !== "";
 
 	const database =
 		dependencies.openDb?.(ACCOUNTS_DB_PATH) ??
 		new AccountsDatabase(ACCOUNTS_DB_PATH);
 	const removedDuplicateIds: string[] = [];
 	let persisted: StoredAccount;
+	let reusedExisting: StoredAccount | undefined;
 	try {
 		const existingAccounts = database.getAccounts();
 		if (
@@ -221,13 +233,57 @@ export async function runLogin(
 				`Account ${replaceAccount.id} was removed while re-login was in progress. No credentials were changed.`,
 			);
 		}
+		// Fresh login: when the identity is verified, an existing row for the
+		// same person (email + auth method + start URL + profile) is updated in
+		// place instead of inserting a second row with a new client ID.
+		const sameIdentity =
+			replaceAccount || !identityVerified
+				? []
+				: existingAccounts.filter((candidate) =>
+						isSameLoginIdentity(candidate, {
+							email,
+							authMethod: "idc",
+							...(startUrl ? { startUrl } : {}),
+						}),
+					);
+		reusedExisting = sameIdentity[0];
+		const previous = replaceAccount ?? reusedExisting;
 		const duplicates = replaceAccount
 			? existingAccounts.filter(
 					(candidate) =>
 						candidate.id !== replaceAccount.id &&
 						isSameLoginIdentity(candidate, replaceAccount),
 				)
-			: [];
+			: sameIdentity.slice(1);
+
+		const account: ManagedAccount = {
+			id: previous?.id ?? accountId(email, token.clientId),
+			email,
+			authMethod: "idc",
+			region,
+			oidcRegion: region,
+			clientId: token.clientId,
+			clientSecret: token.clientSecret,
+			...(startUrl ? { startUrl } : {}),
+			...(replaceAccount?.profileArn
+				? { profileArn: replaceAccount.profileArn }
+				: {}),
+			refreshToken: token.refreshToken,
+			accessToken: token.accessToken,
+			expiresAt: token.expiresAt,
+			rateLimitResetTime:
+				usage && isQuotaExhausted(usage)
+					? refreshedAt + config.quota_recheck_interval_ms
+					: 0,
+			isHealthy: true,
+			failCount: 0,
+			lastUsed: previous?.lastUsed ?? 0,
+			usedCount: usage?.usedCount ?? previous?.usedCount ?? 0,
+			limitCount: usage?.limitCount ?? previous?.limitCount ?? 0,
+			overageCount: usage?.overageCount ?? previous?.overageCount ?? 0,
+			lastSync: usage ? refreshedAt : (previous?.lastSync ?? 0),
+		};
+
 		persisted = database.insertAccount(account);
 		for (const duplicate of duplicates) {
 			database.removeAccount(duplicate.id);
@@ -238,11 +294,15 @@ export async function runLogin(
 	}
 	if (replaceAccount) {
 		stdout(`Re-login successful: ${persisted.email} [${persisted.id}]`);
-		if (removedDuplicateIds.length > 0) {
-			stdout(`Removed ${removedDuplicateIds.length} duplicate account record(s).`);
-		}
+	} else if (reusedExisting) {
+		stdout(
+			`Login successful: ${persisted.email} [${persisted.id}] (updated existing account)`,
+		);
 	} else {
 		stdout(`Login successful: ${persisted.email}`);
+	}
+	if (removedDuplicateIds.length > 0) {
+		stdout(`Removed ${removedDuplicateIds.length} duplicate account record(s).`);
 	}
 	return { account: persisted, removedDuplicateIds };
 }

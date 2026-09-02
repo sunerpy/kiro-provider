@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { platformConfigRoot } from "../config/paths.js";
 import { RegionSchema } from "../kiro/regions.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import type { AccountsDatabase } from "../storage/accounts-db.js";
@@ -35,6 +35,8 @@ type SourceAccount = z.infer<typeof SourceAccountSchema>;
 
 export type ImportAccountsOptions = {
 	readonly from?: string;
+	/** Overwrite local rows even when they are newer than the source row. */
+	readonly force?: boolean;
 };
 
 export type ImportAccountsDependencies = {
@@ -54,9 +56,24 @@ type AccountCandidate =
 
 export function defaultOpenCodeDatabasePath(
 	env: Readonly<Record<string, string | undefined>> = process.env,
+	platform: NodeJS.Platform | string = process.platform,
 ): string {
-	const configHome = env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-	return join(configHome, "opencode", "kiro.db");
+	return join(platformConfigRoot({ env, platform }), "opencode", "kiro.db");
+}
+
+/**
+ * A local row is "newer" when it already carries a later access-token expiry
+ * or a later usage sync than the source row; importing over it would roll
+ * back credentials that kiro-provider has refreshed since the last import.
+ */
+function localCopyIsNewer(
+	local: Pick<ManagedAccount, "expiresAt" | "lastSync">,
+	incoming: Pick<ManagedAccount, "expiresAt" | "lastSync">,
+): boolean {
+	return (
+		local.expiresAt > incoming.expiresAt ||
+		(local.lastSync ?? 0) > (incoming.lastSync ?? 0)
+	);
 }
 
 function optionalText(value: string | null): string | undefined {
@@ -119,6 +136,9 @@ export function runImportAccounts(
 ): ImportAccountsResult {
 	const sourcePath = options.from ?? defaultOpenCodeDatabasePath();
 	const source = new Database(sourcePath, { readonly: true, strict: true });
+	const localById = new Map(
+		dependencies.database.getAccounts().map((account) => [account.id, account]),
+	);
 	let imported = 0;
 	let skipped = 0;
 	try {
@@ -141,6 +161,18 @@ export function runImportAccounts(
 			if (candidate.kind === "skipped") {
 				skipped += 1;
 				dependencies.stdout(`Skipped ${parsed.data.email}: ${candidate.reason}`);
+				continue;
+			}
+			const local = localById.get(candidate.account.id);
+			if (
+				local &&
+				!options.force &&
+				localCopyIsNewer(local, candidate.account)
+			) {
+				skipped += 1;
+				dependencies.stdout(
+					`Skipped ${parsed.data.email}: local copy is newer (use --force to overwrite)`,
+				);
 				continue;
 			}
 			dependencies.database.insertAccount(candidate.account);

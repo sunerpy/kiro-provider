@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 export const CLI_USAGE = `Usage: kiro-provider <command> [options]
 
 Commands:
-	serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
+  serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
       Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>]
       Sign in directly to the provider-owned local auth store.
@@ -13,8 +13,9 @@ Commands:
       Refresh authoritative usage now and renew access tokens when needed.
   accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]
       Re-authenticate one account while preserving its internal account ID.
-  accounts import [--from <path>] [--config <path>]
+  accounts import [--from <path>] [--force]
       Copy OpenCode Kiro accounts once into the provider-owned local store.
+      Rows whose local copy is newer are skipped unless --force is given.
   accounts remove <id|email> [--yes]
       Remove an account from the provider-owned local store and write a tombstone.
 
@@ -54,8 +55,8 @@ type AccountsReloginCommand = {
 };
 type AccountsImportCommand = {
 	readonly kind: "accounts-import";
-	readonly configPath?: string;
 	readonly from?: string;
+	readonly force: boolean;
 };
 type AccountsRemoveCommand = {
 	readonly kind: "accounts-remove";
@@ -94,7 +95,12 @@ function parseServe(args: readonly string[]): ServeCommand | HelpCommand {
 		allowPositionals: false,
 	});
 	if (parsed.values.help) return { kind: "help" };
-	const port = parsed.values.port === undefined ? undefined : Number(parsed.values.port);
+	const port =
+		parsed.values.port === undefined
+			? undefined
+			: /^\d+$/.test(parsed.values.port.trim())
+				? Number(parsed.values.port)
+				: Number.NaN;
 	if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
 		throw new CliUsageError(`Invalid port: ${parsed.values.port}`);
 	}
@@ -107,17 +113,19 @@ function parseServe(args: readonly string[]): ServeCommand | HelpCommand {
 	};
 }
 
-function parseLogin(args: readonly string[]): LoginCommand {
+function parseLogin(args: readonly string[]): LoginCommand | HelpCommand {
 	const parsed = parseArgs({
 		args: [...args],
 		options: {
 			config: { type: "string" },
 			"start-url": { type: "string" },
 			region: { type: "string" },
+			help: { type: "boolean", short: "h" },
 		},
 		strict: true,
 		allowPositionals: false,
 	});
+	if (parsed.values.help) return { kind: "help" };
 	return {
 		kind: "login",
 		...(parsed.values.config ? { configPath: parsed.values.config } : {}),
@@ -133,7 +141,7 @@ function parseImport(args: readonly string[]): AccountsImportCommand | HelpComma
 		args: [...args],
 		options: {
 			from: { type: "string" },
-			config: { type: "string" },
+			force: { type: "boolean" },
 			help: { type: "boolean", short: "h" },
 		},
 		strict: true,
@@ -143,7 +151,7 @@ function parseImport(args: readonly string[]): AccountsImportCommand | HelpComma
 	return {
 		kind: "accounts-import",
 		...(parsed.values.from ? { from: parsed.values.from } : {}),
-		...(parsed.values.config ? { configPath: parsed.values.config } : {}),
+		force: parsed.values.force ?? false,
 	};
 }
 

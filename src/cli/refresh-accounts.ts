@@ -49,7 +49,7 @@ export async function runAccountRefresh(
 			intervalMs: config.quota_recheck_interval_ms,
 			usageRefreshIntervalMs: config.usage_refresh_interval_ms,
 			timeoutMs: config.quota_recheck_timeout_ms,
-			concurrency: config.account_maintenance_concurrency,
+			concurrency: config.quota_recheck_concurrency,
 			proxyUrl: resolveProxyUrl(config),
 			...(dependencies.fetchUsage
 				? { fetchUsage: dependencies.fetchUsage }
