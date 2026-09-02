@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EffortSchema } from "../kiro/regions.js";
+import { EffortSchema, RegionSchema } from "../kiro/regions.js";
 
 export const ApiKeysSchema = z
 	.array(z.string())
@@ -43,8 +43,10 @@ const OptionalPathSchema = z
 	.default(null);
 
 export const ConfigSchema = z.object({
-	host: z.string().default("127.0.0.1"),
-	port: z.number().default(8787),
+	host: z.string().trim().min(1).default("127.0.0.1"),
+	// 0 asks the OS for an ephemeral port (integration tests and the e2e script
+	// rely on it); the `serve --port` flag still rejects 0 for interactive use.
+	port: z.number().int().min(0).max(65_535).default(8787),
 	api_keys: ApiKeysSchema,
 	enable_legacy_chat_completions: z.boolean().default(false),
 	protocol_projection_mode: z
@@ -81,12 +83,17 @@ export const ConfigSchema = z.object({
 		.default(10_000),
 		auth_source: z.enum(["opencode-shared", "local"]).default("local"),
 	opencode_auth_db_path: OptionalPathSchema,
-	default_region: z.string().default("us-east-1"),
+	default_region: RegionSchema.default("us-east-1"),
 	account_selection_strategy: z
 		.enum(["sticky", "round-robin", "lowest-usage"])
 		.default("lowest-usage"),
-	rate_limit_max_retries: z.number().default(3),
-	rate_limit_retry_delay_ms: z.number().default(5000),
+	rate_limit_max_retries: z.number().int().min(0).max(100).default(3),
+	rate_limit_retry_delay_ms: z
+		.number()
+		.int()
+		.min(1)
+		.max(2_147_483_647)
+		.default(5000),
 	quota_recheck_interval_ms: z
 		.number()
 		.int()
@@ -125,7 +132,7 @@ export const ConfigSchema = z.object({
 			.min(1_000)
 			.max(2_147_483_647)
 			.default(900_000),
-		max_request_iterations: z.number().default(20),
+		max_request_iterations: z.number().int().min(1).max(1_000).default(20),
 	request_timeout_ms: z
 		.number()
 		.int()
@@ -138,8 +145,18 @@ export const ConfigSchema = z.object({
 		.min(1)
 		.max(2_147_483_647)
 		.default(60000),
-	max_request_body_bytes: z.number().default(10485760),
-	token_expiry_buffer_ms: z.number().default(300000),
+	max_request_body_bytes: z
+		.number()
+		.int()
+		.min(1)
+		.max(2_147_483_647)
+		.default(10485760),
+	token_expiry_buffer_ms: z
+		.number()
+		.int()
+		.min(1)
+		.max(2_147_483_647)
+		.default(300000),
 	session_affinity_ttl_ms: z
 		.number()
 		.int()
@@ -163,7 +180,7 @@ export const ConfigSchema = z.object({
 		.default(10_000),
 	effort: EffortSchema.nullable().default(null),
 	auto_effort_mapping: z.boolean().default(true),
-	log_level: z.string().default("info"),
+	log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),
 	test_upstream_endpoint: z.string().url().optional(),
 });
 
