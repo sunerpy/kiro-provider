@@ -25,6 +25,12 @@ const STREAM_FAILURES = {
     disposition: "fatal",
     message: "Upstream returned an incomplete tool call",
   },
+  // Responses-only model-output failures (see STREAM_ERROR_CONTRACT.md). They
+  // stay fatal until real traffic shows whether a replacement attempt helps.
+  invalid_custom_tool_input: {
+    disposition: "fatal",
+    message: "Upstream returned invalid custom tool input",
+  },
   invalid_upstream_reasoning: {
     disposition: "fatal",
     message: "Upstream returned invalid reasoning metadata",
@@ -36,6 +42,10 @@ const STREAM_FAILURES = {
   missing_upstream_stream: {
     disposition: "fatal",
     message: "Upstream response did not include a stream",
+  },
+  unknown_upstream_tool: {
+    disposition: "fatal",
+    message: "Upstream returned an undeclared tool call",
   },
   unsupported_upstream_event: {
     disposition: "fatal",
