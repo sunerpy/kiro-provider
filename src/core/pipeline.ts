@@ -164,6 +164,47 @@ function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
   return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
 }
 
+function isSelectableNow(account: ManagedAccount, now: number): boolean {
+  return account.isHealthy && account.rateLimitResetTime <= now && !isQuotaExhausted(account);
+}
+
+/**
+ * Alternatives the classifier may switch to: accounts that are eligible for
+ * the model AND selectable right now. Counting rate-limited or unhealthy
+ * accounts here made a single-usable-account deployment switch away from its
+ * only account and end in 503 instead of honoring retry-after (B3).
+ */
+function countSelectableAlternatives(
+  options: RunChatCompletionOptions,
+  accounts: readonly ManagedAccount[],
+  eligibleAccountIds: ReadonlySet<string>,
+): number {
+  const counted = options.accountManager.countSelectableAccounts?.(eligibleAccountIds);
+  if (counted !== undefined) return counted;
+  const now = Date.now();
+  return accounts.filter(
+    (account) => eligibleAccountIds.has(account.id) && isSelectableNow(account, now),
+  ).length;
+}
+
+/** Shortest wait until a currently rate-limited, otherwise usable candidate frees up. */
+function shortestRateLimitWaitMs(
+  candidates: readonly ManagedAccount[],
+  eligibleAccountIds: ReadonlySet<string>,
+  now: number,
+): number | undefined {
+  const waits = candidates
+    .filter(
+      (account) =>
+        eligibleAccountIds.has(account.id) &&
+        account.isHealthy &&
+        !isQuotaExhausted(account) &&
+        account.rateLimitResetTime > now,
+    )
+    .map((account) => account.rateLimitResetTime - now);
+  return waits.length === 0 ? undefined : Math.min(...waits);
+}
+
 function refreshFailureResponse(): CompletionResult {
   return {
     kind: "response",
@@ -422,6 +463,7 @@ async function executeLoop(
   let lastRefreshFailure: RefreshFailure | undefined;
   let retryCount = 0;
   let iterations = 0;
+  const startedAt = Date.now();
   let binding =
     options.affinity && options.affinityStore
       ? options.affinityStore.getSessionAffinity(options.affinity.keyHash)
@@ -598,6 +640,23 @@ async function executeLoop(
         (cachedEligible !== undefined && eligibleAccountIds.size === 0)
       ) {
         return modelAvailabilityError(options);
+      }
+      // Every remaining candidate is merely rate-limited: wait for the
+      // shortest reset if it fits the request deadline instead of failing.
+      const waitNow = Date.now();
+      const waitMs = shortestRateLimitWaitMs(
+        requestCandidates,
+        new Set(cachedEligible ?? candidateAccountIds),
+        waitNow,
+      );
+      const remainingMs = options.config.request_timeout_ms - (waitNow - startedAt);
+      if (waitMs !== undefined && waitMs <= remainingMs) {
+        auditLog("info", "rate_limit_wait_for_reset", {
+          wait_ms: waitMs,
+          remaining_ms: remainingMs,
+        });
+        await abortableSleep(waitMs + 1, signal);
+        continue;
       }
       return {
         kind: "response",
@@ -844,7 +903,10 @@ async function executeLoop(
       if (retryableServerStatus) serverErrors.set(account.id, serverErrorCount);
       const classification = classifyError(error, {
         accountId: account.id,
-        accountCount: Math.max(1, eligibleAccountIds.size),
+        accountCount: Math.max(
+          1,
+          countSelectableAlternatives(options, accounts, eligibleAccountIds),
+        ),
         retryCount,
         maxRetries: options.config.rate_limit_max_retries,
         serverErrorCount,

@@ -314,6 +314,20 @@ describe('AccountManager selection metrics', () => {
     // When / Then
     expect(manager.getMinWaitTime()).toBe(0)
   })
+
+  test('counts only selectable accounts among the eligible ids', () => {
+    // Given
+    const [db] = createDatabasePair()
+    const healthy = db.insertAccount(account('A'))
+    const throttled = db.insertAccount(account('B', { rateLimitResetTime: Date.now() + 60_000 }))
+    const exhausted = db.insertAccount(account('C', { usedCount: 100, limitCount: 100 }))
+    const manager = new AccountManager([healthy, throttled, exhausted], 'sticky', db)
+
+    // When / Then
+    expect(manager.countSelectableAccounts()).toBe(1)
+    expect(manager.countSelectableAccounts(new Set(['A', 'B']))).toBe(1)
+    expect(manager.countSelectableAccounts(new Set(['B', 'C']))).toBe(0)
+  })
 })
 
 describe('AccountManager reconcileFromDb', () => {

@@ -134,6 +134,18 @@ export class AccountManager {
     return this.selectHealthyAccount()
   }
 
+  /**
+   * Number of accounts selectHealthyAccount could return right now (healthy,
+   * not rate-limited, not quota-exhausted), optionally restricted to the
+   * given eligible ids. Used as the failover alternative count.
+   */
+  countSelectableAccounts(eligibleAccountIds?: ReadonlySet<string>, now = Date.now()): number {
+    return this.accounts.filter(
+      (account) =>
+        this.isSelectable(account, now) && (eligibleAccountIds?.has(account.id) ?? true)
+    ).length
+  }
+
   markRateLimited(account: ManagedAccount, resetTime: number): StoredAccount | undefined {
     return this.patchAccount(account.id, (latest) => ({
       ...latest,
