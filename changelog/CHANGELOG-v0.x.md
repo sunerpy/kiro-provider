@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/sunerpy/kiro-provider/compare/v0.6.0...v0.7.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove the opencode-shared authentication mode
+* remove the opencode-shared authentication mode ([#25](https://github.com/sunerpy/kiro-provider/issues/25))
+* `auth_source: "opencode-shared"` is no longer supported. Run `kiro-provider accounts import` once and set `auth_source` to `"local"` (or delete the key). `opencode_auth_db_path` is deprecated and ignored.
+
+### Features
+
+* remove the opencode-shared authentication mode ([8e5ede8](https://github.com/sunerpy/kiro-provider/commit/8e5ede897da1c8afe793f84c3354f0b86f6da286))
+* remove the opencode-shared authentication mode ([18135ce](https://github.com/sunerpy/kiro-provider/commit/18135ce1794edb191169884d007cdc6aab7ea0fd))
+* remove the opencode-shared authentication mode ([#25](https://github.com/sunerpy/kiro-provider/issues/25)) ([8e5ede8](https://github.com/sunerpy/kiro-provider/commit/8e5ede897da1c8afe793f84c3354f0b86f6da286))
+
 ## [0.6.0](https://github.com/sunerpy/kiro-provider/compare/v0.5.1...v0.6.0) (2026-09-02)
 
 
