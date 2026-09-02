@@ -1,6 +1,7 @@
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
 import { resolveInlineDocument } from "../../kiro/transform/document-handler.js";
 import { RequestTransformError } from "../../kiro/transform/errors.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -12,6 +13,7 @@ import {
   textFromParts,
 } from "../../protocol/canonical.js";
 import {
+  allowedKeysValidator,
   type ProtocolResult,
   protocolFailure,
 } from "../protocol/adaptation.js";
@@ -111,25 +113,7 @@ const REASONING_ITEM_KEYS = new Set([
   "encrypted_content",
 ]);
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateAllowedKeys(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  allowed: ReadonlySet<string>,
-): ProtocolResult<undefined> {
-  for (const key of Object.keys(value)) {
-    if (allowed.has(key)) continue;
-    return protocolFailure(
-      "unsupported_parameter",
-      `Responses field ${path}.${key} is not supported`,
-      `${path}.${key}`,
-    );
-  }
-  return { ok: true, value: undefined };
-}
+const validateAllowedKeys = allowedKeysValidator("Responses field");
 
 function canonicalSource(
   value: Readonly<Record<string, unknown>>,
@@ -190,10 +174,6 @@ function isAdditionalToolsItem(
 
 function isReasoningItem(item: ResponsesInputItem): item is ResponsesReasoningItem {
   return item.type === "reasoning";
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
 }
 
 function mapContentParts(

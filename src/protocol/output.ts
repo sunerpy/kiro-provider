@@ -1,3 +1,5 @@
+import { isRecord } from "./adapter-utils.js";
+
 export const CANONICAL_OUTPUT_VERSION = 1 as const;
 export const CANONICAL_OUTPUT_JSON_MEDIA_TYPE =
   "application/x-kiro-provider-output+json";
@@ -82,10 +84,6 @@ export type CanonicalOutputEvent =
       readonly finishReason: "stop" | "tool_calls";
       readonly usage: CanonicalOutputUsage;
     });
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function hasOnlyKeys(
   value: Readonly<Record<string, unknown>>,

@@ -1,4 +1,5 @@
 import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
@@ -10,8 +11,10 @@ import {
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import type { ChatCompletionRequest } from "../request-schema.js";
 import {
+  allowedKeysValidator,
   type ProtocolResult,
   protocolFailure,
 } from "./adaptation.js";
@@ -68,29 +71,7 @@ const UNSUPPORTED_CHAT_FIELDS = [
 
 type ChatMessage = ChatCompletionRequest["messages"][number];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function validateAllowedKeys(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  allowed: ReadonlySet<string>,
-): ProtocolResult<undefined> {
-  for (const key of Object.keys(value)) {
-    if (allowed.has(key)) continue;
-    return protocolFailure(
-      "unsupported_parameter",
-      `Chat field ${path}.${key} is not supported`,
-      `${path}.${key}`,
-    );
-  }
-  return { ok: true, value: undefined };
-}
-
-function textPart(text: string, path: string): CanonicalTextPart {
-  return { type: "text", text, path };
-}
+const validateAllowedKeys = allowedKeysValidator("Chat field");
 
 function mapContent(
   content: ChatMessage["content"],
@@ -360,41 +341,28 @@ function validateHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): ProtocolResult<undefined> {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, { readonly name: string; readonly index: number }>();
-  const outputs = new Set<string>();
-  for (const [messageIndex, message] of messages.entries()) {
-    for (const call of message.toolCalls) {
-      if (!declarations.has(call.name)) {
-        return protocolFailure(
-          "missing_tool_declaration",
-          `Tool call ${call.id} references ${call.name} without an exact tool declaration`,
-          call.path,
-        );
-      }
-      if (calls.has(call.id)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Duplicate tool call id ${call.id}`,
-          call.path,
-        );
-      }
-      calls.set(call.id, { name: call.name, index: messageIndex });
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const call = calls.get(part.toolCallId);
-      if (!call || call.index >= messageIndex || outputs.has(part.toolCallId)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Tool result ${part.toolCallId} has no earlier unique matching call`,
-          part.path,
-        );
-      }
-      outputs.add(part.toolCallId);
-    }
+  const violation = findToolHistoryViolation(messages, tools);
+  if (!violation) return { ok: true, value: undefined };
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      return protocolFailure(
+        violation.code,
+        `Tool call ${violation.callId} references ${violation.toolName} without an exact tool declaration`,
+        violation.path,
+      );
+    case "duplicate_tool_call":
+      return protocolFailure(
+        violation.code,
+        `Duplicate tool call id ${violation.callId}`,
+        violation.path,
+      );
+    case "orphan_tool_result":
+      return protocolFailure(
+        violation.code,
+        `Tool result ${violation.toolCallId} has no earlier unique matching call`,
+        violation.path,
+      );
   }
-  return { ok: true, value: undefined };
 }
 
 export function chatToCanonical(

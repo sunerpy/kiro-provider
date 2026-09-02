@@ -1,3 +1,4 @@
+import { auditHash, auditLog } from "../../core/audit-log.js";
 import { canonicalFingerprint } from "../../protocol/canonical.js";
 import type {
   ResponsesAdditionalToolsItem,
@@ -70,6 +71,33 @@ export type BridgeFailure = {
   /** Wire name of the upstream tool call that failed restoration, for hashed audit fields. */
   readonly toolName?: string;
 };
+
+/** Public error surfaced to clients when restoring an upstream tool call fails. */
+export type ToolRestoreFailure = {
+  readonly code: string;
+  readonly message: string;
+};
+
+/**
+ * Map a `restoreCalls` failure to its public error code and record the
+ * `upstream_tool_restore_failed` audit event. Shared by the SSE adapter
+ * (`response.failed`) and the non-stream route (HTTP 502) so both paths emit
+ * the same codes. Model-output tool failures keep a fatal disposition for now;
+ * the typed codes exist so real traffic can be observed before any retry policy
+ * is decided. `unknown_tool_alias` is internal and surfaces as
+ * `unknown_upstream_tool`; the raw tool name is only ever logged hashed.
+ */
+export function reportToolRestoreFailure(failure: BridgeFailure): ToolRestoreFailure {
+  const code = failure.code === "unknown_tool_alias" ? "unknown_upstream_tool" : failure.code;
+  auditLog("warn", "upstream_tool_restore_failed", {
+    protocol: "responses",
+    error_code: code,
+    error_disposition: "fatal",
+    bridge_code: failure.code,
+    ...(failure.toolName !== undefined ? { tool_name_hash: auditHash(failure.toolName) } : {}),
+  });
+  return { code, message: failure.message };
+}
 
 type BridgeBuildFailure = {
   readonly ok: false;

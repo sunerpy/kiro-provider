@@ -1142,13 +1142,17 @@ describe("POST /v1/responses", () => {
       model: MODEL,
       input: "run tools",
       stream: false,
-      tools: [{ type: "custom", name: "exec" }],
+      tools: [
+        { type: "function", name: "plain", parameters: { type: "object" } },
+        { type: "custom", name: "exec" },
+      ],
     });
     const body: unknown = await response.json();
 
+    // Non-stream restore failures carry the same typed code as the SSE path.
     expect(response.status).toBe(502);
     expect(body).toMatchObject({
-      error: { code: "upstream_protocol_error" },
+      error: { type: "upstream_error", code: "invalid_custom_tool_input" },
     });
     expect(body).not.toHaveProperty("output");
   });
