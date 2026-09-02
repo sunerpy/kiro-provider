@@ -543,7 +543,11 @@ describe("runChatCompletion success paths", () => {
     expect(completion?.text).toBe("answer");
     expect(completion?.reasoning?.text).toBe("reason");
     expect(completion?.finishReason).toBe("stop");
-    expect(sendSignal).toBe(controller.signal);
+    // The send signal is a per-attempt composite that follows the ingress signal.
+    expect(sendSignal).toBeInstanceOf(AbortSignal);
+    expect(sendSignal?.aborted).toBe(false);
+    controller.abort();
+    expect(sendSignal?.aborted).toBe(true);
     expect(refresher.refreshSignals).toEqual([controller.signal]);
   });
 
@@ -1256,8 +1260,9 @@ describe("runChatCompletion cancellation", () => {
     controller.abort();
     const response = await pending;
 
-    // Then
-    expect(capturedSignal).toBe(controller.signal);
+    // Then: the per-attempt send signal fires together with the ingress signal
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal).not.toBe(controller.signal);
     expect(response.status).toBe(504);
     expect((await errorBody(response)).error.type).toBe("timeout_error");
   });

@@ -20,6 +20,11 @@ export interface PipelineStreamResult {
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
+  /**
+   * Aborts the upstream HTTP request behind sdkResponse. Invoked for every
+   * abnormal terminal outcome; never for a normal completion.
+   */
+  readonly abortUpstream?: (reason?: unknown) => void;
 }
 
 class StreamIdleTimeoutError extends Error {
@@ -117,6 +122,11 @@ export function createPipelineStreamResponse(
       () => {
         if (outcome === "normal-complete") streamController?.close();
         else if (outcome !== "consumer-cancel") streamController?.error(reason);
+      },
+      () => {
+        // Destroy the upstream socket before the account lease is released so
+        // the next request on this account never overlaps a still-open stream.
+        if (outcome !== "normal-complete") result.abortUpstream?.(reason);
       },
       finalize,
     );

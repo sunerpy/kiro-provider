@@ -79,6 +79,8 @@ type CompletionResult =
       readonly fingerprintOutput?: SdkOutputFingerprint;
       readonly captureOutput?: SdkOutputCaptureHandler;
       readonly releaseAccount: () => void;
+      /** Aborts the upstream HTTP request of this attempt; idempotent. */
+      readonly abortUpstream: (reason?: unknown) => void;
     };
 
 interface ReplayState {
@@ -720,8 +722,18 @@ async function executeLoop(
         throw new TypeError("Transformed request is not a valid SDK command input");
       }
       const command = new GenerateAssistantResponseCommand(commandInput);
+      // Each attempt owns an AbortController so the upstream socket can be
+      // destroyed on idle timeout, consumer cancel, or a failed collection
+      // even though the ingress signal itself never fires (A1).
+      const attempt = new AbortController();
+      const abortUpstream = (reason?: unknown): void => {
+        if (!attempt.signal.aborted) attempt.abort(reason);
+      };
       upstreamStarted = true;
-      const sdkResponse = await abortable(client.send(command, { abortSignal: signal }), signal);
+      const sdkResponse = await abortable(
+        client.send(command, { abortSignal: AbortSignal.any([signal, attempt.signal]) }),
+        signal,
+      );
       const captureOptions = reasoningCaptureOptions(
         options,
         account.id,
@@ -736,15 +748,22 @@ async function executeLoop(
           conversationId: prepared.conversationId,
           ...captureOptions,
           releaseAccount,
+          abortUpstream,
         };
       }
-      const completion = await collectSdkResponse(
-        sdkResponse,
-        options.model,
-        prepared.conversationId,
-        signal,
-        captureOptions,
-      );
+      let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
+      try {
+        completion = await collectSdkResponse(
+          sdkResponse,
+          options.model,
+          prepared.conversationId,
+          signal,
+          captureOptions,
+        );
+      } catch (collectError) {
+        abortUpstream(collectError);
+        throw collectError;
+      }
       if (signal.aborted) throw abortReason(signal);
       return {
         kind: "response",

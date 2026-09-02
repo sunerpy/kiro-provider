@@ -75,18 +75,81 @@ export function buildClientConfig(
   }
 }
 
+type HandleArguments = Parameters<NodeHttpHandler['handle']>
+
+interface DestroyableBody {
+  readonly destroyed?: boolean
+  destroy(): unknown
+  on(event: 'error', listener: (error: unknown) => void): unknown
+  once(event: 'close', listener: () => void): unknown
+}
+
+function isDestroyableBody(value: unknown): value is DestroyableBody {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'destroy') === 'function' &&
+    typeof Reflect.get(value, 'on') === 'function' &&
+    typeof Reflect.get(value, 'once') === 'function'
+  )
+}
+
+function isEventTargetSignal(value: unknown): value is AbortSignal {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'addEventListener') === 'function' &&
+    typeof Reflect.get(value, 'aborted') === 'boolean'
+  )
+}
+
+/**
+ * Re-arms abort on the streamed response body. NodeHttpHandler only destroys
+ * the request while the listener it registered on the ClientRequest is alive,
+ * and Bun emits ClientRequest "close" as soon as the response starts, so an
+ * abort that fires while an event-stream body is still open never reaches the
+ * socket. Destroying the IncomingMessage closes the upstream connection and
+ * rejects any pending event-stream read (A1).
+ */
+function bindBodyAbort(body: unknown, signal: unknown): void {
+  if (!isDestroyableBody(body) || !isEventTargetSignal(signal)) return
+  const onAbort = (): void => {
+    if (body.destroyed) return
+    // Bun emits "aborted" on a destroyed IncomingMessage; never let it escape.
+    body.on('error', () => undefined)
+    body.destroy()
+  }
+  if (signal.aborted) {
+    onAbort()
+    return
+  }
+  signal.addEventListener('abort', onAbort, { once: true })
+  body.once('close', () => signal.removeEventListener('abort', onAbort))
+}
+
+export class AbortableBodyHttpHandler extends NodeHttpHandler {
+  override async handle(
+    request: HandleArguments[0],
+    options?: HandleArguments[1]
+  ): ReturnType<NodeHttpHandler['handle']> {
+    const result = await super.handle(request, options)
+    bindBodyAbort(result.response.body, options?.abortSignal)
+    return result
+  }
+}
+
 function createRequestHandler(proxyUrl: string | undefined, keepAlive: boolean): NodeHttpHandler {
   if (proxyUrl) {
     const proxyAgent = new HttpsProxyAgent(proxyUrl, {
       keepAlive,
       maxSockets: SDK_MAX_SOCKETS
     })
-    return new NodeHttpHandler({
+    return new AbortableBodyHttpHandler({
       httpAgent: proxyAgent,
       httpsAgent: proxyAgent
     })
   }
-  return new NodeHttpHandler({
+  return new AbortableBodyHttpHandler({
     httpAgent: new HttpAgent({ keepAlive, maxSockets: SDK_MAX_SOCKETS }),
     httpsAgent: new HttpsAgent({ keepAlive, maxSockets: SDK_MAX_SOCKETS })
   })
