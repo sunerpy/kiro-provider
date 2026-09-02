@@ -6,6 +6,7 @@ import {
 	toDeadReason,
 } from "../kiro/health.js";
 import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
+import { errorFields, errorReason } from "./account-errors.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
@@ -58,33 +59,7 @@ function unrefTimer(timer: TimerHandle): void {
 	}
 }
 
-function errorReason(error: unknown): string {
-	const code =
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string"
-			? error.code
-			: undefined;
-	const message = error instanceof Error ? error.message : String(error);
-	return code ? `${code}: ${message}` : message;
-}
 
-function errorFields(
-	error: unknown,
-): Readonly<Record<string, string | number | boolean | null | undefined>> {
-	const code =
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string"
-			? error.code
-			: undefined;
-	return {
-		error_name: error instanceof Error ? error.name : "UnknownError",
-		error_code: code,
-	};
-}
 
 export class AccountMaintenanceService implements PipelineAccountMaintenance {
 	private initialTimer: ReturnType<typeof setTimeout> | undefined;

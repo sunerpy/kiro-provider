@@ -14,6 +14,7 @@ import {
 	isKiroUsageAuthenticationError,
 	KiroUsageError,
 } from "../kiro/usage-client.js";
+import { errorFields as baseErrorFields, errorReason } from "./account-errors.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import { abortable, abortReason } from "./pipeline-runtime.js";
 
@@ -167,17 +168,6 @@ function exhaustedRecheckAt(
 	return Math.min(Math.max(resetAt, intervalRecheckAt), latestRecheckAt);
 }
 
-function errorReason(error: unknown): string {
-	const code =
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string"
-			? error.code
-			: undefined;
-	const message = error instanceof Error ? error.message : String(error);
-	return code ? `${code}: ${message}` : message;
-}
 
 function errorFields(
 	error: unknown,
@@ -189,17 +179,7 @@ function errorFields(
 			error_code: error.upstreamCode,
 		};
 	}
-	const code =
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string"
-			? error.code
-			: undefined;
-	return {
-		error_name: error instanceof Error ? error.name : "UnknownError",
-		error_code: code,
-	};
+	return baseErrorFields(error);
 }
 
 function usageCounts(account: ManagedAccount): {

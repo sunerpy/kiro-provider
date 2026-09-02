@@ -3,6 +3,7 @@ import { isRefreshTokenDead, toDeadReason } from '../kiro/health.js'
 import { refreshAccessToken } from '../kiro/token.js'
 import type { KiroAuthDetails, ManagedAccount } from '../kiro/types.js'
 import type { StoredAccount } from '../storage/accounts-db.js'
+import { errorReason } from './account-errors.js'
 import type { AccountManager } from './account-manager.js'
 import { abortable } from './pipeline-runtime.js'
 
@@ -16,14 +17,6 @@ export class AccountUnavailableError extends Error {
   }
 }
 
-function errorReason(error: unknown): string {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
-      ? error.code
-      : undefined
-  const message = error instanceof Error ? error.message : String(error)
-  return code ? `${code}: ${message}` : message
-}
 
 function sameTokenSnapshot(left: ManagedAccount, right: ManagedAccount): boolean {
   return (

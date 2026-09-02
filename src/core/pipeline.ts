@@ -57,6 +57,7 @@ import type { PipelineAffinityBinding, RunChatCompletionOptions } from "./pipeli
 import { createSdkClient, mergeModelRequestFields } from "./sdk-client.js";
 import { normalizeStreamFailure } from "./stream-error.js";
 import { AccountUnavailableError } from "./token-refresher.js";
+import { isSelectableAccount } from "./account-selection.js";
 
 export type {
   PipelineAccountManager,
@@ -162,9 +163,6 @@ function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
   return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
 }
 
-function isSelectableNow(account: ManagedAccount, now: number): boolean {
-  return account.isHealthy && account.rateLimitResetTime <= now && !isQuotaExhausted(account);
-}
 
 /**
  * Alternatives the classifier may switch to: accounts that are eligible for
@@ -181,7 +179,7 @@ function countSelectableAlternatives(
   if (counted !== undefined) return counted;
   const now = Date.now();
   return accounts.filter(
-    (account) => eligibleAccountIds.has(account.id) && isSelectableNow(account, now),
+    (account) => eligibleAccountIds.has(account.id) && isSelectableAccount(account, now),
   ).length;
 }
 
@@ -634,7 +632,7 @@ async function scheduleQuotaRecheck(
   const recheckAccounts = options.accountManager.reconcileFromDb();
   const recheckNow = Date.now();
   const usableCandidate = recheckAccounts.some((account) =>
-    isSelectableNow(account, recheckNow),
+    isSelectableAccount(account, recheckNow),
   );
   const lockedAccountExhausted =
     state.replayLocked &&
