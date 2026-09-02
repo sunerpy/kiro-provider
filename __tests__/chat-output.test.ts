@@ -109,6 +109,34 @@ describe("canonical Chat output", () => {
     });
   });
 
+  test("returns null content for a tool-call-only completion like OpenAI", async () => {
+    const toolOnly: CanonicalCompletion = {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      conversationId: "conversation-1",
+      model: "claude-sonnet-5",
+      createdAt: 1_700_000_000,
+      text: "",
+      toolCalls: [{ id: "call-1", name: "lookup", input: "{}" }],
+      finishReason: "tool_calls",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    };
+    const emptyText: CanonicalCompletion = { ...toolOnly, toolCalls: [], finishReason: "stop" };
+
+    const toolPayload = (await canonicalCompletionToChat(toolOnly).json()) as {
+      choices: Array<{ message: Record<string, unknown> }>;
+    };
+    const emptyPayload = (await canonicalCompletionToChat(emptyText).json()) as {
+      choices: Array<{ message: Record<string, unknown> }>;
+    };
+
+    expect(toolPayload.choices[0]?.message).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call-1", type: "function" }],
+    });
+    expect(emptyPayload.choices[0]?.message).toMatchObject({ role: "assistant", content: "" });
+  });
+
   test("encodes every canonical delta and one separate usage frame", async () => {
     let finalized = 0;
     const events: CanonicalOutputEvent[] = [

@@ -52,7 +52,6 @@ const UNSUPPORTED_CHAT_FIELDS = [
   "temperature",
   "top_p",
   "response_format",
-  "n",
   "stop",
   "seed",
   "presence_penalty",
@@ -348,6 +347,15 @@ function mapTools(
   return { ok: true, value: mapped };
 }
 
+/** Mirrors the Responses adapter: `minimal` lowers to `low`, `none` requests no effort. */
+function normalizedChatEffort(
+  effort: ChatCompletionRequest["reasoning_effort"],
+): CanonicalRequest["reasoningEffort"] | undefined {
+  if (effort === undefined || effort === "none") return undefined;
+  if (effort === "minimal") return "low";
+  return effort;
+}
+
 function validateHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
@@ -425,6 +433,13 @@ export function chatToCanonical(
         field,
       );
     }
+  }
+  if (request.n !== undefined && request.n !== 1) {
+    return protocolFailure(
+      "unsupported_parameter",
+      "Chat parameter n must be 1 because the Kiro upstream returns a single choice",
+      "n",
+    );
   }
   if (request.store === true) {
     return protocolFailure(
@@ -584,6 +599,7 @@ export function chatToCanonical(
     );
   }
 
+  const reasoningEffort = normalizedChatEffort(request.reasoning_effort);
   return {
     ok: true,
     value: {
@@ -595,11 +611,9 @@ export function chatToCanonical(
       messages,
       tools: toolsResult.value,
       toolChoice: request.tool_choice === "none" ? "none" : "auto",
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       ...(request.reasoning_effort !== undefined
-        ? {
-            reasoningEffort: request.reasoning_effort,
-            requestedReasoningEffort: request.reasoning_effort,
-          }
+        ? { requestedReasoningEffort: request.reasoning_effort }
         : {}),
       ...(outputTokenLimit !== undefined ? { outputTokenLimit } : {}),
       reasoningReplays,

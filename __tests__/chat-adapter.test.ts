@@ -624,3 +624,36 @@ describe("Chat protocol-fidelity validation", () => {
 		});
 	});
 });
+
+describe("Chat OpenAI-compatibility parameters", () => {
+	test("accepts n=1 and rejects any other choice count", () => {
+		const base = {
+			model: "gpt-5.6-sol",
+			messages: [{ role: "user", content: "hello" }],
+		};
+
+		expect(adapt({ ...base, n: 1 })).toMatchObject({ ok: true });
+		expect(adapt({ ...base, n: 2 })).toMatchObject({
+			ok: false,
+			code: "unsupported_parameter",
+			param: "n",
+		});
+	});
+
+	test.each([
+		["none", undefined],
+		["minimal", "low"],
+		["low", "low"],
+		["xhigh", "xhigh"],
+	] as const)("maps reasoning_effort %s like the Responses adapter", (requested, mapped) => {
+		const result = adapt({
+			model: "gpt-5.6-sol",
+			reasoning_effort: requested,
+			messages: [{ role: "user", content: "hello" }],
+		});
+
+		if (!result.ok) throw new TypeError("Expected the effort to be accepted");
+		expect(result.value.reasoningEffort).toBe(mapped);
+		expect(result.value.requestedReasoningEffort).toBe(requested);
+	});
+});
