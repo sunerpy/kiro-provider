@@ -1,5 +1,4 @@
 import { createInterface } from "node:readline/promises";
-import { defaultOpenCodeAuthDbPath } from "../auth/opencode-auth-store.js";
 import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
 import { setAuditLogLevel } from "../core/audit-log.js";
@@ -65,11 +64,6 @@ async function confirmOnTerminal(message: string): Promise<boolean> {
   }
 }
 
-function sharedAuthError(config: Config): string | undefined {
-  if (config.auth_source !== "opencode-shared") return undefined;
-  return `auth_source=opencode-shared uses ${config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath()} as the authentication authority. Run "opencode auth login" and select Kiro, or set auth_source to "local" before using provider-owned account commands.`;
-}
-
 const defaultDependencies: CliDependencies = {
   loadConfig,
   startServer,
@@ -114,11 +108,6 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
         ...(command.configPath ? { configPath: command.configPath } : {}),
       });
       setAuditLogLevel(config.log_level);
-      const authError = sharedAuthError(config);
-      if (authError) {
-        dependencies.stderr(authError);
-        return 1;
-      }
       await dependencies.runLogin(config, {
         ...(command.startUrl ? { startUrl: command.startUrl } : {}),
         ...(command.region ? { region: command.region } : {}),
@@ -141,11 +130,6 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
         ...(command.configPath ? { configPath: command.configPath } : {}),
       });
       setAuditLogLevel(config.log_level);
-      const authError = sharedAuthError(config);
-      if (authError) {
-        dependencies.stderr(authError);
-        return 1;
-      }
       const summary = await dependencies.runAccountRefresh(config, {
         ...(command.identifier ? { identifier: command.identifier } : {}),
       });
@@ -159,11 +143,6 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
         ...(command.configPath ? { configPath: command.configPath } : {}),
       });
       setAuditLogLevel(config.log_level);
-      const authError = sharedAuthError(config);
-      if (authError) {
-        dependencies.stderr(authError);
-        return 1;
-      }
       const database = dependencies.openDb(ACCOUNTS_DB_PATH);
       let selected: StoredAccount;
       try {

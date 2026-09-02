@@ -123,13 +123,14 @@ The same database also stores provider state:
   permissions on POSIX only; Windows has no equivalent mode bits, so the
   per-user profile directory provides the isolation there.
 
-The explicit `auth_source: "opencode-shared"` compatibility mode retains the
-older live OpenCode integration. It validates the v0.20.7 account/tombstone
-schema, honors the compatible per-account refresh lock, and never migrates the
-OpenCode-owned database. Because that mode reintroduces cross-process
-credential ownership, it is not the default after a one-time import. This is a
-protocol-compatible implementation, not a copy of the GPL plugin's private
-package internals; the provider remains MIT.
+The former `auth_source: "opencode-shared"` compatibility mode (a live reader of
+OpenCode's database with a shared per-account refresh lock) was removed in
+0.7.0. It reintroduced cross-process credential ownership and, because
+`bun:sqlite` is synchronous, could block the whole event loop for up to 30
+seconds while another process held the write lock. The one-time
+`kiro-provider accounts import` command is the supported migration path; a
+configuration that still selects the removed mode fails at startup with that
+instruction.
 
 The selected account manager layers strategy (`sticky` / `round-robin` /
 `lowest-usage`) and failover on top of the configured authority. When a
@@ -216,11 +217,6 @@ check only.
 - `src/server/anthropic/` — Anthropic request, response, and SSE adapters.
 - `src/server/session-affinity.ts` — standard-field affinity extraction and
   tenant-isolated hashing.
-- `src/auth/opencode-auth-store.ts`,
-  `src/auth/opencode-refresh-lock.ts` — shared OpenCode schema, transactions,
-  refresh-lock compatibility, and persistence.
-- `src/core/opencode-auth-runtime.ts` — live reconciliation, selection, health,
-  and refresh orchestration for shared mode.
 - `src/core/account-manager.ts` — selection strategy and failover.
 - `src/core/pipeline-runtime.ts` — session/account keyed queue ownership.
 - `src/core/sdk-client.ts` — mutable-token SDK cache and configurable HTTP transports.

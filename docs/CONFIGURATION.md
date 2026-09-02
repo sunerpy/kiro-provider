@@ -35,8 +35,8 @@ Configuration is validated once at startup; any violation raises a `ConfigLoadEr
 | `enable_legacy_chat_completions` | `boolean`, default `false`                                            | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | Exposes `POST /v1/chat/completions`. Keep this disabled unless a client cannot use Responses or Anthropic Messages. Environment values accept `true`, `false`, `1`, `0`.                                                                                                             |
 | `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is an instruction-only migration mode scheduled for removal in v0.7.0.                                                                                              |
 | `session_affinity_mode`      | `"explicit-only" \| "legacy-initial-input"`, default `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` never derives a logical session from prompt text. `legacy-initial-input` temporarily restores the old initial-input fingerprint heuristics without changing model-visible content.                                                                                     |
-| `auth_source`                | `"local" \| "opencode-shared"`, default `"local"`                        | `KIRO_PROVIDER_AUTH_SOURCE`                | Authentication authority. Local mode makes the provider-owned account database authoritative and supports one-time OpenCode import or direct login. Shared mode remains an explicit compatibility option.                                                                          |
-| `opencode_auth_db_path`      | `string \| null`, default `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | Optional override for the shared OpenCode Kiro database. `null` uses `$XDG_CONFIG_HOME/opencode/kiro.db` or `~/.config/opencode/kiro.db`. Ignored by local mode.                                                                                                                       |
+| `auth_source` | `"local"`, default `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | Authentication authority. Only the provider-owned local store is supported. The former `"opencode-shared"` value is rejected at startup with a migration message since 0.7.0: copy accounts once with `kiro-provider accounts import`, then use `"local"`. |
+| `opencode_auth_db_path` | `string \| null`, default `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | Deprecated since 0.7.0 and ignored (a warning is logged); scheduled for removal. Point `kiro-provider accounts import --from <path>` at a non-default OpenCode database instead. |
 | `proxy_url`                  | `string \| null`, default `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | Optional global HTTP(S) proxy for **all** upstream egress (model requests, token refresh, quota probes, device-code login). Must be a valid `http://` or `https://` URL; other schemes (e.g. SOCKS) are rejected. `null` or an empty string means direct connections.                 |
 | `default_region`             | AWS region enum (`RegionSchema`), default `"us-east-1"`                    | `KIRO_PROVIDER_DEFAULT_REGION`             | Region used by `login` and for accounts without a profile ARN override. Must be one of the regions listed in `src/kiro/regions.ts` (for example `us-east-1`, `eu-west-1`, `ap-northeast-1`); unknown regions are rejected at startup.                                                    |
 | `sdk_http_keep_alive`        | `boolean`, default `false`                                                | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | Controls Kiro model-call sockets only. The transport object stays cached in either mode; an SDK client is reused only while its access token is unchanged and is rebuilt immediately after token rotation. `false` uses fresh direct/proxy SDK sockets; `true` opts into pooling after deployment-specific validation. Token refresh and device login keep their independent transport policy. |
@@ -157,11 +157,12 @@ Continuing to use the same imported account through an independently running
 OpenCode plugin can race token rotation; re-import only as an intentional
 operator action.
 
-`auth_source: "opencode-shared"` remains available for compatibility. It reads
-OpenCode's live database, validates the v0.20.7 account/tombstone schema,
-honors the compatible refresh lock, and never runs provider migrations against
-that database. This mode intentionally reintroduces cross-process ownership and
-is not required for the default deployment.
+The former `auth_source: "opencode-shared"` mode, which read OpenCode's live
+database and shared its refresh lock, was removed in 0.7.0. A configuration
+that still selects it fails at startup with a migration message: run
+`kiro-provider accounts import [--from <path>]` once, then set `auth_source`
+to `"local"` or delete the key. `opencode_auth_db_path` is ignored and only
+logs a deprecation warning until it is removed.
 
 ## Proxy
 

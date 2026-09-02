@@ -56,7 +56,10 @@ export const ConfigSchema = z.object({
   model_catalog_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(900_000),
   model_catalog_stale_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   model_catalog_request_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(10_000),
-  auth_source: z.enum(["opencode-shared", "local"]).default("local"),
+  // "opencode-shared" is accepted by the schema only so loadConfig can raise the
+  // migration error; the mode itself was removed in 0.7.0.
+  auth_source: z.enum(["local", "opencode-shared"]).default("local"),
+  // Deprecated since 0.7.0 and ignored; kept for one release so existing files parse.
   opencode_auth_db_path: OptionalPathSchema,
   default_region: RegionSchema.default("us-east-1"),
   account_selection_strategy: z

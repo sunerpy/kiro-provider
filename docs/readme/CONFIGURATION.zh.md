@@ -35,8 +35,8 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
 | `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
 | `session_affinity_mode`     | `"explicit-only" \| "legacy-initial-input"`，默认 `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` 绝不从提示词推导逻辑会话；`legacy-initial-input` 临时恢复旧版初始输入指纹，但不会改变模型可见内容。                                                                                  |
-| `auth_source`                | `"local" \| "opencode-shared"`，默认 `"local"`                        | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。本地模式以 provider 自有账号库为权威，支持一次性导入 OpenCode 凭证或直接登录；共享模式仅作为显式兼容选项。                                                                             |
-| `opencode_auth_db_path`      | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | OpenCode Kiro 共享数据库的可选覆盖路径。`null` 使用 `$XDG_CONFIG_HOME/opencode/kiro.db` 或 `~/.config/opencode/kiro.db`；本地模式忽略此字段。                                                      |
+| `auth_source` | `"local"`，默认 `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | 认证事实源。仅支持 provider 自有本地库。原有的 `"opencode-shared"` 取值自 0.7.0 起会在启动时被拒绝并给出迁移提示：先用 `kiro-provider accounts import` 导入一次，再改用 `"local"`。 |
+| `opencode_auth_db_path` | `string \| null`，默认 `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | 0.7.0 起弃用并忽略（记录一条告警），后续版本移除。需要非默认 OpenCode 数据库时改用 `kiro-provider accounts import --from <path>`。 |
 | `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、额度探测、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。 |
 | `default_region`             | AWS 区域枚举（`RegionSchema`），默认 `"us-east-1"`                      | `KIRO_PROVIDER_DEFAULT_REGION`             | `login` 使用的区域，以及没有单独 profile ARN 覆盖的账号所使用的区域。必须是 `src/kiro/regions.ts` 中列出的区域之一（如 `us-east-1`、`eu-west-1`、`ap-northeast-1`）；未知区域在启动时被拒绝。       |
 | `sdk_http_keep_alive`       | `boolean`，默认 `false`                                               | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | 只控制 Kiro 模型调用 socket。两种模式都会缓存 transport 对象；SDK 客户端只在 access token 未变化时复用，token 轮换后立即重建。`false` 使用新的直连/代理 SDK socket，`true` 在部署验证后启用池化。令牌刷新与设备登录保持各自独立的传输策略。       |
@@ -143,9 +143,11 @@ kiro-provider accounts remove <id|email>
 的 OpenCode 插件使用同一账号可能产生 token 轮换竞争；再次导入应是明确的
 运维动作，而不是运行期同步方式。
 
-`auth_source: "opencode-shared"` 仍保留为兼容选项：它实时读取 OpenCode
-数据库、校验 v0.20.7 账号/墓碑 schema、遵守兼容刷新锁，且绝不对该数据库
-执行 provider 迁移。该模式会重新引入跨进程所有权，默认部署不需要它。
+原有的 `auth_source: "opencode-shared"` 模式（实时读取 OpenCode 数据库并共享
+其刷新锁）已在 0.7.0 移除。仍选择该值的配置会在启动时报错并给出迁移提示：
+先执行一次 `kiro-provider accounts import [--from <path>]`，再把 `auth_source`
+改为 `"local"` 或删除该键。`opencode_auth_db_path` 会被忽略，只记录一条弃用
+告警，直至后续版本移除。
 
 ## 代理
 

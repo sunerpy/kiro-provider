@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { runLogin } from "../src/cli/login.js";
 import { CLI_USAGE, type CliDependencies, main, parseCliArgs } from "../src/cli/main.js";
-import { loadConfig } from "../src/config/loader.js";
+import {
+  ConfigLoadError,
+  loadConfig,
+  OPENCODE_SHARED_REMOVED_MESSAGE,
+} from "../src/config/loader.js";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type { AccountRefreshSummary } from "../src/core/quota-rechecker.js";
 import type { ManagedAccount } from "../src/kiro/types.js";
@@ -522,24 +526,21 @@ describe("main", () => {
     ]);
   });
 
-  test("rejects local login when OpenCode owns shared authentication", async () => {
+  test("refuses to run when the removed opencode-shared mode is configured", async () => {
     const harness = createHarness();
     const dependencies: CliDependencies = {
       ...harness.deps,
-      loadConfig: () =>
-        ConfigSchema.parse({
-          api_keys: ["sk-test"],
-          auth_source: "opencode-shared",
-          opencode_auth_db_path: "/tmp/opencode/kiro.db",
-        }),
+      loadConfig: () => {
+        throw new ConfigLoadError(OPENCODE_SHARED_REMOVED_MESSAGE);
+      },
     };
 
     const exitCode = await main(["login"], dependencies);
 
     expect(exitCode).toBe(1);
     expect(harness.logins).toHaveLength(0);
-    expect(harness.stderr.join("\n")).toContain("opencode auth login");
-    expect(harness.stderr.join("\n")).toContain("/tmp/opencode/kiro.db");
+    expect(harness.stderr.join("\n")).toContain("accounts import");
+    expect(harness.stderr.join("\n")).toContain("removed in kiro-provider 0.7.0");
   });
 
   test("lists accounts without exposing credentials", async () => {

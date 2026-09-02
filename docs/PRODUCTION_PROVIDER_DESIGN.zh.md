@@ -120,8 +120,8 @@ v0.5.x/v0.6.x 迁移。
 - 后台维护有独立的间隔、并发和整批超时。
 
 导入不会建立实时链接。相同的会轮换 refresh token 不应同时由独立运行的
-OpenCode 插件和 Provider 维护。`auth_source: "opencode-shared"` 仅保留为显式
-兼容模式，它会重新引入共享数据库与跨进程所有权，不是默认部署路径。
+OpenCode 插件和 Provider 维护。原有的 `auth_source: "opencode-shared"` 兼容模式
+会重新引入共享数据库与跨进程所有权，已在 0.7.0 移除；一次性导入是唯一路径。
 
 Provider 自有 SQLite 同时保存凭证、用量、健康、会话亲和与加密 reasoning
 回放。默认 `session_affinity_mode: "explicit-only"` 只接受显式会话键：

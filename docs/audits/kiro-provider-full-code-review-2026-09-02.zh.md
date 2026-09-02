@@ -352,7 +352,7 @@
 | B6 | 已修复 | 有可用账户时配额复查后台执行 |
 | B7、B8、B9 | 已修复 | `maxAttempts: 1`；effort 合并进 `additionalModelRequestFields`，中间件删除；账户消失时驱逐 transport |
 | B10 | 已修复 | 失败退避窗口内使用 stale 快照；stale-while-revalidate |
-| B11 | 未改动 | `bun:sqlite` 固有限制；范围已在报告中限定为 `opencode-shared`，保留后续评估 |
+| B11 | 已解决（0.7.0） | 阻塞等待只存在于 `opencode-shared` 模式；该模式在 0.7.0 整体移除（一次性 `accounts import` 为唯一迁移路径），问题随之消失 |
 | B12 | 已修复（取证后） | 解析 `nextDateReset`；复查时间 `min(max(resetAt, lastSync+interval), lastSync+max(interval, 24h))` |
 | B13 | 已修复 | `linkSync`/`wx` 独占创建，EEXIST 重读 |
 | B14 | 已修复 | 两处 `rowToAccount` 校验 region，非法行跳过并告警 |
@@ -401,6 +401,5 @@
 
 ### 未纳入本次的项
 
-- B11：`bun:sqlite` 同步等待属于运行时固有限制，`opencode-shared` 模式 30 秒上限的缩短留待单独评估。
 - B26 的 disposition 调整：需要生产环境 `upstream_tool_restore_failed` 审计事件的统计数据。
 - C17 中"回放 keyring 丢失时的运维逃生口"：需要新增 CLI 命令与存储 API，留待后续版本。
