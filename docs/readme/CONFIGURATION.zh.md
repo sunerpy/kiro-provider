@@ -8,19 +8,29 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 
 每个字段的最终取值按以下顺序取第一个命中的来源：
 
-1. **CLI 参数** —— `serve` 仅支持 `--config`、`--host`、`--port`、`--proxy`；`login` 支持 `--config`（仅用于选择文件，不会覆盖字段）。
+1. **CLI 参数** —— `serve` 仅支持 `--config`、`--host`、`--port`、`--proxy`；`login` 支持 `--config`（仅用于选择文件，不会覆盖字段）和 `--help`。
 2. **环境变量** —— `KIRO_PROVIDER_*`，见下表。
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为 `~/.config/kiro-provider/config.json`，若设置了 `XDG_CONFIG_HOME`，则为 `$XDG_CONFIG_HOME/kiro-provider/config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域和代理设置，并要求 `auth_source: "local"`。
+配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。
+
+## 校验规则
+
+配置在启动时一次性校验；任何违规都会抛出 `ConfigLoadError`，指明出错字段（环境变量来源时同时指明变量名），进程在绑定端口前退出。
+
+- **空环境变量视为未设置。** 值为空或仅含空白的 `KIRO_PROVIDER_*` 变量会被忽略，因此 `KIRO_PROVIDER_PORT=""` 会沿用配置文件值或默认值，而不会变成 `0`。该规则适用于所有变量，包括 `KIRO_PROVIDER_PROXY_URL`；若要通过环境关闭配置文件中的代理，请在文件中把 `proxy_url` 设为 `null`，或使用 `serve --proxy ""`。
+- **整数变量必须是十进制整数。** 允许首尾空白和显式正负号；`0x1f90`、`8787.5`、`1e3`、`NaN` 会被拒绝，并给出类似 `Invalid environment variable KIRO_PROVIDER_PORT: expected a decimal integer, got "0x1f90"` 的错误。超出范围的值报错形如 `port: Number must be less than or equal to 65535 (from KIRO_PROVIDER_PORT)`。
+- **配置文件中的未知键会被拒绝。** 例如拼错的 `enable_legacy_chat_completion` 会报 `unknown key "enable_legacy_chat_completion" (did you mean "enable_legacy_chat_completions"?)`，而不是被静默丢弃。
+- **文件权限过宽会告警。** POSIX 下若配置文件对同组或其他用户可读/可写（`mode & 0o077 != 0`），启动时输出 `config_file_permissions_loose` 结构化警告（含路径与当前权限），因为该文件通常包含 `api_keys`。加载仍会成功；对文件执行 `chmod 600` 即可消除警告。Windows 上跳过此检查。
+- **所有数值字段都是有界整数。** 取值范围见下表；小数、`NaN`、无穷大以及超出范围的值都会被拒绝。毫秒字段上限为 `2147483647`（见[超时字段的取值范围](#超时字段的取值范围)）。
 
 ## 字段参考
 
 | 字段                         | 类型 / 默认值                                                          | 环境变量                                   | 说明                                                                                                                                                                                               |
 | ---------------------------- | ---------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `host`                       | `string`，默认 `"127.0.0.1"`                                           | `KIRO_PROVIDER_HOST`                       | HTTP 绑定地址。                                                                                                                                                                                    |
-| `port`                       | `number`，默认 `8787`                                                  | `KIRO_PROVIDER_PORT`                       | HTTP 监听端口。                                                                                                                                                                                    |
+| `host`                       | `string`（非空），默认 `"127.0.0.1"`                                    | `KIRO_PROVIDER_HOST`                       | HTTP 绑定地址。首尾空白会被去除；空值会被拒绝。                                                                                                                                                    |
+| `port`                       | 整数 `0`-`65535`，默认 `8787`                                          | `KIRO_PROVIDER_PORT`                       | HTTP 监听端口。`0` 表示由操作系统分配临时端口（启动时会打印实际地址）；`serve --port 0` 会被拒绝。小数和超出范围的值会被拒绝，空的 `KIRO_PROVIDER_PORT` 也不再变成 `0`。                          |
 | `api_keys`                   | `string[]`，**必填，去空格后不能为空**                                 | `KIRO_PROVIDER_API_KEYS`                   | 接受的 Bearer Key 列表。环境变量以逗号分隔。空列表或仅含空白会被拒绝，服务不会启动（默认拒绝启动）。                                                                                               |
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
 | `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
@@ -28,7 +38,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `auth_source`                | `"local" \| "opencode-shared"`，默认 `"local"`                        | `KIRO_PROVIDER_AUTH_SOURCE`                | 认证事实源。本地模式以 provider 自有账号库为权威，支持一次性导入 OpenCode 凭证或直接登录；共享模式仅作为显式兼容选项。                                                                             |
 | `opencode_auth_db_path`      | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`      | OpenCode Kiro 共享数据库的可选覆盖路径。`null` 使用 `$XDG_CONFIG_HOME/opencode/kiro.db` 或 `~/.config/opencode/kiro.db`；本地模式忽略此字段。                                                      |
 | `proxy_url`                  | `string \| null`，默认 `null`                                          | `KIRO_PROVIDER_PROXY_URL`                  | 可选的全局 HTTP(S) 代理，覆盖**所有**上游出网流量（模型请求、令牌刷新、额度探测、设备码登录）。必须是合法的 `http://` 或 `https://` URL，其他协议（如 SOCKS）会被拒绝。`null` 或空字符串表示直连。 |
-| `default_region`             | `string`，默认 `"us-east-1"`                                           | `KIRO_PROVIDER_DEFAULT_REGION`             | `login` 使用的区域，以及没有单独 profile ARN 覆盖的账号所使用的区域。                                                                                                                              |
+| `default_region`             | AWS 区域枚举（`RegionSchema`），默认 `"us-east-1"`                      | `KIRO_PROVIDER_DEFAULT_REGION`             | `login` 使用的区域，以及没有单独 profile ARN 覆盖的账号所使用的区域。必须是 `src/kiro/regions.ts` 中列出的区域之一（如 `us-east-1`、`eu-west-1`、`ap-northeast-1`）；未知区域在启动时被拒绝。       |
 | `sdk_http_keep_alive`       | `boolean`，默认 `false`                                               | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`        | 只控制 Kiro 模型调用 socket。两种模式都会缓存 transport 对象；SDK 客户端只在 access token 未变化时复用，token 轮换后立即重建。`false` 使用新的直连/代理 SDK socket，`true` 在部署验证后启用池化。令牌刷新与设备登录保持各自独立的传输策略。       |
 | `enforce_single_instance`   | `boolean`，默认 `true`                                                | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`    | 绑定 HTTP 监听前取得服务进程锁，使账号/会话队列与 SDK 池只有一个所有者。只有各进程使用独立凭证/状态，或已有外部串行器时才应关闭。                                                                                              |
 | `instance_lock_path`        | `string \| null`，默认 `null`                                        | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`         | 可选服务锁目标。`null` 使用平台配置目录下的 `kiro-provider/service.instance`；POSIX 权限为 `0600`。不同路径会有意创建相互独立的进程域。                                                                                     |
@@ -38,21 +48,21 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `model_catalog_stale_ttl_ms` | 整数 `1`-`2147483647`，默认 `86400000`（24 小时）                    | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` | 刷新失败后允许继续使用最后一次成功目录的最长时间。                                                                                                                                                                       |
 | `model_catalog_request_timeout_ms` | 整数 `1`-`2147483647`，默认 `10000`                           | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` | 单次 Kiro 管理模型列表请求的超时。                                                                                                                                                                                |
 | `account_selection_strategy` | `"sticky" \| "round-robin" \| "lowest-usage"`，默认 `"lowest-usage"`   | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` | 每次请求如何选择账号：`sticky` 倾向复用同一账号，`round-robin` 轮询，`lowest-usage` 优先选剩余额度最多的账号。                                                                                     |
-| `rate_limit_max_retries`     | `number`，默认 `3`                                                     | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | 对可重试限流响应的最大重试次数。                                                                                                                                                                   |
-| `rate_limit_retry_delay_ms`  | `number`，默认 `5000`                                                  | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | 限流重试的基础延迟（毫秒）。                                                                                                                                                                       |
+| `rate_limit_max_retries`     | 整数 `0`-`100`，默认 `3`                                               | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`     | 对可重试限流响应的最大重试次数；`0` 表示不重试。                                                                                                                                                   |
+| `rate_limit_retry_delay_ms`  | 整数 `1`-`2147483647`，默认 `5000`                                     | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`  | 限流重试的基础延迟（毫秒）。                                                                                                                                                                       |
 | `quota_recheck_interval_ms`  | 整数 `1`-`2147483647`，默认 `900000`（15 分钟）                       | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`  | 已耗尽账号再次进入 Kiro 权威用量探测前的等待时间。HTTP 402、仍耗尽的快照或探测失败只会推进该时间，不会形成模型请求重试。                                                                            |
 | `quota_recheck_timeout_ms`   | 整数 `1`-`2147483647`，默认 `10000`                                   | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`   | 同时限制请求前置额度探测批次与每个已启动账号探测。超时后账号继续排除，并安排下一次探测。                                                                                                           |
-| `quota_recheck_concurrency`  | 整数 `1`-`32`，默认 `4`                                               | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`  | 同时探测的到期耗尽账号上限；并发请求会加入同一个账号的在途探测。                                                                                                                                   |
+| `quota_recheck_concurrency`  | 整数 `1`-`32`，默认 `4`                                               | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`  | 同时探测的到期耗尽账号上限；并发请求会加入同一个账号的在途探测。`accounts refresh` 与服务端共用同一探测器，因此也受此值约束。                                                                       |
 | `account_maintenance_enabled` | `boolean`，默认 `true`                                               | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` | 启用 provider 自有的后台令牌与用量维护。只有明确由外部运维系统接管该生命周期时才应关闭。                                                                                                           |
 | `account_maintenance_interval_ms` | 整数 `1000`-`2147483647`，默认 `60000`                          | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` | 后台维护批次间隔；服务启动后会很快安排首个批次。                                                                                                                                               |
 | `account_maintenance_timeout_ms` | 整数 `1000`-`2147483647`，默认 `120000`                           | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` | 单个全账号维护批次的绝对截止时间。                                                                                                                                                              |
 | `account_maintenance_concurrency` | 整数 `1`-`32`，默认 `4`                                          | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` | 主动刷新 access token 的最大并发数。                                                                                                                                                            |
 | `usage_refresh_interval_ms`  | 整数 `1000`-`2147483647`，默认 `900000`（15 分钟）                    | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`  | 普通账号用量快照允许的最大陈旧时间；超过后后台调用 Kiro `getUsageLimits`。已耗尽账号继续使用独立的额度复查周期。                                                                                  |
-| `max_request_iterations`     | `number`，默认 `20`                                                    | `KIRO_PROVIDER_MAX_REQUEST_ITERATIONS`     | 单次请求内账号切换与重试循环的总迭代次数上限。                                                                                                                                                     |
+| `max_request_iterations`     | 整数 `1`-`1000`，默认 `20`                                             | `KIRO_PROVIDER_MAX_REQUEST_ITERATIONS`     | 单次请求内账号切换与重试循环的总迭代次数上限。`0` 会让所有请求失败，因此被拒绝。                                                                                                                   |
 | `request_timeout_ms`         | 整数，`1`-`2147483647`，默认 `120000`                                  | `KIRO_PROVIDER_REQUEST_TIMEOUT_MS`         | 单次请求的绝对超时时间（毫秒）。取值范围与已知限制见[超时字段的取值范围](#超时字段的取值范围)。                                                                                                    |
 | `stream_idle_timeout_ms`     | 整数，`1`-`2147483647`，默认 `60000`                                   | `KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS`     | 流式响应中两次上游事件之间允许的最大空闲间隔（毫秒），超过则中止流。取值范围见[超时字段的取值范围](#超时字段的取值范围)。                                                                          |
-| `max_request_body_bytes`     | `number`，默认 `10485760`（10 MiB）                                    | `KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES`     | 允许的最大请求体大小；超出返回 HTTP 413。                                                                                                                                                          |
-| `token_expiry_buffer_ms`     | `number`，默认 `300000`（5 分钟）                                      | `KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS`     | 在访问令牌实际过期前多久主动触发刷新。                                                                                                                                                             |
+| `max_request_body_bytes`     | 整数 `1`-`2147483647`，默认 `10485760`（10 MiB）                       | `KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES`     | 允许的最大请求体大小；超出返回 HTTP 413。                                                                                                                                                          |
+| `token_expiry_buffer_ms`     | 整数 `1`-`2147483647`，默认 `300000`（5 分钟）                         | `KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS`     | 在访问令牌实际过期前多久主动触发刷新。                                                                                                                                                             |
 | `session_affinity_ttl_ms`    | 整数，`1`-`2147483647`，默认 `86400000`（24 小时）                    | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS`    | 持久化逻辑会话绑定的滑动有效期；每次命中都会续期。过期后按正常账号策略重新建立绑定。                                                                                                               |
 | `session_affinity_max_entries` | 整数，`1`-`1000000`，默认 `10000`                                   | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` | 最多保留的会话绑定数；超限时优先清理最久未使用的记录。                                                                                                                                           |
 | `reasoning_replay_key_path` | `string \| null`，默认 `null`                                         | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`  | reasoning 密钥文件覆盖路径。`null` 使用平台配置目录；未配置环境密钥环时会原子生成 `reasoning-replay-keys.json`，POSIX 权限强制为 `0600`。                                                          |
@@ -61,7 +71,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `reasoning_replay_max_entries` | 整数，`1`-`1000000`，默认 `10000`                                  | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` | 加密回放记录上限；清理过期记录后，在同一事务中按 LRU 淘汰。                                                                                                                                     |
 | `effort`                     | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| null`，默认 `null` | `KIRO_PROVIDER_EFFORT`                     | 可选的全局推理强度覆盖，应用于每个请求。`null` 表示不强制覆盖，除非请求自身指定。                                                                                                                  |
 | `auto_effort_mapping`        | `boolean`，默认 `true`                                                 | `KIRO_PROVIDER_AUTO_EFFORT_MAPPING`        | 启用后，网关会自动映射模型变体后缀与请求的 effort。环境变量值接受 `true`、`false`、`1`、`0`。                                                                                                      |
-| `log_level`                  | `string`，默认 `"info"`                                                | `KIRO_PROVIDER_LOG_LEVEL`                  | 传给日志组件的日志级别。                                                                                                                                                                           |
+| `log_level`                  | `"debug" \| "info" \| "warn" \| "error"`，默认 `"info"`            | `KIRO_PROVIDER_LOG_LEVEL`                  | 结构化审计日志（stderr 上每行一个 JSON 对象）的最低输出级别。级别顺序为 `debug < info < warn < error`，低于阈值的事件被丢弃；`warn` 会屏蔽 `upstream_affinity_selected` 等逐请求 `info` 事件。所有加载配置的命令（`serve`、`login`、`accounts refresh|relogin`）都会应用该值。 |
 | `test_upstream_endpoint`     | `string`（合法 URL），可选，默认不设置                                 | `KIRO_PROVIDER_TEST_UPSTREAM`              | **仅用于测试。** 覆盖 AWS CodeWhisperer SDK 用于上游调用的端点，供 `scripts/security-check.sh` 和隔离测试指向非生产端点使用。设置后 `serve` 启动时会在 stderr 打印警告。正常生产环境不要设置此项。 |
 
 ## 认证事实源
@@ -76,10 +86,23 @@ kiro-provider login
 kiro-provider accounts import
 # 非默认源：
 kiro-provider accounts import --from /path/to/kiro.db
+# 即使本地记录更新也强制覆盖：
+kiro-provider accounts import --from /path/to/kiro.db --force
 ```
 
+`login` 完成设备码流程后会调用一次 Kiro 用量接口，在推导账号 ID 之前获取
+真实登录邮箱。若该请求失败（例如离线），记录会以占位邮箱
+`builder-id@aws.amazon.com` 保存并打印警告，之后执行 `accounts refresh --all`
+或 `accounts relogin` 即可补全真实身份。身份已确认时，同一个人（邮箱、start
+URL、profile 相同）再次登录会原地更新已有记录并清理旧的重复记录，而不是再插
+入一条账号。每个 SSO OIDC 请求（客户端注册、设备授权、令牌轮询）都有 30 秒
+超时；令牌轮询期间的瞬时网络错误会持续重试，直到设备码过期。
+
 导入会复制活跃账号凭证与用量，不会保留实时链接、共享锁或 OpenCode 运行期
-依赖。导入完成后，kiro-provider 会独立完成：
+依赖。若本地记录的 access token 过期时间或用量同步时间比源记录更新（说明
+kiro-provider 在上次导入后已刷新过它），该行会被跳过；传入 `--force` 可强制
+覆盖。`accounts import` 不读取网关配置，因此没有 `--config` 选项。导入完成后，
+kiro-provider 会独立完成：
 
 - 主动刷新临近过期的 access token，并先持久化再使用；
 - token 变化时重建绑定凭据的 SDK client，同时保留账号 transport；
@@ -281,6 +304,21 @@ export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026
 首项为活动加密密钥。旧密钥应保留到其加密记录全部过期；若任一未过期数据库
 记录引用了已缺失的 key，服务构造会失败，不会悄悄破坏活动会话。日志不会
 包含密钥、原始回放令牌、签名、reasoning 文本、redacted bytes 或请求提示词。
+
+## 文件位置
+
+所有 provider 自有文件都位于同一个用户级配置根目录下：
+
+| 平台 | 根目录 | 文件 |
+| --- | --- | --- |
+| Linux / macOS | `$XDG_CONFIG_HOME` 或 `~/.config` | `kiro-provider/config.json`、`kiro-provider/accounts.db`、`kiro-provider/service.instance`、`kiro-provider/reasoning-replay-keys.json`；OpenCode 导入源 `opencode/kiro.db` |
+| Windows | `%APPDATA%` 或 `%USERPROFILE%\AppData\Roaming` | `kiro-provider\config.json`、`kiro-provider\accounts.db`、`kiro-provider\service.instance`、`kiro-provider\reasoning-replay-keys.json`；OpenCode 导入源 `opencode\kiro.db` |
+
+空的 `XDG_CONFIG_HOME` 或 `APPDATA` 视为未设置。v0.6 之前，配置文件在任何平台
+上都只从 `~/.config/kiro-provider/config.json` 读取（包括 Windows）。Windows 上若
+`%APPDATA%\kiro-provider\config.json` 不存在而旧的 `~/.config/kiro-provider/config.json`
+存在，则仍使用旧文件；把它移动到 `%APPDATA%` 即完成迁移。使用 `--config <path>`
+可完全绕过默认查找。
 
 ## 超时字段的取值范围
 
