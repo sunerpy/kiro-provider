@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@aws/codewhisperer-streaming-client": "^1.0.34",
-    "@smithy/node-http-handler": "4.9.7",
+    "@smithy/node-http-handler": "4.11.3",
     "https-proxy-agent": "^9.1.0",
     "proper-lockfile": "^4.1.2",
     "zod": "^3.24.0"
