@@ -45,7 +45,12 @@ export function validatedRegions(row: AccountRegionColumns): ValidatedRegions | 
   }
 }
 
-export interface AccountRow {
+/**
+ * The account columns the local store and the OpenCode-shared store have in
+ * common, as the local schema types them (bookkeeping columns NOT NULL). The
+ * OpenCode store normalizes its nullable columns to this shape before mapping.
+ */
+export interface ManagedAccountRow {
   id: string
   email: string
   auth_method: ManagedAccount['authMethod']
@@ -68,6 +73,9 @@ export interface AccountRow {
   limit_count: number
   last_sync: number
   overage_count: number
+}
+
+export interface AccountRow extends ManagedAccountRow {
   generation: number
 }
 
@@ -100,7 +108,7 @@ export function accountToRow(account: ManagedAccount, generation: number): Accou
 }
 
 /** Returns undefined (after an audit warning) when a region column is invalid. */
-export function rowToAccount(row: AccountRow): StoredAccount | undefined {
+export function rowToManagedAccount(row: ManagedAccountRow): ManagedAccount | undefined {
   const regions = validatedRegions(row)
   if (regions === undefined) return undefined
   return {
@@ -125,9 +133,14 @@ export function rowToAccount(row: AccountRow): StoredAccount | undefined {
     usedCount: row.used_count,
     limitCount: row.limit_count,
     lastSync: row.last_sync,
-    overageCount: row.overage_count,
-    generation: row.generation
+    overageCount: row.overage_count
   }
+}
+
+/** Local rows carry the CAS generation on top of the shared columns. */
+export function rowToAccount(row: AccountRow): StoredAccount | undefined {
+  const account = rowToManagedAccount(row)
+  return account === undefined ? undefined : { ...account, generation: row.generation }
 }
 
 export function rowBindings(row: AccountRow): (string | number | null)[] {

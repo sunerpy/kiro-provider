@@ -19,7 +19,6 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 // allow: SIZE_OK — this architecture probe must remain one self-contained compilable artifact.
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import {
 	type ChatMessage,
@@ -33,6 +32,7 @@ import {
 	type UserInputMessageContext,
 } from "@aws/codewhisperer-streaming-client";
 import { z } from "zod";
+import { platformConfigRoot } from "../src/config/paths.js";
 import { createSdkClient } from "../src/core/sdk-client.js";
 import {
 	extractRegionFromArn,
@@ -204,8 +204,7 @@ function assertNever(value: never): never {
 }
 
 function databasePath(): string {
-	const configHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-	return join(configHome, "opencode", "kiro.db");
+	return join(platformConfigRoot(), "opencode", "kiro.db");
 }
 
 export function resolveProbeProxy(
