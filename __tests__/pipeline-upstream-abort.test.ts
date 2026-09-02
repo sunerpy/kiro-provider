@@ -284,7 +284,7 @@ describe("upstream request teardown through the real SDK transport (A1)", () => 
     try {
       const response = await run(upstream.endpoint, false);
 
-      expect(response.status).toBeGreaterThanOrEqual(500);
+      expect(response.status).toBe(502);
       const body = (await response.json()) as { error: { code?: string } };
       expect(body.error.code).toBe("invalid_upstream_tool_call");
       await waitFor(() => upstream.state.cancelled === 1, "upstream cancel after collection failure");

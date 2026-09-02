@@ -32,6 +32,7 @@ import type { SdkOutputFingerprint } from "../kiro/transform/streaming/sdk-strea
 import {
   SemanticStreamTruncationError,
   SdkStreamProtocolError,
+  ToolCallViolation,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import { openAiError } from "../server/errors.js";
 import {
@@ -52,6 +53,7 @@ import { createPipelineStreamResponse } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type { RunChatCompletionOptions } from "./pipeline-types.js";
 import { createSdkClient } from "./sdk-client.js";
+import { normalizeStreamFailure } from "./stream-error.js";
 import { AccountUnavailableError } from "./token-refresher.js";
 
 export type {
@@ -124,6 +126,20 @@ const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([500, 502, 503, 5
 
 function isRetryableServerStatus(status: number | undefined): boolean {
   return status !== undefined && RETRYABLE_SERVER_STATUSES.has(status);
+}
+
+type StreamFailureError =
+  | SemanticStreamTruncationError
+  | SdkStreamProtocolError
+  | ToolCallViolation;
+
+/** Typed failures raised while consuming an already-open Kiro event stream. */
+function isStreamFailureError(error: unknown): error is StreamFailureError {
+  return (
+    error instanceof SemanticStreamTruncationError ||
+    error instanceof SdkStreamProtocolError ||
+    error instanceof ToolCallViolation
+  );
 }
 
 type RefreshFailure = KiroTokenRefreshError | AccountUnavailableError;
@@ -794,21 +810,27 @@ async function executeLoop(
         }
         throw caught;
       }
-      if (caught instanceof SemanticStreamTruncationError) {
-        if (retryCount < options.config.rate_limit_max_retries) {
+      if (isStreamFailureError(caught)) {
+        // Nothing has been sent to the client on the non-stream path, so a
+        // retryable stream failure gets the same bounded retry as truncation;
+        // fatal ones (and exhausted retries) terminate as 502 consistently.
+        const failure = normalizeStreamFailure(caught, "upstream_protocol_error");
+        if (
+          failure.disposition === "retryable" &&
+          retryCount < options.config.rate_limit_max_retries
+        ) {
           retryCount += 1;
+          auditLog("warn", "non_stream_failure_retry", {
+            account_hash: auditHash(account.id),
+            error_code: failure.code,
+            retry_count: retryCount,
+          });
           await abortableSleep(
             options.config.rate_limit_retry_delay_ms * 2 ** (retryCount - 1),
             signal,
           );
           continue;
         }
-        return {
-          kind: "response",
-          response: terminalError(502, caught.message, caught.code),
-        };
-      }
-      if (caught instanceof SdkStreamProtocolError) {
         return {
           kind: "response",
           response: terminalError(502, caught.message, caught.code),
