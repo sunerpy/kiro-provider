@@ -23,6 +23,8 @@ export interface KiroUsageSnapshot {
   limitCount: number
   overageCount: number
   email?: string
+  /** Upstream quota reset time in epoch milliseconds, when the usage service reports one. */
+  resetAt?: number
 }
 
 export interface RefreshParts {

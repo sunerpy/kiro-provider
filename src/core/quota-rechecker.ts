@@ -144,6 +144,29 @@ function isQuotaRecheckDue(account: ManagedAccount, now: number): boolean {
 	);
 }
 
+/** Longest an exhausted account may go without an authoritative probe. */
+const DAILY_RECHECK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Picks when a confirmed-exhausted account is probed next. Without an upstream
+ * reset time this is the fixed interval. With one, the probe waits for the
+ * reset (never sooner than the interval) but is still capped to at least one
+ * probe per `max(intervalMs, 24h)` so a stale or wrong reset date cannot park
+ * the account indefinitely.
+ */
+function exhaustedRecheckAt(
+	lastSync: number,
+	intervalMs: number,
+	resetAt: number | undefined,
+): number {
+	const intervalRecheckAt = lastSync + intervalMs;
+	if (resetAt === undefined || !Number.isFinite(resetAt)) {
+		return intervalRecheckAt;
+	}
+	const latestRecheckAt = lastSync + Math.max(intervalMs, DAILY_RECHECK_MS);
+	return Math.min(Math.max(resetAt, intervalRecheckAt), latestRecheckAt);
+}
+
 function errorReason(error: unknown): string {
 	const code =
 		typeof error === "object" &&
@@ -551,7 +574,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 			const lastSync = this.now();
 			const exhausted = isQuotaExhausted(usage);
 			const nextRecheckAt = exhausted
-				? lastSync + this.options.intervalMs
+				? exhaustedRecheckAt(lastSync, this.options.intervalMs, usage.resetAt)
 				: 0;
 			const persisted = this.options.accountManager.updateQuotaUsage(
 				account,
@@ -586,6 +609,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
 					{
 						account_hash: auditHash(account.id),
 						next_recheck_at: persisted.rateLimitResetTime,
+						reset_at: usage.resetAt,
 					},
 				);
 				result = "exhausted";

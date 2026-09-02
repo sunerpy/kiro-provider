@@ -13,6 +13,7 @@ const UsageLimitsResponseSchema = z
 						currentUsage: z.number().optional(),
 						usageLimit: z.number().optional(),
 						currentOverages: z.number().optional(),
+						nextDateReset: z.unknown().optional(),
 						freeTrialInfo: z
 							.object({
 								currentUsage: z.number().optional(),
@@ -29,8 +30,18 @@ const UsageLimitsResponseSchema = z
 			.object({ email: z.string().optional() })
 			.passthrough()
 			.optional(),
+		nextDateReset: z.unknown().optional(),
 	})
 	.passthrough();
+
+type UsageLimitsResponse = z.infer<typeof UsageLimitsResponseSchema>;
+
+/**
+ * Upper bound on how far ahead a reported reset may lie before it is treated
+ * as absent. Kiro quotas reset monthly; anything beyond this is either a unit
+ * mismatch (milliseconds sent as seconds) or upstream garbage.
+ */
+const MAX_RESET_HORIZON_MS = 400 * 24 * 60 * 60 * 1000;
 
 interface UsageAttempt {
 	readonly resourceType?: string;
@@ -80,7 +91,45 @@ function responseErrorType(response: Response): string | undefined {
 	);
 }
 
-function parseUsagePayload(value: unknown): KiroUsageSnapshot {
+/**
+ * Converts an upstream `nextDateReset` (epoch seconds) into epoch milliseconds.
+ * Non-numeric, non-finite, non-positive, or implausibly distant values yield
+ * `undefined` so a bad field degrades to the fixed recheck interval instead of
+ * parking an account.
+ */
+function resetAtFromEpochSeconds(
+	value: unknown,
+	now: number,
+): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		return undefined;
+	}
+	const resetAt = Math.round(value * 1000);
+	return resetAt > now + MAX_RESET_HORIZON_MS ? undefined : resetAt;
+}
+
+/**
+ * Prefers the top-level `nextDateReset`; falls back to the earliest per-segment
+ * value when the top-level field is missing or unusable. `daysUntilReset` is
+ * deliberately ignored: it was observed as `0` alongside a reset a month away.
+ */
+function usageResetAt(
+	data: UsageLimitsResponse,
+	now: number,
+): number | undefined {
+	const topLevel = resetAtFromEpochSeconds(data.nextDateReset, now);
+	if (topLevel !== undefined) return topLevel;
+	let earliest: number | undefined;
+	for (const segment of data.usageBreakdownList ?? []) {
+		const candidate = resetAtFromEpochSeconds(segment.nextDateReset, now);
+		if (candidate !== undefined && (earliest === undefined || candidate < earliest)) {
+			earliest = candidate;
+		}
+	}
+	return earliest;
+}
+
+function parseUsagePayload(value: unknown, now: number): KiroUsageSnapshot {
 	const parsed = UsageLimitsResponseSchema.safeParse(value);
 	if (!parsed.success) {
 		throw new KiroUsageError("Kiro usage service returned an invalid response shape");
@@ -99,6 +148,7 @@ function parseUsagePayload(value: unknown): KiroUsageSnapshot {
 		overageCount += segment.currentOverages ?? 0;
 	}
 
+	const resetAt = usageResetAt(parsed.data, now);
 	return {
 		usedCount,
 		limitCount,
@@ -106,6 +156,7 @@ function parseUsagePayload(value: unknown): KiroUsageSnapshot {
 		...(parsed.data.userInfo?.email
 			? { email: parsed.data.userInfo.email }
 			: {}),
+		...(resetAt !== undefined ? { resetAt } : {}),
 	};
 }
 
@@ -214,7 +265,7 @@ export async function fetchUsageLimits(
 				{ cause: error },
 			);
 		}
-		return parseUsagePayload(payload);
+		return parseUsagePayload(payload, Date.now());
 	}
 
 	throw (
