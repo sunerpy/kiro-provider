@@ -96,6 +96,9 @@ function isParseableJson(value: string): boolean {
   }
 }
 
+// Client-supplied history only: some OpenAI SDKs send `arguments: ""` for a
+// zero-argument call. Upstream zero-input tool calls are projected as `{}` by
+// the stream transformer (validateCompletedToolCalls), not here.
 function normalizeFunctionArguments(value: string): string {
   return value.trim().length === 0 ? "{}" : value;
 }
