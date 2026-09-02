@@ -12,6 +12,7 @@ import {
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 
 const ContentBlockSchema = z.object({ type: z.string().min(1) }).passthrough();
 
@@ -462,41 +463,28 @@ function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): AnthropicFailure | undefined {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, number>();
-  const outputs = new Set<string>();
-  for (const [index, message] of messages.entries()) {
-    for (const call of message.toolCalls) {
-      if (!declarations.has(call.name)) {
-        return failure(
-          `Invalid request: tool call ${call.id} has no exact declaration for ${call.name}`,
-          "missing_tool_declaration",
-          call.path,
-        );
-      }
-      if (calls.has(call.id)) {
-        return failure(
-          `Invalid request: duplicate tool call id ${call.id}`,
-          "invalid_tool_history",
-          call.path,
-        );
-      }
-      calls.set(call.id, index);
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const callIndex = calls.get(part.toolCallId);
-      if (callIndex === undefined || callIndex >= index || outputs.has(part.toolCallId)) {
-        return failure(
-          `Invalid request: tool result ${part.toolCallId} has no earlier unique call`,
-          "invalid_tool_history",
-          part.path,
-        );
-      }
-      outputs.add(part.toolCallId);
-    }
+  const violation = findToolHistoryViolation(messages, tools);
+  if (!violation) return undefined;
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      return failure(
+        `Invalid request: tool call ${violation.callId} has no exact declaration for ${violation.toolName}`,
+        violation.code,
+        violation.path,
+      );
+    case "duplicate_tool_call":
+      return failure(
+        `Invalid request: duplicate tool call id ${violation.callId}`,
+        violation.code,
+        violation.path,
+      );
+    case "orphan_tool_result":
+      return failure(
+        `Invalid request: tool result ${violation.toolCallId} has no earlier unique call`,
+        violation.code,
+        violation.path,
+      );
   }
-  return undefined;
 }
 
 export function adaptAnthropicMessagesRequest(

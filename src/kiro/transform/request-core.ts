@@ -7,6 +7,7 @@ import {
   isCanonicalRequest,
   type ResolvedReasoningReplay,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { KIRO_CONSTANTS } from "../constants.js";
 import { resolveModelVariant } from "../models.js";
 import type {
@@ -130,44 +131,26 @@ function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): void {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, { readonly name: string; readonly index: number }>();
-  const results = new Set<string>();
-  for (const [index, message] of messages.entries()) {
-    const messageCalls = [
-      ...message.toolCalls,
-      ...message.content.flatMap((part) =>
-        part.type === "tool_use"
-          ? [{ id: part.id, name: part.name, input: part.input, path: part.path }]
-          : [],
-      ),
-    ];
-    for (const call of messageCalls) {
-      if (!declarations.has(call.name)) {
-        throw new RequestTransformError(
-          `Tool call ${call.id} references ${call.name} without an exact declaration`,
-          "missing_tool_declaration",
-        );
-      }
-      if (calls.has(call.id)) {
-        throw new RequestTransformError(
-          `Duplicate tool call id ${call.id}`,
-          "invalid_tool_history",
-        );
-      }
-      calls.set(call.id, { name: call.name, index });
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const call = calls.get(part.toolCallId);
-      if (!call || call.index >= index || results.has(part.toolCallId)) {
-        throw new RequestTransformError(
-          `Tool result ${part.toolCallId} has no earlier unique matching call`,
-          "invalid_tool_history",
-        );
-      }
-      results.add(part.toolCallId);
-    }
+  // The projection is the last line of defence, so it also scans `tool_use`
+  // content parts; adapters validate only the `toolCalls` they produce.
+  const violation = findToolHistoryViolation(messages, tools, { includeToolUseParts: true });
+  if (!violation) return;
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      throw new RequestTransformError(
+        `Tool call ${violation.callId} references ${violation.toolName} without an exact declaration`,
+        violation.code,
+      );
+    case "duplicate_tool_call":
+      throw new RequestTransformError(
+        `Duplicate tool call id ${violation.callId}`,
+        violation.code,
+      );
+    case "orphan_tool_result":
+      throw new RequestTransformError(
+        `Tool result ${violation.toolCallId} has no earlier unique matching call`,
+        violation.code,
+      );
   }
 }
 

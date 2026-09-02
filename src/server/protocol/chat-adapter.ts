@@ -10,6 +10,7 @@ import {
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import type { ChatCompletionRequest } from "../request-schema.js";
 import {
   type ProtocolResult,
@@ -360,41 +361,28 @@ function validateHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): ProtocolResult<undefined> {
-  const declarations = new Set(tools.map((tool) => tool.wireName));
-  const calls = new Map<string, { readonly name: string; readonly index: number }>();
-  const outputs = new Set<string>();
-  for (const [messageIndex, message] of messages.entries()) {
-    for (const call of message.toolCalls) {
-      if (!declarations.has(call.name)) {
-        return protocolFailure(
-          "missing_tool_declaration",
-          `Tool call ${call.id} references ${call.name} without an exact tool declaration`,
-          call.path,
-        );
-      }
-      if (calls.has(call.id)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Duplicate tool call id ${call.id}`,
-          call.path,
-        );
-      }
-      calls.set(call.id, { name: call.name, index: messageIndex });
-    }
-    for (const part of message.content) {
-      if (part.type !== "tool_result") continue;
-      const call = calls.get(part.toolCallId);
-      if (!call || call.index >= messageIndex || outputs.has(part.toolCallId)) {
-        return protocolFailure(
-          "invalid_tool_history",
-          `Tool result ${part.toolCallId} has no earlier unique matching call`,
-          part.path,
-        );
-      }
-      outputs.add(part.toolCallId);
-    }
+  const violation = findToolHistoryViolation(messages, tools);
+  if (!violation) return { ok: true, value: undefined };
+  switch (violation.kind) {
+    case "missing_tool_declaration":
+      return protocolFailure(
+        violation.code,
+        `Tool call ${violation.callId} references ${violation.toolName} without an exact tool declaration`,
+        violation.path,
+      );
+    case "duplicate_tool_call":
+      return protocolFailure(
+        violation.code,
+        `Duplicate tool call id ${violation.callId}`,
+        violation.path,
+      );
+    case "orphan_tool_result":
+      return protocolFailure(
+        violation.code,
+        `Tool result ${violation.toolCallId} has no earlier unique matching call`,
+        violation.path,
+      );
   }
-  return { ok: true, value: undefined };
 }
 
 export function chatToCanonical(
