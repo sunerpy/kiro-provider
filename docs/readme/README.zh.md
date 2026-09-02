@@ -40,7 +40,7 @@
   completion/event IR，再编码为各外部协议。
 - 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
 - 多账号轮询、自动令牌刷新与故障切换。耗尽账号不会进入模型尝试，只有经过有界、去重的 Kiro 用量探测确认新额度周期后才自动回池；后台维护循环还会在服务空闲时刷新临近过期的 token 和陈旧用量。
-- `kiro-provider login` 与 `accounts import` 直接写入 provider 自有本地认证库。`auth_source: "opencode-shared"` 仅保留为显式兼容选项；一次导入后不再需要它。
+- `kiro-provider login` 与 `accounts import` 直接写入 provider 自有本地认证库。原有的 `auth_source: "opencode-shared"` 兼容模式已在 0.7.0 移除；仍选择该值的配置会在启动时报错并给出迁移指引（先导入一次，再改用 `local`）。
 - 单一全局 `proxy_url`：一旦设置，所有上游出网流量（模型请求、令牌刷新、额度探测、设备码登录）都会走同一个 HTTP(S) 代理。
 - 通过 `bun build --compile` 打包为单文件可执行文件，目标机器无需额外运行时依赖。
 
@@ -319,8 +319,7 @@ systemctl --user enable --now kiro-provider.service
 
 如果二进制或配置不在上述位置，请把 `ExecStart` 改为对应的绝对路径。使用
 自定义 `XDG_CONFIG_HOME` 时，还应加入
-`Environment=XDG_CONFIG_HOME=/absolute/path`，或显式配置
-`opencode_auth_db_path`。
+`Environment=XDG_CONFIG_HOME=/absolute/path`。
 
 日常操作与日志查看：
 
@@ -482,7 +481,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
-| `opencode_auth_db_path` | `null`（使用 OpenCode 默认路径） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
+| `opencode_auth_db_path` | `null`（0.7.0 起弃用并忽略） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
 | `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |

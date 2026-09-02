@@ -4,6 +4,26 @@ import { auditLog } from "../core/audit-log.js";
 import { defaultConfigPath } from "./paths.js";
 import { type Config, ConfigSchema } from "./schema.js";
 
+export const OPENCODE_SHARED_REMOVED_MESSAGE =
+  'auth_source "opencode-shared" was removed in kiro-provider 0.7.0. Copy the OpenCode accounts once with "kiro-provider accounts import [--from <path>]", then set auth_source to "local" or delete the key; the provider-owned store (~/.config/kiro-provider/accounts.db) is the only authentication authority.';
+
+/**
+ * Post-parse migration checks for settings that no longer select behavior.
+ * The removed shared mode fails fast with an actionable message instead of a
+ * generic enum error; the deprecated database path only warns.
+ */
+export function applyRemovedAuthSourceMigration(config: Config): Config {
+  if (config.auth_source === "opencode-shared") {
+    throw new ConfigLoadError(OPENCODE_SHARED_REMOVED_MESSAGE);
+  }
+  if (config.opencode_auth_db_path !== null) {
+    auditLog("warn", "config_opencode_auth_db_path_deprecated", {
+      hint: "opencode_auth_db_path is ignored since 0.7.0 and will be removed; pass --from to kiro-provider accounts import instead",
+    });
+  }
+  return config;
+}
+
 export type LoadConfigOptions = {
   readonly configPath?: string;
   readonly env?: Record<string, string | undefined>;
@@ -411,11 +431,12 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     sources = new Map(
       [...envOverrides.sources].filter(([field]) => !(field in (options.overrides ?? {}))),
     );
-    return ConfigSchema.parse({
+    const config = ConfigSchema.parse({
       ...fileConfig,
       ...envOverrides.values,
       ...options.overrides,
     });
+    return applyRemovedAuthSourceMigration(config);
   } catch (error) {
     if (error instanceof ConfigLoadError) {
       throw error;

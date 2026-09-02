@@ -41,7 +41,7 @@
   separate canonical completion/event IR before protocol-specific encoding.
 - Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
 - Multi-account rotation with automatic token refresh and failover. Exhausted accounts are hard-excluded from model attempts, then automatically rejoin only after a bounded, deduplicated Kiro usage probe confirms a new quota window. A provider-owned maintenance loop also refreshes near-expiry tokens and stale usage while the service is idle.
-- `kiro-provider login` and `accounts import` write directly to the provider-owned local authentication store. `auth_source: "opencode-shared"` remains an explicit compatibility option, but it is not the production default and is not required after import.
+- `kiro-provider login` and `accounts import` write directly to the provider-owned local authentication store. The former `auth_source: "opencode-shared"` compatibility mode was removed in 0.7.0; a configuration that still selects it fails at startup with migration instructions (import once, then use `local`).
 - A single global `proxy_url` that, when set, routes all upstream egress (model requests, token refresh, quota probes, device-code login) through one HTTP(S) proxy.
 - Ships as a self-contained compiled binary via `bun build --compile` — no runtime install required on the target machine.
 
@@ -338,8 +338,7 @@ systemctl --user enable --now kiro-provider.service
 
 If the binary or config is elsewhere, replace `ExecStart` with those absolute
 paths. For a custom `XDG_CONFIG_HOME`, also add an explicit
-`Environment=XDG_CONFIG_HOME=/absolute/path` line or configure
-`opencode_auth_db_path`.
+`Environment=XDG_CONFIG_HOME=/absolute/path` line.
 
 Operate and inspect the service:
 
@@ -506,7 +505,7 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
-| `opencode_auth_db_path` | `null` (uses the OpenCode default) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
+| `opencode_auth_db_path` | `null` (deprecated since 0.7.0, ignored) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
 | `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
 | `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
 | `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |

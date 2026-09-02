@@ -1,4 +1,4 @@
-import { defaultOpenCodeAuthDbPath, OpenCodeAuthStore } from "../auth/opencode-auth-store.js";
+import { OPENCODE_SHARED_REMOVED_MESSAGE } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
 import {
   AccountMaintenanceService,
@@ -7,7 +7,6 @@ import {
 } from "../core/account-maintenance.js";
 import { AccountManager } from "../core/account-manager.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
-import { OpenCodeAccountManager, OpenCodeTokenRefresher } from "../core/opencode-auth-runtime.js";
 import type {
   PipelineAccountManager,
   PipelineAffinityStore,
@@ -106,26 +105,19 @@ export { boundedCleanup, CLEANUP_GRACE_MS, runCleanupSteps, safeStep };
 
 export type ServerDependencyFactories = {
   readonly createDatabase?: () => AccountsDatabase;
-  readonly createOpenCodeAuthStore?: (path: string) => OpenCodeAuthStore;
   readonly createTokenRefresher?: (
     accountManager: AccountManager,
     tokenExpiryBufferMs: number,
     proxyUrl?: string,
   ) => PipelineTokenRefresher;
-  readonly createOpenCodeTokenRefresher?: (
-    accountManager: OpenCodeAccountManager,
-    store: OpenCodeAuthStore,
-    tokenExpiryBufferMs: number,
-    proxyUrl?: string,
-  ) => PipelineTokenRefresher;
   readonly createQuotaRechecker?: (
-    accountManager: AccountManager | OpenCodeAccountManager,
+    accountManager: AccountManager,
     tokenRefresher: PipelineTokenRefresher,
     config: Config,
     proxyUrl?: string,
   ) => PipelineQuotaRechecker;
   readonly createAccountMaintenance?: (
-    accountManager: AccountManager | OpenCodeAccountManager,
+    accountManager: AccountManager,
     tokenRefresher: PipelineTokenRefresher,
     quotaRechecker: PipelineQuotaRechecker,
     config: Config,
@@ -277,6 +269,9 @@ export function buildServerDeps(
   config: Config,
   factories: ServerDependencyFactories = {},
 ): AppDependencies {
+  if (config.auth_source === "opencode-shared") {
+    throw new Error(OPENCODE_SHARED_REMOVED_MESSAGE);
+  }
   if (config.protocol_projection_mode === "legacy-user-prefix") {
     auditLog("warn", "legacy_protocol_projection_enabled", {
       projection_mode: config.protocol_projection_mode,
@@ -297,63 +292,6 @@ export function buildServerDeps(
   const modelCapabilities =
     factories.createModelCapabilityService?.(config) ?? new ModelCapabilityService(config);
   const proxyUrl = resolveProxyUrl(config);
-  if (config.auth_source === "opencode-shared") {
-    const authStorePath = config.opencode_auth_db_path ?? defaultOpenCodeAuthDbPath();
-    const authStore =
-      factories.createOpenCodeAuthStore?.(authStorePath) ?? new OpenCodeAuthStore(authStorePath);
-    const accountManager = new OpenCodeAccountManager(authStore, config.account_selection_strategy);
-    const tokenRefresher = factories.createOpenCodeTokenRefresher
-      ? factories.createOpenCodeTokenRefresher(
-          accountManager,
-          authStore,
-          config.token_expiry_buffer_ms,
-          proxyUrl,
-        )
-      : new OpenCodeTokenRefresher(
-          accountManager,
-          authStore,
-          config.token_expiry_buffer_ms,
-          proxyUrl,
-        );
-    const quotaRechecker =
-      factories.createQuotaRechecker?.(accountManager, tokenRefresher, config, proxyUrl) ??
-      new QuotaRechecker({
-        accountManager,
-        tokenRefresher,
-        intervalMs: config.quota_recheck_interval_ms,
-        usageRefreshIntervalMs: config.usage_refresh_interval_ms,
-        timeoutMs: config.quota_recheck_timeout_ms,
-        concurrency: config.quota_recheck_concurrency,
-        proxyUrl,
-      });
-    const accountMaintenance =
-      factories.createAccountMaintenance?.(
-        accountManager,
-        tokenRefresher,
-        quotaRechecker,
-        config,
-      ) ??
-      new AccountMaintenanceService({
-        enabled: config.account_maintenance_enabled,
-        intervalMs: config.account_maintenance_interval_ms,
-        timeoutMs: config.account_maintenance_timeout_ms,
-        concurrency: config.account_maintenance_concurrency,
-        tokenExpiryBufferMs: config.token_expiry_buffer_ms,
-        accountManager,
-        tokenRefresher,
-        usageRefresher: quotaRechecker,
-      });
-    return {
-      accountManager,
-      tokenRefresher,
-      quotaRechecker,
-      accountMaintenance,
-      affinityStore: database,
-      reasoningReplayStore,
-      modelCapabilities,
-    };
-  }
-
   const accountManager = new AccountManager(
     database.getAccounts(),
     config.account_selection_strategy,

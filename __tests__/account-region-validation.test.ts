@@ -1,9 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { OpenCodeAuthStore } from "../src/auth/opencode-auth-store.js";
+import { join } from "node:path";
 import type { KiroRegion, ManagedAccount } from "../src/kiro/types.js";
 import { rowToAccount, validatedRegions } from "../src/storage/account-record.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
@@ -53,45 +52,6 @@ function corruptColumn(
   const raw = new Database(path, { strict: true });
   raw.query(`UPDATE accounts SET ${column} = ? WHERE id = ?`).run(value, id);
   raw.close();
-}
-
-function createOpenCodeDatabase(rows: readonly ManagedAccount[]): string {
-  const path = temporaryPath(join("opencode", "kiro.db"));
-  mkdirSync(dirname(path), { recursive: true });
-  const db = new Database(path, { create: true, strict: true });
-  db.run(`
-    CREATE TABLE accounts (
-      id TEXT PRIMARY KEY, email TEXT NOT NULL, auth_method TEXT NOT NULL,
-      region TEXT NOT NULL, oidc_region TEXT, client_id TEXT, client_secret TEXT,
-      profile_arn TEXT, start_url TEXT, refresh_token TEXT NOT NULL,
-      access_token TEXT NOT NULL, expires_at INTEGER NOT NULL,
-      rate_limit_reset INTEGER DEFAULT 0, is_healthy INTEGER DEFAULT 1,
-      unhealthy_reason TEXT, recovery_time INTEGER, fail_count INTEGER DEFAULT 0,
-      last_used INTEGER DEFAULT 0, used_count INTEGER DEFAULT 0,
-      limit_count INTEGER DEFAULT 0, overage_count INTEGER DEFAULT 0,
-      last_sync INTEGER DEFAULT 0
-    )
-  `);
-  db.run("CREATE TABLE removed_accounts (id TEXT PRIMARY KEY, removed_at INTEGER NOT NULL)");
-  const insert = db.query(`
-    INSERT INTO accounts (
-      id, email, auth_method, region, oidc_region, refresh_token, access_token, expires_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const row of rows) {
-    insert.run(
-      row.id,
-      row.email,
-      row.authMethod,
-      row.region,
-      row.oidcRegion ?? null,
-      row.refreshToken,
-      row.accessToken,
-      row.expiresAt,
-    );
-  }
-  db.close();
-  return path;
 }
 
 afterEach(() => {
@@ -215,30 +175,6 @@ describe("AccountsDatabase region validation", () => {
         database.insertAccount(account({ id: "bad", region: HOSTILE_REGION as KiroRegion })),
       ).toThrow(/invalid region/);
       expect(database.getAccounts()).toEqual([]);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-});
-
-describe("OpenCodeAuthStore region validation", () => {
-  test("skips rows with invalid regions and keeps the valid ones", () => {
-    const path = createOpenCodeDatabase([
-      account({ id: "hostile", region: HOSTILE_REGION as KiroRegion, oidcRegion: undefined }),
-      account({ id: "hostile-oidc", oidcRegion: HOSTILE_REGION as KiroRegion }),
-      account({ id: "valid", region: "eu-central-1", oidcRegion: undefined }),
-    ]);
-    const store = new OpenCodeAuthStore(path);
-    closers.push(() => store.close());
-
-    const warn = spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      expect(store.getAccounts().map((row) => row.id)).toEqual(["valid"]);
-      expect(store.getById("hostile")).toBeUndefined();
-      expect(store.getById("hostile-oidc")).toBeUndefined();
-      expect(store.getById("valid")?.region).toBe("eu-central-1");
-      expect(store.recordSelection("hostile", 1_000)).toBeUndefined();
-      expect(store.scheduleQuotaRecheck("hostile", 2_000)).toBeUndefined();
     } finally {
       warn.mockRestore();
     }

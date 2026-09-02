@@ -353,7 +353,6 @@ async function main(): Promise<void> {
           port,
           api_keys: [apiKey],
           auth_source: "local",
-          opencode_auth_db_path: join(temporaryRoot, "missing-opencode-database.db"),
           protocol_projection_mode: "legacy-user-prefix",
           session_affinity_mode: "explicit-only",
           enable_legacy_chat_completions: false,

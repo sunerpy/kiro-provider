@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { defaultOpenCodeAuthDbPath } from "../src/auth/opencode-auth-store.js";
+import { defaultOpenCodeDatabasePath } from "../src/cli/import-accounts.js";
 import { platformConfigRoot } from "../src/config/paths.js";
 import { defaultInstanceLockPath } from "../src/server/single-instance.js";
 
@@ -41,15 +41,15 @@ async function moduleDefaults(env: Record<string, string>): Promise<ModuleDefaul
 }
 
 describe("default store paths resolve through platformConfigRoot", () => {
-  test("the OpenCode database default honors an explicit root and ignores an empty one", () => {
+  test("the OpenCode import source default honors an explicit root and ignores an empty one", () => {
     expect(
-      defaultOpenCodeAuthDbPath({
+      defaultOpenCodeDatabasePath({
         XDG_CONFIG_HOME: "/tmp/opencode-config",
         APPDATA: "/tmp/opencode-config",
       }),
     ).toBe(join("/tmp/opencode-config", "opencode", "kiro.db"));
     // An empty variable used to be honored verbatim (yielding a relative path).
-    expect(defaultOpenCodeAuthDbPath({ XDG_CONFIG_HOME: "", APPDATA: "" })).toBe(
+    expect(defaultOpenCodeDatabasePath({ XDG_CONFIG_HOME: "", APPDATA: "" })).toBe(
       join(platformConfigRoot({ env: {} }), "opencode", "kiro.db"),
     );
   });
