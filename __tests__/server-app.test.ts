@@ -11,6 +11,7 @@ import {
 	buildServeOptions,
 	buildServerDeps,
 	createApp,
+	handleServeError,
 } from "../src/server/app.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
@@ -241,6 +242,35 @@ describe("buildServeOptions", () => {
 		expect(options.hostname).toBe(parsed.host);
 		expect(options.port).toBe(parsed.port);
 		expect(options.fetch).toBeFunction();
+	});
+
+	test("hardens the runtime: no development pages, bounded bodies, fixed error envelope", async () => {
+		const parsed = ConfigSchema.parse({
+			api_keys: ["sk-test"],
+			max_request_body_bytes: 2_048,
+		});
+		const options = buildServeOptions(parsed, {
+			accountManager: new ThrowingAccountManager(),
+			tokenRefresher: passThroughRefresher,
+		});
+
+		expect(options.development).toBe(false);
+		expect(options.maxRequestBodySize).toBe(2_048);
+		expect(options.error).toBe(handleServeError);
+
+		const response = handleServeError(new Error("sqlite: /var/lib/accounts.db is locked"));
+		const text = await response.text();
+		expect(response.status).toBe(500);
+		expect(response.headers.get("Content-Type")).toBe("application/json");
+		expect(text).not.toContain("accounts.db");
+		expect(JSON.parse(text)).toMatchObject({
+			error: {
+				type: "internal_error",
+				code: "internal_error",
+				message: expect.stringMatching(/^Internal server error \(request_id: req_/),
+				request_id: expect.stringMatching(/^req_/),
+			},
+		});
 	});
 });
 

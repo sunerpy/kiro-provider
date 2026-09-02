@@ -46,6 +46,11 @@ import {
   openAiInternalError,
 } from "./errors.js";
 import type { RouteDependencies } from "./ingress.js";
+import {
+  createGracefulShutdown,
+  DEFAULT_SHUTDOWN_DRAIN_MS,
+  type ShutdownServer,
+} from "./lifecycle.js";
 import type {
   RequestIdleTimeoutLease,
   RequestIdleTimeoutLeaseMaker,
@@ -62,6 +67,8 @@ import { handleResponses } from "./routes/responses.js";
 import {
 	acquireServiceInstanceLock,
 	bindServiceInstanceLease,
+	type InstanceLockAcquireOptions,
+	type ServiceInstanceLease,
 } from "./single-instance.js";
 
 export type {
@@ -433,6 +440,17 @@ export function buildServerDeps(
   };
 }
 
+/** Bun's last-resort handler: a fixed 500 envelope, never a rendered error page. */
+export function handleServeError(error: unknown): Response {
+  const requestId = newRequestId();
+  auditLog("error", "server_request_failed", {
+    request_id: requestId,
+    error_type: error instanceof Error ? error.name : typeof error,
+    detail_hash: auditHash(error instanceof Error ? error.message : String(error)),
+  });
+  return openAiInternalError(requestId);
+}
+
 export function buildServeOptions(
   config: Config,
   dependencies: AppDependencies,
@@ -440,20 +458,96 @@ export function buildServeOptions(
   return {
     hostname: config.host,
     port: config.port,
+    // Compiled binaries rarely set NODE_ENV; never fall back to Bun's
+    // development error pages with stack traces.
+    development: false,
+    // Let the runtime refuse oversized bodies before buffering them; the
+    // streaming ingress check stays as defense in depth.
+    maxRequestBodySize: config.max_request_body_bytes,
     fetch: createApp(config, dependencies),
+    error: handleServeError,
   };
 }
 
-export function startServer(config: Config): ReturnType<typeof Bun.serve> {
-	const lease = acquireServiceInstanceLock(config);
+export interface ServerHandle extends ShutdownServer {
+  readonly hostname?: string;
+  readonly port?: number;
+}
+
+export interface ServerSignalSource {
+  on(event: "SIGTERM" | "SIGINT", listener: () => void): unknown;
+}
+
+export interface StartServerOptions<S extends ServerHandle> {
+  /** Server factory; defaults to `Bun.serve`. */
+  readonly serve?: (options: Bun.Serve.Options<undefined>) => S;
+  readonly factories?: ServerDependencyFactories;
+  /** Where SIGTERM/SIGINT handlers are registered; defaults to `process`. */
+  readonly signalSource?: ServerSignalSource;
+  /** Terminates the process after shutdown; defaults to `process.exit`. */
+  readonly exit?: (code: number) => void;
+  readonly drainTimeoutMs?: number;
+  readonly drainPollMs?: number;
+  readonly lockOptions?: InstanceLockAcquireOptions;
+}
+
+/**
+ * Starts the gateway with its single-instance lock, background maintenance,
+ * and one shutdown routine shared by SIGTERM/SIGINT (exit 0) and lock
+ * compromise (exit 1, fail closed): stop accepting, drain in-flight requests
+ * within `drainTimeoutMs`, force-close, stop maintenance, release the lock,
+ * exit.
+ */
+export function startServer<S extends ServerHandle = Bun.Server<undefined>>(
+	config: Config,
+	options: StartServerOptions<S> = {},
+): S {
+	const exit = options.exit ?? ((code: number): void => process.exit(code));
+	const lease: ServiceInstanceLease | undefined = acquireServiceInstanceLock(config, {
+		...(options.lockOptions ?? {}),
+		exit,
+	});
 	try {
-		const dependencies = buildServerDeps(config);
-		const server = Bun.serve(buildServeOptions(config, dependencies));
+		const dependencies = buildServerDeps(config, options.factories);
+		const serve =
+			options.serve ??
+			((serveOptions: Bun.Serve.Options<undefined>): S =>
+				Bun.serve(serveOptions) as unknown as S);
+		const server = serve(buildServeOptions(config, dependencies));
+		// Capture the runtime's own stop before the lifecycle bindings wrap it so
+		// the shutdown routine controls when the lock is released.
+		const rawStop = server.stop.bind(server);
+		const shutdown = createGracefulShutdown({
+			server: {
+				stop: rawStop,
+				get pendingRequests(): number | undefined {
+					return server.pendingRequests;
+				},
+			},
+			...(dependencies.accountMaintenance
+				? { maintenance: dependencies.accountMaintenance }
+				: {}),
+			...(lease ? { lease } : {}),
+			exit,
+			drainTimeoutMs: options.drainTimeoutMs ?? DEFAULT_SHUTDOWN_DRAIN_MS,
+			...(options.drainPollMs !== undefined ? { drainPollMs: options.drainPollMs } : {}),
+		});
 		const leasedServer = bindServiceInstanceLease(server, lease);
-		return bindAccountMaintenanceLifecycle(
+		const managedServer = bindAccountMaintenanceLifecycle(
 			leasedServer,
 			dependencies.accountMaintenance,
 		);
+		lease?.onCompromised(() => {
+			void shutdown("lock_compromised", 1);
+		});
+		const signalSource = options.signalSource ?? process;
+		signalSource.on("SIGTERM", () => {
+			void shutdown("SIGTERM", 0);
+		});
+		signalSource.on("SIGINT", () => {
+			void shutdown("SIGINT", 0);
+		});
+		return managedServer;
 	} catch (error) {
 		lease?.release();
 		throw error;
