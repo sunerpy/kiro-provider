@@ -23,6 +23,7 @@
 - [Use with Zuno](#use-with-zuno)
 - [Use with Codex CLI](#use-with-codex-cli)
 - [Use with Claude Code](#use-with-claude-code)
+- [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [License](#license)
 
@@ -733,6 +734,20 @@ The preceding protocol/client matrix is retained in
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
 The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
 is retained as historical v0.4 evidence only.
+
+## Troubleshooting
+
+[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) is the symptom-first
+runbook: for each symptom it names the audit event, the
+`accounts list --details` availability value, or the HTTP status and
+`error.code` to look at, then the cause and the remedy. It covers
+`needs-relogin` and token-refresh failures, `quota-exhausted` versus
+`overage-blocked` (`stop_on_overage`), `503 no_healthy_accounts`, the
+`502 upstream_stream_*` codes with the pre-publication retry events, how to
+read `sdk_stream_terminal` when "the assistant announced a next step and
+stopped", reasoning-replay `400`s, the single-instance lock, configuration
+warnings, `413` variants, and proxy failures. It also lists `journalctl` grep
+recipes for the systemd service and the opt-in `request_shape` debug event.
 
 ## Development
 
