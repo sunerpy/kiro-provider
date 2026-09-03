@@ -1,3 +1,7 @@
+import {
+  ServiceQuotaExceededExceptionReason,
+  ValidationExceptionReason,
+} from "@aws/codewhisperer-streaming-client";
 import { isAccessTokenError } from "../kiro/health.js";
 
 export interface NormalizedSdkError {
@@ -29,6 +33,13 @@ export type ErrorClassification =
       readonly status?: number;
       readonly retryAfterMs?: number;
       readonly terminalStatus?: number;
+      /**
+       * Stable client-facing error code derived from the structured SDK
+       * `reason` (or, for a few legacy bodies, the message). Absent when the
+       * upstream failure carried no classifiable reason; the caller then falls
+       * back to the upstream exception name.
+       */
+      readonly code?: string;
     }
   | {
       /** Force one token refresh for the account, then retry on it. */
@@ -38,10 +49,35 @@ export type ErrorClassification =
       readonly forcedRefreshAccountId: string;
     };
 
+/** Client code for a request that exceeds the model's context window (HTTP 413). */
+export const CONTEXT_LENGTH_EXCEEDED_CODE = "context_length_exceeded";
+/** Client code for a tampered or foreign thinking signature (HTTP 400). */
+export const INVALID_REASONING_SIGNATURE_CODE = "invalid_reasoning_signature";
+/** Client code for a conversation that hit Kiro's per-conversation limit (HTTP 400). */
+export const CONVERSATION_LIMIT_EXCEEDED_CODE = "conversation_limit_exceeded";
+/** Client code for an account whose included monthly request quota is used up (HTTP 402). */
+export const MONTHLY_REQUEST_LIMIT_CODE = "monthly_request_limit";
+/** Client code for an account whose paid overage allowance is used up (HTTP 402). */
+export const OVERAGE_REQUEST_LIMIT_CODE = "overage_request_limit";
+
+/**
+ * Classification codes that mean "this account has no quota left". They carry
+ * the same switch/fail semantics as a bare upstream 402 and the caller persists
+ * the exhaustion for the account exactly as it does for a 402.
+ */
+export const QUOTA_EXHAUSTION_CODES: ReadonlySet<string> = new Set([
+  MONTHLY_REQUEST_LIMIT_CODE,
+  OVERAGE_REQUEST_LIMIT_CODE,
+]);
+
+const SERVICE_QUOTA_EXCEEDED_EXCEPTION = "ServiceQuotaExceededException";
+
 const KIRO_CONTEXT_OVERFLOW_PATTERNS = [
   /input is too long/i,
   /CONTENT_LENGTH_EXCEEDS_THRESHOLD/i,
 ] as const;
+/** Legacy message form of `THINKING_SIGNATURE_INVALID` for bodies without a reason. */
+const INVALID_REASONING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
 /**
  * Transport-level failure codes. Node/Bun socket errors expose `code`; Smithy's
  * NodeHttpHandler reports its request/connection timeout as `name: "TimeoutError"`
@@ -74,6 +110,31 @@ const NETWORK_ERROR_PATTERN =
 const GENERIC_ERROR_NAMES: ReadonlySet<string> = new Set(["Error", "TypeError"]);
 /** Upstream statuses that are retried on the same account before switching. */
 const RETRYABLE_SERVER_STATUSES: ReadonlySet<number> = new Set([500, 502, 503, 504]);
+/** Bound on `cause` traversal so a cyclic chain cannot hang normalization. */
+const MAX_CAUSE_DEPTH = 8;
+
+/**
+ * `ValidationException` reasons and their client codes. Two reasons describe a
+ * request that does not fit the context window and keep the historical 413;
+ * everything else is a plain client input error. Reasons absent from this map
+ * (REQUEST_BODY_INVALID, TOOL_CONFIG_MISSING, ...) fall back to their
+ * lower-cased enum value.
+ */
+const VALIDATION_REASON_CODES: ReadonlyMap<string, string> = new Map([
+  [ValidationExceptionReason.CONTENT_LENGTH_EXCEEDS_THRESHOLD, CONTEXT_LENGTH_EXCEEDED_CODE],
+  [ValidationExceptionReason.PROMPT_TOO_LONG, CONTEXT_LENGTH_EXCEEDED_CODE],
+  [ValidationExceptionReason.THINKING_SIGNATURE_INVALID, INVALID_REASONING_SIGNATURE_CODE],
+  [ValidationExceptionReason.TOOL_SCHEMA_INVALID, "invalid_tool_schema"],
+  [ValidationExceptionReason.TOOL_DUPLICATE, "duplicate_tool"],
+  [ValidationExceptionReason.TOOL_USE_RESULT_MISMATCH, "tool_result_mismatch"],
+  [ValidationExceptionReason.INVALID_CONVERSATION_ID, "invalid_conversation_id"],
+]);
+const CONTEXT_OVERFLOW_REASONS: ReadonlySet<string> = new Set([
+  ValidationExceptionReason.CONTENT_LENGTH_EXCEEDS_THRESHOLD,
+  ValidationExceptionReason.PROMPT_TOO_LONG,
+]);
+/** Every `ValidationException` reason the SDK declares, for the lower-cased fallback. */
+const VALIDATION_REASONS: ReadonlySet<string> = new Set(Object.values(ValidationExceptionReason));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -84,11 +145,27 @@ function readString(record: Record<string, unknown>, key: string): string | unde
   return typeof value === "string" ? value : undefined;
 }
 
-function readStatus(record: Record<string, unknown>): number | undefined {
-  const metadata = record.$metadata;
-  if (!isRecord(metadata)) return undefined;
-  const status = metadata.httpStatusCode;
-  return typeof status === "number" ? status : undefined;
+/** The error followed by its `cause` chain, outermost first, bounded and cycle-safe. */
+function causeChain(record: Record<string, unknown>): Record<string, unknown>[] {
+  const chain: Record<string, unknown>[] = [];
+  const seen = new Set<Record<string, unknown>>();
+  let current: unknown = record;
+  while (isRecord(current) && !seen.has(current) && chain.length < MAX_CAUSE_DEPTH) {
+    seen.add(current);
+    chain.push(current);
+    current = current.cause;
+  }
+  return chain;
+}
+
+function readStatus(chain: readonly Record<string, unknown>[]): number | undefined {
+  for (const record of chain) {
+    const metadata = record.$metadata;
+    if (!isRecord(metadata)) continue;
+    const status = metadata.httpStatusCode;
+    if (typeof status === "number") return status;
+  }
+  return undefined;
 }
 
 function readHeaders(
@@ -110,19 +187,27 @@ function readHeaders(
 /**
  * Prefer the error's own `code`/`name`; when that is only a generic constructor
  * name (Bun's `TypeError: fetch failed`, Smithy wrappers), fall back to the
- * socket-level `cause` so ECONNREFUSED and friends stay classifiable.
+ * first specific code along the `cause` chain so ECONNREFUSED and friends, or
+ * a wrapped `ServiceQuotaExceededException`, stay classifiable.
  */
-function readCode(record: Record<string, unknown>): string | undefined {
-  const own = readString(record, "code") ?? readString(record, "name");
-  if (own !== undefined && !GENERIC_ERROR_NAMES.has(own)) return own;
-  const cause = record.cause;
-  if (isRecord(cause)) {
-    const causeCode = readString(cause, "code") ?? readString(cause, "name");
-    if (causeCode !== undefined && !GENERIC_ERROR_NAMES.has(causeCode)) {
-      return causeCode;
-    }
+function readCode(chain: readonly Record<string, unknown>[]): string | undefined {
+  const [own] = chain;
+  const ownCode = own ? (readString(own, "code") ?? readString(own, "name")) : undefined;
+  if (ownCode !== undefined && !GENERIC_ERROR_NAMES.has(ownCode)) return ownCode;
+  for (const record of chain.slice(1)) {
+    const causeCode = readString(record, "code") ?? readString(record, "name");
+    if (causeCode !== undefined && !GENERIC_ERROR_NAMES.has(causeCode)) return causeCode;
   }
-  return own;
+  return ownCode;
+}
+
+/** The structured SDK `reason`, from the error itself or the first cause that carries one. */
+function readReason(chain: readonly Record<string, unknown>[]): string | undefined {
+  for (const record of chain) {
+    const reason = readString(record, "reason");
+    if (reason !== undefined) return reason;
+  }
+  return undefined;
 }
 
 export function normalizeSdkError(error: unknown): NormalizedSdkError {
@@ -130,10 +215,11 @@ export function normalizeSdkError(error: unknown): NormalizedSdkError {
     return { message: error instanceof Error ? error.message : String(error) };
   }
 
-  const status = readStatus(error);
+  const chain = causeChain(error);
+  const status = readStatus(chain);
   const message = readString(error, "message") ?? String(error);
-  const code = readCode(error);
-  const reason = readString(error, "reason");
+  const code = readCode(chain);
+  const reason = readReason(chain);
   const headers = readHeaders(error);
   return {
     message,
@@ -168,6 +254,17 @@ export function isNetworkError(error: NormalizedSdkError): boolean {
 }
 
 /**
+ * Whether a classification means the account's quota is spent: either a bare
+ * upstream 402 or a structured quota reason. Callers persist the exhaustion
+ * and remember the failure for the terminal 402 exactly as for a 402 status.
+ */
+export function isQuotaExhaustionClassification(classification: ErrorClassification): boolean {
+  if (classification.action === "refresh-then-retry") return false;
+  if (classification.code !== undefined) return QUOTA_EXHAUSTION_CODES.has(classification.code);
+  return classification.status === 402;
+}
+
+/**
  * 401 or invalid-bearer 403: one forced token refresh per account per request,
  * then switch accounts or fail. Pure: classifying the same rejection twice
  * without the caller recording the first decision yields the same decision.
@@ -188,16 +285,93 @@ function classifyRejectedCredentials(
     : { action: "fail", status, terminalStatus: status };
 }
 
-export function classifyError(
+/** Quota-exhausted semantics: switch when an alternative exists, otherwise terminal 402. */
+function classifyQuotaExhausted(
+  status: number,
+  context: ErrorClassificationContext,
+  code?: string,
+): ErrorClassification {
+  const codeField = code !== undefined ? { code } : {};
+  return context.accountCount > 1
+    ? { action: "switch", status, ...codeField }
+    : { action: "fail", status, terminalStatus: 402, ...codeField };
+}
+
+/** Terminal client input error carrying a stable code. */
+function failClientError(
+  error: NormalizedSdkError,
+  terminalStatus: number,
+  code: string,
+): ErrorClassification {
+  return { action: "fail", status: error.status ?? 400, terminalStatus, code };
+}
+
+/**
+ * `ValidationException` reasons are client input errors, never account or
+ * transient faults. Applied regardless of status so a validation failure
+ * delivered inside an already-open event stream (no HTTP status) still maps.
+ */
+function classifyValidationReason(
+  error: NormalizedSdkError,
+  reason: string,
+): ErrorClassification | undefined {
+  const mapped = VALIDATION_REASON_CODES.get(reason);
+  if (mapped !== undefined) {
+    return failClientError(error, CONTEXT_OVERFLOW_REASONS.has(reason) ? 413 : 400, mapped);
+  }
+  if (reason.startsWith("IMAGE_")) return failClientError(error, 400, "invalid_image");
+  if (reason.startsWith("DOCUMENT_")) return failClientError(error, 400, "invalid_document");
+  if (VALIDATION_REASONS.has(reason) || error.status === 400) {
+    return failClientError(error, 400, reason.toLowerCase());
+  }
+  return undefined;
+}
+
+/**
+ * `ServiceQuotaExceededException` is recognised by exception name (walked
+ * through `cause` during normalization) so it classifies even when the SDK
+ * delivered it inside the event stream without `$metadata.httpStatusCode`.
+ * `MONTHLY_REQUEST_COUNT` is shared with `ThrottlingException`, where it keeps
+ * the 429 semantics, so it only counts as quota exhaustion here when the name
+ * or a 402 status says so.
+ */
+function classifyServiceQuotaReason(
+  error: NormalizedSdkError,
+  reason: string,
+  context: ErrorClassificationContext,
+): ErrorClassification | undefined {
+  const quotaException = error.code === SERVICE_QUOTA_EXCEEDED_EXCEPTION || error.status === 402;
+  switch (reason) {
+    case ServiceQuotaExceededExceptionReason.MONTHLY_REQUEST_COUNT:
+      return quotaException
+        ? classifyQuotaExhausted(error.status ?? 402, context, MONTHLY_REQUEST_LIMIT_CODE)
+        : undefined;
+    case ServiceQuotaExceededExceptionReason.OVERAGE_REQUEST_LIMIT_EXCEEDED:
+      return classifyQuotaExhausted(error.status ?? 402, context, OVERAGE_REQUEST_LIMIT_CODE);
+    case ServiceQuotaExceededExceptionReason.CONVERSATION_LIMIT_EXCEEDED:
+      return failClientError(error, 400, CONVERSATION_LIMIT_EXCEEDED_CODE);
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Structured `reason` classification. Returns undefined when the reason is
+ * unknown so the status-based rules (and their message regex fallbacks) apply.
+ */
+function classifyByReason(
   error: NormalizedSdkError,
   context: ErrorClassificationContext,
-): ErrorClassification {
-  if (error.reason === "INVALID_MODEL_ID") {
+): ErrorClassification | undefined {
+  const reason = error.reason;
+  if (reason === undefined) return undefined;
+
+  if (reason === ValidationExceptionReason.INVALID_MODEL_ID) {
     const status = error.status ?? 400;
     return { action: "fail", status, terminalStatus: status };
   }
 
-  if (error.reason === "TEMPORARILY_SUSPENDED") {
+  if (reason === "TEMPORARILY_SUSPENDED") {
     return context.accountCount > 1
       ? {
           action: "switch",
@@ -210,19 +384,41 @@ export function classifyError(
         };
   }
 
+  return (
+    classifyServiceQuotaReason(error, reason, context) ?? classifyValidationReason(error, reason)
+  );
+}
+
+/** Reason-less 400: legacy message patterns decide the code, if any. */
+function classifyBadRequestBody(error: NormalizedSdkError): ErrorClassification {
+  if (isKiroContextOverflowBody(error.message)) {
+    return { action: "fail", status: 400, terminalStatus: 413, code: CONTEXT_LENGTH_EXCEEDED_CODE };
+  }
+  if (INVALID_REASONING_SIGNATURE_PATTERN.test(error.message)) {
+    return {
+      action: "fail",
+      status: 400,
+      terminalStatus: 400,
+      code: INVALID_REASONING_SIGNATURE_CODE,
+    };
+  }
+  return { action: "fail", status: 400, terminalStatus: 400 };
+}
+
+export function classifyError(
+  error: NormalizedSdkError,
+  context: ErrorClassificationContext,
+): ErrorClassification {
+  const byReason = classifyByReason(error, context);
+  if (byReason !== undefined) return byReason;
+
   switch (error.status) {
     case 400:
-      return {
-        action: "fail",
-        status: 400,
-        terminalStatus: isKiroContextOverflowBody(error.message) ? 413 : 400,
-      };
+      return classifyBadRequestBody(error);
     case 401:
       return classifyRejectedCredentials(401, context);
     case 402:
-      return context.accountCount > 1
-        ? { action: "switch", status: 402 }
-        : { action: "fail", status: 402, terminalStatus: 402 };
+      return classifyQuotaExhausted(402, context);
     case 403:
       if (isAccessTokenError(error.message)) {
         return classifyRejectedCredentials(403, context);
