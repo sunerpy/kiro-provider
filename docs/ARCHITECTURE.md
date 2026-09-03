@@ -186,6 +186,14 @@ check only.
   class) with the structured code preserved in the message.
 - `GET /ready` distinguishes `authentication_store_unavailable`,
   `reasoning_replay_store_unavailable`, and `model_catalog_unavailable`.
+- Once a route has produced its `CanonicalRequest`, the shared
+  `buildPipelineOptions` step emits one debug-level `request_shape` audit
+  event (`src/server/request-shape.ts`): message and role counts, tool
+  declaration/call/result and orphan-result counts, image/document counts,
+  reasoning-replay presence, `input_text_chars`, and a `tool_set_hash`. It is
+  computed only when `log_level` is `debug` and never carries message text,
+  tool arguments, or tool names; see
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md#request-shape-diagnostics-request_shape-debug).
 
 ## Process lifecycle
 
@@ -205,6 +213,8 @@ check only.
 - `src/server/app.ts` — HTTP entry point and route dispatch.
 - `src/server/ingress.ts` — shared request ingress: body-size limit, request
   deadlines, and the abort signals handed to every route.
+- `src/server/request-shape.ts` — content-free structural summary of a
+  canonical request behind the debug `request_shape` audit event.
 - `src/server/routes/` — per-endpoint handlers (`responses.ts`, `messages.ts`,
   `chat-completions.ts`, `models.ts`, `health.ts`, `readiness.ts`).
 - `src/protocol/output.ts` — strict, versioned canonical completion/event
