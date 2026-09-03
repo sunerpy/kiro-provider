@@ -24,6 +24,8 @@ import {
   isQuotaExhausted,
   isRefreshTokenDead,
   toDeadReason,
+  type OveragePolicy,
+  toOveragePolicy,
 } from "../kiro/health.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import { transformToSdkRequest } from "../kiro/transform/request-sdk.js";
@@ -44,6 +46,7 @@ import {
   isRetryableServerStatus,
   normalizeSdkError,
   type NormalizedSdkError,
+  isQuotaExhaustionClassification,
 } from "./error-classifier.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import {
@@ -210,13 +213,14 @@ function shortestRateLimitWaitMs(
   candidates: readonly ManagedAccount[],
   eligibleAccountIds: ReadonlySet<string>,
   now: number,
+  policy: OveragePolicy,
 ): number | undefined {
   const waits = candidates
     .filter(
       (account) =>
         eligibleAccountIds.has(account.id) &&
         account.isHealthy &&
-        !isQuotaExhausted(account) &&
+        !isQuotaExhausted(account, policy) &&
         account.rateLimitResetTime > now,
     )
     .map((account) => account.rateLimitResetTime - now);
@@ -668,7 +672,8 @@ async function scheduleQuotaRecheck(
   const lockedAccountExhausted =
     state.replayLocked &&
     recheckAccounts.some(
-      (account) => account.id === state.boundAccountId && isQuotaExhausted(account),
+      (account) =>
+        account.id === state.boundAccountId && isQuotaExhausted(account, overagePolicy(options)),
     );
   if (usableCandidate && !lockedAccountExhausted) {
     void rechecker
@@ -690,6 +695,23 @@ function authenticationFailureResult(failure: NormalizedSdkError): CompletionRes
       failure.status ?? 403,
       failure.message,
       failure.code ?? "upstream_authentication_failed",
+    ),
+  };
+}
+
+/** The overage gate the pipeline applies; prefers the manager's policy so both agree. */
+function overagePolicy(options: RunChatCompletionOptions): OveragePolicy {
+  return options.accountManager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
+}
+
+/** Every eligible account is healthy and within quota but held back by paid overage. */
+function paidOverageBlockedResult(): CompletionResult {
+  return {
+    kind: "response",
+    response: terminalError(
+      402,
+      "All eligible Kiro accounts are blocked by paid overage; set stop_on_overage to false or raise overage_threshold to keep using them",
+      "paid_overage_blocked",
     ),
   };
 }
@@ -740,7 +762,10 @@ function selectAttemptAccount(
       !state.modelRejectedAccountIds.has(account.id) &&
       !state.requestExcludedAccountIds.has(account.id),
   );
-  const quotaExhaustedAccounts = requestCandidates.filter(isQuotaExhausted);
+  const policy = overagePolicy(options);
+  const quotaExhaustedAccounts = requestCandidates.filter((account) =>
+    isQuotaExhausted(account, policy),
+  );
   const newlyReportedQuotaAccounts = quotaExhaustedAccounts.filter(
     (account) => !state.reportedQuotaExhaustedAccountIds.has(account.id),
   );
@@ -753,7 +778,7 @@ function selectAttemptAccount(
     });
   }
   const candidateAccountIds = requestCandidates
-    .filter((account) => !isQuotaExhausted(account))
+    .filter((account) => !isQuotaExhausted(account, policy))
     .map((account) => account.id);
   const cachedEligible = options.modelCapabilities?.eligibleAccountIds(
     options.model,
@@ -781,6 +806,15 @@ function selectAttemptAccount(
   }
   if (
     candidateAccountIds.length === 0 &&
+    state.lastQuotaFailure === undefined &&
+    options.accountManager.blockedByOverageOnly?.(
+      new Set(requestCandidates.map((account) => account.id)),
+    ) === true
+  ) {
+    return { kind: "result", result: paidOverageBlockedResult() };
+  }
+  if (
+    candidateAccountIds.length === 0 &&
     (quotaExhaustedAccounts.length > 0 || state.lastQuotaFailure)
   ) {
     return { kind: "result", result: quotaFailureResult(state.lastQuotaFailure) };
@@ -804,6 +838,7 @@ function selectAttemptAccount(
     requestCandidates,
     new Set(cachedEligible ?? candidateAccountIds),
     waitNow,
+    overagePolicy(options),
   );
   const remainingMs = options.config.request_timeout_ms - (waitNow - state.startedAt);
   if (waitMs !== undefined && waitMs <= remainingMs) {
@@ -1436,13 +1471,13 @@ async function applyClassification(
       if (error.status === 401 || (error.status === 403 && isAccessTokenError(error.message))) {
         state.lastAuthenticationFailure = error;
       }
-      if (error.status === 402) state.lastQuotaFailure = error;
+      if (isQuotaExhaustionClassification(classification)) state.lastQuotaFailure = error;
       if (error.reason === "TEMPORARILY_SUSPENDED") {
         options.accountManager.markUnhealthy(
           account,
           `InvalidTokenException: Account Suspended: ${error.message}`,
         );
-      } else if (error.status === 402) {
+      } else if (isQuotaExhaustionClassification(classification)) {
         persistQuotaExhaustion(options, account);
       } else {
         options.accountManager.markRateLimited(
@@ -1464,7 +1499,7 @@ async function applyClassification(
           ),
         });
       }
-      if (error.status === 402) {
+      if (isQuotaExhaustionClassification(classification)) {
         persistQuotaExhaustion(options, account);
       }
       if (error.reason === "TEMPORARILY_SUSPENDED") {
@@ -1478,7 +1513,7 @@ async function applyClassification(
         response: terminalError(
           classification.terminalStatus ?? classification.status ?? 500,
           error.message,
-          error.code,
+          classification.code ?? error.code,
         ),
       });
   }

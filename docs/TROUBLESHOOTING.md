@@ -177,8 +177,8 @@ and apply the same `grep`/`jq` filters to it.
   | --- | --- | --- | --- |
   | `sdk_stream_attempt_retry` | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | An attempt failed before the first semantic event reached the client; the pipeline is retrying (same account first, then another). Nothing was published, so the client sees no error. |
   | `sdk_stream_attempts_exhausted` | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash` | `stream_max_attempts` was spent; the last failure becomes the client-visible `502` or in-stream error. |
-  | `sdk_stream_empty_completion_retry` | `info` | `attempt`, `max_attempts`, `account_hash` | Kiro completed with no reasoning, text, or tool output; `retry_empty_completion` spends one more attempt on the same account. |
-  | `sdk_stream_transport_error_after_completion` | `info` | `error_code`, `account_hash`, `completion_witnessed` | The transport failed *after* an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
+  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`, `max_attempts`, `account_hash` | Kiro completed with no reasoning, text, or tool output; `retry_empty_completion` spends one more attempt on the same account. |
+  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`, `account_hash`, `completion_witnessed` | The transport failed *after* an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
 
 - **Cause:** `upstream_stream_error` is a reader, decoder, transport, or
   embedded upstream failure; `upstream_stream_incomplete` is a clean EOF
@@ -351,10 +351,11 @@ stopped":
 
 - **Look at:** HTTP `413`. `error.code` `request_too_large` (message
   `Request body exceeds the N byte limit`) is the ingress body limit. A `413`
-  with `error.type` `upstream_error` whose message says `input is too long`
-  or `CONTENT_LENGTH_EXCEEDS_THRESHOLD` is Kiro rejecting the prompt as
-  exceeding the model context; the provider remaps that upstream `400` to
-  `413` so clients can tell it from a malformed request.
+  with `error.type` `upstream_error` and `error.code` `context_length_exceeded`
+  is Kiro rejecting the prompt as exceeding the model context (structured
+  reasons `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `PROMPT_TOO_LONG`, or the
+  `input is too long` message on older responses); the provider remaps that
+  upstream `400` to `413` so clients can tell it from a malformed request.
 - **Cause:** The first is a body larger than `max_request_body_bytes`
   (default 10 MiB; Bun answers even larger bodies with a plain `413` before
   the JSON envelope). The second is conversation history, tool results, or

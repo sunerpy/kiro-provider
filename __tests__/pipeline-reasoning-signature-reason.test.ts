@@ -147,14 +147,14 @@ describe("structured invalid-signature detection", () => {
     expect(sends).toBe(1);
   });
 
-  test("an unrelated 400 reason stays on the generic upstream_error path", async () => {
+  test("an unrelated 400 reason surfaces its structured code on the upstream_error path", async () => {
     const { response } = await run(
-      validationException("Improperly formed request.", "CONTENT_LENGTH_EXCEEDS_THRESHOLD"),
+      validationException("Improperly formed request.", "SOME_OTHER_VALIDATION_REASON"),
     );
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
-      error: { type: "upstream_error", code: "ValidationException" },
+      error: { type: "upstream_error", code: "some_other_validation_reason" },
     });
   });
 });

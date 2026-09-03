@@ -160,8 +160,8 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   | --- | --- | --- | --- |
   | `sdk_stream_attempt_retry` | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 某次尝试在第一个语义事件送达客户端之前失败；流水线正在重试（先同一账号，再换账号）。尚未发布任何内容，客户端看不到错误。 |
   | `sdk_stream_attempts_exhausted` | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash` | `stream_max_attempts` 已用尽；最后一次失败成为客户端可见的 `502` 或流内错误。 |
-  | `sdk_stream_empty_completion_retry` | `info` | `attempt`、`max_attempts`、`account_hash` | Kiro 完成了流但没有任何推理、文本或工具输出；`retry_empty_completion` 在同一账号上多花一次尝试。 |
-  | `sdk_stream_transport_error_after_completion` | `info` | `error_code`、`account_hash`、`completion_witnessed` | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
+  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`、`max_attempts`、`account_hash` | Kiro 完成了流但没有任何推理、文本或工具输出；`retry_empty_completion` 在同一账号上多花一次尝试。 |
+  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`、`account_hash`、`completion_witnessed` | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
 
 - **原因：** `upstream_stream_error` 是读取器、解码器、传输或内嵌上游错误；
   `upstream_stream_incomplete` 是没有完成见证的干净 EOF。按契约两者都是
@@ -308,10 +308,11 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 
 - **查看：** HTTP `413`。`error.code` 为 `request_too_large`（message 为
   `Request body exceeds the N byte limit`）是入口的请求体上限。`error.type`
-  为 `upstream_error`、message 含 `input is too long` 或
-  `CONTENT_LENGTH_EXCEEDS_THRESHOLD` 的 `413`，则是 Kiro 以提示词超过模型
-  上下文为由拒绝；Provider 把该上游 `400` 重新映射为 `413`，以便客户端把它
-  与格式错误的请求区分开。
+  为 `upstream_error`、`error.code` 为 `context_length_exceeded` 的 `413`，
+  则是 Kiro 以提示词超过模型上下文为由拒绝（结构化 reason
+  `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `PROMPT_TOO_LONG`，或旧响应里的
+  `input is too long` 文本）；Provider 把该上游 `400` 重新映射为 `413`，以便
+  客户端把它与格式错误的请求区分开。
 - **原因：** 前者是请求体超过 `max_request_body_bytes`（默认 10 MiB；更大的
   请求体 Bun 会在 JSON 信封之前直接返回纯 `413`）。后者是会话历史、工具结果
   或附带文档超过了模型的上下文窗口。
