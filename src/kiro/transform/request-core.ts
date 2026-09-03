@@ -98,6 +98,11 @@ function projectMessages(request: CanonicalRequest): {
     .join("\n\n");
   const firstUserIndex = messages.findIndex((message) => message.role === "user");
   if (firstUserIndex < 0) {
+    // No user turn to glue into: the instruction block becomes its own leading
+    // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
+    // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
+    // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
+    // so the standalone turn is kept.
     messages.unshift({
       role: "user",
       content: [textPart(prefix, "legacy-user-prefix")],
