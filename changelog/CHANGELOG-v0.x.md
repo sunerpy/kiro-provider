@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0](https://github.com/sunerpy/kiro-provider/compare/v0.7.0...v0.8.0) (2026-09-03)
+
+
+### Features
+
+* **accounts:** gate selection on paid overage with the stop_on_overage knobs ([39bab58](https://github.com/sunerpy/kiro-provider/commit/39bab586ce0a0b7ea33623402431feb80613dc27))
+* **classifier:** map structured SDK reasons to stable client codes ([87053b2](https://github.com/sunerpy/kiro-provider/commit/87053b271aae7d00d265bdd211e12f88938ae334))
+* **config:** add stream retry and overage selection knobs ([4d7e2bb](https://github.com/sunerpy/kiro-provider/commit/4d7e2bb53ba606f52f2478b8dffbe040e2cdeea3))
+* **core:** retry upstream stream failures before the first semantic event ([52f199f](https://github.com/sunerpy/kiro-provider/commit/52f199f1be8c5422447dda911b25a97eb592cd37))
+* **core:** wire the overage gate and structured quota codes into the pipeline ([3f36e54](https://github.com/sunerpy/kiro-provider/commit/3f36e544d2e29297f9be8f9e17f3b69f2de3f368))
+* pre-publication stream retry, structured Kiro reasons, and overage gating ([a06024c](https://github.com/sunerpy/kiro-provider/commit/a06024c2436eb75d2f6e5275ba147e5858b40874))
+* pre-publication stream retry, structured Kiro reasons, and overage gating ([#27](https://github.com/sunerpy/kiro-provider/issues/27)) ([a06024c](https://github.com/sunerpy/kiro-provider/commit/a06024c2436eb75d2f6e5275ba147e5858b40874))
+* **server:** request shape diagnostics ([c3e2f83](https://github.com/sunerpy/kiro-provider/commit/c3e2f8311dd84bddbc107bd667a8774ffe624648))
+
+
+### Bug Fixes
+
+* **health:** treat corrupted stored credentials as permanent ([bac181a](https://github.com/sunerpy/kiro-provider/commit/bac181a2c2d539c9f1e1b6175346d855b0fddb04))
+* **transform:** tolerate transport errors after a completion witness ([9e9d858](https://github.com/sunerpy/kiro-provider/commit/9e9d85866b8f745a882e7b8bca8906334591380c))
+
 ## [0.7.0](https://github.com/sunerpy/kiro-provider/compare/v0.6.0...v0.7.0) (2026-09-02)
 
 
