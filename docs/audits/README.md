@@ -20,6 +20,7 @@ fact, so where records overlap the newer one supersedes the older conclusion.
 | [kiro-provider-full-code-review-2026-09-02.zh.md](kiro-provider-full-code-review-2026-09-02.zh.md) | Full v0.5.1 code review (revision 2): prioritized findings, a phased remediation plan, and the test backlog. |
 | [kiro-protocol-evidence-probe-2026-09-02.zh.md](kiro-protocol-evidence-probe-2026-09-02.zh.md) | Live evidence probes for review items B12/B20/B21/B25: usage reset fields, zero-parameter tool events, split same-role tool history, and thinking-signature replay validation. |
 | [pending-probes.zh.md](pending-probes.zh.md) | Open probe backlog: whether replaying signature-only reasoning envelopes improves tool-loop continuity, and whether the `legacy-user-prefix` standalone-user-turn projection reproduces the plugin's turn-2 early-stop regression. Lists method and the decision each outcome drives. |
+| [kiro-ab-probes-2026-09-03.zh.md](kiro-ab-probes-2026-09-03.zh.md) | 真机 A/B：签名-only 推理回放与独立指令轮均无显著差异，两项待探针关闭 |
 
 Older v0.4 evidence lives outside this directory in
 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and
