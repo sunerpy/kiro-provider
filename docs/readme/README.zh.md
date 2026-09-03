@@ -23,6 +23,7 @@
 - [配合 Zuno 使用](#配合-zuno-使用)
 - [配合 Codex CLI 使用](#配合-codex-cli-使用)
 - [配合 Claude Code 使用](#配合-claude-code-使用)
+- [排障](#排障)
 - [开发](#开发)
 - [许可证](#许可证)
 
@@ -694,6 +695,18 @@ v0.5.0 类型化流错误契约与 Zuno 下游接入说明见
 [`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
 旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
 仅保留为历史 v0.4 证据。
+
+## 排障
+
+[`docs/readme/TROUBLESHOOTING.zh.md`](TROUBLESHOOTING.zh.md) 是"症状优先"的
+排障手册：每个症状都指出应查看的审计事件、`accounts list --details` 的
+可用性取值或 HTTP 状态码与 `error.code`，再给出原因和处置。覆盖
+`needs-relogin` 与令牌刷新失败、`quota-exhausted` 与 `overage-blocked`
+（`stop_on_overage`）、`503 no_healthy_accounts`、`502 upstream_stream_*`
+及发布前重试事件、"助手宣布了下一步然后就停了"时如何解读
+`sdk_stream_terminal`、reasoning 回放的 `400`、单实例锁、配置告警、两种
+`413`、代理故障；并附 systemd 服务的 `journalctl` 查询模板与可选的
+`request_shape` 调试事件说明。
 
 ## 开发
 

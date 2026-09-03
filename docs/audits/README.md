@@ -18,6 +18,8 @@ fact, so where records overlap the newer one supersedes the older conclusion.
 | [kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md](kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md) | RC.5 acceptance: `accounts list / refresh / relogin / remove` operations and live-usage validation of the local store. |
 | [kiro-provider-v0.5.1-malformed-tool-arguments-validation-2026-08-30.md](kiro-provider-v0.5.1-malformed-tool-arguments-validation-2026-08-30.md) | v0.5.1 validation: syntactically malformed completed tool arguments are classified as retryable, separately from structural tool-call violations. |
 | [kiro-provider-full-code-review-2026-09-02.zh.md](kiro-provider-full-code-review-2026-09-02.zh.md) | Full v0.5.1 code review (revision 2): prioritized findings, a phased remediation plan, and the test backlog. |
+| [kiro-protocol-evidence-probe-2026-09-02.zh.md](kiro-protocol-evidence-probe-2026-09-02.zh.md) | Live evidence probes for review items B12/B20/B21/B25: usage reset fields, zero-parameter tool events, split same-role tool history, and thinking-signature replay validation. |
+| [pending-probes.zh.md](pending-probes.zh.md) | Open probe backlog: whether replaying signature-only reasoning envelopes improves tool-loop continuity, and whether the `legacy-user-prefix` standalone-user-turn projection reproduces the plugin's turn-2 early-stop regression. Lists method and the decision each outcome drives. |
 
 Older v0.4 evidence lives outside this directory in
 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and
