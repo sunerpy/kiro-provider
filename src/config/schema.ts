@@ -68,6 +68,11 @@ export const ConfigSchema = z.object({
   rate_limit_max_retries: z.number().int().min(0).max(100).default(3),
   rate_limit_retry_delay_ms: z.number().int().min(1).max(2_147_483_647).default(5000),
   quota_recheck_interval_ms: z.number().int().min(1).max(2_147_483_647).default(900_000),
+  // Paid overage is a selection gate, not a health signal: when true, an account whose
+  // overage count exceeds overage_threshold is treated as exhausted until the next
+  // authoritative usage sync shows it back within its included quota.
+  stop_on_overage: z.boolean().default(true),
+  overage_threshold: z.number().int().min(0).max(1_000_000).default(0),
   quota_recheck_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(10_000),
   quota_recheck_concurrency: z.number().int().min(1).max(32).default(4),
   account_maintenance_enabled: z.boolean().default(true),
@@ -78,6 +83,13 @@ export const ConfigSchema = z.object({
   max_request_iterations: z.number().int().min(1).max(1_000).default(20),
   request_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(120000),
   stream_idle_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(60000),
+  // Upstream stream attempts allowed before the first semantic event (reasoning,
+  // text, or tool call) is published; failures before that point are retried with
+  // the rate-limit backoff instead of surfacing to the client as a failed response.
+  stream_max_attempts: z.number().int().min(1).max(10).default(3),
+  // Spend one same-account retry when Kiro completes a stream with no reasoning,
+  // text, or tool output at all.
+  retry_empty_completion: z.boolean().default(true),
   max_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(10485760),
   token_expiry_buffer_ms: z.number().int().min(1).max(2_147_483_647).default(300000),
   session_affinity_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
