@@ -138,6 +138,18 @@ const numericFields: NumericField[] = [
     max: 2_147_483_647,
   },
   {
+    field: "stream_max_attempts",
+    envName: "KIRO_PROVIDER_STREAM_MAX_ATTEMPTS",
+    min: 1,
+    max: 10,
+  },
+  {
+    field: "overage_threshold",
+    envName: "KIRO_PROVIDER_OVERAGE_THRESHOLD",
+    min: 0,
+    max: 1_000_000,
+  },
+  {
     field: "session_affinity_ttl_ms",
     envName: "KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS",
     min: 1,

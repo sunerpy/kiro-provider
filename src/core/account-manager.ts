@@ -1,5 +1,10 @@
 import { decodeRefreshToken, encodeRefreshToken } from "../kiro/auth.js";
-import { isQuotaExhausted } from "../kiro/health.js";
+import {
+  DEFAULT_OVERAGE_POLICY,
+  isPermanentError,
+  isQuotaExhausted,
+  type OveragePolicy,
+} from "../kiro/health.js";
 import type {
   AccountSelectionStrategy,
   KiroAuthDetails,
@@ -7,12 +12,23 @@ import type {
   ManagedAccount,
 } from "../kiro/types.js";
 import type { AccountsDatabase, StoredAccount } from "../storage/accounts-db.js";
-import { AccountSelector, countSelectable, selectableCandidates } from "./account-selection.js";
+import {
+  AccountSelector,
+  countSelectable,
+  isBlockedOnlyByOverage,
+  isSelectableAccount,
+  selectableCandidates,
+} from "./account-selection.js";
 import { evictSdkClientsForAccount } from "./sdk-client.js";
 
 const MAX_CAS_ATTEMPTS = 4;
 
 type AccountPatch = (account: StoredAccount) => StoredAccount;
+
+export interface AccountManagerOptions {
+  /** Overage selection gate; defaults to stop_on_overage=true, overage_threshold=0. */
+  readonly overagePolicy?: OveragePolicy;
+}
 
 export class AccountConcurrentUpdateError extends Error {
   constructor(readonly accountId: string) {
@@ -49,14 +65,22 @@ export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
 export class AccountManager {
   private accounts: StoredAccount[];
   private readonly selector: AccountSelector;
+  private readonly overagePolicy: OveragePolicy;
 
   constructor(
     accounts: readonly StoredAccount[],
     strategy: AccountSelectionStrategy,
     private readonly database: AccountsDatabase,
+    options: AccountManagerOptions = {},
   ) {
     this.accounts = accounts.map(cloneAccount);
     this.selector = new AccountSelector(strategy);
+    this.overagePolicy = options.overagePolicy ?? DEFAULT_OVERAGE_POLICY;
+  }
+
+  /** The overage gate every selection and exhaustion decision of this manager applies. */
+  getOveragePolicy(): OveragePolicy {
+    return this.overagePolicy;
   }
 
   getAccountCount(): number {
@@ -109,7 +133,12 @@ export class AccountManager {
     eligibleAccountIds?: ReadonlySet<string>,
   ): StoredAccount | null {
     const now = Date.now();
-    const candidates = selectableCandidates(this.accounts, now, eligibleAccountIds);
+    const candidates = selectableCandidates(
+      this.accounts,
+      now,
+      eligibleAccountIds,
+      this.overagePolicy,
+    );
     if (candidates.length === 0) return null;
 
     const selected = this.selector.pick(candidates, preferredAccountId);
@@ -135,7 +164,30 @@ export class AccountManager {
    * given eligible ids. Used as the failover alternative count.
    */
   countSelectableAccounts(eligibleAccountIds?: ReadonlySet<string>, now = Date.now()): number {
-    return countSelectable(this.accounts, now, eligibleAccountIds);
+    return countSelectable(this.accounts, now, eligibleAccountIds, this.overagePolicy);
+  }
+
+  /**
+   * Whether the overage gate alone is what leaves nothing to select among the
+   * given account ids (all accounts when omitted). True only when none of them
+   * is selectable, at least one remains after ignoring permanently dead rows,
+   * and every remaining one is blocked solely by overage above the threshold:
+   * not exhausted on its included quota, not unhealthy. A genuinely rate-limited
+   * or included-quota-exhausted account therefore yields false, so the caller
+   * keeps its wait / quota_exhausted handling for those. Lets the pipeline
+   * answer 402 `paid_overage_blocked` with a `stop_on_overage` hint instead of
+   * a generic quota failure.
+   */
+  blockedByOverageOnly(accountIds?: ReadonlySet<string>, now = Date.now()): boolean {
+    const candidates = this.accounts.filter(
+      (account) =>
+        (accountIds?.has(account.id) ?? true) && !isPermanentError(account.unhealthyReason),
+    );
+    if (candidates.length === 0) return false;
+    if (candidates.some((account) => isSelectableAccount(account, now, this.overagePolicy))) {
+      return false;
+    }
+    return candidates.every((account) => isBlockedOnlyByOverage(account, now, this.overagePolicy));
   }
 
   markRateLimited(account: ManagedAccount, resetTime: number): StoredAccount | undefined {
@@ -158,7 +210,7 @@ export class AccountManager {
 
   scheduleQuotaRecheck(account: ManagedAccount, recheckAfter: number): StoredAccount | undefined {
     return this.patchAccount(account.id, (latest) =>
-      isQuotaExhausted(latest)
+      isQuotaExhausted(latest, this.overagePolicy)
         ? {
             ...latest,
             rateLimitResetTime: Math.max(latest.rateLimitResetTime, recheckAfter),
@@ -182,8 +234,8 @@ export class AccountManager {
         this.replaceAccount(current);
         return cloneAccount(current);
       }
-      const wasExhausted = isQuotaExhausted(current);
-      const snapshotExhausted = isQuotaExhausted(usage);
+      const wasExhausted = isQuotaExhausted(current, this.overagePolicy);
+      const snapshotExhausted = isQuotaExhausted(usage, this.overagePolicy);
       const updated: StoredAccount = {
         ...current,
         email: usage.email ?? current.email,

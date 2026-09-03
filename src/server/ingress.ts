@@ -20,6 +20,7 @@ import {
   openAiInternalError,
 } from "./errors.js";
 import type { IngressSignals, RequestIdleTimeoutLease } from "./request-lifecycle.js";
+import { auditRequestShape } from "./request-shape.js";
 
 /**
  * Dependencies shared by every request route. The HTTP entry point assembles
@@ -295,8 +296,15 @@ export interface PipelineOptionsInput {
   readonly deadlineSignal: AbortSignal;
 }
 
-/** Builds the `runChatCompletion` options every route hands to the pipeline. */
+/**
+ * Builds the `runChatCompletion` options every route hands to the pipeline.
+ *
+ * This is the one call each protocol route makes once its `CanonicalRequest`
+ * exists, so it also emits the debug-level `request_shape` diagnostic (counts
+ * and hashes only) for Responses, Messages, and Chat alike.
+ */
 export function buildPipelineOptions(input: PipelineOptionsInput): RunChatCompletionOptions {
+  auditRequestShape(input.body);
   const { dependencies } = input;
   return {
     body: input.body,

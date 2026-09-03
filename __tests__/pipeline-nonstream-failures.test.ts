@@ -19,6 +19,11 @@ import { canonicalRequest, message } from "./canonical-test-helpers.js";
  * failures are routed by normalizeStreamFailure().disposition — retryable
  * ones (malformed tool arguments, embedded stream error, truncation) get the
  * bounded retry, fatal ones terminate as 502 (never 500).
+ *
+ * A retryable failure before the first semantic event (no reasoning, text, or
+ * validated tool call yet) takes the pre-publication retry bounded by
+ * `stream_max_attempts`; one after semantic output keeps the
+ * `rate_limit_max_retries` bound.
  */
 
 const BODY = canonicalRequest([message("user", "hello")], { model: "auto" });
@@ -177,7 +182,7 @@ describe("non-stream stream-failure routing (B4)", () => {
     expect(scripted.sends()).toBe(2);
   });
 
-  test("returns 502 once a retryable failure exhausts the bounded retries", async () => {
+  test("returns 502 once a retryable pre-semantic failure exhausts stream_max_attempts", async () => {
     const malformed = exactResponse([
       { toolUseEvent: { toolUseId: "tool-1", name: "lookup", input: "{not json", stop: true } },
       COMPLETION,
@@ -188,7 +193,7 @@ describe("non-stream stream-failure routing (B4)", () => {
       body: BODY,
       model: "auto",
       stream: false,
-      config: config({ rate_limit_max_retries: 1 }),
+      config: config({ rate_limit_max_retries: 1, stream_max_attempts: 2 }),
       accountManager: new FakeAccountManager([account("account-a")]),
       tokenRefresher: refresher,
       makeClient: () => scripted.client,

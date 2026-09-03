@@ -1,5 +1,6 @@
 import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-streaming-client";
 import type { Config } from "../config/schema.js";
+import type { OveragePolicy } from "../kiro/health.js";
 import type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
@@ -23,6 +24,14 @@ export interface PipelineAccountManager {
    * ids. When absent the pipeline approximates it from the account rows.
    */
   countSelectableAccounts?(eligibleAccountIds: ReadonlySet<string>): number;
+  /** Overage gate the manager applies to selection; the pipeline mirrors it from config when absent. */
+  getOveragePolicy?(): OveragePolicy;
+  /**
+   * True when nothing among the given ids is selectable and every remaining
+   * account is held back only by paid overage (not by included quota, health,
+   * or a rate limit). Drives the 402 paid_overage_blocked terminal.
+   */
+  blockedByOverageOnly?(accountIds?: ReadonlySet<string>, now?: number): boolean;
   toAuthDetails(account: ManagedAccount): KiroAuthDetails;
   markRateLimited(account: ManagedAccount, resetTime: number): unknown;
   markQuotaExhausted?(account: ManagedAccount, recheckAfter: number): unknown;

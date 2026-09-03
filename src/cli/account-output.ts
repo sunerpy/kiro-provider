@@ -1,8 +1,27 @@
 import type { AccountRefreshSummary } from "../core/quota-rechecker.js";
-import { isPermanentError, isQuotaExhausted } from "../kiro/health.js";
+import {
+  DEFAULT_OVERAGE_POLICY,
+  isIncludedQuotaExhausted,
+  isOverageBlocked,
+  isPermanentError,
+  type OveragePolicy,
+} from "../kiro/health.js";
 import type { StoredAccount } from "../storage/accounts-db.js";
 
 export type AccountListMode = "table" | "details" | "json";
+
+/**
+ * Why an account is or is not selectable, in priority order. `quota-exhausted`
+ * is the included quota (usedCount >= limitCount); `overage-blocked` is paid
+ * overage above the configured threshold while stop_on_overage is on.
+ */
+export type AccountAvailability =
+  | "needs-relogin"
+  | "quota-exhausted"
+  | "overage-blocked"
+  | "rate-limited"
+  | "unhealthy"
+  | "available";
 
 export class AccountNotFoundError extends Error {
   constructor(readonly identifier: string) {
@@ -43,9 +62,14 @@ export function resolveAccount(
   return matches[0] as StoredAccount;
 }
 
-function accountAvailability(account: StoredAccount, now = Date.now()): string {
+export function accountAvailability(
+  account: StoredAccount,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+  now = Date.now(),
+): AccountAvailability {
   if (isPermanentError(account.unhealthyReason)) return "needs-relogin";
-  if (isQuotaExhausted(account)) return "quota-exhausted";
+  if (isIncludedQuotaExhausted(account)) return "quota-exhausted";
+  if (isOverageBlocked(account, policy)) return "overage-blocked";
   if (account.rateLimitResetTime > now) return "rate-limited";
   if (!account.isHealthy) return "unhealthy";
   return "available";
@@ -81,7 +105,10 @@ function renderTable(headers: readonly string[], rows: readonly (readonly string
   return [render(headers), render(widths.map((width) => "-".repeat(width))), ...rows.map(render)];
 }
 
-function accountJson(account: StoredAccount): Readonly<Record<string, unknown>> {
+function accountJson(
+  account: StoredAccount,
+  policy: OveragePolicy,
+): Readonly<Record<string, unknown>> {
   const used = account.usedCount ?? 0;
   const limit = account.limitCount ?? 0;
   return {
@@ -92,7 +119,7 @@ function accountJson(account: StoredAccount): Readonly<Record<string, unknown>> 
     oidc_region: account.oidcRegion ?? null,
     start_url: account.startUrl ?? null,
     health: account.isHealthy ? "healthy" : "unhealthy",
-    availability: accountAvailability(account),
+    availability: accountAvailability(account, policy),
     unhealthy_reason: account.unhealthyReason ?? null,
     used_count: used,
     limit_count: limit,
@@ -109,12 +136,19 @@ function accountJson(account: StoredAccount): Readonly<Record<string, unknown>> 
 export function formatAccountList(
   accounts: readonly StoredAccount[],
   mode: AccountListMode,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
 ): string[] {
   const sorted = [...accounts].sort(
     (left, right) => left.email.localeCompare(right.email) || left.id.localeCompare(right.id),
   );
   if (mode === "json") {
-    return [JSON.stringify(sorted.map(accountJson), null, 2)];
+    return [
+      JSON.stringify(
+        sorted.map((account) => accountJson(account, policy)),
+        null,
+        2,
+      ),
+    ];
   }
   if (mode === "details") {
     return renderTable(
@@ -138,7 +172,7 @@ export function formatAccountList(
         account.authMethod,
         account.region,
         account.isHealthy ? "healthy" : "unhealthy",
-        accountAvailability(account),
+        accountAvailability(account, policy),
         formatUsage(account),
         String(account.overageCount ?? 0),
         formatTimestamp(account.lastSync),
@@ -154,7 +188,7 @@ export function formatAccountList(
       account.email,
       account.region,
       account.isHealthy ? "healthy" : "unhealthy",
-      accountAvailability(account),
+      accountAvailability(account, policy),
       formatUsage(account),
     ]),
   );

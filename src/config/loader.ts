@@ -145,6 +145,8 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     field: "quota_recheck_interval_ms",
     kind: "integer",
   },
+  { env: "KIRO_PROVIDER_STOP_ON_OVERAGE", field: "stop_on_overage", kind: "boolean" },
+  { env: "KIRO_PROVIDER_OVERAGE_THRESHOLD", field: "overage_threshold", kind: "integer" },
   {
     env: "KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS",
     field: "quota_recheck_timeout_ms",
@@ -194,6 +196,12 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     env: "KIRO_PROVIDER_STREAM_IDLE_TIMEOUT_MS",
     field: "stream_idle_timeout_ms",
     kind: "integer",
+  },
+  { env: "KIRO_PROVIDER_STREAM_MAX_ATTEMPTS", field: "stream_max_attempts", kind: "integer" },
+  {
+    env: "KIRO_PROVIDER_RETRY_EMPTY_COMPLETION",
+    field: "retry_empty_completion",
+    kind: "boolean",
   },
   {
     env: "KIRO_PROVIDER_MAX_REQUEST_BODY_BYTES",

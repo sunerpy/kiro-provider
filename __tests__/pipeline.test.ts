@@ -592,12 +592,25 @@ describe("runChatCompletion resource ownership", () => {
     let secondSendCalls = 0;
     let firstResponse: Response | undefined;
     let secondResponse: Response | undefined;
+    let prefetchedTypes: readonly string[] | undefined;
+    // The pipeline prefetches to the first semantic event before hand-off, so
+    // the SDK stream must produce one; it then stalls like a live upstream.
     const sdkResponse: SdkStreamResponse = {
       generateAssistantResponseResponse: {
         [Symbol.asyncIterator](): AsyncIterator<SdkStreamEvent> {
           iteratorAcquisitions += 1;
+          let emitted = false;
           return {
-            next: () => new Promise<IteratorResult<SdkStreamEvent>>(() => undefined),
+            next: () => {
+              if (!emitted) {
+                emitted = true;
+                return Promise.resolve({
+                  done: false,
+                  value: { assistantResponseEvent: { content: "prefetched" } },
+                });
+              }
+              return new Promise<IteratorResult<SdkStreamEvent>>(() => undefined);
+            },
           };
         },
       },
@@ -618,9 +631,7 @@ describe("runChatCompletion resource ownership", () => {
         }),
       createStreamResponse: (result) => {
         constructorCalls += 1;
-        const upstream = result.sdkResponse.generateAssistantResponseResponse;
-        if (!upstream) throw new TypeError("SDK response must expose a stream");
-        upstream[Symbol.asyncIterator]();
+        prefetchedTypes = result.prepared?.prefetched.map((event) => event.type);
         throw new Error("stream construction failed");
       },
     };
@@ -643,21 +654,27 @@ describe("runChatCompletion resource ownership", () => {
       });
       await Bun.sleep(firstRequestTimeoutMs * 3);
 
-      // Then
+      // Then: the abandoned attempt is torn down by the pipeline (its send
+      // signal aborts with the construction error), never by the deadline.
+      const sendReason: unknown = firstSendSignal?.reason;
       expect({
         constructorCalls,
         iteratorAcquisitions,
+        prefetchedTypes,
         firstStatus: firstResponse.status,
         secondStatus: secondResponse.status,
         secondSendCalls,
-        deadlineAborted: firstSendSignal?.aborted ?? null,
+        attemptAborted: firstSendSignal?.aborted ?? null,
+        deadlineFired: sendReason instanceof DOMException && sendReason.name === "TimeoutError",
       }).toEqual({
         constructorCalls: 1,
         iteratorAcquisitions: 1,
+        prefetchedTypes: ["started", "text_delta"],
         firstStatus: 500,
         secondStatus: 200,
         secondSendCalls: 1,
-        deadlineAborted: false,
+        attemptAborted: true,
+        deadlineFired: false,
       });
     } finally {
       await firstResponse?.body?.cancel().catch(() => undefined);
