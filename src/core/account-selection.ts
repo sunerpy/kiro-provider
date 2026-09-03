@@ -1,4 +1,12 @@
-import { isAccessTokenError, isPermanentError, isQuotaExhausted } from "../kiro/health.js";
+import {
+  DEFAULT_OVERAGE_POLICY,
+  isAccessTokenError,
+  isIncludedQuotaExhausted,
+  isOverageBlocked,
+  isPermanentError,
+  isQuotaExhausted,
+  type OveragePolicy,
+} from "../kiro/health.js";
 import type { AccountSelectionStrategy, ManagedAccount } from "../kiro/types.js";
 
 function assertNever(value: never): never {
@@ -7,17 +15,44 @@ function assertNever(value: never): never {
 
 /**
  * Whether selectHealthyAccount may hand out this account right now: not
- * permanently dead, not quota-exhausted, not inside a rate-limit cooldown, and
- * either healthy, only suffering a refreshable access-token error, or past its
- * transient recovery time. Shared by the local and OpenCode account managers so
- * both apply the same health semantics.
+ * permanently dead, not quota-exhausted under the overage policy, not inside a
+ * rate-limit cooldown, and either healthy, only suffering a refreshable
+ * access-token error, or past its transient recovery time. Shared by
+ * AccountManager, the pipeline and the maintenance paths so all apply the same
+ * health semantics.
  */
-export function isSelectableAccount(account: ManagedAccount, now: number): boolean {
+export function isSelectableAccount(
+  account: ManagedAccount,
+  now: number,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+): boolean {
   if (isPermanentError(account.unhealthyReason)) return false;
-  if (isQuotaExhausted(account)) return false;
+  if (isQuotaExhausted(account, policy)) return false;
   if (account.rateLimitResetTime > now) return false;
+  return hasUsableHealth(account, now);
+}
+
+function hasUsableHealth(account: ManagedAccount, now: number): boolean {
   if (account.isHealthy || isAccessTokenError(account.unhealthyReason)) return true;
   return account.recoveryTime !== undefined && account.recoveryTime <= now;
+}
+
+/**
+ * Whether the overage gate is the only thing keeping this account out of
+ * selection: overage above the threshold, but not dead, not exhausted on its
+ * included quota, and with usable health. The rate-limit cooldown is ignored
+ * on purpose: an exhausted account stores its next quota recheck time there,
+ * so honoring it would hide the very accounts the gate parked.
+ */
+export function isBlockedOnlyByOverage(
+  account: ManagedAccount,
+  now: number,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+): boolean {
+  if (!isOverageBlocked(account, policy)) return false;
+  if (isPermanentError(account.unhealthyReason)) return false;
+  if (isIncludedQuotaExhausted(account)) return false;
+  return hasUsableHealth(account, now);
 }
 
 /** Selectable accounts restricted to the eligible ids, in stable id order. */
@@ -25,9 +60,10 @@ export function selectableCandidates<T extends ManagedAccount>(
   accounts: readonly T[],
   now: number,
   eligibleAccountIds?: ReadonlySet<string>,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
 ): T[] {
   return accounts
-    .filter((account) => isSelectableAccount(account, now))
+    .filter((account) => isSelectableAccount(account, now, policy))
     .filter((account) => eligibleAccountIds?.has(account.id) ?? true)
     .sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -41,9 +77,11 @@ export function countSelectable(
   accounts: readonly ManagedAccount[],
   now: number,
   eligibleAccountIds?: ReadonlySet<string>,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
 ): number {
   return accounts.filter(
-    (account) => isSelectableAccount(account, now) && (eligibleAccountIds?.has(account.id) ?? true),
+    (account) =>
+      isSelectableAccount(account, now, policy) && (eligibleAccountIds?.has(account.id) ?? true),
   ).length;
 }
 

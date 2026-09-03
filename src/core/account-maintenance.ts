@@ -1,8 +1,10 @@
 import { accessTokenExpired } from "../kiro/auth.js";
 import {
+  DEFAULT_OVERAGE_POLICY,
   isPermanentError,
   isQuotaExhausted,
   isRefreshTokenDead,
+  type OveragePolicy,
   toDeadReason,
 } from "../kiro/health.js";
 import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
@@ -11,6 +13,8 @@ import { auditHash, auditLog } from "./audit-log.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 interface MaintenanceAccountManager {
+  /** Overage gate shared with selection; maintenance mirrors it when no explicit policy is given. */
+  getOveragePolicy?(): OveragePolicy;
   reconcileFromDb(): readonly ManagedAccount[];
   toAuthDetails(account: ManagedAccount): KiroAuthDetails;
   markUnhealthy(account: ManagedAccount, reason: string, recoveryTime?: number): unknown;
@@ -40,6 +44,13 @@ export interface AccountMaintenanceOptions {
   readonly tokenRefresher: MaintenanceTokenRefresher;
   readonly usageRefresher: PipelineQuotaRechecker;
   readonly initialDelayMs?: number;
+  /** Explicit overage gate; defaults to the account manager's policy, then the built-in default. */
+  readonly overagePolicy?: OveragePolicy;
+}
+
+interface TokenCandidate {
+  readonly account: ManagedAccount;
+  readonly auth: KiroAuthDetails;
 }
 
 type TimerHandle = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>;
@@ -124,45 +135,40 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
     const timeoutSignal = AbortSignal.timeout(this.options.timeoutMs);
     const signal = parentSignal ? AbortSignal.any([parentSignal, timeoutSignal]) : timeoutSignal;
     const accounts = this.options.accountManager.reconcileFromDb();
-    const tokenCandidates = accounts.filter(
-      (account) =>
-        !isPermanentError(account.unhealthyReason) &&
-        !isQuotaExhausted(account) &&
-        accessTokenExpired(
-          this.options.accountManager.toAuthDetails(account),
-          this.options.tokenExpiryBufferMs,
-        ),
-    );
+    const policy = this.overagePolicy();
     let tokenRefreshed = 0;
     let tokenFailed = 0;
+    const tokenCandidates: TokenCandidate[] = [];
+    for (const account of accounts) {
+      if (isPermanentError(account.unhealthyReason) || isQuotaExhausted(account, policy)) {
+        continue;
+      }
+      const auth = this.authDetails(account);
+      if (auth === undefined) {
+        tokenFailed += 1;
+        continue;
+      }
+      if (accessTokenExpired(auth, this.options.tokenExpiryBufferMs)) {
+        tokenCandidates.push({ account, auth });
+      }
+    }
     let cursor = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         if (signal.aborted) throw signal.reason;
-        const account = tokenCandidates[cursor];
+        const candidate = tokenCandidates[cursor];
         cursor += 1;
-        if (!account) return;
+        if (!candidate) return;
         try {
           await this.options.tokenRefresher.refreshIfNeeded(
-            account,
-            this.options.accountManager.toAuthDetails(account),
+            candidate.account,
+            candidate.auth,
             signal,
           );
           tokenRefreshed += 1;
         } catch (error) {
           tokenFailed += 1;
-          const reason = errorReason(error);
-          if (isRefreshTokenDead(reason)) {
-            try {
-              this.options.accountManager.markUnhealthy(account, toDeadReason(reason));
-            } catch {
-              // The account may have been removed while maintenance ran.
-            }
-          }
-          auditLog("warn", "account_maintenance_token_refresh_failed", {
-            account_hash: auditHash(account.id),
-            ...errorFields(error),
-          });
+          this.recordTokenFailure(candidate.account, error);
         }
       }
     };
@@ -184,6 +190,43 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
       token_refreshed_count: tokenRefreshed,
       token_failed_count: tokenFailed,
       duration_ms: Date.now() - startedAt,
+    });
+  }
+
+  private overagePolicy(): OveragePolicy {
+    return (
+      this.options.overagePolicy ??
+      this.options.accountManager.getOveragePolicy?.() ??
+      DEFAULT_OVERAGE_POLICY
+    );
+  }
+
+  /**
+   * toAuthDetails for one account. Corrupted stored credentials (an IdC row
+   * without its client secret) throw a typed MISSING_CREDENTIALS error; that
+   * account is marked needs-relogin and skipped instead of aborting the pass.
+   */
+  private authDetails(account: ManagedAccount): KiroAuthDetails | undefined {
+    try {
+      return this.options.accountManager.toAuthDetails(account);
+    } catch (error) {
+      this.recordTokenFailure(account, error);
+      return undefined;
+    }
+  }
+
+  private recordTokenFailure(account: ManagedAccount, error: unknown): void {
+    const reason = errorReason(error);
+    if (isRefreshTokenDead(reason)) {
+      try {
+        this.options.accountManager.markUnhealthy(account, toDeadReason(reason));
+      } catch {
+        // The account may have been removed while maintenance ran.
+      }
+    }
+    auditLog("warn", "account_maintenance_token_refresh_failed", {
+      account_hash: auditHash(account.id),
+      ...errorFields(error),
     });
   }
 }

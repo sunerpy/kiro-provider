@@ -1,7 +1,10 @@
 import {
+  DEFAULT_OVERAGE_POLICY,
   isPermanentError,
   isQuotaExhausted,
   isRefreshTokenDead,
+  type OveragePolicy,
+  type QuotaCounts,
   toDeadReason,
 } from "../kiro/health.js";
 import type { KiroAuthDetails, KiroUsageSnapshot, ManagedAccount } from "../kiro/types.js";
@@ -15,6 +18,8 @@ import { auditHash, auditLog } from "./audit-log.js";
 import { abortable, abortReason } from "./pipeline-runtime.js";
 
 interface QuotaAccountManager {
+  /** Overage gate shared with selection; the rechecker mirrors it when no explicit policy is given. */
+  getOveragePolicy?(): OveragePolicy;
   toAuthDetails(account: ManagedAccount): KiroAuthDetails;
   markUnhealthy(account: ManagedAccount, reason: string, recoveryTime?: number): unknown;
   scheduleQuotaRecheck(account: ManagedAccount, recheckAfter: number): ManagedAccount | undefined;
@@ -51,6 +56,8 @@ export interface QuotaRecheckerOptions {
   readonly timeoutMs: number;
   readonly concurrency: number;
   readonly proxyUrl?: string;
+  /** Explicit overage gate; defaults to the account manager's policy, then the built-in default. */
+  readonly overagePolicy?: OveragePolicy;
   readonly now?: () => number;
   readonly fetchUsage?: (
     auth: KiroAuthDetails,
@@ -110,9 +117,9 @@ interface QuotaProbeOutcome {
   readonly account: AccountRefreshResult;
 }
 
-function isQuotaRecheckDue(account: ManagedAccount, now: number): boolean {
+function isQuotaRecheckDue(account: ManagedAccount, now: number, policy: OveragePolicy): boolean {
   return (
-    isQuotaExhausted(account) &&
+    isQuotaExhausted(account, policy) &&
     !isPermanentError(account.unhealthyReason) &&
     account.rateLimitResetTime <= now
   );
@@ -154,11 +161,7 @@ function errorFields(
   return baseErrorFields(error);
 }
 
-function usageCounts(account: ManagedAccount): {
-  readonly usedCount: number;
-  readonly limitCount: number;
-  readonly overageCount: number;
-} {
+function usageCounts(account: ManagedAccount): Required<QuotaCounts> {
   return {
     usedCount: account.usedCount ?? 0,
     limitCount: account.limitCount ?? 0,
@@ -166,10 +169,13 @@ function usageCounts(account: ManagedAccount): {
   };
 }
 
-function quotaStatus(account: ManagedAccount): AccountRefreshResult["quotaStatus"] {
+function quotaStatus(
+  account: ManagedAccount,
+  policy: OveragePolicy,
+): AccountRefreshResult["quotaStatus"] {
   const counts = usageCounts(account);
   if (counts.limitCount <= 0) return "unknown";
-  return isQuotaExhausted(counts) ? "exhausted" : "available";
+  return isQuotaExhausted(counts, policy) ? "exhausted" : "available";
 }
 
 function abortStatus(signal: AbortSignal): "timeout" | "aborted" {
@@ -183,10 +189,20 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
   private readonly usageRetryAfter = new Map<string, number>();
   private readonly now: () => number;
   private readonly fetchUsage: NonNullable<QuotaRecheckerOptions["fetchUsage"]>;
+  private readonly overagePolicy: OveragePolicy;
 
   constructor(private readonly options: QuotaRecheckerOptions) {
     this.now = options.now ?? Date.now;
     this.fetchUsage = options.fetchUsage ?? fetchUsageLimits;
+    this.overagePolicy =
+      options.overagePolicy ??
+      options.accountManager.getOveragePolicy?.() ??
+      DEFAULT_OVERAGE_POLICY;
+  }
+
+  /** The overage gate this rechecker applies when deciding exhaustion. */
+  getOveragePolicy(): OveragePolicy {
+    return this.overagePolicy;
   }
 
   async recheckDueAccounts(
@@ -196,7 +212,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
   ): Promise<void> {
     const startedAt = this.now();
     const due = accounts
-      .filter((account) => isQuotaRecheckDue(account, startedAt))
+      .filter((account) => isQuotaRecheckDue(account, startedAt, this.overagePolicy))
       .sort(
         (left, right) =>
           Number(right.id === preferredAccountId) - Number(left.id === preferredAccountId) ||
@@ -356,7 +372,10 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
   }
 
   private isUsageRefreshDue(account: ManagedAccount, now: number): boolean {
-    if (isPermanentError(account.unhealthyReason) || isQuotaExhausted(account)) {
+    if (
+      isPermanentError(account.unhealthyReason) ||
+      isQuotaExhausted(account, this.overagePolicy)
+    ) {
       return false;
     }
     if ((this.usageRetryAfter.get(account.id) ?? 0) > now) return false;
@@ -405,7 +424,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
           after: before,
           tokenStatus: "skipped_unhealthy",
           usageStatus: "skipped",
-          quotaStatus: quotaStatus(startedAccount),
+          quotaStatus: quotaStatus(startedAccount, this.overagePolicy),
           error: "Account needs re-login before its usage can be refreshed.",
         },
       };
@@ -427,7 +446,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
       }
       if (
         !force &&
-        !isQuotaRecheckDue(account, this.now()) &&
+        !isQuotaRecheckDue(account, this.now(), this.overagePolicy) &&
         !this.isUsageRefreshDue(account, this.now())
       ) {
         return {
@@ -439,13 +458,13 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
             after: usageCounts(account),
             tokenStatus,
             usageStatus: "skipped",
-            quotaStatus: quotaStatus(account),
+            quotaStatus: quotaStatus(account, this.overagePolicy),
           },
         };
       }
 
       phase = "usage";
-      const wasExhausted = isQuotaExhausted(account);
+      const wasExhausted = isQuotaExhausted(account, this.overagePolicy);
       let auth = this.options.accountManager.toAuthDetails(account);
       let usage: KiroUsageSnapshot;
       try {
@@ -467,7 +486,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
       }
 
       const lastSync = this.now();
-      const exhausted = isQuotaExhausted(usage);
+      const exhausted = isQuotaExhausted(usage, this.overagePolicy);
       const nextRecheckAt = exhausted
         ? exhaustedRecheckAt(lastSync, this.options.intervalMs, usage.resetAt)
         : 0;
@@ -486,14 +505,14 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
             after: usageCounts(account),
             tokenStatus,
             usageStatus: "skipped",
-            quotaStatus: quotaStatus(account),
+            quotaStatus: quotaStatus(account, this.overagePolicy),
             error: "Account was removed while its usage was being refreshed.",
           },
         };
       }
 
       this.usageRetryAfter.delete(account.id);
-      const persistedExhausted = isQuotaExhausted(persisted);
+      const persistedExhausted = isQuotaExhausted(persisted, this.overagePolicy);
       let result: QuotaRecheckResult = "updated";
       if (persistedExhausted) {
         auditLog(
@@ -521,7 +540,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
           after: usageCounts(persisted),
           tokenStatus,
           usageStatus: "updated",
-          quotaStatus: quotaStatus(persisted),
+          quotaStatus: quotaStatus(persisted, this.overagePolicy),
         },
       };
     } catch (error) {
@@ -534,7 +553,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
           // The account may have been removed while its probe was in flight.
         }
         this.usageRetryAfter.delete(account.id);
-      } else if (isQuotaExhausted(account)) {
+      } else if (isQuotaExhausted(account, this.overagePolicy)) {
         try {
           this.options.accountManager.scheduleQuotaRecheck(account, nextRecheckAt);
         } catch {
@@ -545,7 +564,9 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
       }
       auditLog(
         "warn",
-        isQuotaExhausted(account) ? "quota_recheck_failed" : "usage_refresh_failed",
+        isQuotaExhausted(account, this.overagePolicy)
+          ? "quota_recheck_failed"
+          : "usage_refresh_failed",
         {
           account_hash: auditHash(startedAccount.id),
           next_recheck_at: nextRecheckAt,
@@ -567,7 +588,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
                 ? "failed"
                 : tokenStatus,
           usageStatus: interrupted ?? (phase === "token" ? "skipped" : "failed"),
-          quotaStatus: quotaStatus(account),
+          quotaStatus: quotaStatus(account, this.overagePolicy),
           error: reason,
         },
       };
@@ -587,7 +608,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
       after: counts,
       tokenStatus: status,
       usageStatus: status,
-      quotaStatus: quotaStatus(account),
+      quotaStatus: quotaStatus(account, this.overagePolicy),
       error,
     };
   }
