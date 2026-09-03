@@ -18,7 +18,12 @@ and must not by itself make the error fatal.
 
 The provider does not retry after it has emitted response bytes. Retrying inside
 the same SSE response could duplicate text or repeat a tool side effect.
-Attempt-level retry belongs in the downstream orchestrator.
+Attempt-level retry after that point belongs in the downstream orchestrator.
+
+Before that point the provider owns the retry: an upstream failure that happens
+before the first semantic event exists is replaced by a new upstream attempt
+without the client ever seeing a `started` event or a terminal error. See
+[Provider-side pre-publication retry](#provider-side-pre-publication-retry).
 
 ## Error codes
 
@@ -142,6 +147,65 @@ Provider rollout should precede downstream classification rollout. The legacy
 generic `upstream_error` code mixed transient and protocol failures and should
 not be globally declared retryable during migration.
 
+## Provider-side pre-publication retry
+
+The streaming response is not published until the first **semantic** canonical
+event exists: `reasoning_delta`, `reasoning_redacted`, `text_delta`,
+`tool_call_delta`, or `completed`. Until then the pipeline drives the canonical
+stream into a small prefetch buffer. Once a semantic event is buffered the
+buffer and the live iterator are handed to the response as one stream, so a
+retried request produces exactly the same NDJSON/SSE sequence (`started` first)
+as an unretried one. The non-stream path publishes nothing until the end and
+therefore applies the same rule to failures that happen before its first
+semantic event.
+
+What is retried (only before the first semantic event):
+
+- any failure whose contract disposition is **retryable**
+  (`upstream_stream_error`, `upstream_stream_incomplete`,
+  `upstream_stream_idle_timeout`, `malformed_upstream_tool_arguments`), including
+  a stream idle timeout while waiting for the first event;
+- a **fully empty completion**: `completed` reached with a valid witness but
+  zero reasoning characters, zero visible text characters, zero tool calls, and
+  no signed/redacted/encrypted reasoning envelope. When
+  `retry_empty_completion` is `true` exactly one same-account replacement
+  attempt is spent; if it is empty as well, that result is returned.
+
+What is never retried by the provider:
+
+- anything after a semantic event has been produced, even if it only sits in
+  the prefetch buffer (the client-visible contract above applies unchanged);
+- **fatal** dispositions (`upstream_protocol_error`, `upstream_invalid_state`,
+  `unsupported_upstream_event`, `invalid_upstream_reasoning`,
+  `invalid_upstream_tool_call`, `incomplete_upstream_tool_call`,
+  `missing_upstream_stream`, `unknown_upstream_tool`,
+  `invalid_custom_tool_input`) — these return HTTP 502 with the code, as today;
+- a request deadline or client disconnect during the prefetch — the attempt is
+  torn down and the request ends with 504/499 exactly like a pre-commit abort.
+
+Bounds and account policy:
+
+- `stream_max_attempts` (default 3) is the total number of upstream streams
+  opened for one request, counting the initial attempt and the empty-completion
+  replacement. Exhausting it returns HTTP 502 with the last failure's code.
+- The first retry always reuses the same account. When the same account fails a
+  second time and another selectable account exists, the failing account is
+  excluded for this request and normal selection switches (its lease is
+  released before the next lease is taken). With no alternative, or under a
+  signed-reasoning replay lock, the same account is retried until the budget
+  is spent. Stream failures never change account health or rate-limit state.
+- Backoff is the rate-limit backoff: `rate_limit_retry_delay_ms` doubled per
+  failed attempt with up to 25% random jitter, bounded by the request deadline.
+- Each attempt owns its upstream abort; the failed attempt's socket is
+  destroyed before the replacement is sent.
+
+Transport errors after a completion witness: when a metering (or token-usage)
+witness has already been observed and the SDK reader then rejects with a
+transport error while draining the trailing bytes, the canonical stream
+completes normally and the fault is audited as
+`sdk_stream_transport_error_after_completion`. An embedded upstream `error` or
+`invalidStateEvent` after the witness still fails the stream as before.
+
 ## Zuno classification change
 
 In `crates/zuno-provider-compatible/src/stream.rs::classify`, inspect the
@@ -197,3 +261,38 @@ The `sdk_stream_upstream_error` audit event now includes:
 Raw exception prose is not logged, avoiding accidental credential or payload
 disclosure while still allowing repeated failures to be correlated. Raw tool
 arguments, tool IDs, and tool names are never written to the audit log.
+
+`sdk_stream_completed`, `sdk_stream_upstream_error`, `sdk_stream_idle_timeout`,
+and `sdk_stream_completion_witness` now carry `mode` (`stream` / `non-stream`).
+A failure audited during the prefetch phase additionally carries
+`phase: "prefetch"`.
+
+### Pre-publication retry events
+
+| Event | Level | Fields |
+| --- | --- | --- |
+| `sdk_stream_attempt_retry` | warn | `attempt` (the failed attempt, 1-based), `max_attempts`, `error_code`, `same_account` (boolean), `account_hash`, `mode` |
+| `sdk_stream_attempts_exhausted` | warn | `attempt`, `max_attempts`, `error_code`, `account_hash`, `mode` |
+| `sdk_stream_empty_completion_retry` | warn | `attempt`, `max_attempts`, `account_hash`, `model`, `conversation_hash`, `mode`, raw event counts |
+| `sdk_stream_transport_error_after_completion` | warn | `model`, `conversation_hash`, `witness_kind`, `error_type`, `error_code`, `error_disposition`, `error_message_hash`, safe cause fields |
+
+### Stream terminal telemetry
+
+Exactly one `sdk_stream_terminal` (info) is emitted per attempt-stream, on both
+the streaming and non-stream paths, including outcomes that previously left no
+trace (`consumer_cancel`, `external_abort`):
+
+- `terminal_provenance` ∈ `normal_complete`, `idle_timeout`, `upstream_error`,
+  `consumer_cancel`, `external_abort`
+- `completion_witnessed` (boolean) and `witness_kind`
+  (`token-usage-metadata` / `metering-clean-eof`)
+- `reasoning_chars`, `visible_chars`, `tool_count`, `reasoning_redacted`
+- `tool_intent_open` — a tool call started but never reached its stop marker
+- `finish_reason` and `finish_reason_synthesized` — present only when a
+  `completed` event exists; the latter is always `true` because Kiro exposes
+  no stop marker and the canonical finish reason is derived from the tool count
+- `canonical_event_count`, plus the existing `model`, `conversation_hash`,
+  `mode`, `raw_event_count`, `last_event_type`, `event_type_counts`
+
+Counts only; no reasoning, text, or tool content is ever logged.
+`sdk_stream_completed` is retained unchanged for backward compatibility.
