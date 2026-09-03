@@ -32,6 +32,10 @@ function sameTokenSnapshot(left: ManagedAccount, right: ManagedAccount): boolean
  * generation each caller holds. The shared refresh owns its own bounded
  * lifetime: a caller's AbortSignal only detaches that caller from the result,
  * it never cancels the refresh other callers are waiting on.
+ *
+ * Any refresh-token-dead failure, including corrupted stored credentials that
+ * fail before the network (`MISSING_CREDENTIALS` from toAuthDetails), marks
+ * the account needs-relogin before the typed error reaches the caller.
  */
 export class TokenRefresher {
   private readonly inFlight = new Map<string, Promise<StoredAccount>>();
@@ -49,7 +53,7 @@ export class TokenRefresher {
     signal?: AbortSignal,
   ): Promise<StoredAccount> {
     const current = this.latestAccount(account.id);
-    if (!accessTokenExpired(this.accountManager.toAuthDetails(current), this.tokenExpiryBufferMs)) {
+    if (!accessTokenExpired(this.authDetails(current), this.tokenExpiryBufferMs)) {
       return current;
     }
     return this.startOrJoinRefresh(current, false, signal);
@@ -63,6 +67,26 @@ export class TokenRefresher {
     const current = this.accountManager.getLatestAccount(accountId);
     if (!current) throw new AccountUnavailableError(accountId);
     return current;
+  }
+
+  /** toAuthDetails with dead-credential bookkeeping; rethrows the typed error. */
+  private authDetails(account: StoredAccount): KiroAuthDetails {
+    try {
+      return this.accountManager.toAuthDetails(account);
+    } catch (error) {
+      this.markDeadIfPermanent(account, error);
+      throw error;
+    }
+  }
+
+  private markDeadIfPermanent(account: ManagedAccount, error: unknown): void {
+    const reason = errorReason(error);
+    if (!isRefreshTokenDead(reason)) return;
+    try {
+      this.accountManager.markUnhealthy(account, toDeadReason(reason));
+    } catch {
+      // The account may have been removed while the refresh was in flight.
+    }
   }
 
   private startOrJoinRefresh(
@@ -88,12 +112,12 @@ export class TokenRefresher {
 
   private async runRefresh(started: ManagedAccount, force: boolean): Promise<StoredAccount> {
     const latest = this.latestAccount(started.id);
-    const latestAuth = this.accountManager.toAuthDetails(latest);
-    const alreadyRotated = force
-      ? !sameTokenSnapshot(started, latest)
-      : !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
-    if (alreadyRotated) return latest;
     try {
+      const latestAuth = this.accountManager.toAuthDetails(latest);
+      const alreadyRotated = force
+        ? !sameTokenSnapshot(started, latest)
+        : !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
+      if (alreadyRotated) return latest;
       const refreshedAuth = await refreshAccessToken(
         latestAuth,
         AbortSignal.timeout(this.refreshTimeoutMs),
@@ -103,14 +127,7 @@ export class TokenRefresher {
       if (!updated) throw new AccountUnavailableError(started.id);
       return updated;
     } catch (error) {
-      const reason = errorReason(error);
-      if (isRefreshTokenDead(reason)) {
-        try {
-          this.accountManager.markUnhealthy(latest, toDeadReason(reason));
-        } catch {
-          // The account may have been removed while the refresh was in flight.
-        }
-      }
+      this.markDeadIfPermanent(latest, error);
       throw error;
     }
   }

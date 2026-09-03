@@ -234,11 +234,19 @@ describe("classifyError HTTP decisions", () => {
       context(),
     );
 
-    expect(first).toEqual({ action: "fail", status: 400, terminalStatus: 413 });
+    // Both message forms carry the same client code as the structured
+    // CONTENT_LENGTH_EXCEEDS_THRESHOLD / PROMPT_TOO_LONG reasons.
+    expect(first).toEqual({
+      action: "fail",
+      status: 400,
+      terminalStatus: 413,
+      code: "context_length_exceeded",
+    });
     expect(second).toEqual({
       action: "fail",
       status: 400,
       terminalStatus: 413,
+      code: "context_length_exceeded",
     });
     expect(unrelated).toEqual({
       action: "fail",

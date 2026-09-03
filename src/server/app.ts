@@ -24,6 +24,7 @@ import {
   safeStep,
 } from "../core/stream-cleanup.js";
 import { TokenRefresher } from "../core/token-refresher.js";
+import { toOveragePolicy } from "../kiro/health.js";
 import {
   ModelCapabilityService,
   type PipelineModelCapabilities,
@@ -296,6 +297,7 @@ export function buildServerDeps(
     database.getAccounts(),
     config.account_selection_strategy,
     database,
+    { overagePolicy: toOveragePolicy(config) },
   );
   const tokenRefresher = factories.createTokenRefresher
     ? factories.createTokenRefresher(accountManager, config.token_expiry_buffer_ms, proxyUrl)
