@@ -21,10 +21,14 @@ import {
  * transformer exactly as on the streaming path, and `onRawEvent` /
  * `onCompletionWitness` expose the same raw-stream audit hooks.
  */
-export type CollectSdkResponseOptions = TransformSdkOutputOptions;
+export type CollectSdkResponseOptions = TransformSdkOutputOptions & {
+  /** Observes every canonical event as it is folded into the completion. */
+  readonly onCanonicalEvent?: (event: CanonicalOutputEvent) => void;
+};
 
 export class MissingSdkEventStreamError extends Error {
   readonly name = "MissingSdkEventStreamError";
+  readonly code = "missing_upstream_stream";
 
   constructor() {
     super("SDK response has no event stream");
@@ -62,6 +66,7 @@ export async function collectSdkResponse(
   let encryptedContent: string | undefined;
   const toolCalls = new Map<number, ToolCallAccumulator>();
   let completed: CompletedEvent | undefined;
+  const { onCanonicalEvent, ...transformOptions } = options;
 
   try {
     for await (const event of transformSdkOutputStream(
@@ -69,8 +74,9 @@ export async function collectSdkResponse(
       model,
       conversationId,
       signal,
-      options,
+      transformOptions,
     )) {
+      onCanonicalEvent?.(event);
       switch (event.type) {
         case "started":
           createdAt = event.createdAt;

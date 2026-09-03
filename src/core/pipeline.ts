@@ -10,7 +10,10 @@ import {
   type CanonicalRequest,
   type ResolvedReasoningReplay,
 } from "../protocol/canonical.js";
-import { CANONICAL_OUTPUT_JSON_CONTENT_TYPE } from "../protocol/output.js";
+import {
+  CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+  type CanonicalOutputEvent,
+} from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { KIRO_CONSTANTS } from "../kiro/constants.js";
@@ -51,11 +54,24 @@ import {
   acquireSessionQueue,
   createPipelineDeadline,
 } from "./pipeline-runtime.js";
-import { createPipelineStreamResponse } from "./pipeline-stream.js";
+import {
+  abandonPreparedStream,
+  createPipelineStreamResponse,
+  createStreamTelemetry,
+  isSemanticOutputEvent,
+  type PreparedCanonicalStream,
+  prepareCanonicalStream,
+  StreamIdleTimeoutError,
+  type StreamTelemetry,
+} from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type { PipelineAffinityBinding, RunChatCompletionOptions } from "./pipeline-types.js";
 import { createSdkClient, mergeModelRequestFields } from "./sdk-client.js";
-import { normalizeStreamFailure } from "./stream-error.js";
+import {
+  normalizeStreamFailure,
+  type StreamFailure,
+  streamErrorAuditFields,
+} from "./stream-error.js";
 import { AccountUnavailableError } from "./token-refresher.js";
 import { isSelectableAccount } from "./account-selection.js";
 
@@ -86,6 +102,8 @@ type CompletionResult =
       readonly releaseAccount: () => void;
       /** Aborts the upstream HTTP request of this attempt; idempotent. */
       readonly abortUpstream: (reason?: unknown) => void;
+      /** Canonical stream prefetched up to its first semantic event. */
+      readonly prepared: PreparedCanonicalStream;
     };
 
 interface ReplayState {
@@ -153,13 +171,18 @@ function refreshFailureReason(failure: RefreshFailure): string {
 }
 
 const INVALID_REASONING_SIGNATURE_PATTERN = /invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
+/** SDK `ValidationExceptionReason` for a rejected replayed thinking signature. */
+const INVALID_REASONING_SIGNATURE_REASON = "THINKING_SIGNATURE_INVALID";
 
 /**
  * Kiro rejects a tampered or foreign thinking signature with HTTP 400
- * `ValidationException: ... Invalid `signature` in `thinking` block`. That is
- * a client input error, never an account or transient fault.
+ * `ValidationException` carrying `reason: THINKING_SIGNATURE_INVALID` (and the
+ * message "Invalid `signature` in `thinking` block"). That is a client input
+ * error, never an account or transient fault. The structured reason is
+ * authoritative; the message pattern remains as the fallback.
  */
 function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
+  if (error.reason === INVALID_REASONING_SIGNATURE_REASON) return true;
   return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
 }
 
@@ -455,6 +478,14 @@ interface LoopState {
   preferredAccountId: string | undefined;
   requestAccountId: string | undefined;
   requestConversationId: string | undefined;
+  /** Upstream streams opened for this request; bounded by stream_max_attempts. */
+  streamAttempts: number;
+  /** Accounts that already spent their same-account pre-publication retry. */
+  readonly streamRetriedAccountIds: Set<string>;
+  /** The one-shot empty-completion replacement attempt has been spent. */
+  emptyCompletionRetried: boolean;
+  /** Most recent pre-publication stream failure, for the no-candidates terminal. */
+  lastStreamFailure: StreamFailure | undefined;
 }
 
 interface AttemptSelection {
@@ -481,6 +512,21 @@ type AttemptOutcome =
       readonly account: ManagedAccount;
       readonly caught: unknown;
       readonly upstreamStarted: boolean;
+    }
+  | {
+      /**
+       * The attempt-stream failed before any semantic event existed, so nothing
+       * reached a client buffer and a replacement attempt is safe.
+       */
+      readonly kind: "stream-failed";
+      readonly account: ManagedAccount;
+      readonly caught: unknown;
+      readonly failure: StreamFailure;
+    }
+  | {
+      /** Kiro completed with no output at all; one same-account replacement follows. */
+      readonly kind: "empty-completion";
+      readonly account: ManagedAccount;
     };
 
 type LoopDirective =
@@ -528,6 +574,10 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     preferredAccountId: boundAccountId,
     requestAccountId: boundAccountId,
     requestConversationId: replayState.conversationId ?? effectiveBinding?.conversationId,
+    streamAttempts: 0,
+    streamRetriedAccountIds: new Set<string>(),
+    emptyCompletionRetried: false,
+    lastStreamFailure: undefined,
   };
 }
 
@@ -734,6 +784,9 @@ function selectAttemptAccount(
     (quotaExhaustedAccounts.length > 0 || state.lastQuotaFailure)
   ) {
     return { kind: "result", result: quotaFailureResult(state.lastQuotaFailure) };
+  }
+  if (candidateAccountIds.length === 0 && state.lastStreamFailure !== undefined) {
+    return { kind: "result", result: streamFailureResult(undefined, state.lastStreamFailure) };
   }
   if (candidateAccountIds.length === 0 && state.lastRefreshFailure !== undefined) {
     return { kind: "result", result: refreshFailureResponse() };
@@ -944,83 +997,349 @@ async function runAttempt(
       signal,
     );
     const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId);
-    if (options.stream) {
-      return {
-        kind: "result",
-        leaseTransferred: true,
-        result: {
-          kind: "stream",
-          sdkResponse,
-          model: options.model,
-          conversationId: prepared.conversationId,
-          ...captureOptions,
-          releaseAccount,
-          abortUpstream,
-        },
-      };
-    }
-    // Non-stream collection shares the raw-event audit the streaming path emits
-    // from pipeline-stream.ts so both modes leave the same operator trail.
-    const eventTypeCounts = new Map<string, number>();
-    let rawEventCount = 0;
-    let lastEventType: string | undefined;
-    const collectAuditFields = (): Readonly<Record<string, string | number | undefined>> => ({
-      model: options.model,
-      conversation_hash: auditHash(prepared.conversationId),
-      raw_event_count: rawEventCount,
-      last_event_type: lastEventType,
-      event_type_counts: JSON.stringify(Object.fromEntries([...eventTypeCounts.entries()].sort())),
-      mode: "non-stream",
-    });
-    let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
-    try {
-      completion = await collectSdkResponse(
-        sdkResponse,
-        options.model,
-        prepared.conversationId,
-        signal,
-        {
-          ...captureOptions,
-          onCompletionWitness: (kind) => {
-            auditLog("info", "sdk_stream_completion_witness", {
-              model: options.model,
-              conversation_hash: auditHash(prepared.conversationId),
-              witness_kind: kind,
-              mode: "non-stream",
-            });
-          },
-          onRawEvent: (eventTypes) => {
-            rawEventCount += 1;
-            lastEventType = eventTypes.join("+");
-            for (const eventType of eventTypes) {
-              eventTypeCounts.set(eventType, (eventTypeCounts.get(eventType) ?? 0) + 1);
-            }
-          },
-        },
-      );
-    } catch (collectError) {
-      auditLog("warn", "sdk_stream_upstream_error", {
-        ...collectAuditFields(),
-        error_name: collectError instanceof Error ? collectError.name : typeof collectError,
-      });
-      abortUpstream(collectError);
-      throw collectError;
-    }
-    if (signal.aborted) throw abortReason(signal);
-    auditLog("info", "sdk_stream_completed", collectAuditFields());
-    return {
-      kind: "result",
-      leaseTransferred: false,
-      result: {
-        kind: "response",
-        response: Response.json(completion, {
-          headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
-        }),
-      },
+    const attemptContext: AttemptStreamContext = {
+      options,
+      signal,
+      state,
+      account,
+      conversationId: prepared.conversationId,
+      sdkResponse,
+      captureOptions,
+      abortUpstream,
     };
+    state.streamAttempts += 1;
+    return options.stream
+      ? await runStreamAttempt(attemptContext, releaseAccount)
+      : await runCollectAttempt(attemptContext);
   } catch (caught) {
     return { kind: "failed", account, caught, upstreamStarted };
   }
+}
+
+interface AttemptStreamContext {
+  readonly options: RunChatCompletionOptions;
+  readonly signal: AbortSignal;
+  readonly state: LoopState;
+  readonly account: ManagedAccount;
+  readonly conversationId: string;
+  readonly sdkResponse: SdkStreamResponse;
+  readonly captureOptions: ReturnType<typeof reasoningCaptureOptions>;
+  readonly abortUpstream: (reason?: unknown) => void;
+}
+
+/**
+ * Typed stream failures with an unknown code are protocol faults; anything
+ * else that escapes the transformer (SDK decoder, socket) is a stream error.
+ */
+function classifyStreamFailure(caught: unknown): StreamFailure {
+  return normalizeStreamFailure(
+    caught,
+    isStreamFailureError(caught) ? "upstream_protocol_error" : "upstream_stream_error",
+  );
+}
+
+/** Terminal 502 for a stream failure; typed errors keep their message, others the contract text. */
+function streamFailureResult(caught: unknown, failure: StreamFailure): CompletionResult {
+  const message = isStreamFailureError(caught) ? caught.message : failure.message;
+  return { kind: "response", response: terminalError(502, message, failure.code) };
+}
+
+/** Rate-limit backoff: exponential on the base delay with up to 25% jitter. */
+function streamRetryDelayMs(baseMs: number, failedAttempts: number): number {
+  const exponential = baseMs * 2 ** Math.max(0, failedAttempts - 1);
+  return Math.round(exponential * (1 + Math.random() * 0.25));
+}
+
+function toStreamError(error: unknown): Error {
+  return error instanceof Error
+    ? error
+    : new TypeError("SDK stream failed with a non-Error reason", { cause: error });
+}
+
+/**
+ * One canonical event with the stream idle timeout and the ingress signal
+ * applied. Rejects with StreamIdleTimeoutError or the abort reason; the
+ * underlying iterator promise is left to settle on its own after teardown.
+ */
+function nextWithIdleTimeout(
+  iterator: AsyncGenerator<CanonicalOutputEvent>,
+  signal: AbortSignal,
+  idleTimeoutMs: number,
+): Promise<IteratorResult<CanonicalOutputEvent>> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onAbort = (): void => {
+      cleanup();
+      reject(abortReason(signal));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new StreamIdleTimeoutError(idleTimeoutMs));
+    }, idleTimeoutMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    iterator.next().then(
+      (result) => {
+        cleanup();
+        resolve(result);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+type PrefetchOutcome =
+  | { readonly kind: "semantic" }
+  | { readonly kind: "failed"; readonly error: Error };
+
+/**
+ * Drives the canonical stream into the prefetch buffer until the first
+ * semantic event. A failure before that point is reported (and the attempt's
+ * upstream torn down) so the loop can decide on a replacement attempt; an
+ * external abort is rethrown after teardown exactly like a pre-commit abort.
+ */
+async function prefetchFirstSemanticEvent(
+  prepared: PreparedCanonicalStream,
+  signal: AbortSignal,
+  idleTimeoutMs: number,
+  abortUpstream: (reason?: unknown) => void,
+): Promise<PrefetchOutcome> {
+  const { iterator, telemetry, prefetched } = prepared;
+  const externalAbort = (): never => {
+    const reason = abortReason(signal);
+    telemetry.emitTerminal("external_abort");
+    abandonPreparedStream(prepared, abortUpstream, reason);
+    throw reason;
+  };
+  const fail = (error: Error): PrefetchOutcome => {
+    const idle = error instanceof StreamIdleTimeoutError;
+    auditLog("warn", idle ? "sdk_stream_idle_timeout" : "sdk_stream_upstream_error", {
+      ...telemetry.auditFields(),
+      ...streamErrorAuditFields(error),
+      ...(idle ? { idle_timeout_ms: idleTimeoutMs } : {}),
+      phase: "prefetch",
+    });
+    telemetry.emitTerminal(idle ? "idle_timeout" : "upstream_error");
+    abandonPreparedStream(prepared, abortUpstream, error);
+    return { kind: "failed", error };
+  };
+  while (true) {
+    let next: IteratorResult<CanonicalOutputEvent>;
+    try {
+      next = await nextWithIdleTimeout(iterator, signal, idleTimeoutMs);
+    } catch (error) {
+      if (signal.aborted) return externalAbort();
+      return fail(toStreamError(error));
+    }
+    if (next.done) {
+      // The transformer only ends early when its signal aborted.
+      if (signal.aborted) return externalAbort();
+      return fail(new SemanticStreamTruncationError());
+    }
+    telemetry.observeCanonicalEvent(next.value);
+    prefetched.push(next.value);
+    if (isSemanticOutputEvent(next.value)) return { kind: "semantic" };
+  }
+}
+
+/**
+ * B-empty: a witnessed completion with no reasoning, text, or tool call gets
+ * one same-account replacement attempt when the knob allows and the attempt
+ * budget has room. No health or rate-limit state changes.
+ */
+function shouldRetryEmptyCompletion(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  telemetry: StreamTelemetry,
+): boolean {
+  return (
+    options.config.retry_empty_completion &&
+    !state.emptyCompletionRetried &&
+    state.streamAttempts < options.config.stream_max_attempts &&
+    telemetry.isEmptyCompletion()
+  );
+}
+
+function recordEmptyCompletionRetry(
+  context: AttemptStreamContext,
+  telemetry: StreamTelemetry,
+): AttemptOutcome {
+  const { options, state, account } = context;
+  state.emptyCompletionRetried = true;
+  auditLog("warn", "sdk_stream_empty_completion_retry", {
+    ...telemetry.auditFields(),
+    attempt: state.streamAttempts,
+    max_attempts: options.config.stream_max_attempts,
+    account_hash: auditHash(account.id),
+  });
+  return { kind: "empty-completion", account };
+}
+
+/**
+ * Stream attempt: open the canonical stream, prefetch to the first semantic
+ * event, and only then hand the stream (with its buffer) to the response.
+ */
+async function runStreamAttempt(
+  context: AttemptStreamContext,
+  releaseAccount: () => void,
+): Promise<AttemptOutcome> {
+  const { options, signal, state, account, conversationId, sdkResponse, captureOptions } = context;
+  const streamResult = {
+    kind: "stream" as const,
+    sdkResponse,
+    model: options.model,
+    conversationId,
+    ...captureOptions,
+    releaseAccount,
+    abortUpstream: context.abortUpstream,
+  };
+  const prepared = prepareCanonicalStream(streamResult, signal);
+  const prefetch = await prefetchFirstSemanticEvent(
+    prepared,
+    signal,
+    options.config.stream_idle_timeout_ms,
+    context.abortUpstream,
+  );
+  if (prefetch.kind === "failed") {
+    return {
+      kind: "stream-failed",
+      account,
+      caught: prefetch.error,
+      failure: classifyStreamFailure(prefetch.error),
+    };
+  }
+  if (shouldRetryEmptyCompletion(options, state, prepared.telemetry)) {
+    // The prefetched stream completed normally (its terminal is reported as
+    // such); it is discarded unpublished in favour of the replacement.
+    auditLog("info", "sdk_stream_completed", prepared.telemetry.auditFields());
+    prepared.telemetry.emitTerminal("normal_complete");
+    abandonPreparedStream(prepared, undefined, undefined);
+    return recordEmptyCompletionRetry(context, prepared.telemetry);
+  }
+  return { kind: "result", leaseTransferred: true, result: { ...streamResult, prepared } };
+}
+
+/**
+ * Non-stream attempt: collect the whole canonical stream. Nothing is
+ * published until the end, so a failure before the first semantic event takes
+ * the same pre-publication retry as the stream path; later failures keep the
+ * disposition-based routing in applyClassification.
+ */
+async function runCollectAttempt(context: AttemptStreamContext): Promise<AttemptOutcome> {
+  const { options, signal, state, account, conversationId, sdkResponse, captureOptions } = context;
+  const telemetry = createStreamTelemetry(options.model, conversationId, "non-stream");
+  let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
+  try {
+    completion = await collectSdkResponse(sdkResponse, options.model, conversationId, signal, {
+      ...captureOptions,
+      onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
+      onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
+      onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
+      onCanonicalEvent: (event) => telemetry.observeCanonicalEvent(event),
+    });
+  } catch (collectError) {
+    const aborted = signal.aborted;
+    if (!aborted) {
+      auditLog("warn", "sdk_stream_upstream_error", {
+        ...telemetry.auditFields(),
+        ...streamErrorAuditFields(collectError),
+        error_name: collectError instanceof Error ? collectError.name : typeof collectError,
+      });
+    }
+    telemetry.emitTerminal(aborted ? "external_abort" : "upstream_error");
+    context.abortUpstream(collectError);
+    if (aborted) throw abortReason(signal);
+    if (!telemetry.semanticSeen) {
+      return {
+        kind: "stream-failed",
+        account,
+        caught: collectError,
+        failure: classifyStreamFailure(collectError),
+      };
+    }
+    throw collectError;
+  }
+  if (signal.aborted) {
+    telemetry.emitTerminal("external_abort");
+    throw abortReason(signal);
+  }
+  auditLog("info", "sdk_stream_completed", telemetry.auditFields());
+  telemetry.emitTerminal("normal_complete");
+  if (shouldRetryEmptyCompletion(options, state, telemetry)) {
+    return recordEmptyCompletionRetry(context, telemetry);
+  }
+  return {
+    kind: "result",
+    leaseTransferred: false,
+    result: {
+      kind: "response",
+      response: Response.json(completion, {
+        headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
+      }),
+    },
+  };
+}
+
+/**
+ * Phase 5a: pre-publication stream failure. Fatal dispositions and an
+ * exhausted stream_max_attempts budget terminate with the failure code. A
+ * retryable failure is first retried on the same account; when that account
+ * fails again and another selectable account exists it is excluded for this
+ * request so normal selection switches (the lease is released by the loop).
+ */
+async function applyStreamFailure(
+  options: RunChatCompletionOptions,
+  signal: AbortSignal,
+  state: LoopState,
+  selection: AttemptSelection,
+  outcome: Extract<AttemptOutcome, { kind: "stream-failed" }>,
+): Promise<LoopDirective> {
+  const { account, caught, failure } = outcome;
+  if (signal.aborted) throw abortReason(signal);
+  state.lastStreamFailure = failure;
+  const terminal = returning(streamFailureResult(caught, failure));
+  if (failure.disposition === "fatal") return terminal;
+  const maxAttempts = options.config.stream_max_attempts;
+  if (state.streamAttempts >= maxAttempts) {
+    auditLog("warn", "sdk_stream_attempts_exhausted", {
+      attempt: state.streamAttempts,
+      max_attempts: maxAttempts,
+      error_code: failure.code,
+      account_hash: auditHash(account.id),
+      mode: options.stream ? "stream" : "non-stream",
+    });
+    return terminal;
+  }
+  const alternativeIds = new Set(selection.eligibleAccountIds);
+  alternativeIds.delete(account.id);
+  const alternatives = state.replayLocked
+    ? 0
+    : countSelectableAlternatives(options, selection.accounts, alternativeIds);
+  const sameAccount = !state.streamRetriedAccountIds.has(account.id) || alternatives === 0;
+  state.streamRetriedAccountIds.add(account.id);
+  if (!sameAccount) {
+    state.requestExcludedAccountIds.add(account.id);
+    forgetPreferredAccount(state);
+  }
+  auditLog("warn", "sdk_stream_attempt_retry", {
+    attempt: state.streamAttempts,
+    max_attempts: maxAttempts,
+    error_code: failure.code,
+    same_account: sameAccount,
+    account_hash: auditHash(account.id),
+    mode: options.stream ? "stream" : "non-stream",
+  });
+  await abortableSleep(
+    streamRetryDelayMs(options.config.rate_limit_retry_delay_ms, state.streamAttempts),
+    signal,
+  );
+  return CONTINUE;
 }
 
 /**
@@ -1206,7 +1525,12 @@ async function executeLoop(
         forgetPreferredAccount(state);
         continue;
       }
-      const directive = await applyClassification(options, signal, state, selection, outcome);
+      // The preferred account is unchanged, so selection returns to it.
+      if (outcome.kind === "empty-completion") continue;
+      const directive =
+        outcome.kind === "stream-failed"
+          ? await applyStreamFailure(options, signal, state, selection, outcome)
+          : await applyClassification(options, signal, state, selection, outcome);
       if (directive.kind === "return") return directive.result;
     } finally {
       if (accountLeaseOwned) releaseAccount();
@@ -1239,16 +1563,24 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     releaseAccount = result.releaseAccount;
     const streamAccountRelease = releaseAccount;
     const streamSessionRelease = releaseSession;
-    const response = (options.createStreamResponse ?? createPipelineStreamResponse)(
-      result,
-      deadline.signal,
-      options.config.stream_idle_timeout_ms,
-      () => {
-        streamAccountRelease();
-        streamSessionRelease?.();
-        deadline.dispose();
-      },
-    );
+    let response: Response;
+    try {
+      response = (options.createStreamResponse ?? createPipelineStreamResponse)(
+        result,
+        deadline.signal,
+        options.config.stream_idle_timeout_ms,
+        () => {
+          streamAccountRelease();
+          streamSessionRelease?.();
+          deadline.dispose();
+        },
+      );
+    } catch (constructionError) {
+      // The prefetched upstream stream must not outlive a failed hand-off.
+      result.prepared.telemetry.emitTerminal("external_abort");
+      abandonPreparedStream(result.prepared, result.abortUpstream, constructionError);
+      throw constructionError;
+    }
     releaseAccount = undefined;
     releaseSession = undefined;
     streamOwnsResources = true;
