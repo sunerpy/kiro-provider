@@ -1,3 +1,5 @@
+import { auditHash, auditLog } from "../../../core/audit-log.js";
+import { streamErrorAuditFields } from "../../../core/stream-error.js";
 import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
 import { CANONICAL_OUTPUT_VERSION, type CanonicalOutputEvent } from "../../../protocol/output.js";
 import {
@@ -7,6 +9,7 @@ import {
   createReasoningCaptureState,
   isCompletionMetadataEvent,
   isCompletionMeteringEvent,
+  type NextSdkEvent,
   nextSdkEvent,
   resolveReasoningCapture,
   resolveUsage,
@@ -26,6 +29,12 @@ import {
 
 export type { SdkStreamEvent, SdkStreamResponse } from "./sdk-stream-runtime.js";
 
+/** Tool-call structure seen so far: calls without a stop marker versus stopped ones. */
+export interface ToolCallProgress {
+  readonly open: number;
+  readonly stopped: number;
+}
+
 export interface TransformSdkOutputOptions {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
@@ -34,6 +43,8 @@ export interface TransformSdkOutputOptions {
   readonly captureOutput?: SdkOutputCaptureHandler;
   readonly onCompletionWitness?: (kind: "token-usage-metadata" | "metering-clean-eof") => void;
   readonly onRawEvent?: (eventTypes: readonly string[]) => void;
+  /** Fires after every raw tool fragment; counts only, never arguments. */
+  readonly onToolCallProgress?: (progress: ToolCallProgress) => void;
 }
 
 export class MissingSdkOutputStreamError extends Error {
@@ -43,6 +54,12 @@ export class MissingSdkOutputStreamError extends Error {
   constructor() {
     super("SDK response has no event stream");
   }
+}
+
+function toolCallProgress(toolCalls: ReadonlyMap<string, ToolCallState>): ToolCallProgress {
+  let stopped = 0;
+  for (const toolCall of toolCalls.values()) if (toolCall.stopped) stopped += 1;
+  return { open: toolCalls.size - stopped, stopped };
 }
 
 function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): void {
@@ -87,7 +104,25 @@ export async function* transformSdkOutputStream(
     };
 
     while (true) {
-      const next = await nextSdkEvent(iterator, signal);
+      let next: NextSdkEvent;
+      try {
+        next = await nextSdkEvent(iterator, signal);
+      } catch (transportError) {
+        // A completion witness is authoritative: a transport failure while
+        // draining the trailing bytes after it must not erase a complete
+        // answer. Embedded error events never take this path; they are
+        // rejected by assertSupportedSdkEvent below.
+        if (completionWitness === undefined) throw transportError;
+        auditLog("warn", "sdk_stream_transport_error_after_completion", {
+          model,
+          conversation_hash: auditHash(conversationId),
+          witness_kind: completionWitness,
+          ...streamErrorAuditFields(transportError),
+        });
+        iteratorClosed = true;
+        closeIteratorWithoutBlocking(iterator);
+        break;
+      }
       if (next.kind === "aborted") {
         if (iterator.return) await iterator.return();
         iteratorClosed = true;
@@ -191,6 +226,7 @@ export async function* transformSdkOutputStream(
 
       if (event.toolUseEvent) {
         appendToolFragment(toolCalls, event.toolUseEvent);
+        options.onToolCallProgress?.(toolCallProgress(toolCalls));
       }
     }
   } finally {
