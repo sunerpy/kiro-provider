@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { RequestTransformError } from "../src/kiro/transform/errors.js";
+import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import type { ProtocolProjectionMode } from "../src/protocol/canonical.js";
 import { chatToCanonical } from "../src/server/protocol/chat-adapter.js";
 import { parseChatCompletionRequest } from "../src/server/request-schema.js";
+import { TEST_AUTH } from "./canonical-test-helpers.js";
 
 function adapt(raw: unknown, projectionMode: ProtocolProjectionMode = "safe") {
   const parsed = parseChatCompletionRequest(raw);
@@ -78,6 +81,49 @@ describe("Chat output-token projection", () => {
 });
 
 describe("Chat protocol-fidelity validation", () => {
+  test("rejects missing and blank tool descriptions at the Kiro projection boundary", () => {
+    const cases = [
+      {
+        request: {
+          model: "gpt-5.6-sol",
+          messages: [{ role: "user", content: "hello" }],
+          tools: [
+            {
+              type: "function",
+              function: { name: "read", parameters: { type: "object" } },
+            },
+          ],
+        },
+        param: "tools.0.function.description",
+      },
+      {
+        request: {
+          model: "gpt-5.6-sol",
+          messages: [{ role: "user", content: "hello" }],
+          tools: [{ name: "read", description: " ", input_schema: { type: "object" } }],
+        },
+        param: "tools.0.description",
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const adapted = adapt(fixture.request);
+      expect(adapted.ok).toBe(true);
+      if (!adapted.ok) continue;
+
+      try {
+        buildCodeWhispererRequest(adapted.value, "gpt-5.6-sol", TEST_AUTH);
+        throw new TypeError("Expected missing tool description rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RequestTransformError);
+        expect(error).toMatchObject({
+          code: "missing_tool_description",
+          param: fixture.param,
+        });
+      }
+    }
+  });
+
   test("supports only the exact standard streaming usage option", () => {
     expect(
       adapt({
@@ -348,7 +394,12 @@ describe("Chat protocol-fidelity validation", () => {
       "serial tool guarantee",
       {
         parallel_tool_calls: false,
-        tools: [{ type: "function", function: { name: "read", parameters: {} } }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "read", description: "Read a file", parameters: {} },
+          },
+        ],
       },
       "parallel_tool_calls",
     ],
@@ -411,6 +462,32 @@ describe("Chat protocol-fidelity validation", () => {
     });
   });
 
+  test("keeps a trailing developer reconciliation turn after assistant history", () => {
+    const result = adapt(
+      {
+        model: "gpt-5.6-sol",
+        messages: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: "final answer" },
+          { role: "developer", content: "RECONCILE" },
+        ],
+      },
+      "legacy-user-prefix",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const transformed = buildCodeWhispererRequest(result.value, "gpt-5.6-sol", TEST_AUTH);
+
+    expect(
+      transformed.request.conversationState.history?.map(
+        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
+      ),
+    ).toEqual(["question", "final answer"]);
+    expect(transformed.request.conversationState.currentMessage.userInputMessage?.content).toBe(
+      "RECONCILE",
+    );
+  });
+
   test("rejects unsupported message and content fields with exact source paths", () => {
     expect(
       adapt({
@@ -470,7 +547,11 @@ describe("Chat protocol-fidelity validation", () => {
         tools: [
           {
             type: "function",
-            function: { name: "read", parameters: { type: "object" } },
+            function: {
+              name: "read",
+              description: "Read a file",
+              parameters: { type: "object" },
+            },
           },
         ],
         messages: [
@@ -507,7 +588,11 @@ describe("Chat protocol-fidelity validation", () => {
     };
     const declaration = {
       type: "function",
-      function: { name: "read", parameters: { type: "object" } },
+      function: {
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object" },
+      },
     };
     expect(
       adapt({
@@ -548,6 +633,7 @@ describe("Chat protocol-fidelity validation", () => {
   test("rejects duplicate declarations and non-text tool messages", () => {
     const declaration = {
       name: "read",
+      description: "Read a file",
       input_schema: { type: "object" },
     };
     expect(

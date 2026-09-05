@@ -4,6 +4,7 @@ import type {
   CanonicalMessage,
   CanonicalProtocol,
   CanonicalRequest,
+  ProtocolProjectionMode,
 } from "../protocol/canonical.js";
 
 /**
@@ -17,6 +18,7 @@ import type {
  */
 export type RequestShape = {
   readonly protocol: CanonicalProtocol;
+  readonly projection_mode: ProtocolProjectionMode;
   readonly model: string;
   readonly message_count: number;
   readonly user_message_count: number;
@@ -158,6 +160,7 @@ export function describeRequestShape(canonical: CanonicalRequest): RequestShape 
 
   return {
     protocol: canonical.protocol,
+    projection_mode: canonical.projectionMode,
     model: canonical.model,
     message_count: messages.length,
     user_message_count: roles.user,
@@ -184,10 +187,13 @@ export function describeRequestShape(canonical: CanonicalRequest): RequestShape 
  * the summary is not even computed otherwise. Diagnostics never fail a
  * request: any unexpected error is swallowed.
  */
-export function auditRequestShape(canonical: CanonicalRequest): void {
+export function auditRequestShape(canonical: CanonicalRequest, requestId?: string): void {
   if (getAuditLogLevel() !== "debug") return;
   try {
-    auditLog("debug", REQUEST_SHAPE_EVENT, describeRequestShape(canonical));
+    auditLog("debug", REQUEST_SHAPE_EVENT, {
+      request_id: requestId,
+      ...describeRequestShape(canonical),
+    });
   } catch {
     // A diagnostic must never turn into a request failure.
   }

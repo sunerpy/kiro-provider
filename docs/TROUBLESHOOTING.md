@@ -399,7 +399,9 @@ counts, booleans, one hash, and two labels:
 
 | Field | Meaning |
 | --- | --- |
+| `request_id` | Random per-public-request correlation id shared with projection, dispatch, and terminal events. |
 | `protocol` | `responses`, `anthropic-messages`, or `chat-completions`. |
+| `projection_mode` | `safe` or `legacy-user-prefix`. |
 | `model` | The requested public model name. |
 | `message_count` | Canonical messages after adaptation. |
 | `user_message_count`, `assistant_message_count`, `tool_message_count`, `instruction_message_count` | Role counts (`instruction_message_count` is `system` plus `developer`). |
@@ -416,3 +418,10 @@ counts, booleans, one hash, and two labels:
 Use it to answer "did the client send the whole history?", "is a tool result
 arriving without its call?", or "how big is this conversation?" without ever
 enabling request-body logging, which the provider does not offer.
+
+At `debug`, the same `request_id` also appears on
+`request_projection_completed` and `request_history_built`. At `info`, each
+real SDK send emits `sdk_dispatch_started` with a one-based `attempt`; the same
+pair is copied to completion-witness and `sdk_stream_terminal` events.
+`request_transform_rejected` records only the stage, code, and source path.
+These events contain counts, enum labels, lengths, and hashes only.

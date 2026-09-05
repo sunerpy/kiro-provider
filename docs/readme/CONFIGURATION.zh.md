@@ -33,7 +33,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `port`                       | 整数 `0`-`65535`，默认 `8787`                                          | `KIRO_PROVIDER_PORT`                       | HTTP 监听端口。`0` 表示由操作系统分配临时端口（启动时会打印实际地址）；`serve --port 0` 会被拒绝。小数和超出范围的值会被拒绝，空的 `KIRO_PROVIDER_PORT` 也不再变成 `0`。                          |
 | `api_keys`                   | `string[]`，**必填，去空格后不能为空**                                 | `KIRO_PROVIDER_API_KEYS`                   | 接受的 Bearer Key 列表。环境变量以逗号分隔。空列表或仅含空白会被拒绝，服务不会启动（默认拒绝启动）。                                                                                               |
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
-| `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 仅用于指令迁移，计划在 v0.7.0 删除。                                                                                       |
+| `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 是已弃用的显式指令兼容模式，只有原生指令保真能力成立或客户端迁移完成后才会移除。                                           |
 | `session_affinity_mode`     | `"explicit-only" \| "legacy-initial-input"`，默认 `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` 绝不从提示词推导逻辑会话；`legacy-initial-input` 临时恢复旧版初始输入指纹，但不会改变模型可见内容。                                                                                  |
 | `auth_source` | `"local"`，默认 `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | 认证事实源。仅支持 provider 自有本地库。原有的 `"opencode-shared"` 取值自 0.7.0 起会在启动时被拒绝并给出迁移提示：先用 `kiro-provider accounts import` 导入一次，再改用 `"local"`。 |
 | `opencode_auth_db_path` | `string \| null`，默认 `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | 0.7.0 起弃用并忽略（记录一条告警），后续版本移除。需要非默认 OpenCode 数据库时改用 `kiro-provider accounts import --from <path>`。 |
@@ -202,10 +202,14 @@ KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
 OpenAI `system`/`developer` 与 Anthropic `system` 返回
 `unsupported_instruction_projection`，不会自动回退到 user 前缀。
 
-`legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本，并前置到首个 user
-回合。服务启动时输出不含正文的结构化警告；该模式不会恢复消息合并、重复
-内容折叠、尾部字符删除、合成工具说明或其他改写。迁移模式在 v0.5.x、
-v0.6.x 保留，计划在 v0.7.0 删除。
+`legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本。开头和中间的
+指令块仍前置到首个 user 回合；若可执行历史之后存在连续的尾部指令块，则
+它们会保留在当前边界：当前消息是 user/tool 时附加文本且不移动工具结果或
+附件，历史以 assistant 结果结束时才新建当前合成 user 回合。这样可避免把
+新的调和/续跑指令错误移到先前 assistant 结果之前。服务启动时输出不含正文
+的结构化警告；该模式不会恢复消息合并、重复内容折叠、尾部字符删除、合成
+工具说明或其他改写。该模式仍处于弃用状态，但不再绑定固定删除版本；只有 Kiro
+具备协议保真的原生指令通道，或受影响客户端完成迁移后才会移除。
 
 完整接受/拒绝范围见
 [`PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。

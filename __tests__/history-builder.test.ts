@@ -193,6 +193,65 @@ describe("safe and legacy instruction projection", () => {
     );
     expect(JSON.stringify(transformed.request)).not.toContain("system message");
   });
+
+  test("legacy mode keeps trailing reconciliation instructions after the assistant result", () => {
+    const request = canonicalRequest(
+      [
+        message("system", "SYS", "messages.0"),
+        message("user", "question", "messages.1"),
+        message("assistant", "final answer", "messages.2"),
+        message("developer", "WORK STATE", "messages.3"),
+        message("developer", "RECONCILE NOW", "messages.4"),
+      ],
+      { projectionMode: "legacy-user-prefix" },
+    );
+    const transformed = buildCodeWhispererRequest(request, TEST_MODEL, TEST_AUTH, {
+      conversationId: "conv-test",
+      resolvedReasoningReplays: [
+        {
+          insertBeforeMessage: 2,
+          content: {
+            kind: "reasoning_text",
+            text: "private plan",
+            signature: "sig",
+          },
+        },
+      ],
+    });
+
+    expect(
+      transformed.request.conversationState.history?.map(
+        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
+      ),
+    ).toEqual(["SYS\n\nquestion", "final answer"]);
+    expect(transformed.request.conversationState.currentMessage.userInputMessage?.content).toBe(
+      "WORK STATE\n\nRECONCILE NOW",
+    );
+    expect(
+      transformed.request.conversationState.history?.[1]?.assistantResponseMessage
+        ?.reasoningContent,
+    ).toEqual({
+      reasoningText: { text: "private plan", signature: "sig" },
+    });
+
+    const redacted = buildCodeWhispererRequest(request, TEST_MODEL, TEST_AUTH, {
+      conversationId: "conv-redacted",
+      resolvedReasoningReplays: [
+        {
+          insertBeforeMessage: 2,
+          content: {
+            kind: "redacted_content",
+            bytes: Uint8Array.from([1, 2, 3]),
+          },
+        },
+      ],
+    });
+    expect(
+      redacted.request.conversationState.history?.[1]?.assistantResponseMessage?.reasoningContent,
+    ).toEqual({
+      redactedContent: Uint8Array.from([1, 2, 3]),
+    });
+  });
 });
 
 describe("exact tool history declarations", () => {

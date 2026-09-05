@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { RequestTransformError } from "../src/kiro/transform/errors.js";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
@@ -216,9 +217,119 @@ describe("Responses instruction projection", () => {
       "TOP\n\nDEV\n\n  q{",
     );
   });
+
+  test("legacy mode preserves trailing reconciliation order after an assistant result", () => {
+    const result = adapt(
+      {
+        model: TEST_MODEL,
+        input: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: "final answer" },
+          { role: "developer", content: "WORK STATE" },
+          { role: "developer", content: "RECONCILE NOW" },
+        ],
+      },
+      "legacy-user-prefix",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const transformed = buildCodeWhispererRequest(result.body, TEST_MODEL, TEST_AUTH);
+
+    expect(
+      transformed.request.conversationState.history?.map(
+        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
+      ),
+    ).toEqual(["question", "final answer"]);
+    expect(transformed.request.conversationState.currentMessage.userInputMessage?.content).toBe(
+      "WORK STATE\n\nRECONCILE NOW",
+    );
+  });
+
+  test("legacy mode keeps a Responses tool result in the current Kiro message", () => {
+    const result = adapt(
+      {
+        model: TEST_MODEL,
+        tools: [
+          {
+            type: "function",
+            name: "read_file",
+            description: "Read one file",
+            parameters: { type: "object" },
+          },
+        ],
+        input: [
+          {
+            type: "function_call",
+            call_id: "call_1",
+            name: "read_file",
+            arguments: "{}",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: "done",
+          },
+          { role: "developer", content: "RECONCILE" },
+        ],
+      },
+      "legacy-user-prefix",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const transformed = buildCodeWhispererRequest(result.body, TEST_MODEL, TEST_AUTH);
+    const current = transformed.request.conversationState.currentMessage.userInputMessage;
+
+    expect(transformed.request.conversationState.history).toHaveLength(1);
+    expect(current?.content).toBe("RECONCILE");
+    expect(current?.userInputMessageContext?.toolResults).toEqual([
+      {
+        toolUseId: "call_1",
+        content: [{ text: "done" }],
+        status: "success",
+      },
+    ]);
+  });
 });
 
 describe("Responses exact function/custom tools", () => {
+  test("rejects missing or blank tool descriptions at the Kiro projection boundary", () => {
+    const cases = [
+      {
+        request: {
+          model: TEST_MODEL,
+          input: "hello",
+          tools: [{ type: "function", name: "read_file", parameters: { type: "object" } }],
+        },
+        param: "tools.0.description",
+      },
+      {
+        request: {
+          model: TEST_MODEL,
+          input: "hello",
+          tools: [{ type: "custom", name: "shell", description: "   " }],
+        },
+        param: "tools.0.description",
+      },
+    ] as const;
+
+    for (const fixture of cases) {
+      const adapted = adapt(fixture.request);
+      expect(adapted.ok).toBe(true);
+      if (!adapted.ok) continue;
+
+      try {
+        buildCodeWhispererRequest(adapted.body, TEST_MODEL, TEST_AUTH);
+        throw new TypeError("Expected missing tool description rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RequestTransformError);
+        expect(error).toMatchObject({
+          code: "missing_tool_description",
+          param: fixture.param,
+        });
+      }
+    }
+  });
+
   test("maps function call/result with its original declaration and arguments", () => {
     const result = adapt({
       model: TEST_MODEL,
@@ -260,6 +371,7 @@ describe("Responses exact function/custom tools", () => {
       name: "read_file",
       wireName: "read_file",
       description: "Read one file",
+      descriptionPath: "tools.0.description",
       inputSchema: {
         type: "object",
         properties: { path: { type: "string" } },
@@ -652,7 +764,14 @@ describe("Responses fail-closed capability validation", () => {
         model: TEST_MODEL,
         input: "q",
         parallel_tool_calls: false,
-        tools: [{ type: "function", name: "f", parameters: { type: "object" } }],
+        tools: [
+          {
+            type: "function",
+            name: "f",
+            description: "Run f",
+            parameters: { type: "object" },
+          },
+        ],
       },
       "unsupported_parallel_tool_calls",
       "parallel_tool_calls",

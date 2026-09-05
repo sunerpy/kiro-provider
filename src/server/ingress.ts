@@ -89,6 +89,7 @@ export const anthropicIngressErrors: IngressErrorEnvelope = {
 };
 
 export interface Ingress {
+  readonly requestId: string;
   readonly signals: IngressSignals;
   /**
    * Creates the per-request idle-timeout lease (once) and disables Bun's idle
@@ -105,6 +106,7 @@ export function createIngress(
   config: Pick<Config, "request_timeout_ms">,
   createLease?: () => RequestIdleTimeoutLease | undefined,
 ): Ingress {
+  const requestId = newRequestId();
   const deadlineController = new AbortController();
   const deadlineTimer = setTimeout(
     () => deadlineController.abort(new DOMException("Request deadline exceeded", "TimeoutError")),
@@ -113,10 +115,12 @@ export function createIngress(
   let lease: RequestIdleTimeoutLease | undefined;
   let leaseRequested = false;
   return {
+    requestId,
     signals: {
       combined: AbortSignal.any([deadlineController.signal, request.signal]),
       deadline: deadlineController.signal,
       client: request.signal,
+      requestId,
     },
     disableIdleTimeout(): void {
       if (leaseRequested) return;
@@ -251,7 +255,7 @@ async function readRequestBody(
     if (failure === "malformed") {
       return { ok: false, response: errors.malformedBody() };
     }
-    const requestId = newRequestId();
+    const requestId = signals.requestId ?? newRequestId();
     auditLog("error", "request_body_read_failed", {
       request_id: requestId,
       error_type: error instanceof Error ? error.name : typeof error,
@@ -286,6 +290,7 @@ export async function readJsonBody(
 }
 
 export interface PipelineOptionsInput {
+  readonly requestId: string;
   readonly body: CanonicalRequest;
   readonly model: string;
   readonly stream: boolean;
@@ -304,9 +309,10 @@ export interface PipelineOptionsInput {
  * and hashes only) for Responses, Messages, and Chat alike.
  */
 export function buildPipelineOptions(input: PipelineOptionsInput): RunChatCompletionOptions {
-  auditRequestShape(input.body);
+  auditRequestShape(input.body, input.requestId);
   const { dependencies } = input;
   return {
+    requestId: input.requestId,
     body: input.body,
     model: input.model,
     stream: input.stream,

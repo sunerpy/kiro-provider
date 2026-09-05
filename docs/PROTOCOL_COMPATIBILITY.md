@@ -2,7 +2,7 @@
 
 [简体中文](readme/PROTOCOL_COMPATIBILITY.zh.md) · English
 
-kiro-provider v0.5 is a **verified OpenAI/Anthropic compatibility subset**, not
+kiro-provider v0.8 is a **verified OpenAI/Anthropic compatibility subset**, not
 an implementation of every field accepted by the upstream APIs. The default
 `safe` projection mode preserves client text, roles, content-block boundaries,
 tool identity, ordering, and source paths. If Kiro cannot express a requested
@@ -14,12 +14,12 @@ or invents prose for orphan tools, omitted images, thinking, or Web Search.
 
 ## Compatibility matrix
 
-| Capability | v0.5 behavior |
+| Capability | v0.8 behavior |
 | --- | --- |
 | Plain text and consecutive same-role turns | Preserved in original order and sent without merge or separator text. A 2026-09-02 live probe confirmed that Kiro accepts the split tool-history projection (`A{content}`, `A{toolUses:[a]}`, `A{toolUses:[b]}`, `U{toolResults:[ra]}` plus a current `U{toolResults:[rb]}`) exactly like the native merged `A{content, toolUses:[a,b]}` + `U{toolResults:[ra,rb]}` shape, so the never-merge projection is retained. |
 | Multiple top-level text blocks in one message | Plain-text-only blocks remain separate in the canonical request and are concatenated exactly, with no inserted separator, only at Kiro's scalar text boundary. Multiple text blocks interleaved with non-text content are rejected with `unsupported_content_block_projection`; tool-result text arrays remain structured. |
-| Responses `instructions`; Chat/Responses `system` and `developer`; Anthropic `system` | `safe`: `unsupported_instruction_projection`. Valid `additionalContext` is structurally accepted by Kiro but did not preserve instruction content or priority in live GPT and Claude probes. `legacy-user-prefix`: exact text is joined with `\n\n` and prepended to the first user turn; without a user turn it becomes the leading user turn on its own (a 2026-09-03 live A/B found no turn-2 premature-stop difference between the two shapes, so no merge or rejection is applied); no other legacy rewrites return. |
-| Function tools and Responses custom tools | Exact declaration, public name, schema, call ID, arguments, result, order, and source path are retained. History without the exact declaration returns `missing_tool_declaration`. A zero-parameter call that Kiro completes without ever sending an `input` fragment (observed 2026-09-02 as `{toolUseId, name}` followed by `{toolUseId, name, stop: true}`) is projected as `{}`; any fragment that was received, including an empty or whitespace-only string, must parse as JSON or the stream fails with `malformed_upstream_tool_arguments`. A completed call whose wire name is not a declared tool fails with `unknown_upstream_tool`; a custom-tool wrapper that is not exactly `{"input": string}` fails with `invalid_custom_tool_input`. Both codes are returned as `response.failed` on the SSE path and as HTTP 502 on the non-stream path. |
+| Responses `instructions`; Chat/Responses `system` and `developer`; Anthropic `system` | `safe`: `unsupported_instruction_projection`. Valid `additionalContext` is structurally accepted by Kiro but did not preserve instruction content or priority in live GPT and Claude probes. `legacy-user-prefix`: exact text is joined with `\n\n`; leading/intermediate blocks prefix the first user turn. A trailing contiguous suffix stays at the current boundary: it is appended to a current user/tool message without moving structured input, or becomes a synthetic current user turn after an assistant result. Without any executable turn, instructions become the leading user turn on their own (a 2026-09-03 live A/B found no turn-2 premature-stop difference between the two shapes); no other legacy rewrites return. |
+| Function tools and Responses custom tools | Exact declaration, public name, non-empty description, schema, call ID, arguments, result, order, and source path are retained. Kiro rejects an empty tool description as `Invalid tool use format`, so an omitted or blank description fails locally with `missing_tool_description`; the provider never invents one. History without the exact declaration returns `missing_tool_declaration`. A zero-parameter call that Kiro completes without ever sending an `input` fragment (observed 2026-09-02 as `{toolUseId, name}` followed by `{toolUseId, name, stop: true}`) is projected as `{}`; any fragment that was received, including an empty or whitespace-only string, must parse as JSON or the stream fails with `malformed_upstream_tool_arguments`. A completed call whose wire name is not a declared tool fails with `unknown_upstream_tool`; a custom-tool wrapper that is not exactly `{"input": string}` fails with `invalid_custom_tool_input`. Both codes are returned as `response.failed` on the SSE path and as HTTP 502 on the non-stream path. |
 | `tool_choice: auto` | Supported. |
 | `tool_choice: none` | Supported only when no unfinished tool state requires a declaration. Otherwise rejected. |
 | Required/specific tool choice | Rejected with `unsupported_tool_choice`; Kiro cannot guarantee it. |
@@ -39,6 +39,7 @@ or invents prose for orphan tools, omitted images, thinking, or Web Search.
 | Stop reason and truncation | Kiro exposes no stop reason. Responses `status` is always `completed` and `incomplete_details` is always `null`; Anthropic `stop_reason` is `tool_use` when tool calls were emitted and `end_turn` otherwise and is never `max_tokens`. An output truncated by the native output-token limit is therefore indistinguishable from a normal end of turn. |
 | Responses item and usage shape | `output_text` parts carry `annotations: []` and `logprobs: []`; function and custom tool items carry `status` (`in_progress` on `output_item.added`, `completed` on `output_item.done` and in non-streaming output); `usage` carries `input_tokens_details.cached_tokens` and `output_tokens_details.reasoning_tokens`, both always `0` because Kiro exposes no such breakdown. |
 | Anthropic thinking blocks | Reasoning before text streams as one `thinking` block whose `signature_delta` may arrive after the last `thinking_delta` but before the block stops. A thinking block that completes without any signature, or a signature without a block, fails the stream with `invalid_upstream_reasoning` (`api_error`), the same disposition as the non-stream HTTP 502. Reasoning that arrives after text started is emitted as a new block when the response completes; redacted envelopes that arrive while text is open wait until the text block stops, so no delta ever targets a stopped block. `message_delta.usage` carries the canonical `input_tokens` and `output_tokens` (cache counters are always `0`); `message_start.usage.input_tokens` remains the estimate flagged by `x-kiro-token-count-mode: estimate`. Replayed `thinking` blocks must carry the non-empty signature that was returned; `tool_result.content` may be omitted and is treated as an empty result. |
+| Anthropic assistant prefill | Unsupported. A Messages request ending in an assistant message has no Kiro current user input and is rejected before any upstream request. The Anthropic error envelope preserves the explanatory message; the internal/OpenAI-compatible transform code is `missing_current_input`. |
 
 Unknown nested fields in supported objects are rejected with a field path.
 This is intentional: accepting and discarding them would falsely claim protocol
@@ -59,13 +60,27 @@ Zuno integration handoff is in
 - `safe`: no model-visible compatibility text. Unsupported instruction roles
   return `unsupported_instruction_projection`.
 - `legacy-user-prefix`: migration-only behavior for instruction text. The
-  provider joins the original instruction blocks with exactly `\n\n` and
-  prefixes the first user text. Startup emits a structured warning containing
-  no request content. This mode does not restore message merging, content
-  deletion, synthetic tool prose, or any other old rewrite.
+  provider joins the original instruction blocks with exactly `\n\n`.
+  Leading/intermediate blocks prefix the first user text. A trailing
+  contiguous instruction suffix stays at the current boundary: it is appended
+  to a current user/tool message without moving tool results, images, or
+  documents, or becomes a synthetic current user turn after an assistant
+  result. Startup emits a structured warning containing no request content.
+  This mode does not restore message merging, content deletion, synthetic tool
+  prose, or any other old rewrite.
 
-The migration mode remains available in v0.5.x and v0.6.x and is scheduled for
-removal in v0.7.0. The legacy Chat endpoint is controlled separately by
+After projection, a request must have real current input: non-empty text
+(whitespace bytes are preserved), an image, a document, or at least one tool
+result. A request ending at an assistant message, or containing only tool
+declarations with empty current text, fails locally with
+`missing_current_input`; it is never converted into an empty Kiro user
+message. An empty-content tool result remains executable because the
+structured result itself is the input.
+
+The compatibility mode remains deprecated, but removal is evidence-gated
+rather than tied to a fixed version. It can be removed only after Kiro exposes
+a protocol-faithful native instruction channel or affected clients complete
+their migration. The legacy Chat endpoint is controlled separately by
 `enable_legacy_chat_completions` and remains disabled by default.
 
 ## Session affinity modes
@@ -196,6 +211,7 @@ least-recently-used records happens transactionally.
 | `unsupported_strict_tools` | Kiro cannot guarantee strict schema enforcement. |
 | `unsupported_custom_tool_format` | A custom grammar/format cannot be preserved. |
 | `missing_tool_declaration` | Tool history lacks the exact original declaration. |
+| `missing_tool_description` | A function/custom tool omits its description or supplies only whitespace. Kiro requires a non-empty description; `param` identifies the description field. |
 | `unsupported_output_token_limit` | The model/range has no probe-confirmed native mapping. |
 | `unsupported_stateful_responses` | Server-side Responses state is unavailable. |
 | `unsupported_web_search` | Native Kiro search/citation events are not supported. |
@@ -209,8 +225,8 @@ least-recently-used records happens transactionally.
 1. Keep `protocol_projection_mode: "safe"` and run representative requests.
 2. Remove unsupported fields instead of expecting the provider to ignore them.
 3. If an older client requires system/developer projection, temporarily select
-   `legacy-user-prefix`, record that exception, and plan to remove it before
-   v0.7.0.
+   `legacy-user-prefix` and record that exception. Remove it only after the
+   native-fidelity or client-migration gate is satisfied.
 4. Enable Chat only when required:
    `enable_legacy_chat_completions: true`.
 5. Keep `session_affinity_mode: "explicit-only"` and have capable Responses

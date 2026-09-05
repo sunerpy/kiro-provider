@@ -119,6 +119,7 @@ export type PipelineReasoningReplayStore = Pick<
 >;
 
 export interface RunChatCompletionOptions {
+  readonly requestId?: string;
   readonly body: CanonicalRequest;
   readonly model: string;
   readonly stream: boolean;

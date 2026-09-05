@@ -312,6 +312,8 @@ function mapTools(
       name,
       wireName: name,
       ...(description !== undefined ? { description } : {}),
+      descriptionPath:
+        openAiFunction !== undefined ? `${path}.function.description` : `${path}.description`,
       inputSchema,
       ...(openAiFunction !== undefined ? { strict: false as const } : {}),
       path,

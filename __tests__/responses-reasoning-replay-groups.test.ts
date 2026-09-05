@@ -9,6 +9,7 @@ const TOOLS = [
   {
     type: "function",
     name: "lookup",
+    description: "Look up one synthetic status value.",
     parameters: { type: "object", properties: { q: { type: "string" } } },
   },
 ] as const;

@@ -276,14 +276,16 @@ export function buildServerDeps(
   if (config.protocol_projection_mode === "legacy-user-prefix") {
     auditLog("warn", "legacy_protocol_projection_enabled", {
       projection_mode: config.protocol_projection_mode,
-      planned_removal: "v0.7.0",
+      deprecation_status: "evidence-gated",
+      removal_gate: "native_instruction_fidelity_or_client_migration",
     });
   }
   if (config.session_affinity_mode === "legacy-initial-input") {
     auditLog("warn", "legacy_session_affinity_enabled", {
       session_affinity_mode: config.session_affinity_mode,
       risk: "identical_initial_input_can_alias_independent_sessions",
-      planned_removal: "v0.7.0",
+      deprecation_status: "migration-only",
+      removal_gate: "explicit_affinity_adoption",
     });
   }
   const database = factories.createDatabase?.() ?? new AccountsDatabase();

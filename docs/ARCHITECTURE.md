@@ -14,6 +14,9 @@ API-key gate (Authorization: Bearer or x-api-key, accepted on every route)
 Route dispatch (/v1/responses, /v1/messages, optional /v1/chat/completions)
         │
         ▼
+Per-request correlation id (`request_id`, never model-visible)
+        │
+        ▼
 CanonicalRequest (roles, content blocks, tools, reasoning, source paths)
         │
         ▼
@@ -63,6 +66,12 @@ messages, tool descriptions, and tool results are carried as client data.
 Opaque replayed reasoning is not converted into plaintext. A capability that
 cannot be represented structurally (for example Anthropic forced tool choice)
 is rejected rather than approximated with a hidden prompt.
+
+The same random `request_id` follows one public request through canonical
+shape diagnostics, projection, history construction, every actual SDK send,
+completion witnesses, and stream terminals. `attempt` counts real SDK sends,
+so retries are distinguishable from separate Agent turns without subtracting
+unrelated step counters.
 
 ## Transport
 

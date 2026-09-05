@@ -96,6 +96,7 @@ describe("describeRequestShape", () => {
   test("describes an empty request with zero counts and a stable empty tool-set hash", () => {
     expect(describeRequestShape(canonicalRequest([]))).toEqual({
       protocol: "responses",
+      projection_mode: "safe",
       model: "gpt-5.6-sol",
       message_count: 0,
       user_message_count: 0,
@@ -322,7 +323,7 @@ describe("describeRequestShape", () => {
     );
 
     for (const [key, value] of Object.entries(shape)) {
-      if (key === "protocol" || key === "model") continue;
+      if (key === "protocol" || key === "projection_mode" || key === "model") continue;
       if (key === "tool_set_hash") {
         expect(value).toMatch(/^[0-9a-f]{16}$/);
         continue;
@@ -342,12 +343,14 @@ describe("auditRequestShape", () => {
 
   test("emits one debug event at debug level", async () => {
     setAuditLogLevel("debug");
-    const lines = await captureAuditLines(() => auditRequestShape(request));
+    const lines = await captureAuditLines(() => auditRequestShape(request, "req-shape"));
     const events = shapeLines(lines);
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toMatchObject({
       level: "debug",
       event: REQUEST_SHAPE_EVENT,
+      request_id: "req-shape",
+      projection_mode: "safe",
       message_count: 1,
       user_message_count: 1,
     });
@@ -516,6 +519,8 @@ describe("routes emit request_shape", () => {
       expect(emitted?.event).toMatchObject({
         level: "debug",
         protocol: route.protocol,
+        projection_mode: "legacy-user-prefix",
+        request_id: expect.stringMatching(/^req_[0-9a-f-]+$/),
         tool_declaration_count: 1,
         tool_call_count: 1,
         tool_result_count: 1,

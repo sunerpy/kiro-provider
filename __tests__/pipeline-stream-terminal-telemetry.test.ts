@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
-import { auditHash } from "../src/core/audit-log.js";
+import { auditHash, resetAuditLogLevel, setAuditLogLevel } from "../src/core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineSdkClient,
@@ -83,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
   audit.restore();
+  resetAuditLogLevel();
 });
 
 describe("sdk_stream_terminal on the streaming response", () => {
@@ -306,6 +307,7 @@ describe("sdk_stream_terminal through the pipeline", () => {
     };
 
     const response = await runChatCompletion({
+      requestId: "req-non-stream",
       body: canonicalRequest([message("user", "hello")], { model: "auto" }),
       model: "auto",
       stream: false,
@@ -319,6 +321,9 @@ describe("sdk_stream_terminal through the pipeline", () => {
     expect(terminalEvents(audit)).toEqual([
       expect.objectContaining({
         mode: "non-stream",
+        request_id: "req-non-stream",
+        attempt: 1,
+        account_hash: auditHash("telemetry-account"),
         terminal_provenance: "normal_complete",
         completion_witnessed: true,
         reasoning_chars: 3,
@@ -337,6 +342,7 @@ describe("sdk_stream_terminal through the pipeline", () => {
     };
 
     const response = await runChatCompletion({
+      requestId: "req-failed-stream",
       body: canonicalRequest([message("user", "hello")], { model: "auto" }),
       model: "auto",
       stream: false,
@@ -368,6 +374,7 @@ describe("sdk_stream_terminal through the pipeline", () => {
     };
 
     const response = await runChatCompletion({
+      requestId: "req-retried-stream",
       body: canonicalRequest([message("user", "hello")], { model: "auto" }),
       model: "auto",
       stream: true,
@@ -378,13 +385,80 @@ describe("sdk_stream_terminal through the pipeline", () => {
     });
     await response.text();
 
-    expect(terminalEvents(audit).map((record) => record.terminal_provenance)).toEqual([
-      "upstream_error",
-      "normal_complete",
+    expect(
+      terminalEvents(audit).map((record) => ({
+        requestId: record.request_id,
+        attempt: record.attempt,
+        provenance: record.terminal_provenance,
+      })),
+    ).toEqual([
+      {
+        requestId: "req-retried-stream",
+        attempt: 1,
+        provenance: "upstream_error",
+      },
+      {
+        requestId: "req-retried-stream",
+        attempt: 2,
+        provenance: "normal_complete",
+      },
+    ]);
+    expect(
+      audit.events("sdk_dispatch_started").map((record) => ({
+        requestId: record.request_id,
+        attempt: record.attempt,
+      })),
+    ).toEqual([
+      { requestId: "req-retried-stream", attempt: 1 },
+      { requestId: "req-retried-stream", attempt: 2 },
     ]);
     expect(terminalEvents(audit)[1]).toMatchObject({
       visible_chars: 2,
       completion_witnessed: true,
     });
+  });
+
+  test("emits payload-free projection and history stages at debug level", async () => {
+    setAuditLogLevel("debug");
+    const secret = "do-not-log-this-instruction";
+    const client: PipelineSdkClient = {
+      send: async () => eventsResponse([{ assistantResponseEvent: { content: "ok" } }, COMPLETION]),
+    };
+
+    const response = await runChatCompletion({
+      requestId: "req-stage-events",
+      body: canonicalRequest(
+        [message("user", "question"), message("assistant", "answer"), message("developer", secret)],
+        { model: "auto", projectionMode: "legacy-user-prefix" },
+      ),
+      model: "auto",
+      stream: false,
+      config: config({ protocol_projection_mode: "legacy-user-prefix" }),
+      accountManager: new FakeAccountManager(),
+      tokenRefresher: refresher,
+      makeClient: () => client,
+    });
+
+    expect(response.status).toBe(200);
+    expect(audit.events("request_projection_completed")).toEqual([
+      expect.objectContaining({
+        request_id: "req-stage-events",
+        attempt: 1,
+        projection_mode: "legacy-user-prefix",
+        prefix_instruction_count: 0,
+        trailing_instruction_count: 1,
+        suffix_action: "synthetic_user",
+      }),
+    ]);
+    expect(audit.events("request_history_built")).toEqual([
+      expect.objectContaining({
+        request_id: "req-stage-events",
+        attempt: 1,
+        history_message_count: 2,
+        current_role: "user",
+        current_text_chars: secret.length,
+      }),
+    ]);
+    expect(JSON.stringify(audit.events())).not.toContain(secret);
   });
 });

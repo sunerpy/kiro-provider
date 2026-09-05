@@ -539,8 +539,9 @@ LangChain 适配器，或采用该包的 OpenCode 自定义 provider）指向
 标准客户端也必须落在已验证子集内。safe 模式下，始终发送
 system/developer、custom grammar、namespace 工具或 Anthropic
 `cache_control` 的客户端会收到字段级 400；网关不会修改请求强行通过 Kiro。
-可选的 `legacy-user-prefix` 仅是 v0.5.x/v0.6.x 的指令迁移手段，计划在
-v0.7.0 删除。
+可选的 `legacy-user-prefix` 是显式的指令兼容模式。它仍处于弃用状态，但
+移除采用证据门控：只有 Kiro 提供协议保真的原生指令通道，或受影响客户端
+完成迁移后，才会删除。
 
 默认 `session_affinity_mode: "explicit-only"` 绝不会通过 prompt 文本猜测
 会话。Responses 按顺序检查 `metadata.zuno_session_id`、
@@ -630,7 +631,8 @@ Kiro conversation 绑定；不同会话即使首个 prompt 与上游工具别名
 `unsupported_instruction_projection`，绝不改写请求。还应按上例把 Zuno
 `options.maxTokens` 设为 `null`，避免通用层加入 Kiro 不支持的
 `max_output_tokens: 32000`。这两项都不依赖私有 Header 或客户端提示词补丁；
-legacy 模式只是计划在 v0.7.0 删除的显式迁移例外。
+legacy 模式是显式迁移例外；是否移除取决于原生指令保真能力或客户端迁移
+是否完成，不再绑定已经过期的固定版本号。
 
 ## 配合 Codex CLI 使用
 

@@ -351,7 +351,9 @@ Responses、Messages、Chat 请求都会在构造出规范请求之后、账号�
 
 | 字段 | 含义 |
 | --- | --- |
+| `request_id` | 每个公开请求随机生成的关联 ID，与投影、SDK dispatch 和终止事件共用。 |
 | `protocol` | `responses`、`anthropic-messages` 或 `chat-completions`。 |
+| `projection_mode` | `safe` 或 `legacy-user-prefix`。 |
 | `model` | 请求的公开模型名。 |
 | `message_count` | 适配后的规范消息数。 |
 | `user_message_count`、`assistant_message_count`、`tool_message_count`、`instruction_message_count` | 角色计数（`instruction_message_count` 为 `system` 加 `developer`）。 |
@@ -367,3 +369,10 @@ Responses、Messages、Chat 请求都会在构造出规范请求之后、账号�
 
 用它来回答"客户端是否发送了完整历史？"、"是否有工具结果没有对应的调用？"、
 "这段会话有多大？"，而无需开启请求体日志（Provider 也不提供这种日志）。
+
+在 `debug` 级别，同一个 `request_id` 还会出现在
+`request_projection_completed` 与 `request_history_built`。每次真实 SDK
+发送都会在 `info` 级别输出 `sdk_dispatch_started` 和从 1 开始的 `attempt`；
+completion witness 与 `sdk_stream_terminal` 会复用同一组关联字段。
+`request_transform_rejected` 只记录阶段、错误码和来源路径。所有字段均为计数、
+枚举、长度或哈希。
