@@ -42,7 +42,7 @@
     "@smithy/node-http-handler": "4.9.7",
     "https-proxy-agent": "^9.1.0",
     "proper-lockfile": "^4.1.2",
-    "zod": "^3.24.0"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.4",
