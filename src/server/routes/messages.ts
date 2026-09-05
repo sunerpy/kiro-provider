@@ -105,6 +105,7 @@ export async function handleMessages(
   );
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
+      request_id: ingress.requestId,
       protocol: "anthropic-messages",
       projection_mode: config.protocol_projection_mode,
       code: adapted.code,
@@ -125,6 +126,7 @@ export async function handleMessages(
     ingress.disableIdleTimeout();
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
       buildPipelineOptions({
+        requestId: ingress.requestId,
         body: adapted.value.body,
         model: adapted.value.body.model,
         stream: adapted.value.source.stream,

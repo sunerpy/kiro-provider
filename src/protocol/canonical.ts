@@ -68,6 +68,7 @@ export interface CanonicalToolDeclaration extends CanonicalSource {
   readonly name: string;
   readonly wireName: string;
   readonly description?: string;
+  readonly descriptionPath?: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
   readonly origin?: "request" | "input";
   readonly strict?: false;

@@ -6,6 +6,7 @@ import {
   type CanonicalToolDeclaration,
   isCanonicalRequest,
   type ResolvedReasoningReplay,
+  textFromParts,
 } from "../../protocol/canonical.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { KIRO_CONSTANTS } from "../constants.js";
@@ -15,6 +16,8 @@ import type {
   CodeWhispererRequest,
   Effort,
   KiroAuthDetails,
+  RequestProjectionDiagnostics,
+  RequestTransformDiagnostics,
 } from "../types.js";
 import { RequestTransformError } from "./errors.js";
 import { buildHistory, currentUserInput } from "./history-builder.js";
@@ -24,6 +27,7 @@ export interface RequestTransformResult {
   readonly resolved: string;
   readonly convId: string;
   readonly variantEffort?: Effort;
+  readonly diagnostics: RequestTransformDiagnostics;
 }
 
 export interface RequestTransformIdentity {
@@ -41,6 +45,16 @@ function cloneMessage(message: CanonicalMessage): CanonicalMessage {
     ),
     toolCalls: message.toolCalls.map((call) => ({ ...call })),
   };
+}
+
+function isInstruction(message: CanonicalMessage): boolean {
+  return message.role === "system" || message.role === "developer";
+}
+
+function instructionText(messages: readonly CanonicalMessage[]): string {
+  return messages
+    .flatMap((message) => message.content.map((part) => (part.type === "text" ? part.text : "")))
+    .join("\n\n");
 }
 
 function validateContentBlockProjection(messages: readonly CanonicalMessage[]): void {
@@ -62,10 +76,9 @@ function validateContentBlockProjection(messages: readonly CanonicalMessage[]): 
 function projectMessages(request: CanonicalRequest): {
   readonly messages: CanonicalMessage[];
   readonly projectedIndexByOriginal: ReadonlyMap<number, number>;
+  readonly diagnostics: RequestProjectionDiagnostics;
 } {
-  const instructions = request.messages.filter(
-    (message) => message.role === "system" || message.role === "developer",
-  );
+  const instructions = request.messages.filter(isInstruction);
   if (instructions.length > 0 && request.projectionMode === "safe") {
     throw new RequestTransformError(
       "Kiro accepted additionalContext structurally but did not preserve instruction content or priority; safe mode cannot project system/developer/instructions",
@@ -84,43 +97,100 @@ function projectMessages(request: CanonicalRequest): {
     }
   }
 
+  let trailingInstructionStart = request.messages.length;
+  while (
+    trailingInstructionStart > 0 &&
+    isInstruction(request.messages[trailingInstructionStart - 1] as CanonicalMessage)
+  ) {
+    trailingInstructionStart -= 1;
+  }
+  const hasEarlierExecutableMessage = request.messages
+    .slice(0, trailingInstructionStart)
+    .some((message) => !isInstruction(message));
+  const trailingInstructions = hasEarlierExecutableMessage
+    ? request.messages.slice(trailingInstructionStart)
+    : [];
+  const prefixInstructions =
+    trailingInstructions.length > 0
+      ? instructions.slice(0, instructions.length - trailingInstructions.length)
+      : instructions;
+  let prefixAction: RequestProjectionDiagnostics["prefixAction"] = "none";
+  let suffixAction: RequestProjectionDiagnostics["suffixAction"] = "none";
+
   const messages: CanonicalMessage[] = [];
   const projectedIndexByOriginal = new Map<number, number>();
   for (const [index, message] of request.messages.entries()) {
-    if (message.role === "system" || message.role === "developer") continue;
+    if (isInstruction(message)) continue;
     projectedIndexByOriginal.set(index, messages.length);
     messages.push(cloneMessage(message));
   }
-  if (instructions.length === 0) return { messages, projectedIndexByOriginal };
-
-  const prefix = instructions
-    .flatMap((message) => message.content.map((part) => (part.type === "text" ? part.text : "")))
-    .join("\n\n");
-  const firstUserIndex = messages.findIndex((message) => message.role === "user");
-  if (firstUserIndex < 0) {
-    // No user turn to glue into: the instruction block becomes its own leading
-    // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
-    // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
-    // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
-    // so the standalone turn is kept.
-    messages.unshift({
-      role: "user",
-      content: [textPart(prefix, "legacy-user-prefix")],
-      toolCalls: [],
-      path: "legacy-user-prefix",
-    });
-    for (const [key, value] of projectedIndexByOriginal) {
-      projectedIndexByOriginal.set(key, value + 1);
+  if (prefixInstructions.length > 0) {
+    const prefix = instructionText(prefixInstructions);
+    const firstUserIndex = messages.findIndex((message) => message.role === "user");
+    if (firstUserIndex < 0) {
+      // No user turn to glue into: the instruction block becomes its own leading
+      // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
+      // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
+      // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
+      // so the standalone turn is kept.
+      messages.unshift({
+        role: "user",
+        content: [textPart(prefix, "legacy-user-prefix")],
+        toolCalls: [],
+        path: "legacy-user-prefix",
+      });
+      prefixAction = "synthetic_leading_user";
+      for (const [key, value] of projectedIndexByOriginal) {
+        projectedIndexByOriginal.set(key, value + 1);
+      }
+    } else {
+      const firstUser = messages[firstUserIndex];
+      if (firstUser) {
+        messages[firstUserIndex] = {
+          ...firstUser,
+          content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
+        };
+        prefixAction = "prepend_first_user";
+      }
     }
-    return { messages, projectedIndexByOriginal };
   }
-  const firstUser = messages[firstUserIndex];
-  if (!firstUser) return { messages, projectedIndexByOriginal };
-  messages[firstUserIndex] = {
-    ...firstUser,
-    content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
+
+  if (trailingInstructions.length > 0) {
+    const suffix = instructionText(trailingInstructions);
+    const suffixPath = trailingInstructions[0]?.path ?? "legacy-user-suffix";
+    const currentIndex = messages.length - 1;
+    const current = messages[currentIndex];
+    if (current?.role === "user" || current?.role === "tool") {
+      const separator = textFromParts(current.content).length > 0 ? "\n\n" : "";
+      messages[currentIndex] = {
+        ...current,
+        content: [...current.content, textPart(`${separator}${suffix}`, suffixPath)],
+      };
+      suffixAction = current.role === "user" ? "append_user" : "append_tool";
+    } else {
+      messages.push({
+        role: "user",
+        content: [textPart(suffix, suffixPath)],
+        toolCalls: [],
+        path: suffixPath,
+      });
+      suffixAction = "synthetic_user";
+    }
+  }
+
+  return {
+    messages,
+    projectedIndexByOriginal,
+    diagnostics: {
+      projectionMode: request.projectionMode,
+      inputMessageCount: request.messages.length,
+      outputMessageCount: messages.length,
+      prefixInstructionCount: prefixInstructions.length,
+      trailingInstructionCount: trailingInstructions.length,
+      prefixAction,
+      suffixAction,
+    },
   };
-  return { messages, projectedIndexByOriginal };
 }
 
 function validateToolHistory(
@@ -154,13 +224,31 @@ function toolsForKiro(
     NonNullable<CodeWhispererMessage["userInputMessage"]>["userInputMessageContext"]
   >["tools"]
 > {
+  for (const tool of tools) {
+    if (tool.description === undefined || tool.description.trim().length === 0) {
+      throw new RequestTransformError(
+        `Tool ${tool.path} requires a non-empty description for Kiro`,
+        "missing_tool_description",
+        tool.descriptionPath ?? tool.path,
+      );
+    }
+  }
   return tools.map((tool) => ({
     toolSpecification: {
       name: tool.wireName,
-      description: tool.description ?? "",
+      description: tool.description as string,
       inputSchema: { json: { ...tool.inputSchema } },
     },
   }));
+}
+
+function hasExecutableInput(input: NonNullable<CodeWhispererMessage["userInputMessage"]>): boolean {
+  return (
+    input.content.length > 0 ||
+    (input.images?.length ?? 0) > 0 ||
+    (input.documents?.length ?? 0) > 0 ||
+    (input.userInputMessageContext?.toolResults?.length ?? 0) > 0
+  );
 }
 
 export function buildCodeWhispererRequest(
@@ -217,22 +305,34 @@ export function buildCodeWhispererRequest(
 
   const current = projection.messages.at(-1);
   if (!current) throw new RequestTransformError("No executable messages", "empty_input");
-  const currentIsAssistant = current.role === "assistant";
-  const historyMessages = currentIsAssistant
-    ? projection.messages
-    : projection.messages.slice(0, -1);
+  if (current.role === "assistant") {
+    throw new RequestTransformError(
+      "Request ends with an assistant message and has no current user input",
+      "missing_current_input",
+      current.path,
+    );
+  }
+  if (current.role !== "user" && current.role !== "tool") {
+    throw new RequestTransformError(
+      `Request ends with ${current.role} and has no current user input`,
+      "missing_current_input",
+      current.path,
+    );
+  }
+  const historyMessages = projection.messages.slice(0, -1);
   const historyReplays = projectedReplays.filter(
     (replay) => replay.insertBeforeMessage < historyMessages.length,
   );
   const history = buildHistory(historyMessages, resolved, historyReplays);
 
-  const currentInput = currentIsAssistant
-    ? {
-        content: "",
-        modelId: resolved,
-        origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
-      }
-    : currentUserInput(current, resolved);
+  const currentInput = currentUserInput(current, resolved);
+  if (!hasExecutableInput(currentInput)) {
+    throw new RequestTransformError(
+      "Current input contains no text bytes, image, document, or tool result",
+      "missing_current_input",
+      current.path,
+    );
+  }
   const suppliedTools = canonical.toolChoice === "auto" ? toolsForKiro(canonical.tools) : [];
   if (suppliedTools.length > 0) {
     currentInput.userInputMessageContext ??= {};
@@ -251,7 +351,19 @@ export function buildCodeWhispererRequest(
     },
     ...(auth.profileArn ? { profileArn: auth.profileArn } : {}),
   };
+  const diagnostics: RequestTransformDiagnostics = {
+    projection: projection.diagnostics,
+    history: {
+      historyMessageCount: history.length,
+      currentRole: current.role,
+      currentTextChars: currentInput.content.length,
+      currentImageCount: currentInput.images?.length ?? 0,
+      currentDocumentCount: currentInput.documents?.length ?? 0,
+      currentToolResultCount: currentInput.userInputMessageContext?.toolResults?.length ?? 0,
+      reasoningReplayCount: historyReplays.length,
+    },
+  };
   return variantEffort === undefined
-    ? { request, resolved, convId }
-    : { request, resolved, convId, variantEffort };
+    ? { request, resolved, convId, diagnostics }
+    : { request, resolved, convId, variantEffort, diagnostics };
 }

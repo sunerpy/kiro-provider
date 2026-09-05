@@ -5,6 +5,8 @@ import type {
   PipelineTokenRefresher,
   RunChatCompletionOptions,
 } from "../src/core/pipeline.js";
+import { RequestTransformError } from "../src/kiro/transform/errors.js";
+import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import {
   CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
@@ -243,6 +245,36 @@ function eventPayloads(text: string): Array<Readonly<Record<string, unknown>>> {
 }
 
 describe("Anthropic request adapter", () => {
+  test("rejects missing and blank tool descriptions at the Kiro projection boundary", () => {
+    const cases = [
+      [{ name: "read", input_schema: { type: "object" } }],
+      [{ name: "read", description: " ", input_schema: { type: "object" } }],
+    ] as const;
+
+    for (const tools of cases) {
+      const adapted = adaptAnthropicMessagesRequest(validRequest({ tools }), {
+        requireMaxTokens: true,
+      });
+      expect(adapted.ok).toBe(true);
+      if (!adapted.ok) continue;
+
+      try {
+        buildCodeWhispererRequest(
+          adapted.value.body,
+          MODEL,
+          new FakeAccountManager().toAuthDetails(account()),
+        );
+        throw new TypeError("Expected missing tool description rejection");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RequestTransformError);
+        expect(error).toMatchObject({
+          code: "missing_tool_description",
+          param: "tools.0.description",
+        });
+      }
+    }
+  });
+
   test("maps system blocks, structured thinking config, tool use, and tool results", () => {
     const adapted = adaptAnthropicMessagesRequest(
       validRequest({
@@ -330,6 +362,32 @@ describe("Anthropic request adapter", () => {
     });
   });
 
+  test("rejects assistant-prefill requests before contacting Kiro", () => {
+    const adapted = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [{ role: "assistant", content: "prefill" }],
+      }),
+      { requireMaxTokens: true },
+    );
+    expect(adapted.ok).toBe(true);
+    if (!adapted.ok) return;
+
+    try {
+      buildCodeWhispererRequest(
+        adapted.value.body,
+        MODEL,
+        new FakeAccountManager().toAuthDetails(account()),
+      );
+      throw new TypeError("Expected missing current input rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RequestTransformError);
+      expect(error).toMatchObject({
+        code: "missing_current_input",
+        param: "messages.0",
+      });
+    }
+  });
+
   test("requires max_tokens for message generation but not token counting", () => {
     const raw = {
       model: MODEL,
@@ -415,8 +473,8 @@ describe("Anthropic request adapter", () => {
       adaptAnthropicMessagesRequest(
         validRequest({
           tools: [
-            { name: "read", input_schema: { type: "object" } },
-            { name: "read", input_schema: { type: "object" } },
+            { name: "read", description: "Read once", input_schema: { type: "object" } },
+            { name: "read", description: "Read twice", input_schema: { type: "object" } },
           ],
         }),
       ),

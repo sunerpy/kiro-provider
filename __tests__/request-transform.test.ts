@@ -229,6 +229,124 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
     ]);
   });
 
+  test("accepts image-only and document-only current input", () => {
+    const image = transformToSdkRequest(
+      request([
+        message(
+          "user",
+          [
+            {
+              type: "image",
+              url: "data:image/png;base64,AQID",
+              path: "messages.0.content.0",
+            },
+          ],
+          "messages.0",
+        ),
+      ]),
+      MODEL,
+      auth,
+    );
+    expect(currentUserInput(image).content).toBe("");
+    expect(currentUserInput(image).images).toHaveLength(1);
+
+    const document = transformToSdkRequest(
+      request([
+        message(
+          "user",
+          [
+            {
+              type: "document",
+              name: "notes.txt",
+              format: "txt",
+              data: "SGVsbG8=",
+              path: "messages.0.content.0",
+            },
+          ],
+          "messages.0",
+        ),
+      ]),
+      MODEL,
+      auth,
+    );
+    expect(currentUserInput(document).content).toBe("");
+    expect(currentUserInput(document).documents).toHaveLength(1);
+  });
+
+  test("keeps current attachments current when trailing instructions are projected", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message(
+            "user",
+            [
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                path: "messages.0.content.0",
+              },
+              {
+                type: "document",
+                name: "notes.txt",
+                format: "txt",
+                data: "SGVsbG8=",
+                path: "messages.0.content.1",
+              },
+            ],
+            "messages.0",
+          ),
+          message("developer", "RECONCILE", "messages.1"),
+        ],
+        { projectionMode: "legacy-user-prefix" },
+      ),
+      MODEL,
+      auth,
+    );
+
+    expect(prepared.conversationState.history).toBeUndefined();
+    expect(currentUserInput(prepared).content).toBe("RECONCILE");
+    expect(currentUserInput(prepared).images).toHaveLength(1);
+    expect(currentUserInput(prepared).documents).toHaveLength(1);
+  });
+
+  test("does not add a separator for an empty text part beside structured current input", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message(
+            "user",
+            [
+              textPart("", "messages.0.content.0"),
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                path: "messages.0.content.1",
+              },
+            ],
+            "messages.0",
+          ),
+          message("developer", "RECONCILE", "messages.1"),
+        ],
+        { projectionMode: "legacy-user-prefix" },
+      ),
+      MODEL,
+      auth,
+    );
+
+    expect(currentUserInput(prepared).content).toBe("RECONCILE");
+    expect(prepared.diagnostics.projection).toMatchObject({
+      prefixInstructionCount: 0,
+      trailingInstructionCount: 1,
+      suffixAction: "append_user",
+    });
+    expect(prepared.diagnostics.history).toMatchObject({
+      currentRole: "user",
+      currentTextChars: "RECONCILE".length,
+      currentImageCount: 1,
+      historyMessageCount: 0,
+    });
+  });
+
   test("legacy mode separates every original instruction block with exact double newlines", () => {
     const prepared = transformToSdkRequest(
       request(
@@ -257,6 +375,26 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
 });
 
 describe("transformToSdkRequest exact tools and history", () => {
+  test("keeps missing tool descriptions fail-closed at the projection boundary", () => {
+    expect(() =>
+      transformToSdkRequest(
+        request([message("user", "hello")], {
+          tools: [
+            {
+              publicType: "function",
+              name: "runner",
+              wireName: "runner",
+              inputSchema: { type: "object" },
+              path: "tools.0",
+            },
+          ],
+        }),
+        MODEL,
+        auth,
+      ),
+    ).toThrow(/requires a non-empty description/);
+  });
+
   test("converts supplied declarations without inference", () => {
     const prepared = transformToSdkRequest(
       request([message("user", "use a tool")], { tools: [runnerTool()] }),
@@ -326,6 +464,97 @@ describe("transformToSdkRequest exact tools and history", () => {
     ]);
   });
 
+  test("accepts an empty current tool result as executable input", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message(
+            "assistant",
+            [
+              {
+                type: "tool_use",
+                id: "tu1",
+                name: "runner",
+                input: { x: 1 },
+                path: "messages.0.content.0",
+              },
+            ],
+            "messages.0",
+          ),
+          message(
+            "tool",
+            [
+              {
+                type: "tool_result",
+                toolCallId: "tu1",
+                content: [],
+                isError: false,
+                path: "messages.1.content.0",
+              },
+            ],
+            "messages.1",
+          ),
+        ],
+        { tools: [runnerTool()] },
+      ),
+      MODEL,
+      auth,
+    );
+
+    expect(currentUserInput(prepared).content).toBe("");
+    expect(currentUserInput(prepared).userInputMessageContext?.toolResults).toEqual([
+      { content: [], status: "success", toolUseId: "tu1" },
+    ]);
+  });
+
+  test("keeps the current tool result current when trailing instructions are projected", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message(
+            "assistant",
+            [
+              {
+                type: "tool_use",
+                id: "tu1",
+                name: "runner",
+                input: { x: 1 },
+                path: "messages.0.content.0",
+              },
+            ],
+            "messages.0",
+          ),
+          message(
+            "tool",
+            [
+              {
+                type: "tool_result",
+                toolCallId: "tu1",
+                content: [textPart("done", "messages.1.content.0.content")],
+                isError: false,
+                path: "messages.1.content.0",
+              },
+            ],
+            "messages.1",
+          ),
+          message("developer", "RECONCILE", "messages.2"),
+        ],
+        {
+          projectionMode: "legacy-user-prefix",
+          tools: [runnerTool()],
+        },
+      ),
+      MODEL,
+      auth,
+    );
+
+    expect(prepared.conversationState.history).toHaveLength(1);
+    expect(currentUserInput(prepared).content).toBe("RECONCILE");
+    expect(currentUserInput(prepared).userInputMessageContext?.toolResults).toEqual([
+      { content: [{ text: "done" }], status: "success", toolUseId: "tu1" },
+    ]);
+  });
+
   test("rejects duplicate/orphan results and absent exact declarations", () => {
     const call = message(
       "assistant",
@@ -386,34 +615,89 @@ describe("transformToSdkRequest exact tools and history", () => {
     );
   });
 
-  test("keeps a current assistant turn structurally and does not delete a trailing brace", () => {
+  test("rejects an assistant-ending request locally without rewriting its content", () => {
     const assistant = message("assistant", "final{", "messages.1");
+    try {
+      transformToSdkRequest(
+        request(
+          [
+            message("user", "q", "messages.0"),
+            {
+              ...assistant,
+              toolCalls: [
+                {
+                  id: "x1",
+                  name: "runner",
+                  input: { x: 2 },
+                  path: "messages.1.tool_calls.0",
+                },
+              ],
+            },
+          ],
+          { tools: [runnerTool()] },
+        ),
+        MODEL,
+        auth,
+      );
+      throw new TypeError("Expected missing current input rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RequestTransformError);
+      expect(error).toMatchObject({
+        code: "missing_current_input",
+        param: "messages.1",
+      });
+      expect(assistant.content[0]).toEqual(textPart("final{", "messages.1.content"));
+    }
+  });
+
+  test("reports the original trailing instruction path when its synthetic input is empty", () => {
+    try {
+      transformToSdkRequest(
+        request(
+          [
+            message("user", "q", "messages.0"),
+            message("assistant", "final", "messages.1"),
+            message("developer", "", "messages.2"),
+          ],
+          { projectionMode: "legacy-user-prefix" },
+        ),
+        MODEL,
+        auth,
+      );
+      throw new TypeError("Expected missing current input rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RequestTransformError);
+      expect(error).toMatchObject({
+        code: "missing_current_input",
+        param: "messages.2",
+      });
+    }
+  });
+
+  test("rejects tool declarations without any current text or tool results", () => {
+    try {
+      transformToSdkRequest(
+        request([message("user", "", "messages.0")], { tools: [runnerTool()] }),
+        MODEL,
+        auth,
+      );
+      throw new TypeError("Expected missing current input rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RequestTransformError);
+      expect(error).toMatchObject({
+        code: "missing_current_input",
+        param: "messages.0",
+      });
+    }
+  });
+
+  test("preserves whitespace-only current text exactly", () => {
     const prepared = transformToSdkRequest(
-      request(
-        [
-          message("user", "q", "messages.0"),
-          {
-            ...assistant,
-            toolCalls: [
-              {
-                id: "x1",
-                name: "runner",
-                input: { x: 2 },
-                path: "messages.1.tool_calls.0",
-              },
-            ],
-          },
-        ],
-        { tools: [runnerTool()] },
-      ),
+      request([message("user", " \n\t", "messages.0")], { tools: [runnerTool()] }),
       MODEL,
       auth,
     );
-
-    const historical = prepared.conversationState.history?.at(-1)?.assistantResponseMessage;
-    expect(historical?.content).toBe("final{");
-    expect(historical?.toolUses).toEqual([{ input: { x: 2 }, name: "runner", toolUseId: "x1" }]);
-    expect(currentUserInput(prepared).content).toBe("");
+    expect(currentUserInput(prepared).content).toBe(" \n\t");
   });
 });
 

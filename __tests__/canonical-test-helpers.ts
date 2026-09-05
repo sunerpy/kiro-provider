@@ -45,6 +45,8 @@ export function functionTool(
     publicType: "function",
     name,
     wireName: name,
+    description: `Test tool ${name}`,
+    descriptionPath: `${path}.description`,
     inputSchema,
     path,
   };

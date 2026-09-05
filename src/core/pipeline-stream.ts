@@ -8,6 +8,7 @@ import type {
   SdkReasoningCaptureHandler,
   SdkStreamResponse,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
+import type { Effort } from "../kiro/types.js";
 import {
   CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
   type CanonicalOutputEvent,
@@ -21,6 +22,7 @@ export interface PipelineStreamResult {
   readonly sdkResponse: SdkStreamResponse;
   readonly model: string;
   readonly conversationId: string;
+  readonly telemetryContext?: StreamTelemetryContext;
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
@@ -61,6 +63,13 @@ export type CompletionWitnessKind = "token-usage-metadata" | "metering-clean-eof
 
 type AuditFields = Readonly<Record<string, string | number | boolean | undefined>>;
 
+export interface StreamTelemetryContext {
+  readonly requestId?: string;
+  readonly attempt?: number;
+  readonly effort?: Effort;
+  readonly accountHash?: string;
+}
+
 const SEMANTIC_EVENT_TYPES: ReadonlySet<CanonicalOutputEvent["type"]> = new Set<
   CanonicalOutputEvent["type"]
 >(["reasoning_delta", "reasoning_redacted", "text_delta", "tool_call_delta", "completed"]);
@@ -99,6 +108,7 @@ export class StreamTelemetry {
     readonly model: string,
     readonly conversationId: string,
     readonly mode: StreamTelemetryMode,
+    private readonly context: StreamTelemetryContext = {},
   ) {}
 
   /** True once any semantic event was observed on this attempt-stream. */
@@ -151,8 +161,12 @@ export class StreamTelemetry {
   onCompletionWitness(kind: CompletionWitnessKind): void {
     this.witnessKind = kind;
     auditLog("info", "sdk_stream_completion_witness", {
+      request_id: this.context.requestId,
+      attempt: this.context.attempt,
       model: this.model,
       conversation_hash: auditHash(this.conversationId),
+      effort: this.context.effort,
+      account_hash: this.context.accountHash,
       witness_kind: kind,
       mode: this.mode,
     });
@@ -181,8 +195,12 @@ export class StreamTelemetry {
 
   auditFields(): AuditFields {
     return {
+      request_id: this.context.requestId,
+      attempt: this.context.attempt,
       model: this.model,
       conversation_hash: auditHash(this.conversationId),
+      effort: this.context.effort,
+      account_hash: this.context.accountHash,
       mode: this.mode,
       raw_event_count: this.rawEventCount,
       last_event_type: this.lastEventType,
@@ -224,8 +242,9 @@ export function createStreamTelemetry(
   model: string,
   conversationId: string,
   mode: StreamTelemetryMode,
+  context: StreamTelemetryContext = {},
 ): StreamTelemetry {
-  return new StreamTelemetry(model, conversationId, mode);
+  return new StreamTelemetry(model, conversationId, mode, context);
 }
 
 export interface PreparedCanonicalStream {
@@ -243,7 +262,12 @@ export function prepareCanonicalStream(
   result: PipelineStreamResult,
   signal: AbortSignal,
 ): PreparedCanonicalStream {
-  const telemetry = createStreamTelemetry(result.model, result.conversationId, "stream");
+  const telemetry = createStreamTelemetry(
+    result.model,
+    result.conversationId,
+    "stream",
+    result.telemetryContext,
+  );
   const streamAbort = new AbortController();
   const composedSignal = AbortSignal.any([signal, streamAbort.signal]);
   const iterator = transformSdkOutputStream(

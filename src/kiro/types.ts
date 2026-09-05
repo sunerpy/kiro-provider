@@ -133,6 +133,35 @@ export interface PreparedRequest {
   conversationId: string;
 }
 
+export type InstructionPrefixAction = "none" | "prepend_first_user" | "synthetic_leading_user";
+
+export type InstructionSuffixAction = "none" | "append_user" | "append_tool" | "synthetic_user";
+
+export interface RequestProjectionDiagnostics {
+  readonly projectionMode: "safe" | "legacy-user-prefix";
+  readonly inputMessageCount: number;
+  readonly outputMessageCount: number;
+  readonly prefixInstructionCount: number;
+  readonly trailingInstructionCount: number;
+  readonly prefixAction: InstructionPrefixAction;
+  readonly suffixAction: InstructionSuffixAction;
+}
+
+export interface RequestHistoryDiagnostics {
+  readonly historyMessageCount: number;
+  readonly currentRole: "user" | "tool";
+  readonly currentTextChars: number;
+  readonly currentImageCount: number;
+  readonly currentDocumentCount: number;
+  readonly currentToolResultCount: number;
+  readonly reasoningReplayCount: number;
+}
+
+export interface RequestTransformDiagnostics {
+  readonly projection: RequestProjectionDiagnostics;
+  readonly history: RequestHistoryDiagnostics;
+}
+
 export interface SdkPreparedRequest {
   conversationState: CodeWhispererRequest["conversationState"];
   profileArn?: string;
@@ -143,6 +172,7 @@ export interface SdkPreparedRequest {
   region: string;
   /** Resolved effort level for thinking models */
   effort?: Effort;
+  diagnostics: RequestTransformDiagnostics;
 }
 
 export type AccountSelectionStrategy = "sticky" | "round-robin" | "lowest-usage";

@@ -29,6 +29,12 @@
     "build": "bun build src/cli/bin.ts --outdir dist --target bun",
     "build:binary": "bun build --compile --minify src/cli/bin.ts --outfile dist/kiro-provider",
     "build:npm": "bun build src/cli/bin.ts --outfile dist/cli.js --target=bun --minify && chmod +x dist/cli.js",
+    "probe:projection-fidelity": "bun run scripts/probe-projection-fidelity.ts",
+    "study:effort": "bun run scripts/effort-study.ts",
+    "study:effort:run": "bun run scripts/run-effort-study.ts",
+    "study:effort:responses": "bun run scripts/responses-effort-study.ts",
+    "e2e:responses": "bun run scripts/responses-live-e2e.ts",
+    "diff:kiro-cli-wire": "bun run scripts/kiro-cli-wire-diff.ts",
     "prepublishOnly": "bun run build:npm"
   },
   "dependencies": {

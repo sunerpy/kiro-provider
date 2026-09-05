@@ -441,6 +441,7 @@ function mapTools(
       name: tool.name,
       wireName: tool.name,
       ...(tool.description !== undefined ? { description: tool.description } : {}),
+      descriptionPath: `tools.${index}.description`,
       inputSchema: tool.input_schema ?? {},
       path: `tools.${index}`,
     });

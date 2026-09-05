@@ -484,6 +484,8 @@ interface LoopState {
   requestConversationId: string | undefined;
   /** Upstream streams opened for this request; bounded by stream_max_attempts. */
   streamAttempts: number;
+  /** Actual SDK send calls made for this provider request. */
+  sdkDispatches: number;
   /** Accounts that already spent their same-account pre-publication retry. */
   readonly streamRetriedAccountIds: Set<string>;
   /** The one-shot empty-completion replacement attempt has been spent. */
@@ -579,6 +581,7 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     requestAccountId: boundAccountId,
     requestConversationId: replayState.conversationId ?? effectiveBinding?.conversationId,
     streamAttempts: 0,
+    sdkDispatches: 0,
     streamRetriedAccountIds: new Set<string>(),
     emptyCompletionRetried: false,
     lastStreamFailure: undefined,
@@ -925,6 +928,7 @@ function bindAttemptAffinity(
 
   state.preferredAccountId = selected.id;
   auditLog("info", "upstream_affinity_selected", {
+    request_id: options.requestId,
     projection_mode: options.config.protocol_projection_mode,
     session_affinity_mode: options.config.session_affinity_mode,
     affinity_source: options.affinity?.source ?? options.lineage?.source,
@@ -975,6 +979,7 @@ async function runAttempt(
       );
       if (!availability.supported) {
         auditLog("warn", "account_model_unavailable", {
+          request_id: options.requestId,
           account_hash: auditHash(account.id),
           model_hash: auditHash(options.model),
           capability_source: availability.source,
@@ -988,6 +993,36 @@ async function runAttempt(
       conversationId: state.requestConversationId,
       resolvedReasoningReplays: state.replayState.replays,
       ...(parsedEffort.success ? { effort: parsedEffort.data } : {}),
+    });
+    const plannedAttempt = state.sdkDispatches + 1;
+    const conversationHash = auditHash(prepared.conversationId);
+    const accountHash = auditHash(account.id);
+    auditLog("debug", "request_projection_completed", {
+      request_id: options.requestId,
+      attempt: plannedAttempt,
+      model: options.model,
+      conversation_hash: conversationHash,
+      projection_mode: prepared.diagnostics.projection.projectionMode,
+      input_message_count: prepared.diagnostics.projection.inputMessageCount,
+      output_message_count: prepared.diagnostics.projection.outputMessageCount,
+      prefix_instruction_count: prepared.diagnostics.projection.prefixInstructionCount,
+      trailing_instruction_count: prepared.diagnostics.projection.trailingInstructionCount,
+      prefix_action: prepared.diagnostics.projection.prefixAction,
+      suffix_action: prepared.diagnostics.projection.suffixAction,
+    });
+    auditLog("debug", "request_history_built", {
+      request_id: options.requestId,
+      attempt: plannedAttempt,
+      model: options.model,
+      conversation_hash: conversationHash,
+      history_message_count: prepared.diagnostics.history.historyMessageCount,
+      current_role: prepared.diagnostics.history.currentRole,
+      current_text_chars: prepared.diagnostics.history.currentTextChars,
+      current_has_text: prepared.diagnostics.history.currentTextChars > 0,
+      current_image_count: prepared.diagnostics.history.currentImageCount,
+      current_document_count: prepared.diagnostics.history.currentDocumentCount,
+      current_tool_result_count: prepared.diagnostics.history.currentToolResultCount,
+      reasoning_replay_count: prepared.diagnostics.history.reasoningReplayCount,
     });
     const makeClient = options.makeClient ?? createSdkClient;
     const client = makeClient(
@@ -1026,6 +1061,17 @@ async function runAttempt(
     const abortUpstream = (reason?: unknown): void => {
       if (!attempt.signal.aborted) attempt.abort(reason);
     };
+    state.sdkDispatches = plannedAttempt;
+    auditLog("info", "sdk_dispatch_started", {
+      request_id: options.requestId,
+      attempt: plannedAttempt,
+      model: options.model,
+      effective_model: prepared.effectiveModel,
+      effort: prepared.effort,
+      account_hash: accountHash,
+      conversation_hash: conversationHash,
+      mode: options.stream ? "stream" : "non-stream",
+    });
     upstreamStarted = true;
     const sdkResponse = await abortable(
       client.send(command, { abortSignal: AbortSignal.any([signal, attempt.signal]) }),
@@ -1041,6 +1087,9 @@ async function runAttempt(
       sdkResponse,
       captureOptions,
       abortUpstream,
+      sdkAttempt: plannedAttempt,
+      effort: prepared.effort,
+      accountHash,
     };
     state.streamAttempts += 1;
     return options.stream
@@ -1060,6 +1109,9 @@ interface AttemptStreamContext {
   readonly sdkResponse: SdkStreamResponse;
   readonly captureOptions: ReturnType<typeof reasoningCaptureOptions>;
   readonly abortUpstream: (reason?: unknown) => void;
+  readonly sdkAttempt: number;
+  readonly effort: ReturnType<typeof transformToSdkRequest>["effort"];
+  readonly accountHash: string;
 }
 
 /**
@@ -1230,6 +1282,12 @@ async function runStreamAttempt(
     sdkResponse,
     model: options.model,
     conversationId,
+    telemetryContext: {
+      requestId: options.requestId,
+      attempt: context.sdkAttempt,
+      effort: context.effort,
+      accountHash: context.accountHash,
+    },
     ...captureOptions,
     releaseAccount,
     abortUpstream: context.abortUpstream,
@@ -1268,7 +1326,12 @@ async function runStreamAttempt(
  */
 async function runCollectAttempt(context: AttemptStreamContext): Promise<AttemptOutcome> {
   const { options, signal, state, account, conversationId, sdkResponse, captureOptions } = context;
-  const telemetry = createStreamTelemetry(options.model, conversationId, "non-stream");
+  const telemetry = createStreamTelemetry(options.model, conversationId, "non-stream", {
+    requestId: options.requestId,
+    attempt: context.sdkAttempt,
+    effort: context.effort,
+    accountHash: context.accountHash,
+  });
   let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
   try {
     completion = await collectSdkResponse(sdkResponse, options.model, conversationId, signal, {
@@ -1579,20 +1642,26 @@ async function executeLoop(
  * queue waiting, refresh, retry sleeps, SDK send, and response consumption.
  */
 export async function runChatCompletion(options: RunChatCompletionOptions): Promise<Response> {
+  const requestId = options.requestId ?? newRequestId();
+  const tracedOptions: RunChatCompletionOptions =
+    options.requestId === requestId ? options : { ...options, requestId };
   const deadline = createPipelineDeadline(
-    options.deadlineSignal,
-    options.config.request_timeout_ms,
+    tracedOptions.deadlineSignal,
+    tracedOptions.config.request_timeout_ms,
   );
   let releaseSession: (() => void) | undefined;
   let releaseAccount: (() => void) | undefined;
   let streamOwnsResources = false;
   try {
-    if (options.affinity) {
-      releaseSession = await acquireSessionQueue(options.affinity.keyHash, deadline.signal);
-    } else if (options.lineage?.lookupKeyHash !== undefined) {
-      releaseSession = await acquireSessionQueue(options.lineage.lookupKeyHash, deadline.signal);
+    if (tracedOptions.affinity) {
+      releaseSession = await acquireSessionQueue(tracedOptions.affinity.keyHash, deadline.signal);
+    } else if (tracedOptions.lineage?.lookupKeyHash !== undefined) {
+      releaseSession = await acquireSessionQueue(
+        tracedOptions.lineage.lookupKeyHash,
+        deadline.signal,
+      );
     }
-    const result = await executeLoop(options, deadline.signal);
+    const result = await executeLoop(tracedOptions, deadline.signal);
     if (result.kind === "response") return result.response;
 
     releaseAccount = result.releaseAccount;
@@ -1600,10 +1669,10 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     const streamSessionRelease = releaseSession;
     let response: Response;
     try {
-      response = (options.createStreamResponse ?? createPipelineStreamResponse)(
+      response = (tracedOptions.createStreamResponse ?? createPipelineStreamResponse)(
         result,
         deadline.signal,
-        options.config.stream_idle_timeout_ms,
+        tracedOptions.config.stream_idle_timeout_ms,
         () => {
           streamAccountRelease();
           streamSessionRelease?.();
@@ -1622,6 +1691,15 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     return response;
   } catch (error) {
     if (error instanceof RequestTransformError) {
+      auditLog("warn", "request_transform_rejected", {
+        request_id: requestId,
+        stage: "request_transform",
+        protocol: tracedOptions.body.protocol,
+        model: tracedOptions.model,
+        projection_mode: tracedOptions.body.projectionMode,
+        code: error.code,
+        param: error.param,
+      });
       return openAiError(400, error.message, "invalid_request_error", error.code, error.param);
     }
     if (error instanceof ReasoningReplayError) {
@@ -1642,7 +1720,6 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     }
     // B16: never echo arbitrary exception text (paths, ids, SQL) to the client.
     // The correlation id ties the fixed response to the hashed audit record.
-    const requestId = newRequestId();
     auditLog("error", "pipeline_internal_error", {
       request_id: requestId,
       error_type: error instanceof Error ? error.name : typeof error,

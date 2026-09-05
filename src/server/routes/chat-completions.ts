@@ -48,6 +48,7 @@ export async function handleChatCompletions(
   const canonical = chatToCanonical(parsed.value, config.protocol_projection_mode);
   if (!canonical.ok) {
     auditLog("warn", "protocol_projection_rejected", {
+      request_id: ingress.requestId,
       protocol: "chat-completions",
       projection_mode: config.protocol_projection_mode,
       code: canonical.code,
@@ -70,6 +71,7 @@ export async function handleChatCompletions(
 
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
       buildPipelineOptions({
+        requestId: ingress.requestId,
         body: canonical.value,
         model: parsed.value.model,
         stream: parsed.value.stream,

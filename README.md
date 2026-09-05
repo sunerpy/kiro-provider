@@ -564,8 +564,10 @@ Standard clients must also stay within the verified subset. In safe mode a
 client that always sends system/developer instructions, custom grammars,
 namespace tools, or Anthropic `cache_control` receives a field-level 400; the
 gateway does not modify that request to force it through Kiro. The optional
-`legacy-user-prefix` projection is a temporary instruction-only migration aid
-for v0.5.x/v0.6.x and is scheduled for removal in v0.7.0.
+`legacy-user-prefix` projection is an explicit instruction-only compatibility
+mode. It remains deprecated, but removal is evidence-gated: Kiro must expose a
+protocol-faithful native instruction channel, or affected clients must migrate
+away from instruction roles first.
 
 The default `session_affinity_mode: "explicit-only"` never hashes prompt text
 to guess a conversation. Responses checks, in order,
@@ -665,7 +667,8 @@ returns `unsupported_instruction_projection` and never rewrites the request.
 Set Zuno `options.maxTokens` to `null` as shown so its generic layer does not
 add the unsupported `max_output_tokens: 32000`. Neither setting uses a private
 Header or client-side prompt patch; the legacy mode is an explicit migration
-exception scheduled for removal in v0.7.0.
+exception whose removal is gated on native instruction fidelity or completed
+client migration.
 
 ## Use with Codex CLI
 

@@ -33,7 +33,7 @@ Configuration is validated once at startup; any violation raises a `ConfigLoadEr
 | `port`                       | integer, `0`-`65535`, default `8787`                                      | `KIRO_PROVIDER_PORT`                       | HTTP listen port. `0` asks the OS for an ephemeral port (the bound address is printed at startup); `serve --port 0` is rejected. Fractional and out-of-range values are rejected, and an empty `KIRO_PROVIDER_PORT` no longer becomes `0`.                                              |
 | `api_keys`                   | `string[]`, **required, non-empty after trimming**                        | `KIRO_PROVIDER_API_KEYS`                   | Accepted Bearer keys. The environment value is a comma-separated list. An empty or whitespace-only list is rejected and the server refuses to start (fail-closed).                                                                                                                    |
 | `enable_legacy_chat_completions` | `boolean`, default `false`                                            | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | Exposes `POST /v1/chat/completions`. Keep this disabled unless a client cannot use Responses or Anthropic Messages. Environment values accept `true`, `false`, `1`, `0`.                                                                                                             |
-| `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is an instruction-only migration mode scheduled for removal in v0.7.0.                                                                                              |
+| `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is a deprecated, explicit instruction compatibility mode; removal is gated on native instruction fidelity or completed client migration.                              |
 | `session_affinity_mode`      | `"explicit-only" \| "legacy-initial-input"`, default `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` never derives a logical session from prompt text. `legacy-initial-input` temporarily restores the old initial-input fingerprint heuristics without changing model-visible content.                                                                                     |
 | `auth_source` | `"local"`, default `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | Authentication authority. Only the provider-owned local store is supported. The former `"opencode-shared"` value is rejected at startup with a migration message since 0.7.0: copy accounts once with `kiro-provider accounts import`, then use `"local"`. |
 | `opencode_auth_db_path` | `string \| null`, default `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | Deprecated since 0.7.0 and ignored (a warning is logged); scheduled for removal. Point `kiro-provider accounts import --from <path>` at a non-default OpenCode database instead. |
@@ -225,11 +225,18 @@ instruction-over-user priority. Safe mode therefore returns
 prefix.
 
 `legacy-user-prefix` joins only the original instruction text with exactly
-`\n\n` and prefixes the first user turn. Startup emits a content-free
-structured warning. It does not restore message merging, repeated-content
-collapse, trailing-character deletion, synthetic tool prose, or any other
-rewrite. This migration mode is available in v0.5.x and v0.6.x and is
-scheduled for removal in v0.7.0.
+`\n\n`. Leading and intermediate instruction blocks prefix the first user
+turn. A trailing contiguous instruction suffix that follows executable
+history stays at the current boundary: it is appended to a current user/tool
+message without moving its tool results or attachments, or becomes a synthetic
+current user turn when the history ends in an assistant result. This preserves
+reconciliation and continuation ordering instead of moving the new
+instruction back before an earlier assistant result. Startup emits a
+content-free structured warning. It does not restore message merging,
+repeated-content collapse, trailing-character deletion, synthetic tool prose,
+or any other rewrite. The mode remains deprecated, but it has no fixed removal
+version: removal requires a protocol-faithful native Kiro instruction channel
+or completed migration of affected clients.
 
 The exact accepted/rejected API subset is documented in
 [`PROTOCOL_COMPATIBILITY.md`](PROTOCOL_COMPATIBILITY.md).

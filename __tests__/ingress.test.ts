@@ -357,6 +357,7 @@ describe("buildPipelineOptions", () => {
     const resolved = config();
 
     const options = buildPipelineOptions({
+      requestId: "req-options-full",
       body,
       model: "gpt-5.6-sol",
       stream: true,
@@ -377,6 +378,7 @@ describe("buildPipelineOptions", () => {
     });
 
     expect(options).toEqual({
+      requestId: "req-options-full",
       body,
       model: "gpt-5.6-sol",
       stream: true,
@@ -397,6 +399,7 @@ describe("buildPipelineOptions", () => {
 
   test("omits absent optional dependencies while keeping tenantId explicit", () => {
     const options = buildPipelineOptions({
+      requestId: "req-options-minimal",
       body,
       model: "gpt-5.6-sol",
       stream: false,
@@ -412,12 +415,14 @@ describe("buildPipelineOptions", () => {
         "config",
         "deadlineSignal",
         "model",
+        "requestId",
         "stream",
         "tenantId",
         "tokenRefresher",
       ].sort(),
     );
     expect(options.tenantId).toBeUndefined();
+    expect(options.requestId).toBe("req-options-minimal");
   });
 });
 

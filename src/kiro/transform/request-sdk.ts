@@ -21,7 +21,7 @@ export function transformToSdkRequest(
   budget = 20_000,
   effortConfig?: EffortConfig,
 ): SdkPreparedRequest {
-  const { request, resolved, convId } = buildCodeWhispererRequest(body, model, auth, {
+  const { request, resolved, convId, diagnostics } = buildCodeWhispererRequest(body, model, auth, {
     conversationId: effortConfig?.conversationId,
     resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays,
   });
@@ -53,5 +53,6 @@ export function transformToSdkRequest(
     conversationId: convId,
     region: extractRegionFromArn(auth.profileArn) ?? auth.region,
     ...(effort ? { effort } : {}),
+    diagnostics,
   };
 }

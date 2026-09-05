@@ -910,6 +910,7 @@ describe("POST /v1/responses", () => {
         {
           type: "function",
           name: tool.name,
+          description: "Get the weather for a city",
           parameters: {
             type: "object",
             properties: { city: { type: "string" } },
@@ -972,10 +973,11 @@ describe("POST /v1/responses", () => {
       input: "run tools",
       stream: false,
       tools: [
-        { type: "custom", name: "exec" },
+        { type: "custom", name: "exec", description: "Execute a command" },
         {
           type: "function",
           name: "spawn_agent",
+          description: "Spawn an agent",
           parameters: { type: "object" },
         },
       ],
@@ -1153,8 +1155,13 @@ describe("POST /v1/responses", () => {
       input: "run tools",
       stream: false,
       tools: [
-        { type: "function", name: "plain", parameters: { type: "object" } },
-        { type: "custom", name: "exec" },
+        {
+          type: "function",
+          name: "plain",
+          description: "Call a plain function",
+          parameters: { type: "object" },
+        },
+        { type: "custom", name: "exec", description: "Execute a command" },
       ],
     });
     const body: unknown = await response.json();
@@ -1182,6 +1189,7 @@ describe("POST /v1/responses", () => {
       {
         type: "function" as const,
         name: firstTool.name,
+        description: "Look up service status",
         parameters: {
           type: "object",
           properties: { query: { type: "string" } },

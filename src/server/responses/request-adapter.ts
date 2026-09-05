@@ -674,6 +674,7 @@ export function adaptResponsesRequest(
     name: tool.publicName,
     wireName: tool.wireName,
     ...(tool.description !== undefined ? { description: tool.description } : {}),
+    descriptionPath: `${tool.path}.description`,
     inputSchema: tool.parameters,
     path: tool.path,
     origin: tool.origin,

@@ -2,7 +2,7 @@
 
 简体中文 · [English](../PROTOCOL_COMPATIBILITY.md)
 
-kiro-provider v0.5 定位为**经过验证的 OpenAI/Anthropic 兼容子集**，而不是
+kiro-provider v0.8 定位为**经过验证的 OpenAI/Anthropic 兼容子集**，而不是
 接受上游协议所有字段的实现。默认 `safe` 投影模式会保留客户端文本、角色、
 内容块边界、工具身份、顺序和来源路径；Kiro 无法等价表达的保证，会在发起
 上游请求前返回 HTTP 400。
@@ -13,12 +13,12 @@ Web Search 生成解释性补偿文本。
 
 ## 能力矩阵
 
-| 能力 | v0.5 行为 |
+| 能力 | v0.8 行为 |
 | --- | --- |
 | 普通文本与连续同角色回合 | 保持原始顺序直接发送，不合并，也不插入分隔文本。2026-09-02 的真实探针确认 Kiro 接受拆分的工具历史投影（`A{content}`、`A{toolUses:[a]}`、`A{toolUses:[b]}`、`U{toolResults:[ra]}` 加当前 `U{toolResults:[rb]}`），与原生合并形态 `A{content, toolUses:[a,b]}` + `U{toolResults:[ra,rb]}` 同样成功，因此保留不合并投影。 |
 | 同一消息中的多个顶层文本块 | 纯文本块在统一请求中保持独立，只在 Kiro 标量文本边界按原字节无分隔拼接。多个文本块与非文本内容交错时返回 `unsupported_content_block_projection`；工具结果内部的文本数组仍保持结构化。 |
-| Responses `instructions`；Chat/Responses `system`、`developer`；Anthropic `system` | `safe`：返回 `unsupported_instruction_projection`。Kiro 虽接受合法 `additionalContext` 结构，但 GPT 与 Claude 实测均未保留其中的指令内容或优先级。`legacy-user-prefix`：仅用 `\n\n` 连接原始文本并前置到首个 user 回合；不会恢复其他旧改写。 |
-| function 工具与 Responses custom 工具 | 保留精确声明、公开名称、schema、调用 ID、参数、结果、顺序与来源路径。历史缺少原始声明时返回 `missing_tool_declaration`。Kiro 对无参数工具的调用从不发送 `input` 片段（2026-09-02 观测为 `{toolUseId, name}` 后接 `{toolUseId, name, stop: true}`），这种精确形态投影为 `{}`；任何已收到的片段（包括空串或仅空白）都必须是合法 JSON，否则流以 `malformed_upstream_tool_arguments` 失败。完成的调用若工具名不在声明中，以 `unknown_upstream_tool` 失败；custom 工具包装不是精确的 `{"input": string}` 时以 `invalid_custom_tool_input` 失败。 |
+| Responses `instructions`；Chat/Responses `system`、`developer`；Anthropic `system` | `safe`：返回 `unsupported_instruction_projection`。Kiro 虽接受合法 `additionalContext` 结构，但 GPT 与 Claude 实测均未保留其中的指令内容或优先级。`legacy-user-prefix`：仅用 `\n\n` 连接原始文本；开头/中间的指令前置到首个 user 回合。连续尾部指令保留在当前边界：当前是 user/tool 时附加文本且不移动结构化输入，历史以 assistant 结束时才新建当前合成 user；不会恢复其他旧改写。 |
+| function 工具与 Responses custom 工具 | 保留精确声明、公开名称、非空描述、schema、调用 ID、参数、结果、顺序与来源路径。Kiro 会把空描述拒绝为 `Invalid tool use format`，因此缺失或仅空白的描述在本地以 `missing_tool_description` 失败；Provider 不会编造描述。历史缺少原始声明时返回 `missing_tool_declaration`。Kiro 对无参数工具的调用从不发送 `input` 片段（2026-09-02 观测为 `{toolUseId, name}` 后接 `{toolUseId, name, stop: true}`），这种精确形态投影为 `{}`；任何已收到的片段（包括空串或仅空白）都必须是合法 JSON，否则流以 `malformed_upstream_tool_arguments` 失败。完成的调用若工具名不在声明中，以 `unknown_upstream_tool` 失败；custom 工具包装不是精确的 `{"input": string}` 时以 `invalid_custom_tool_input` 失败。 |
 | `tool_choice: auto` | 支持。 |
 | `tool_choice: none` | 仅在不存在尚未完成的工具状态时支持，否则拒绝。 |
 | required/指定工具 | 返回 `unsupported_tool_choice`；Kiro 无法保证。 |
@@ -38,6 +38,7 @@ Web Search 生成解释性补偿文本。
 | stop reason 与截断 | Kiro 不暴露 stop reason。Responses 的 `status` 始终为 `completed`、`incomplete_details` 始终为 `null`；Anthropic 的 `stop_reason` 在有工具调用时为 `tool_use`，否则为 `end_turn`，永不为 `max_tokens`。因此被原生输出 token 上限截断的输出与正常结束无法区分。 |
 | Responses item 与 usage 形态 | `output_text` 部分携带 `annotations: []` 与 `logprobs: []`；function 与 custom 工具 item 携带 `status`（`output_item.added` 为 `in_progress`，`output_item.done` 与非流式输出为 `completed`）；`usage` 携带 `input_tokens_details.cached_tokens` 与 `output_tokens_details.reasoning_tokens`，由于 Kiro 不暴露此类拆分，两者始终为 `0`。 |
 | Anthropic thinking 块 | 文本之前的 reasoning 以一个 `thinking` 块流式输出，其 `signature_delta` 可以在最后一个 `thinking_delta` 之后、块停止之前到达。完成时仍无签名的 thinking 块，或没有对应块的签名，会以 `invalid_upstream_reasoning`（`api_error`）使流失败，与非流式 HTTP 502 同一处置。文本开始后到达的 reasoning 在响应完成时作为新块输出；文本块打开期间到达的 redacted envelope 等到文本块停止后再输出，因此不会有 delta 指向已停止的块。`message_delta.usage` 携带 canonical 的 `input_tokens` 与 `output_tokens`（缓存计数始终为 `0`）；`message_start.usage.input_tokens` 仍是由 `x-kiro-token-count-mode: estimate` 标记的估算值。回放的 `thinking` 块必须携带返回时的非空签名；`tool_result.content` 可以省略，视为空结果。 |
+| Anthropic assistant prefill | 不支持。Messages 请求若以 assistant 消息结束，就没有可映射的 Kiro 当前 user 输入，会在调用上游前被拒绝。Anthropic 错误 envelope 保留说明文本；内部/OpenAI 兼容转换错误码为 `missing_current_input`。 |
 
 受支持对象中的未知嵌套字段也会带字段路径被拒绝。接受后丢弃会造成虚假的
 协议兼容声明，因此这里有意采用默认拒绝。
@@ -50,11 +51,21 @@ Web Search 生成解释性补偿文本。
 - `safe`：不加入任何模型可见的兼容文本；指令类角色返回
   `unsupported_instruction_projection`。
 - `legacy-user-prefix`：仅用于迁移指令文本。Provider 使用精确的 `\n\n`
-  连接原始指令块并前置到首个 user 文本。启动时会输出不含请求正文的结构化
-  警告。该模式不会恢复消息合并、内容删除、合成工具文本或其他旧改写。
+  连接原始指令块；开头/中间的指令前置到首个 user 文本。连续尾部指令保留
+  在当前边界：当前是 user/tool 时附加文本且不移动工具结果、图片或文档，
+  历史以 assistant 结果结束时才新建当前合成 user 回合。启动时会输出不含
+  请求正文的结构化警告。该模式不会恢复消息合并、内容删除、合成工具文本或
+  其他旧改写。
 
-迁移模式在 v0.5.x、v0.6.x 保留，计划于 v0.7.0 删除。旧 Chat 端点由
-`enable_legacy_chat_completions` 独立控制，默认仍关闭。
+完成投影后，请求必须存在真实的当前输入：非空文本（空白字节原样保留）、
+图片、文档或至少一个工具结果。若请求以 assistant 消息结束，或当前只有工具
+声明和空文本，Provider 会在调用 SDK 前返回 `missing_current_input`，不会再
+构造空的 Kiro user 消息。工具结果即使内容数组为空，结构化结果本身仍属于
+有效输入。
+
+该兼容模式仍处于弃用状态，但移除采用证据门控，不绑定固定版本。只有 Kiro
+提供协议保真的原生指令通道，或受影响客户端完成迁移后才会删除。旧 Chat
+端点由 `enable_legacy_chat_completions` 独立控制，默认仍关闭。
 
 ## 会话亲和模式
 
@@ -163,6 +174,7 @@ envelope 附加到该轮次的首个 assistant message。同一轮次中不带
 | `unsupported_strict_tools` | Kiro 无法保证 strict schema。 |
 | `unsupported_custom_tool_format` | 无法保留 custom grammar/format。 |
 | `missing_tool_declaration` | 工具历史缺少精确原始声明。 |
+| `missing_tool_description` | function/custom 工具缺失描述或描述仅为空白。Kiro 要求非空描述；`param` 指向描述字段。 |
 | `unsupported_output_token_limit` | 模型或范围没有探针确认的原生映射。 |
 | `unsupported_stateful_responses` | 不提供服务端 Responses 状态。 |
 | `unsupported_web_search` | 不支持原生 Kiro 搜索/引用事件。 |
@@ -176,7 +188,7 @@ envelope 附加到该轮次的首个 assistant message。同一轮次中不带
 1. 保持 `protocol_projection_mode: "safe"`，运行代表性请求。
 2. 删除不支持字段，不要依赖 Provider 接收后忽略。
 3. 旧客户端确实依赖 system/developer 投影时，可临时选择
-   `legacy-user-prefix`，记录例外并计划在 v0.7.0 前移除。
+   `legacy-user-prefix` 并记录例外；只有原生保真或客户端迁移门禁满足后才移除。
 4. 只有确有需要时才设置 `enable_legacy_chat_completions: true`。
 5. 保持 `session_affinity_mode: "explicit-only"`，让有能力的 Responses
    客户端发送稳定 metadata 键；`legacy-initial-input` 只用于临时路由迁移。

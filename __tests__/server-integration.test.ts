@@ -323,6 +323,7 @@ describe("POST /v1/chat/completions", () => {
           type: "function",
           function: {
             name: "lookup",
+            description: "Look up a value",
             parameters: { type: "object" },
           },
         },
