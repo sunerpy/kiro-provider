@@ -102,6 +102,7 @@ function testConfig(overrides: Partial<Config> = {}): Config {
   return ConfigSchema.parse({
     api_keys: [API_KEY],
     enable_legacy_chat_completions: true,
+    protocol_projection_mode: "safe",
     request_timeout_ms: 1_000,
     stream_idle_timeout_ms: 1_000,
     max_request_body_bytes: 16_384,

@@ -1,35 +1,27 @@
-# 配合 Codex CLI 使用 kiro-provider
+# 使用 kiro-provider V3 对接 Codex CLI
 
-kiro-provider 提供 `POST /v1/responses`。Codex 自定义 `model_provider` 设置
-`wire_api = "responses"` 时会使用该协议。
+> **日期**：2026-09-05 · **已验证客户端**：Codex CLI 0.153.0
 
-## v0.5.0 支持边界
+kiro-provider V3 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
+wire API。
 
-v0.5.0 包含 provider 自有账号运维、真实用量刷新和类型化流错误；这些能力
-不改变这里的协议投影边界。最近一次 Codex
-门禁于 2026-08-27 使用编译后二进制和 **Codex CLI 0.150.0-alpha.9**；
-客户端只配置标准 base URL、API key、模型和 reasoning effort。
-`claude-opus-5-max` 已通过 Provider 模型校验。调用 Kiro 前的第一个字段级
-拒绝为：
+## V3 已支持契约
 
-```json
-{"reasoning":{"summary":"none"}}
-```
+编译后的 V3 候选已通过隔离真实客户端门禁，覆盖：
 
-`reasoning.summary` 没有经过证明的 Kiro 等价能力，因此 Provider 返回 HTTP
-400：`unsupported_reasoning_summary`，字段路径为 `reasoning.summary`。
-Provider 不会忽略该字段，也不会用提示词模拟。因此该 Codex 版本目前
-**尚未通过 v0.5 稳定版门禁**。
+- 普通 `response.completed` 回合；
+- custom command 执行及精确副作用；
+- 命令失败后的成功恢复；
+- 通过 `spawn_agent`、子代理响应与 `wait` 完成 namespace 协作；
+- Provider 私有 custom/namespace 别名零泄漏。
 
-未来 Codex 请求若落在已验证子集内，Responses 适配器可提供精确的
-function/custom 声明与结果、加密 reasoning 回放，以及标准字段驱动的账号与
-Kiro conversation 亲和。namespace 身份、custom grammar、托管 Web Search、
-有状态 Responses，以及存在可调用工具时的仅串行保证仍会明确报 capability
-错误。
+需要 custom grammar、namespace 工具、`agent_message`、`additional_tools`、
+`parallel_tool_calls: false`、加密 reasoning 或 `store: false` 的 Codex 请求
+会自动使用 V3 stateless 兼容通道；普通请求使用原生 KiroRuntime Responses。
 
-## 隔离兼容性探针
+## 配置
 
-不要修改真实 `~/.codex`。使用隔离的文件和 SQLite 状态：
+测试时不要修改真实 Codex profile，应隔离文件与 SQLite 状态：
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -37,34 +29,50 @@ export CODEX_HOME="$CODEX_TEST_ROOT/home"
 export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
 mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
 export LOCALGW_KEY="sk-...你的网关 api key..."
+
 cat > "$CODEX_HOME/config.toml" <<'EOF'
-model = "claude-opus-5-max"
+model = "gpt-5.6-sol"
 model_provider = "localgw"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 
 [model_providers.localgw]
-name = "Local Gateway"
+name = "Local Kiro Gateway"
 base_url = "http://127.0.0.1:8787/v1"
 env_key = "LOCALGW_KEY"
 wire_api = "responses"
 EOF
+
 codex exec --skip-git-repo-check "Reply with exactly: CODEX_OK"
 ```
 
-Codex 0.150.0-alpha.9 的预期结果是非零退出，并在
-`reasoning.summary` 返回 `unsupported_reasoning_summary`。未来出现受支持的请求形态后，
-还必须继续验证真实 shell/custom 工具往返、续轮，以及 Provider 重启后的
-reasoning 回放，才能标记为支持。
+网关必须预先运行，并已填充 Provider 自有账号库。启动客户端前，要求带鉴权的
+`GET /ready` 返回 HTTP 200。
 
-网关必须预先运行，并通过 `kiro-provider login` 或一次性的
-`kiro-provider accounts import` 填充 provider 自有本地认证库；带鉴权的
-`GET /ready` 必须返回 200。验收契约不包含私有 Header 或请求改写代理。
+## 可复现 smoke 门禁
 
-RC.5 账号管理证据见
-[`../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)。
-RC.4 认证生命周期证据保留在
-[`../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
-最近一次 Codex 协议证据仍为
-[`../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
-旧的 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
-仅是历史 v0.4 记录。
+仓库 smoke 脚本会创建隔离 Codex 状态、隔离 capture proxy 与临时 workspace：
+
+```bash
+CODEX_SMOKE_CODEX_BIN=/absolute/path/to/codex \
+CODEX_SMOKE_EXPECTED_VERSION=0.153.0 \
+KIRO_PROVIDER_SMOKE_MODE=tools \
+bash scripts/codex-smoke.sh
+```
+
+Capture 只会写入 owner-only 临时目录，并由退出 trap 删除。失败诊断只打印
+item type、role、工具名与存在性标记，不输出凭据、原始 reasoning envelope 或
+prompt 正文。
+
+## 仍存在的边界
+
+- KiroRuntime 不提供 OpenAI 托管 Web Search、File Search、Computer Use 或托管
+  MCP 工具。
+- `background`、Responses `conversation`、Structured Outputs、
+  `/responses/compact` 与精确 `/responses/input_tokens` 会被明确拒绝。
+- 为兼容 Codex，V3 接受 `parallel_tool_calls: false`，但 Kiro 不提供硬性串行
+  工具保证。
+- `store: false` 会阻止本地 Response 镜像，但不等于 AWS Zero Data Retention
+  保证。
+
+详见 [V3 协议兼容范围](PROTOCOL_COMPATIBILITY.zh.md) 与
+[V3 验证证据](../audits/kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md)。

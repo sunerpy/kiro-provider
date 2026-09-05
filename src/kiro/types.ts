@@ -133,12 +133,22 @@ export interface PreparedRequest {
   conversationId: string;
 }
 
-export type InstructionPrefixAction = "none" | "prepend_first_user" | "synthetic_leading_user";
+export type InstructionPrefixAction =
+  | "none"
+  | "kiro_cli_forced_role"
+  | "native_system_prompt"
+  | "prepend_first_user"
+  | "synthetic_leading_user";
 
 export type InstructionSuffixAction = "none" | "append_user" | "append_tool" | "synthetic_user";
 
 export interface RequestProjectionDiagnostics {
-  readonly projectionMode: "safe" | "legacy-user-prefix";
+  readonly projectionMode: "v3-auto" | "safe" | "native-context-safe" | "legacy-user-prefix";
+  readonly instructionChannel:
+    | "none"
+    | "kiro-cli-forced-role"
+    | "kiro-runtime-system-prompt"
+    | "legacy-user-prefix";
   readonly inputMessageCount: number;
   readonly outputMessageCount: number;
   readonly prefixInstructionCount: number;
@@ -165,6 +175,8 @@ export interface RequestTransformDiagnostics {
 export interface SdkPreparedRequest {
   conversationState: CodeWhispererRequest["conversationState"];
   profileArn?: string;
+  systemPrompt?: string;
+  runtimeProtocol: "codewhisperer" | "kiro-runtime";
   additionalModelRequestFields?: Readonly<Record<string, unknown>>;
   streaming: boolean;
   effectiveModel: string;

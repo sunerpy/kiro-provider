@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { RequestTransformError } from "../src/kiro/transform/errors.js";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
-import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
+import {
+  assistantOutputFingerprint,
+  type ProtocolProjectionMode,
+} from "../src/protocol/canonical.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { parsedResponses, TEST_AUTH, TEST_MODEL } from "./canonical-test-helpers.js";
 
-function adapt(raw: unknown, mode: "safe" | "legacy-user-prefix" = "safe") {
+function adapt(raw: unknown, mode: ProtocolProjectionMode = "safe") {
   return adaptResponsesRequest(parsedResponses(raw), mode);
 }
 
@@ -170,11 +173,13 @@ describe("Responses canonical adaptation", () => {
         expect(result.body.requestedReasoningEffort).toBe(input);
       }
     }
-    expectFailure(
-      { model: TEST_MODEL, input: "q", reasoning: { summary: "auto" } },
-      "unsupported_reasoning_summary",
-      "reasoning.summary",
-    );
+    expect(
+      adapt({
+        model: TEST_MODEL,
+        input: "q",
+        reasoning: { summary: "auto", context: "all_turns" },
+      }),
+    ).toMatchObject({ ok: true });
   });
 });
 
@@ -216,6 +221,29 @@ describe("Responses instruction projection", () => {
     expect(transformed.request.conversationState.currentMessage.userInputMessage?.content).toBe(
       "TOP\n\nDEV\n\n  q{",
     );
+  });
+
+  test("native-context-safe preserves one leading instruction for the runtime gate", () => {
+    const result = adapt(
+      {
+        model: TEST_MODEL,
+        instructions: "NATIVE",
+        input: "hello",
+      },
+      "native-context-safe",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      body: {
+        projectionMode: "native-context-safe",
+        instructions: { text: "NATIVE" },
+        messages: [
+          { role: "developer", content: [{ type: "text", text: "NATIVE" }] },
+          { role: "user", content: [{ type: "text", text: "hello" }] },
+        ],
+      },
+    });
   });
 
   test("legacy mode preserves trailing reconciliation order after an assistant result", () => {
@@ -566,10 +594,12 @@ describe("Responses fail-closed capability validation", () => {
   test.each([
     ["temperature", 0.2],
     ["top_p", 0.9],
-    ["truncation", "auto"],
-    ["background", true],
     ["max_tool_calls", 2],
-    ["service_tier", "default"],
+    ["context_management", { type: "compaction" }],
+    ["moderation", { type: "auto" }],
+    ["prompt", { id: "pmpt_test" }],
+    ["prompt_cache_options", { ttl: "30m" }],
+    ["prompt_cache_retention", "24h"],
   ] as const)("rejects unsupported field %s before Kiro", (field, value) => {
     expectFailure(
       { model: TEST_MODEL, input: "q", [field]: value },
@@ -578,12 +608,103 @@ describe("Responses fail-closed capability validation", () => {
     );
   });
 
-  test("reports unsupported text controls at their exact field paths", () => {
+  test("accepts no-op standard controls and rejects unsupported active variants", () => {
+    expect(
+      adapt({
+        model: TEST_MODEL,
+        input: "q",
+        background: false,
+        truncation: "disabled",
+        top_logprobs: 0,
+        service_tier: "default",
+      }),
+    ).toMatchObject({
+      ok: true,
+      body: { serviceTier: "default" },
+    });
     expectFailure(
-      { model: TEST_MODEL, input: "q", text: { verbosity: "low" } },
+      { model: TEST_MODEL, input: "q", background: true },
       "unsupported_parameter",
-      "text.verbosity",
+      "background",
     );
+    expectFailure(
+      { model: TEST_MODEL, input: "q", truncation: "auto" },
+      "unsupported_parameter",
+      "truncation",
+    );
+    expectFailure(
+      { model: TEST_MODEL, input: "q", top_logprobs: 1 },
+      "unsupported_parameter",
+      "top_logprobs",
+    );
+    expectFailure(
+      { model: TEST_MODEL, input: "q", service_tier: "priority" },
+      "unsupported_parameter",
+      "service_tier",
+    );
+  });
+
+  test("accepts OpenAI client identity fields without making them model-visible", () => {
+    expect(
+      adapt({
+        model: TEST_MODEL,
+        input: "q",
+        safety_identifier: "safety-hash",
+        user: "deprecated-user",
+      }),
+    ).toMatchObject({
+      ok: true,
+      body: {
+        user: "deprecated-user",
+        messages: [{ role: "user", content: [{ text: "q" }] }],
+      },
+    });
+  });
+
+  test("accepts only the no-obfuscation streaming option", () => {
+    expect(
+      adapt({
+        model: TEST_MODEL,
+        input: "q",
+        stream: true,
+        stream_options: { include_obfuscation: false },
+      }),
+    ).toMatchObject({ ok: true });
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: "q",
+        stream: true,
+        stream_options: { include_obfuscation: true },
+      },
+      "unsupported_parameter",
+      "stream_options.include_obfuscation",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: "q",
+        stream_options: { include_obfuscation: false },
+      },
+      "unsupported_parameter",
+      "stream_options",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: "q",
+        stream: true,
+        stream_options: { unexpected: false },
+      },
+      "unsupported_parameter",
+      "stream_options.unexpected",
+    );
+  });
+
+  test("reports unsupported text controls at their exact field paths", () => {
+    expect(adapt({ model: TEST_MODEL, input: "q", text: { verbosity: "low" } })).toMatchObject({
+      ok: true,
+    });
     expectFailure(
       {
         model: TEST_MODEL,
@@ -650,6 +771,45 @@ describe("Responses fail-closed capability validation", () => {
       "unsupported_file_reference",
       "input.0.content.0.file_id",
     );
+    const agentMessage = adapt({
+      model: TEST_MODEL,
+      input: [
+        {
+          type: "reasoning",
+          encrypted_content: "kr1_child_private_state",
+        },
+        {
+          type: "agent_message",
+          author: "root",
+          recipient: "worker",
+          content: [
+            { type: "input_text", text: "task" },
+            { type: "encrypted_content", encrypted_content: "opaque-child-state" },
+          ],
+        },
+      ],
+    });
+    expect(agentMessage).toMatchObject({
+      ok: true,
+      body: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: '[agent_message author="root" recipient="worker"]\n',
+              },
+              { type: "text", text: "task" },
+            ],
+            sourceMetadata: { author: "root", recipient: "worker" },
+          },
+        ],
+        reasoningReplays: [],
+      },
+    });
+    expect(JSON.stringify(agentMessage)).not.toContain("opaque-child-state");
+    expect(JSON.stringify(agentMessage)).not.toContain("kr1_child_private_state");
     expectFailure(
       {
         model: TEST_MODEL,
@@ -658,12 +818,12 @@ describe("Responses fail-closed capability validation", () => {
             type: "agent_message",
             author: "root",
             recipient: "worker",
-            content: [{ type: "input_text", text: "task" }],
+            content: [{ type: "encrypted_content", encrypted_content: "opaque" }],
           },
         ],
       },
-      "unsupported_input_item",
-      "input.0",
+      "unsupported_agent_message_content",
+      "input.0.content",
     );
     expectFailure(
       {
@@ -674,18 +834,35 @@ describe("Responses fail-closed capability validation", () => {
       "unsupported_web_search",
       "tools.0",
     );
-    expectFailure(
-      {
+    expect(
+      adapt({
         model: TEST_MODEL,
         input: "q",
-        tools: [{ type: "namespace", name: "ns", tools: [] }],
+        tools: [
+          {
+            type: "namespace",
+            name: "ns",
+            description: "Namespace",
+            tools: [
+              {
+                type: "function",
+                name: "run",
+                description: "Run",
+                parameters: { type: "object" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      ok: true,
+      body: {
+        tools: [{ publicType: "function", name: "ns.run", wireName: "kiro_ns_0" }],
       },
-      "unsupported_tool_type",
-      "tools.0",
-    );
+    });
   });
 
-  test("rejects strict tools, custom grammar, unknown nested fields, and ambiguous schemas", () => {
+  test("rejects strict tools, unknown nested fields, and ambiguous schemas", () => {
     expectFailure(
       {
         model: TEST_MODEL,
@@ -695,21 +872,30 @@ describe("Responses fail-closed capability validation", () => {
       "unsupported_strict_tools",
       "tools.0.strict",
     );
-    expectFailure(
-      {
+    expect(
+      adapt({
         model: TEST_MODEL,
         input: "q",
         tools: [
           {
             type: "custom",
             name: "shell",
+            description: "Run shell input",
             format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
           },
         ],
+      }),
+    ).toMatchObject({
+      ok: true,
+      body: {
+        tools: [
+          {
+            publicType: "custom",
+            description: expect.stringContaining("start: /.+/"),
+          },
+        ],
       },
-      "unsupported_custom_tool_format",
-      "tools.0.format",
-    );
+    });
     expectFailure(
       {
         model: TEST_MODEL,
@@ -742,12 +928,14 @@ describe("Responses fail-closed capability validation", () => {
     );
   });
 
-  test("rejects stateful continuation and non-equivalent tool controls", () => {
-    expectFailure(
-      { model: TEST_MODEL, input: "q", previous_response_id: "resp_1" },
-      "unsupported_stateful_responses",
-      "previous_response_id",
-    );
+  test("accepts previous_response_id state and rejects non-equivalent tool controls", () => {
+    expect(adapt({ model: TEST_MODEL, input: "q", previous_response_id: "resp_1" })).toMatchObject({
+      ok: true,
+      body: {
+        previousResponseId: "resp_1",
+        store: true,
+      },
+    });
     expectFailure(
       { model: TEST_MODEL, input: "q", tool_choice: "required" },
       "unsupported_tool_choice",
@@ -759,8 +947,8 @@ describe("Responses fail-closed capability validation", () => {
       parallel_tool_calls: false,
     });
     expect(noTools.ok).toBe(true);
-    expectFailure(
-      {
+    expect(
+      adapt({
         model: TEST_MODEL,
         input: "q",
         parallel_tool_calls: false,
@@ -772,10 +960,8 @@ describe("Responses fail-closed capability validation", () => {
             parameters: { type: "object" },
           },
         ],
-      },
-      "unsupported_parallel_tool_calls",
-      "parallel_tool_calls",
-    );
+      }),
+    ).toMatchObject({ ok: true });
   });
 
   test("supports tool_choice=none only without an unfinished tool state", () => {

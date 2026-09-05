@@ -1,6 +1,6 @@
 # kiro-provider
 
-> A protocol-fidelity gateway exposing a verified OpenAI Responses and Anthropic Messages subset over AWS Kiro (CodeWhisperer).
+> An OpenAI Responses-compatible provider over AWS KiroRuntime, with native Responses and protocol-fidelity stateless fallback transports.
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
@@ -29,17 +29,20 @@
 
 ## Features
 
-- OpenAI Responses `POST /v1/responses` and Anthropic Messages `POST /v1/messages` (both streaming and non-streaming), plus `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /health`, and authenticated `GET /ready`.
+- OpenAI Responses creation plus locally mirrored retrieve, delete, input-items,
+  and cancel routes; Anthropic Messages `POST /v1/messages`; legacy Chat
+  Completions behind an explicit switch; `GET /v1/models`, `GET /health`, and
+  authenticated `GET /ready`.
 - Legacy OpenAI Chat Completions is available at `POST /v1/chat/completions`, but is disabled by default and must be explicitly enabled with `enable_legacy_chat_completions`.
 - Bearer API-key gate that fails closed: the server refuses to start with no configured keys, and defaults to binding `127.0.0.1`.
 - Provider-owned authentication by default: `auth_source: "local"` stores credentials in `~/.config/kiro-provider/accounts.db`. Existing `opencode-kiro-auth` accounts can be imported once with `kiro-provider accounts import`; after that, kiro-provider refreshes access tokens, usage, quota recovery, and account health without reading or locking OpenCode's database.
 - Explicit-only session affinity by default: Responses requests can opt in through standard `metadata`, compatibility `client_metadata`, or `prompt_cache_key`; standard clients that resend complete history can also continue through the exact prior assistant-output lineage. User prompts are never fingerprinted to guess a session. A matching Zuno native OpenAI transport supplies `metadata.zuno_session_id` automatically.
 - Account-scoped scheduling and cached SDK/transport objects: unrelated accounts can run concurrently, while one account is protected from overlapping Kiro streams. Access-token rotation rebuilds the credential-bound SDK client while retaining the account transport. A production-default service lock prevents multiple processes from silently splitting those queues and pools. Kiro model-call HTTP keep-alive is disabled by default and is an explicit transport opt-in.
 - Live per-account model discovery and account-aware routing through Kiro management, with bounded stale/static fallback. Production calls use the live-probe-confirmed `runtime.<region>.kiro.dev` dialect. Token-usage metadata is an immediate completion witness; the current runtime's valid terminal metering event is accepted only when followed by clean EOF.
-- Zero provider-owned prompt injection in the default `safe` mode: a canonical
-  input IR preserves client text, roles, content-block boundaries, tool
-  identity, ordering, and source paths; Kiro output is normalized into a
-  separate canonical completion/event IR before protocol-specific encoding.
+- Default `v3-auto` transport selection: ordinary requests use KiroRuntime's
+  native OpenAI Responses operation and request shapes requiring `store:false`,
+  max effort, encrypted reasoning replay, custom grammar, namespace tools, or
+  Codex collaboration use the canonical stateless fallback.
 - Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
 - Multi-account rotation with automatic token refresh and failover. Exhausted accounts are hard-excluded from model attempts, then automatically rejoin only after a bounded, deduplicated Kiro usage probe confirms a new quota window. A provider-owned maintenance loop also refreshes near-expiry tokens and stale usage while the service is idle.
 - `kiro-provider login` and `accounts import` write directly to the provider-owned local authentication store. The former `auth_source: "opencode-shared"` compatibility mode was removed in 0.7.0; a configuration that still selects it fails at startup with migration instructions (import once, then use `local`).
@@ -48,54 +51,30 @@
 
 ## Protocol compatibility
 
-v0.5 is intentionally a **verified compatibility subset**. It does not accept
-fields and silently discard them. The default `protocol_projection_mode:
-"safe"` never prepends or rewrites client instructions, merges adjacent
-messages, clears repeated assistant output, removes trailing text such as `{`,
-or creates model-visible compensation prose.
+V3 implements the core OpenAI Responses resource and makes every upstream
+difference explicit:
 
-Key boundaries:
+- native JSON/SSE creation, instructions, function tools, supported effort and
+  token controls, and native `previous_response_id`;
+- automatic stateless fallback for `store:false`, max effort, encrypted
+  reasoning, custom grammar, namespace tools, and Codex multi-agent items;
+- tenant-isolated local response mirrors for retrieve, delete, input-items
+  pagination, and continuation;
+- field-level OpenAI error envelopes for capabilities Kiro cannot preserve,
+  including Responses conversation objects, background execution, Structured
+  Outputs, hosted tools, remote file references, compact, and exact
+  input-token counting.
 
-- plain text, consecutive same-role turns, function/custom tool declarations,
-  calls, and results retain their original structure and order;
-- plain-text-only top-level blocks remain distinct in the canonical request,
-  then are concatenated byte-for-byte with no inserted separator at Kiro's
-  single-text-field boundary; multiple text blocks interleaved with images or
-  tool content still return `unsupported_content_block_projection`;
-- `instructions`, `system`, and `developer` return
-  `unsupported_instruction_projection` in safe mode because Kiro accepted a
-  valid `additionalContext` shape but did not preserve its instruction content
-  or priority in live GPT and Claude probes;
-- `tool_choice: auto` is supported; `parallel_tool_calls: false` is accepted as
-  a no-op only when no callable tool can run (including `tool_choice: none`),
-  and otherwise returns `unsupported_parallel_tool_calls`; required/named
-  choice, strict schemas, custom grammars, and namespace tools are rejected
-  rather than weakened;
-- base64/data-URL images are supported, while remote image URLs and detail
-  controls are rejected;
-- Responses `input_file` supports inline base64/data-URL documents in Kiro's
-  native document formats. The original filename remains in the canonical
-  request; its recognized extension becomes the separate Kiro `format`, while
-  the extensionless ASCII name is validated before the SDK call. Names that
-  would require lossy rewriting return `invalid_file_name`; `file_id`
-  references are rejected because the provider has no OpenAI file store;
-- an output-token limit is probe-confirmed for `claude-sonnet-5` and
-  `claude-opus-5` variants in the range 1,024–128,000;
-- Responses omits only the exact `...`/`…` reasoning placeholder emitted by
-  GPT 5.6 Sol; Opus reasoning, non-placeholder Sol reasoning, effort mapping,
-  and encrypted reasoning replay remain unchanged;
-- stateful Responses fields and native Web Search remain unsupported, and the
-  provider never fabricates search/citation events.
+The old GenerateAssistantResponse `safe` mode remains fail-closed because
+`additionalContext` did not preserve instruction content or priority, and the
+account does not advertise the private `systemPrompt` feature. The default
+`v3-auto` path instead uses KiroRuntime CreateResponse's native
+`instructions` field.
 
-The current state of the verified subset, the compiled-binary acceptance runs
-behind each release, and the 2026-09-02 full code review with its remediation
-plan are recorded in [`docs/audits/`](docs/audits/README.md). Stable releases
-stay gated on those records rather than on silently discarding unsupported
-fields.
-
-For the complete capability matrix, error codes, reasoning replay contract,
-and v0.4 migration steps, see
-[`docs/PROTOCOL_COMPATIBILITY.md`](docs/PROTOCOL_COMPATIBILITY.md).
+For the transport decision table, stored-response contract, data-retention
+boundary, verified model controls, and current client evidence, see
+[`docs/PROTOCOL_COMPATIBILITY.md`](docs/PROTOCOL_COMPATIBILITY.md) and the
+[`docs/audits/`](docs/audits/README.md) records.
 
 ## Install
 
@@ -135,11 +114,11 @@ irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install
 Both scripts download the platform asset together with the release's `SHA256SUMS`, verify the checksum, and abort on a mismatch before installing to `~/.local/bin` (override with `KIRO_PROVIDER_INSTALL_DIR`). By default they follow `releases/latest`; for reproducible or service installs, pin a release with `KIRO_PROVIDER_VERSION` (recommended):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=0.5.1 sh
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=3.0.0 sh
 ```
 
 ```powershell
-$env:KIRO_PROVIDER_VERSION = "0.5.1"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+$env:KIRO_PROVIDER_VERSION = "3.0.0"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
 ### 3. From source (developers)
@@ -503,7 +482,7 @@ Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOM
 | `port` | `8787` | `KIRO_PROVIDER_PORT` |
 | `api_keys` | required, non-empty | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
-| `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
+| `protocol_projection_mode` | `v3-auto` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null` (deprecated since 0.7.0, ignored) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
@@ -560,14 +539,12 @@ Chat-Completions-only client (`@ai-sdk/openai-compatible`, older LangChain
 adapters, or an OpenCode custom provider using that package) at
 `POST /v1/chat/completions` after explicitly enabling the legacy endpoint.
 
-Standard clients must also stay within the verified subset. In safe mode a
-client that always sends system/developer instructions, custom grammars,
-namespace tools, or Anthropic `cache_control` receives a field-level 400; the
-gateway does not modify that request to force it through Kiro. The optional
-`legacy-user-prefix` projection is an explicit instruction-only compatibility
-mode. It remains deprecated, but removal is evidence-gated: Kiro must expose a
-protocol-faithful native instruction channel, or affected clients must migrate
-away from instruction roles first.
+The default `v3-auto` mode accepts standard instructions through KiroRuntime's
+native Responses field. Requests that need custom grammar, namespace tools,
+Codex collaboration items, encrypted reasoning replay, max effort, or
+`store:false` automatically use the stateless compatibility lane. Unsupported
+hosted capabilities fail with a field-level OpenAI error instead of being
+silently ignored.
 
 The default `session_affinity_mode: "explicit-only"` never hashes prompt text
 to guess a conversation. Responses checks, in order,
@@ -584,9 +561,10 @@ socket behavior.
 The temporary `legacy-initial-input` mode restores only the old affinity
 heuristics and logs a startup warning; it does not alter request content.
 
-Stateful Responses fields `previous_response_id` and `conversation` are
-rejected until the gateway has a real response-state store, so clients must
-resend the complete input.
+`previous_response_id` is supported for tenant-local mirrored responses.
+`conversation` objects remain unsupported. Retrieve, delete, input-items, and
+cancel use the local mirror; deleting it does not prove deletion of Kiro's
+upstream state.
 
 <details>
 <summary>Agent command reference</summary>

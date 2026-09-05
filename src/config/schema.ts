@@ -45,7 +45,9 @@ export const ConfigSchema = z.object({
   port: z.number().int().min(0).max(65_535).default(8787),
   api_keys: ApiKeysSchema,
   enable_legacy_chat_completions: z.boolean().default(false),
-  protocol_projection_mode: z.enum(["safe", "legacy-user-prefix"]).default("safe"),
+  protocol_projection_mode: z
+    .enum(["v3-auto", "safe", "native-context-safe", "legacy-user-prefix"])
+    .default("v3-auto"),
   session_affinity_mode: z.enum(["explicit-only", "legacy-initial-input"]).default("explicit-only"),
   proxy_url: ProxyUrlSchema,
   sdk_http_keep_alive: z.boolean().default(false),

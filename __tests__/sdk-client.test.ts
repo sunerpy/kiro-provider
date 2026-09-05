@@ -7,6 +7,8 @@ import {
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { HttpRequest } from "@smithy/protocol-http";
 import {
+  attachKiroRuntimeRequest,
+  attachKiroRuntimeSystemPrompt,
   buildClientConfig,
   clearSdkClientCache,
   createSdkClient,
@@ -38,6 +40,8 @@ async function captureBuiltRequest(
   client: CodeWhispererStreamingClient,
   wireModel: string,
   additionalModelRequestFields?: GenerateAssistantResponseCommandInput["additionalModelRequestFields"],
+  systemPrompt?: string,
+  runtime = false,
 ): Promise<HttpRequest> {
   let capturedRequest: HttpRequest | undefined;
   client.middlewareStack.add(
@@ -65,6 +69,8 @@ async function captureBuiltRequest(
     },
     ...(additionalModelRequestFields === undefined ? {} : { additionalModelRequestFields }),
   });
+  if (systemPrompt !== undefined) attachKiroRuntimeSystemPrompt(command, systemPrompt);
+  else if (runtime) attachKiroRuntimeRequest(command);
 
   try {
     await client.send(command);
@@ -164,6 +170,78 @@ describe("createSdkClient", () => {
     const plain = await captureBuiltRequest(plainClient, "gpt-5.6-sol");
     expect("additionalModelRequestFields" in parseRequestBody(plain)).toBe(false);
     clearSdkClientCache();
+  });
+
+  test("injects systemPrompt after serialization and before Content-Length", async () => {
+    clearSdkClientCache();
+    const client = createSdkClient(makeAuth(), "us-east-1", "high");
+    const systemPrompt = "System instruction bytes\r\n{";
+
+    const request = await captureBuiltRequest(
+      client,
+      "claude-opus-5",
+      { output_config: { effort: "high" } },
+      systemPrompt,
+    );
+    const body = parseRequestBody(request);
+    const serialized =
+      typeof request.body === "string"
+        ? request.body
+        : new TextDecoder().decode(request.body as Uint8Array);
+
+    expect(body.systemPrompt).toBe(systemPrompt);
+    expect(body.agentMode).toBe("vibe");
+    expect(body.conversationState).toMatchObject({
+      conversationId: "sdk-client-test",
+      rootConversationId: "sdk-client-test",
+    });
+    expect(request.path).toBe("/");
+    expect(request.headers["content-type"]).toBe("application/x-amz-json-1.0");
+    expect(request.headers["x-amz-target"]).toBe("KiroRuntimeService.GenerateAssistantResponse");
+    expect(request.headers["x-amzn-kiro-client-attribution"]).toBe("unrecognized");
+    expect(request.headers["x-kiro-attempt"]).toBe("1;max=3");
+    expect(body.additionalModelRequestFields).toEqual({
+      output_config: { effort: "high" },
+    });
+    expect(request.headers["content-length"]).toBe(String(Buffer.byteLength(serialized)));
+    clearSdkClientCache();
+  });
+
+  test("retargets an ordinary command to KiroRuntime without inventing systemPrompt", async () => {
+    clearSdkClientCache();
+    const client = createSdkClient(makeAuth(), "us-east-1");
+    const request = await captureBuiltRequest(client, "gpt-5.6-sol", undefined, undefined, true);
+    const body = parseRequestBody(request);
+
+    expect(request.path).toBe("/");
+    expect(request.headers["x-amz-target"]).toBe("KiroRuntimeService.GenerateAssistantResponse");
+    expect(body.agentMode).toBe("vibe");
+    expect(body.systemPrompt).toBeUndefined();
+    expect(body.conversationState).toMatchObject({
+      conversationId: "sdk-client-test",
+      rootConversationId: "sdk-client-test",
+    });
+    clearSdkClientCache();
+  });
+
+  test("rejects an empty systemPrompt before dispatch", () => {
+    const command = new GenerateAssistantResponseCommand({
+      conversationState: {
+        chatTriggerType: "MANUAL",
+        conversationId: "empty-system-prompt",
+        currentMessage: {
+          userInputMessage: {
+            content: "hello",
+            modelId: "claude-opus-5",
+            origin: "AI_EDITOR",
+          },
+        },
+      },
+    });
+
+    expect(() => attachKiroRuntimeSystemPrompt(command, "")).toThrow(
+      "Kiro systemPrompt must contain at least one byte",
+    );
   });
 
   test("mergeModelRequestFields deep-merges additions without dropping existing keys", () => {

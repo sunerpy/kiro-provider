@@ -225,7 +225,10 @@ export const ChatCompletionRequestSchema = z
     prediction: z.unknown().optional(),
     store: z.boolean().optional(),
     metadata: z.unknown().optional(),
-    service_tier: z.unknown().optional(),
+    service_tier: z
+      .enum(["auto", "default", "flex", "priority", "fast", "ultrafast"])
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -547,12 +550,19 @@ const ResponsesReasoningConfigSchema = z
   })
   .passthrough();
 
+const ResponsesStreamOptionsSchema = z
+  .object({
+    include_obfuscation: z.boolean().optional(),
+  })
+  .passthrough();
+
 export const ResponsesRequestSchema = z
   .object({
     model: z.string().trim().min(1),
     input: z.union([z.string(), z.array(ResponsesInputItemSchema)]),
     instructions: z.string().optional(),
     stream: z.boolean().default(false),
+    stream_options: ResponsesStreamOptionsSchema.optional(),
     tools: z.array(ResponsesToolSchema).optional(),
     tool_choice: z.union([z.enum(["auto", "none", "required"]), z.record(z.unknown())]).optional(),
     parallel_tool_calls: z.boolean().optional(),
@@ -564,14 +574,22 @@ export const ResponsesRequestSchema = z
     max_output_tokens: z.number().int().positive().optional(),
     temperature: z.number().optional(),
     top_p: z.number().optional(),
-    truncation: z.unknown().optional(),
-    background: z.boolean().optional(),
+    truncation: z.enum(["auto", "disabled"]).nullable().optional(),
+    background: z.boolean().nullable().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     prompt_cache_key: z.string().optional(),
     metadata: OpenAiMetadataSchema.optional(),
     client_metadata: z.unknown().optional(),
     previous_response_id: z.string().optional(),
     conversation: z.unknown().optional(),
+    context_management: z.unknown().optional(),
+    moderation: z.unknown().optional(),
+    prompt: z.unknown().optional(),
+    prompt_cache_options: z.unknown().optional(),
+    prompt_cache_retention: z.unknown().optional(),
+    safety_identifier: z.string().max(64).optional(),
+    top_logprobs: z.number().int().min(0).max(20).optional(),
+    user: z.string().optional(),
   })
   .passthrough();
 

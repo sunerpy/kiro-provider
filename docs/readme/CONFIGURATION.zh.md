@@ -33,7 +33,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `port`                       | 整数 `0`-`65535`，默认 `8787`                                          | `KIRO_PROVIDER_PORT`                       | HTTP 监听端口。`0` 表示由操作系统分配临时端口（启动时会打印实际地址）；`serve --port 0` 会被拒绝。小数和超出范围的值会被拒绝，空的 `KIRO_PROVIDER_PORT` 也不再变成 `0`。                          |
 | `api_keys`                   | `string[]`，**必填，去空格后不能为空**                                 | `KIRO_PROVIDER_API_KEYS`                   | 接受的 Bearer Key 列表。环境变量以逗号分隔。空列表或仅含空白会被拒绝，服务不会启动（默认拒绝启动）。                                                                                               |
 | `enable_legacy_chat_completions` | `boolean`，默认 `false`                                          | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                              |
-| `protocol_projection_mode`  | `"safe" \| "legacy-user-prefix"`，默认 `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` 禁止模型可见的兼容文本并拒绝无法投影的指令角色；`legacy-user-prefix` 是已弃用的显式指令兼容模式，只有原生指令保真能力成立或客户端迁移完成后才会移除。                                           |
+| `protocol_projection_mode`  | `"v3-auto" \| "safe" \| "native-context-safe" \| "legacy-user-prefix"`，默认 `"v3-auto"` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` | `v3-auto` 在请求可保真时使用 KiroRuntime 原生 Responses，并对 `store:false`、max effort、加密 reasoning、custom/namespace 工具与 Codex 协作 item 自动 fallback；其余值保留显式旧投影控制。 |
 | `session_affinity_mode`     | `"explicit-only" \| "legacy-initial-input"`，默认 `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` 绝不从提示词推导逻辑会话；`legacy-initial-input` 临时恢复旧版初始输入指纹，但不会改变模型可见内容。                                                                                  |
 | `auth_source` | `"local"`，默认 `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | 认证事实源。仅支持 provider 自有本地库。原有的 `"opencode-shared"` 取值自 0.7.0 起会在启动时被拒绝并给出迁移提示：先用 `kiro-provider accounts import` 导入一次，再改用 `"local"`。 |
 | `opencode_auth_db_path` | `string \| null`，默认 `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | 0.7.0 起弃用并忽略（记录一条告警），后续版本移除。需要非默认 OpenCode 数据库时改用 `kiro-provider accounts import --from <path>`。 |
@@ -196,11 +196,16 @@ KIRO_PROVIDER_PROXY_URL=http://proxy.example.com:8080 \
   覆盖时才返回 HTTP 200。其 `model_catalog` 对象还会说明当前模型信息来自
   实时、陈旧缓存、静态兜底或已禁用的动态发现。
 
-`protocol_projection_mode: "safe"` 是生产默认值。GPT 与 Claude 实时探针已经
-证明，Kiro 会接受合法非空标签的 `additionalContext` 结构，但不会保留其中的
-指令内容或指令高于 user 的优先级。因此 safe 模式对 Responses `instructions`、
-OpenAI `system`/`developer` 与 Anthropic `system` 返回
-`unsupported_instruction_projection`，不会自动回退到 user 前缀。
+`protocol_projection_mode: "v3-auto"` 是生产默认值。普通 Responses 请求使用
+KiroRuntime CreateResponse，包括原生 `instructions` 字段。需要
+`store:false`、max effort、加密 reasoning、custom/namespace 工具、串行工具
+兼容或 Codex 协作 item 的请求使用 stateless canonical pipeline。
+
+显式 `safe` 仍作用于旧 GenerateAssistantResponse 路径。GPT 与 Claude 真实
+探针证明，Kiro 虽接受合法非空标签的 `additionalContext`，但不会保留指令
+内容或指令高于 user 的优先级，因此 `safe` 对指令角色返回
+`unsupported_instruction_projection`。更严格的 `native-context-safe` 只有在
+Kiro 公开私有 feature 后才使用 `systemPrompt`；当前测试账号没有启用。
 
 `legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本。开头和中间的
 指令块仍前置到首个 user 回合；若可执行历史之后存在连续的尾部指令块，则
@@ -214,9 +219,11 @@ OpenAI `system`/`developer` 与 Anthropic `system` 返回
 完整接受/拒绝范围见
 [`PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
 
-Kiro 没有提供独立 tokenizer，因此 count-tokens 接口使用 provider
-现有的回退估算器；成功响应会携带
-`x-kiro-token-count-mode: estimate`。
+Kiro 没有提供独立 tokenizer，因此 Anthropic
+`POST /v1/messages/count_tokens` 使用 Provider 回退估算器，成功响应携带
+`x-kiro-token-count-mode: estimate`。OpenAI
+`POST /v1/responses/input_tokens` 是独立路径，会返回带类型的 HTTP 501
+`unsupported_endpoint`。
 
 ## Kiro runtime 与模型目录
 
@@ -284,9 +291,11 @@ Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同�
 静默拆到多个进程。若关闭该保护或使用不同锁路径，队列只在各自进程内串行；
 只有凭证/状态彼此独立，或已有外部跨进程串行器时才安全。
 
-本网关不保存 OpenAI response 对象状态，因此 `previous_response_id` 与
-`conversation` 会返回 `unsupported_stateful_responses`，不会被静默忽略；
-客户端需要重传完整 Responses 输入。
+网关会把已存储 OpenAI Response 镜像到 Provider 自有 SQLite，保留 30 天，
+上限 10,000 条。同一租户的 `previous_response_id`、retrieve、delete、cancel
+与 input-items 分页均使用该镜像。已删除、过期、未知或跨租户 ID 返回
+`response_not_found`；Responses `conversation` 对象仍不支持。删除本地镜像
+会阻止网关续轮，但不能证明 Kiro 上游状态已物理删除。
 
 ## 加密 reasoning 回放
 
@@ -346,7 +355,7 @@ export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026
   "port": 8787,
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
-  "protocol_projection_mode": "safe",
+  "protocol_projection_mode": "v3-auto",
   "session_affinity_mode": "explicit-only",
   "auth_source": "local",
   "opencode_auth_db_path": null,

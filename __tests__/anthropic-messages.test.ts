@@ -245,6 +245,30 @@ function eventPayloads(text: string): Array<Readonly<Record<string, unknown>>> {
 }
 
 describe("Anthropic request adapter", () => {
+  test("native-context-safe preserves one system string for the runtime capability gate", () => {
+    const adapted = adaptAnthropicMessagesRequest(
+      validRequest({
+        system: "NATIVE",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      { requireMaxTokens: true },
+      "native-context-safe",
+    );
+
+    expect(adapted).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          projectionMode: "native-context-safe",
+          messages: [
+            { role: "system", content: [{ type: "text", text: "NATIVE" }] },
+            { role: "user", content: [{ type: "text", text: "hello" }] },
+          ],
+        },
+      },
+    });
+  });
+
   test("rejects missing and blank tool descriptions at the Kiro projection boundary", () => {
     const cases = [
       [{ name: "read", input_schema: { type: "object" } }],

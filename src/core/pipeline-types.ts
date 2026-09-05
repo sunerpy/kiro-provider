@@ -2,6 +2,7 @@ import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-stream
 import type { Config } from "../config/schema.js";
 import type { OveragePolicy } from "../kiro/health.js";
 import type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
+import type { PipelineNativeContextCapabilities } from "../kiro/native-context-capabilities.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
@@ -10,6 +11,7 @@ import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 export type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
+export type { PipelineNativeContextCapabilities } from "../kiro/native-context-capabilities.js";
 export type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 export interface PipelineAccountManager {
@@ -133,6 +135,7 @@ export interface RunChatCompletionOptions {
   readonly tenantId?: string;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly modelCapabilities?: PipelineModelCapabilities;
+  readonly nativeContextCapabilities?: PipelineNativeContextCapabilities;
   readonly makeClient?: PipelineClientFactory;
   readonly deadlineSignal?: AbortSignal;
   readonly createStreamResponse?: typeof createPipelineStreamResponse;

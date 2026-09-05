@@ -1,37 +1,29 @@
-# Using kiro-provider with Codex CLI
+# Using kiro-provider V3 with Codex CLI
 
-kiro-provider exposes `POST /v1/responses`, which is the wire API used by a
-Codex custom `model_provider` when `wire_api = "responses"` is selected.
+> **Date**: 2026-09-05 · **Validated client**: Codex CLI 0.153.0
 
-## v0.5.0 support boundary
+kiro-provider V3 exposes the OpenAI Responses wire API expected by a Codex
+custom `model_provider`.
 
-v0.5.0 includes provider-owned account operations, live usage refresh, and
-typed stream failures. These do not change this protocol projection boundary.
-The latest compiled-service Codex gate on 2026-08-27 used Codex CLI
-**0.150.0-alpha.9** with only a standard base URL, API key, model, and
-reasoning-effort setting. `claude-opus-5-max` passes provider model validation.
-The first field-level rejection before Kiro is:
+## Supported V3 contract
 
-```json
-{"reasoning":{"summary":"none"}}
-```
+The compiled V3 candidate passed an isolated real-client gate covering:
 
-`reasoning.summary` has no proven Kiro equivalent, so the provider returns
-HTTP 400 with `unsupported_reasoning_summary` and
-`param: "reasoning.summary"`. It does not ignore the field or simulate it
-with prompt text. Therefore this Codex version is **not an accepted v0.5
-stable client yet**.
+- a normal `response.completed` turn;
+- custom command execution with the exact side effect;
+- a failed command followed by successful recovery;
+- namespace collaboration through `spawn_agent`, a child response, and
+  `wait`;
+- no leakage of the provider's private custom/namespace aliases.
 
-When a future Codex request stays within the verified subset, the Responses
-adapter supports exact function/custom declarations and results, encrypted
-reasoning replay, and standard-field account/Kiro-conversation affinity.
-Namespace identity, custom grammar constraints, hosted Web Search, stateful
-Responses, and serial-only execution with callable tools remain explicit
-capability errors.
+Codex request shapes that require custom grammar, namespace tools,
+`agent_message`, `additional_tools`, `parallel_tool_calls: false`, encrypted
+reasoning, or `store: false` automatically use V3's stateless compatibility
+lane. Ordinary requests use native KiroRuntime Responses.
 
-## Isolated compatibility probe
+## Configuration
 
-Do not edit a real `~/.codex` configuration. Use isolated file and SQLite
+Do not modify a real Codex profile while testing. Use isolated file and SQLite
 state:
 
 ```bash
@@ -40,36 +32,54 @@ export CODEX_HOME="$CODEX_TEST_ROOT/home"
 export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
 mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
 export LOCALGW_KEY="sk-...your gateway api key..."
+
 cat > "$CODEX_HOME/config.toml" <<'EOF'
-model = "claude-opus-5-max"
+model = "gpt-5.6-sol"
 model_provider = "localgw"
-model_reasoning_effort = "high"
+model_reasoning_effort = "xhigh"
 
 [model_providers.localgw]
-name = "Local Gateway"
+name = "Local Kiro Gateway"
 base_url = "http://127.0.0.1:8787/v1"
 env_key = "LOCALGW_KEY"
 wire_api = "responses"
 EOF
+
 codex exec --skip-git-repo-check "Reply with exactly: CODEX_OK"
 ```
 
-For Codex 0.150.0-alpha.9, the expected result is a non-zero exit with
-`unsupported_reasoning_summary` at `reasoning.summary`. A supported future request shape
-must then pass a real shell/custom-tool round trip, continuation, and reasoning
-replay across a provider restart before Codex can be marked supported.
+The gateway must already be running with a populated provider-owned account
+store. Require authenticated `GET /ready` to return HTTP 200 before starting
+the client.
 
-The gateway must already be running with its provider-owned local auth store
-populated by `kiro-provider login` or a one-time
-`kiro-provider accounts import`. Require authenticated `GET /ready` to return
-200. No private header or request-rewrite proxy is part of the acceptance
-contract.
+## Reproducible smoke gate
 
-See the RC.5 account-management evidence in
-[`audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
-The RC.4 authentication lifecycle evidence remains in
-[`audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
-The latest Codex protocol evidence remains
-[`audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
-The older [`E2E_VALIDATION_2026-08-22.md`](E2E_VALIDATION_2026-08-22.md) is a
-historical v0.4 record only.
+The repository smoke script creates isolated Codex state, an isolated capture
+proxy, and a temporary workspace:
+
+```bash
+CODEX_SMOKE_CODEX_BIN=/absolute/path/to/codex \
+CODEX_SMOKE_EXPECTED_VERSION=0.153.0 \
+KIRO_PROVIDER_SMOKE_MODE=tools \
+bash scripts/codex-smoke.sh
+```
+
+The capture contains request bodies only in an owner-only temporary directory
+and is deleted by the exit trap. Failure diagnostics print only item types,
+roles, tool names, and presence flags—never credentials, raw reasoning
+envelopes, or prompt text.
+
+## Remaining boundaries
+
+- OpenAI hosted Web Search, File Search, Computer Use, and hosted MCP tools are
+  not provided by KiroRuntime.
+- `background`, Responses `conversation`, Structured Outputs,
+  `/responses/compact`, and exact `/responses/input_tokens` are explicitly
+  unsupported.
+- `parallel_tool_calls: false` is accepted for Codex compatibility, but Kiro
+  does not provide a hard serial-tool guarantee.
+- `store: false` prevents local response mirroring; it is not an AWS Zero Data
+  Retention guarantee.
+
+See [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md) and
+[V3 validation evidence](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md).

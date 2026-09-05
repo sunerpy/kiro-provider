@@ -45,11 +45,17 @@ export type ResponsesRequestAdaptationResult =
       readonly param?: string;
     };
 
+export interface ResponsesPreviousContext {
+  readonly messages: readonly CanonicalMessage[];
+  readonly items?: readonly ResponsesInputItem[];
+}
+
 const RESPONSES_REQUEST_KEYS = new Set([
   "model",
   "input",
   "instructions",
   "stream",
+  "stream_options",
   "tools",
   "tool_choice",
   "parallel_tool_calls",
@@ -69,18 +75,29 @@ const RESPONSES_REQUEST_KEYS = new Set([
   "truncation",
   "background",
   "max_tool_calls",
+  "context_management",
+  "moderation",
+  "prompt",
+  "prompt_cache_options",
+  "prompt_cache_retention",
+  "safety_identifier",
+  "top_logprobs",
+  "user",
 ]);
 
 const UNSUPPORTED_RESPONSES_FIELDS = [
   "temperature",
   "top_p",
-  "truncation",
-  "background",
   "max_tool_calls",
-  "service_tier",
+  "context_management",
+  "moderation",
+  "prompt",
+  "prompt_cache_options",
+  "prompt_cache_retention",
 ] as const;
 
 const MESSAGE_ITEM_KEYS = new Set(["type", "id", "status", "role", "content"]);
+const AGENT_MESSAGE_ITEM_KEYS = new Set(["type", "id", "status", "author", "recipient", "content"]);
 const FUNCTION_CALL_ITEM_KEYS = new Set([
   "type",
   "id",
@@ -100,7 +117,7 @@ const CUSTOM_CALL_ITEM_KEYS = new Set([
   "input",
 ]);
 const TOOL_OUTPUT_ITEM_KEYS = new Set(["type", "id", "status", "call_id", "output"]);
-const ADDITIONAL_TOOLS_ITEM_KEYS = new Set(["type", "role", "tools"]);
+const ADDITIONAL_TOOLS_ITEM_KEYS = new Set(["type", "id", "status", "role", "tools"]);
 const REASONING_ITEM_KEYS = new Set([
   "type",
   "id",
@@ -270,6 +287,41 @@ function mapMessageContent(
     : mapContentParts(content, path);
 }
 
+function mapAgentMessageContent(
+  item: ResponsesAgentMessageItem,
+  path: string,
+): ProtocolResult<readonly CanonicalContentPart[]> {
+  const visibleParts: ResponsesContentPart[] = [];
+  for (const [index, part] of item.content.entries()) {
+    const partPath = `${path}.content.${index}`;
+    if (part.type === "encrypted_content") {
+      const keys = validateAllowedKeys(part, partPath, new Set(["type", "encrypted_content"]));
+      if (!keys.ok) return keys;
+      continue;
+    }
+    visibleParts.push(part);
+  }
+  if (visibleParts.length === 0) {
+    return protocolFailure(
+      "unsupported_agent_message_content",
+      "agent_message requires at least one visible content part; encrypted_content is transport metadata only",
+      `${path}.content`,
+    );
+  }
+  const mapped = mapContentParts(visibleParts, `${path}.content`);
+  if (!mapped.ok) return mapped;
+  return {
+    ok: true,
+    value: [
+      textPart(
+        `[agent_message author=${JSON.stringify(item.author)} recipient=${JSON.stringify(item.recipient)}]\n`,
+        `${path}.author`,
+      ),
+      ...mapped.value,
+    ],
+  };
+}
+
 function outputTextParts(
   output: ResponsesFunctionCallOutputItem["output"] | ResponsesCustomToolCallOutputItem["output"],
   path: string,
@@ -306,6 +358,9 @@ function outputTextParts(
 
 function validateInputItemShape(item: ResponsesInputItem, path: string): ProtocolResult<undefined> {
   if (isMessageItem(item)) return validateAllowedKeys(item, path, MESSAGE_ITEM_KEYS);
+  if (isAgentMessageItem(item)) {
+    return validateAllowedKeys(item, path, AGENT_MESSAGE_ITEM_KEYS);
+  }
   if (isFunctionCallItem(item)) {
     return validateAllowedKeys(item, path, FUNCTION_CALL_ITEM_KEYS);
   }
@@ -379,11 +434,13 @@ function validateTextConfig(value: unknown): ProtocolResult<undefined> {
     }
   }
   if (value.verbosity !== undefined) {
-    return protocolFailure(
-      "unsupported_parameter",
-      "Responses text.verbosity cannot be represented by the Kiro upstream",
-      "text.verbosity",
-    );
+    if (value.verbosity !== "low" && value.verbosity !== "medium" && value.verbosity !== "high") {
+      return protocolFailure(
+        "invalid_request",
+        "Responses text.verbosity must be low, medium, or high",
+        "text.verbosity",
+      );
+    }
   }
   if (value.format === undefined) return { ok: true, value: undefined };
   const format = value.format;
@@ -401,7 +458,7 @@ function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<unde
   const reasoning = request.reasoning;
   if (reasoning === undefined || reasoning === null) return { ok: true, value: undefined };
   for (const key of Object.keys(reasoning)) {
-    if (key !== "effort" && key !== "summary") {
+    if (key !== "effort" && key !== "summary" && key !== "context") {
       return protocolFailure(
         "unsupported_parameter",
         `Responses reasoning.${key} is not supported`,
@@ -409,10 +466,17 @@ function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<unde
       );
     }
   }
-  if (reasoning.summary !== undefined) {
+  if (
+    reasoning.summary !== undefined &&
+    reasoning.summary !== null &&
+    reasoning.summary !== "auto" &&
+    reasoning.summary !== "concise" &&
+    reasoning.summary !== "detailed" &&
+    reasoning.summary !== "none"
+  ) {
     return protocolFailure(
-      "unsupported_reasoning_summary",
-      "reasoning.summary cannot be guaranteed by the Kiro upstream",
+      "invalid_request",
+      "reasoning.summary must be auto, concise, detailed, or none",
       "reasoning.summary",
     );
   }
@@ -428,7 +492,7 @@ function isAssistantOutputItem(item: ResponsesInputItem): boolean {
 }
 
 function isTurnGroupItem(item: ResponsesInputItem): boolean {
-  return isReasoningItem(item) || isAssistantOutputItem(item);
+  return isReasoningItem(item) || isAssistantOutputItem(item) || isAgentMessageItem(item);
 }
 
 type ReplayGroup = {
@@ -475,6 +539,14 @@ function groupHasReplayToken(items: readonly ResponsesInputItem[], group: Replay
   for (let index = group.start; index <= group.end; index += 1) {
     const item = items[index];
     if (item && isReasoningItem(item) && replayTokenOf(item) !== undefined) return true;
+  }
+  return false;
+}
+
+function groupHasAgentMessage(items: readonly ResponsesInputItem[], group: ReplayGroup): boolean {
+  for (let index = group.start; index <= group.end; index += 1) {
+    const item = items[index];
+    if (item && isAgentMessageItem(item)) return true;
   }
   return false;
 }
@@ -532,11 +604,35 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
     allowInputSchema: boolean,
   ): ProtocolResult<undefined> => {
     if (tool.type === "namespace") {
-      return protocolFailure(
-        "unsupported_tool_type",
-        "Responses namespace tools cannot be represented without changing tool identity",
+      const keys = validateAllowedKeys(
+        tool,
         path,
+        new Set(["type", "name", "description", "tools"]),
       );
+      if (!keys.ok) return keys;
+      if (!Array.isArray(tool.tools)) {
+        return protocolFailure(
+          "invalid_tool_declaration",
+          `Responses namespace ${path} requires a tools array`,
+          `${path}.tools`,
+        );
+      }
+      for (const [index, child] of tool.tools.entries()) {
+        if (!isRecord(child) || typeof child.type !== "string") {
+          return protocolFailure(
+            "invalid_tool_declaration",
+            `Responses namespace child ${path}.tools.${index} is invalid`,
+            `${path}.tools.${index}`,
+          );
+        }
+        const childResult = validateTool(
+          child as Readonly<Record<string, unknown>> & { readonly type: string },
+          `${path}.tools.${index}`,
+          allowInputSchema,
+        );
+        if (!childResult.ok) return childResult;
+      }
+      return { ok: true, value: undefined };
     }
     if (tool.type !== "function" && tool.type !== "custom") {
       return protocolFailure(
@@ -573,11 +669,32 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
     );
     if (!keys.ok) return keys;
     if (tool.format !== undefined) {
-      return protocolFailure(
-        "unsupported_custom_tool_format",
-        "Custom tool grammar cannot be enforced by the Kiro upstream",
+      const format = tool.format;
+      if (!isRecord(format)) {
+        return protocolFailure(
+          "invalid_tool_declaration",
+          "Custom tool format must be an object",
+          `${path}.format`,
+        );
+      }
+      const formatKeys = validateAllowedKeys(
+        format,
         `${path}.format`,
+        new Set(["type", "syntax", "definition"]),
       );
+      if (!formatKeys.ok) return formatKeys;
+      if (
+        format.type !== "grammar" ||
+        typeof format.syntax !== "string" ||
+        format.syntax.length === 0 ||
+        typeof format.definition !== "string"
+      ) {
+        return protocolFailure(
+          "invalid_tool_declaration",
+          "Custom tool format must contain a grammar syntax and definition",
+          `${path}.format`,
+        );
+      }
     }
     return { ok: true, value: undefined };
   };
@@ -601,6 +718,7 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
 export function adaptResponsesRequest(
   request: ResponsesRequest,
   projectionMode: ProtocolProjectionMode = "safe",
+  previous?: ResponsesPreviousContext,
 ): ResponsesRequestAdaptationResult {
   for (const key of Object.keys(request)) {
     if (!RESPONSES_REQUEST_KEYS.has(key)) {
@@ -620,18 +738,74 @@ export function adaptResponsesRequest(
       );
     }
   }
-  if (request.previous_response_id !== undefined || request.conversation !== undefined) {
-    return protocolFailure(
-      "unsupported_stateful_responses",
-      "Stateful Responses continuation is not supported; resend the complete input",
-      request.previous_response_id !== undefined ? "previous_response_id" : "conversation",
+  if (request.stream_options !== undefined) {
+    const unknownStreamOption = Object.keys(request.stream_options).find(
+      (key) => key !== "include_obfuscation",
     );
+    if (unknownStreamOption !== undefined) {
+      return protocolFailure(
+        "unsupported_parameter",
+        `Responses parameter stream_options.${unknownStreamOption} is not supported`,
+        `stream_options.${unknownStreamOption}`,
+      );
+    }
+    if (request.stream_options.include_obfuscation === true) {
+      return protocolFailure(
+        "unsupported_parameter",
+        "Responses stream obfuscation cannot be represented by the Kiro upstream",
+        "stream_options.include_obfuscation",
+      );
+    }
+    if (request.stream !== true) {
+      return protocolFailure(
+        "unsupported_parameter",
+        "Responses stream_options is valid only when stream=true",
+        "stream_options",
+      );
+    }
   }
-  if (request.store === true) {
+  if (request.background === true) {
     return protocolFailure(
       "unsupported_parameter",
-      "Responses store=true is not supported",
-      "store",
+      "Responses background execution is not supported",
+      "background",
+    );
+  }
+  if (
+    request.truncation !== undefined &&
+    request.truncation !== null &&
+    request.truncation !== "disabled"
+  ) {
+    return protocolFailure(
+      "unsupported_parameter",
+      "Responses truncation=auto cannot be represented without changing input history",
+      "truncation",
+    );
+  }
+  if (request.top_logprobs !== undefined && request.top_logprobs !== 0) {
+    return protocolFailure(
+      "unsupported_parameter",
+      "Kiro does not expose token log probabilities",
+      "top_logprobs",
+    );
+  }
+  if (
+    request.service_tier !== undefined &&
+    request.service_tier !== null &&
+    request.service_tier !== "auto" &&
+    request.service_tier !== "default"
+  ) {
+    return protocolFailure(
+      "unsupported_parameter",
+      `Responses service_tier=${request.service_tier} is not available through Kiro`,
+      "service_tier",
+    );
+  }
+  if (request.conversation !== undefined) {
+    return protocolFailure(
+      "unsupported_stateful_responses",
+      "Conversation objects are not supported; use previous_response_id or resend complete input",
+      "conversation",
     );
   }
   if (
@@ -666,7 +840,7 @@ export function adaptResponsesRequest(
   const toolValidation = validateToolDeclarations(request);
   if (!toolValidation.ok) return toolValidation;
 
-  const bridgeResult = createResponsesToolBridge(request);
+  const bridgeResult = createResponsesToolBridge(request, previous?.items);
   if (!bridgeResult.ok) return bridgeResult;
   const bridge = bridgeResult.bridge;
   const tools: CanonicalToolDeclaration[] = bridge.declarations.map((tool) => ({
@@ -682,15 +856,17 @@ export function adaptResponsesRequest(
     ...(tool.sourceMetadata !== undefined ? { sourceMetadata: tool.sourceMetadata } : {}),
   }));
 
+  const previousMessages: CanonicalMessage[] = (previous?.messages ?? []).map((message) => ({
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "tool_result"
+        ? { ...part, content: part.content.map((content) => ({ ...content })) }
+        : { ...part },
+    ),
+    toolCalls: message.toolCalls.map((call) => ({ ...call })),
+  }));
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
-  if (request.parallel_tool_calls === false && request.tool_choice !== "none" && tools.length > 0) {
-    return protocolFailure(
-      "unsupported_parallel_tool_calls",
-      "parallel_tool_calls=false cannot be guaranteed by the Kiro upstream",
-      "parallel_tool_calls",
-    );
-  }
   const instructions =
     request.instructions !== undefined ? textPart(request.instructions, "instructions") : undefined;
   if (request.instructions !== undefined && request.instructions.length > 0) {
@@ -708,6 +884,7 @@ export function adaptResponsesRequest(
       path: "instructions",
     });
   }
+  messages.push(...previousMessages);
 
   let executableInputSeen = false;
   const canonicalIndexByInput = new Map<number, number>();
@@ -731,6 +908,14 @@ export function adaptResponsesRequest(
         const hasContent =
           item.content !== undefined && item.content !== null && item.content.length > 0;
         const group = replayGroupAt(request.input, index);
+        // Codex collaboration transports a child response as agent_message and
+        // may place that child's encrypted reasoning item immediately before it.
+        // The child message becomes external input in the parent conversation,
+        // so replaying the child's private reasoning as a parent assistant turn
+        // would cross conversation/account boundaries. Keep it non-model-visible.
+        if (group.firstOutputIndex === undefined && groupHasAgentMessage(request.input, group)) {
+          continue;
+        }
         if (item.encrypted_content === undefined || item.encrypted_content === null) {
           // The provider attaches the replay token to one reasoning item per
           // turn; the turn's other reasoning items are output metadata only.
@@ -789,13 +974,6 @@ export function adaptResponsesRequest(
         continue;
       }
       if (isFunctionCallItem(item) || isCustomToolCallItem(item)) {
-        if (item.namespace !== undefined) {
-          return protocolFailure(
-            "unsupported_tool_namespace",
-            "Namespaced tool calls cannot be represented without changing tool identity",
-            `${path}.namespace`,
-          );
-        }
         const lowered = bridge.lowerCall(item);
         let input: unknown;
         try {
@@ -846,11 +1024,16 @@ export function adaptResponsesRequest(
         continue;
       }
       if (isAgentMessageItem(item)) {
-        return protocolFailure(
-          "unsupported_input_item",
-          "agent_message author/recipient semantics cannot be represented by the Kiro upstream",
-          path,
-        );
+        const content = mapAgentMessageContent(item, path);
+        if (!content.ok) return content;
+        messages.push({
+          role: "user",
+          content: content.value,
+          toolCalls: [],
+          ...canonicalSource(item, path, ["author", "recipient"]),
+        });
+        executableInputSeen = true;
+        continue;
       }
       if (isFunctionCallOutputItem(item) || isCustomToolCallOutputItem(item)) {
         const content = outputTextParts(item.output, `${path}.output`);
@@ -925,6 +1108,14 @@ export function adaptResponsesRequest(
         ? { promptCacheKey: request.prompt_cache_key }
         : {}),
       ...(request.metadata !== undefined ? { metadata: request.metadata } : {}),
+      store: request.store !== false,
+      ...(request.previous_response_id !== undefined
+        ? { previousResponseId: request.previous_response_id }
+        : {}),
+      ...(request.service_tier === "auto" || request.service_tier === "default"
+        ? { serviceTier: request.service_tier }
+        : {}),
+      ...(request.user !== undefined ? { user: request.user } : {}),
     },
     bridge,
   };

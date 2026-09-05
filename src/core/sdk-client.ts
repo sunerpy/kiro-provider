@@ -4,9 +4,13 @@ import { Agent as HttpsAgent } from "node:https";
 import {
   CodeWhispererStreamingClient,
   type CodeWhispererStreamingClientConfig,
+  type GenerateAssistantResponseCommand,
+  type GenerateAssistantResponseCommandInput,
+  type GenerateAssistantResponseCommandOutput,
 } from "@aws/codewhisperer-streaming-client";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { HttpRequest } from "@smithy/protocol-http";
+import type { BuildMiddleware } from "@smithy/types";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { KIRO_CONSTANTS } from "../kiro/constants.js";
 import type { Effort, KiroAuthDetails } from "../kiro/types.js";
@@ -28,6 +32,7 @@ const transportKeysByAccount = new Map<string, Set<string>>();
 /** The pipeline owns retries; a second retry layer in the SDK only obscures backoff. */
 const SDK_MAX_ATTEMPTS = 1;
 const SDK_MAX_SOCKETS = 50;
+export const KIRO_RUNTIME_GENERATE_TARGET = "KiroRuntimeService.GenerateAssistantResponse";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -49,6 +54,93 @@ export function mergeModelRequestFields(
   }
   return merged;
 }
+
+function requestBodyText(body: unknown): string {
+  if (typeof body === "string") return body;
+  if (body instanceof Uint8Array) return new TextDecoder().decode(body);
+  throw new TypeError("Kiro systemPrompt injection requires a serialized JSON request body");
+}
+
+/**
+ * Retargets the public SDK command to Kiro Runtime's newer operation and adds
+ * its experimental top-level `systemPrompt` field after the public serializer
+ * runs and before Content-Length and bearer signing.
+ *
+ * The npm CodeWhisperer client still targets
+ * `AmazonCodeWhispererStreamingService.GenerateAssistantResponse`; Kiro
+ * CLI V3/KAS targets `KiroRuntimeService.GenerateAssistantResponse` on the
+ * same host. Keeping the middleware command-scoped prevents prompt leakage
+ * through cached clients.
+ */
+export interface KiroRuntimeRequestOptions {
+  readonly agentMode?: string;
+  readonly systemPrompt?: string;
+}
+
+export function attachKiroRuntimeRequest(
+  command: GenerateAssistantResponseCommand,
+  options: KiroRuntimeRequestOptions = {},
+): void {
+  if (options.systemPrompt !== undefined && options.systemPrompt.length === 0) {
+    throw new TypeError("Kiro systemPrompt must contain at least one byte");
+  }
+  const middleware: BuildMiddleware<
+    GenerateAssistantResponseCommandInput,
+    GenerateAssistantResponseCommandOutput
+  > = (next) => async (args) => {
+    if (!(args.request instanceof HttpRequest)) {
+      throw new TypeError("Kiro systemPrompt injection requires a Smithy HttpRequest");
+    }
+    const body: unknown = JSON.parse(requestBodyText(args.request.body));
+    if (!isRecord(body)) {
+      throw new TypeError("Kiro systemPrompt injection requires a JSON object request");
+    }
+    if (!isRecord(body.conversationState)) {
+      throw new TypeError("Kiro systemPrompt injection requires conversationState");
+    }
+    const conversationId = body.conversationState.conversationId;
+    if (typeof conversationId !== "string" || conversationId.length === 0) {
+      throw new TypeError("Kiro systemPrompt injection requires conversationId");
+    }
+    const agentMode = options.agentMode ?? args.request.headers["x-amzn-kiro-agent-mode"] ?? "vibe";
+    delete args.request.headers["x-amzn-kiro-agent-mode"];
+    args.request.path = "/";
+    args.request.headers["content-type"] = "application/x-amz-json-1.0";
+    args.request.headers["x-amz-target"] = KIRO_RUNTIME_GENERATE_TARGET;
+    args.request.headers["x-amzn-kiro-client-attribution"] = "unrecognized";
+    args.request.headers["x-kiro-attempt"] = "1;max=3";
+    args.request.body = JSON.stringify({
+      ...body,
+      agentMode,
+      conversationState: {
+        ...body.conversationState,
+        rootConversationId:
+          typeof body.conversationState.rootConversationId === "string" &&
+          body.conversationState.rootConversationId.length > 0
+            ? body.conversationState.rootConversationId
+            : conversationId,
+      },
+      ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+    });
+    return next(args);
+  };
+  command.middlewareStack.addRelativeTo(middleware, {
+    relation: "after",
+    toMiddleware: "serializerMiddleware",
+    name: "injectKiroSystemPrompt",
+    override: true,
+  });
+}
+
+export function attachKiroRuntimeSystemPrompt(
+  command: GenerateAssistantResponseCommand,
+  systemPrompt: string,
+): void {
+  attachKiroRuntimeRequest(command, { systemPrompt });
+}
+
+/** @deprecated Use attachKiroRuntimeSystemPrompt. */
+export const attachKiroSystemPrompt = attachKiroRuntimeSystemPrompt;
 
 export function buildClientConfig(
   auth: KiroAuthDetails,
