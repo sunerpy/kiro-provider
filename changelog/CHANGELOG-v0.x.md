@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/sunerpy/kiro-provider/compare/v0.8.0...v0.8.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* **protocol:** 修复 Kiro 请求边界投影 ([16b5529](https://github.com/sunerpy/kiro-provider/commit/16b552928bcf7bd369182f2e4ce2cfa2f1fd85d4))
+
 ## [0.8.0](https://github.com/sunerpy/kiro-provider/compare/v0.7.0...v0.8.0) (2026-09-03)
 
 
