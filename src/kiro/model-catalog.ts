@@ -1,4 +1,9 @@
-import { getModelContextLimit } from "./constants.js";
+import {
+  GPT_56_OUTPUT_TOKEN_LIMIT,
+  GPT_56_PROMPT_TOKEN_LIMIT,
+  GPT_56_TOTAL_CONTEXT_LIMIT,
+  getModelContextLimit,
+} from "./constants.js";
 import type { KiroAvailableModel } from "./management-client.js";
 
 export type InputModality = "text" | "image" | "pdf";
@@ -31,6 +36,17 @@ const PDF_MODALITIES = Object.freeze({
   input: Object.freeze(["text", "image", "pdf"] as const),
   output: Object.freeze(["text"] as const),
 });
+
+const GPT_56_STALE_MANAGEMENT_INPUT_LIMIT = 272000;
+const GPT_56_1M_WIRE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+
+function correctedGpt56Description(modelName: string): string {
+  return (
+    `${modelName} with a ${GPT_56_TOTAL_CONTEXT_LIMIT / 1_000_000}M total context window ` +
+    `(${GPT_56_PROMPT_TOKEN_LIMIT / 1000}k prompt + ` +
+    `${GPT_56_OUTPUT_TOKEN_LIMIT / 1000}k output)`
+  );
+}
 
 export const EXPECTED_PUBLIC_MODEL_IDS = Object.freeze([
   "auto",
@@ -588,11 +604,21 @@ export function modelCatalogFromAvailableModels(
     staticByWire.set(entry.wireId, entries);
   }
   return availableModels.flatMap((model) => {
+    const correctStaleGpt56Limits =
+      GPT_56_1M_WIRE_MODELS.has(model.modelId) &&
+      model.tokenLimits.maxInputTokens === GPT_56_STALE_MANAGEMENT_INPUT_LIMIT &&
+      model.tokenLimits.maxOutputTokens === GPT_56_OUTPUT_TOKEN_LIMIT;
     const metadata = {
-      contextLimit: model.tokenLimits.maxInputTokens,
+      contextLimit: correctStaleGpt56Limits
+        ? GPT_56_PROMPT_TOKEN_LIMIT
+        : model.tokenLimits.maxInputTokens,
       outputLimit: model.tokenLimits.maxOutputTokens,
       modalities: dynamicModalities(model),
-      ...(model.description !== undefined ? { description: model.description } : {}),
+      ...(correctStaleGpt56Limits
+        ? { description: correctedGpt56Description(model.modelName) }
+        : model.description !== undefined
+          ? { description: model.description }
+          : {}),
       ...(model.rateMultiplier !== undefined ? { rateMultiplier: model.rateMultiplier } : {}),
       ...(model.additionalModelRequestFieldsSchema !== undefined
         ? {

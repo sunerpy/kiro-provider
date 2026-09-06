@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { EXPECTED_PUBLIC_MODEL_IDS, MODEL_CATALOG } from "../src/kiro/model-catalog.js";
+import type { KiroAvailableModel } from "../src/kiro/management-client.js";
+import {
+  EXPECTED_PUBLIC_MODEL_IDS,
+  MODEL_CATALOG,
+  modelCatalogFromAvailableModels,
+} from "../src/kiro/model-catalog.js";
 import { resolveModelVariant } from "../src/kiro/models.js";
 
 const LEGACY_ONLY_MODEL_IDS = [
@@ -54,6 +59,71 @@ describe("MODEL_CATALOG", () => {
       expect(entry.contextLimit).toBe(1_000_000);
       expect(entry.outputLimit).toBe(128_000);
     }
+  });
+
+  test("advertises every GPT 5.6 family with an 872k prompt limit", () => {
+    for (const family of ["sol", "terra", "luna"]) {
+      const wireId = `gpt-5.6-${family}`;
+      const entries = MODEL_CATALOG.filter(
+        ({ id }) => id === wireId || id.startsWith(`${wireId}-`),
+      );
+
+      expect(entries).toHaveLength(6);
+      for (const entry of entries) {
+        expect(entry.wireId).toBe(wireId);
+        expect(entry.contextLimit).toBe(872_000);
+        expect(entry.outputLimit).toBe(128_000);
+      }
+    }
+  });
+
+  test("corrects the known stale GPT 5.6 family management metadata", () => {
+    const available = [
+      {
+        modelId: "gpt-5.6-sol",
+        modelName: "GPT 5.6 Sol",
+        description: "Old 272k description",
+        supportedInputTypes: ["TEXT", "IMAGE"],
+        tokenLimits: { maxInputTokens: 272_000, maxOutputTokens: 128_000 },
+      },
+      {
+        modelId: "gpt-5.6-terra",
+        modelName: "GPT 5.6 Terra",
+        description: "Old Terra 272k description",
+        supportedInputTypes: ["TEXT", "IMAGE"],
+        tokenLimits: { maxInputTokens: 272_000, maxOutputTokens: 128_000 },
+      },
+      {
+        modelId: "gpt-5.6-luna",
+        modelName: "GPT 5.6 Luna",
+        description: "Old Luna 272k description",
+        supportedInputTypes: ["TEXT", "IMAGE"],
+        tokenLimits: { maxInputTokens: 272_000, maxOutputTokens: 128_000 },
+      },
+      {
+        modelId: "future-model",
+        modelName: "Future Model",
+        description: "Unrelated 272k description",
+        supportedInputTypes: ["TEXT"],
+        tokenLimits: { maxInputTokens: 272_000, maxOutputTokens: 128_000 },
+      },
+    ] satisfies readonly KiroAvailableModel[];
+
+    const catalog = modelCatalogFromAvailableModels(available);
+    for (const family of ["sol", "terra", "luna"]) {
+      const entries = catalog.filter(({ wireId }) => wireId === `gpt-5.6-${family}`);
+      expect(entries).toHaveLength(6);
+      for (const entry of entries) {
+        expect(entry.contextLimit).toBe(872_000);
+        expect(entry.outputLimit).toBe(128_000);
+        expect(entry.description).toContain("1M total context window");
+      }
+    }
+    expect(catalog.find(({ wireId }) => wireId === "future-model")).toMatchObject({
+      contextLimit: 272_000,
+      outputLimit: 128_000,
+      description: "Unrelated 272k description",
+    });
   });
 
   test("does not expose legacy or wire-only model ids", () => {
