@@ -3,6 +3,7 @@ import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
+import { resolveModelVariant } from "../../kiro/models.js";
 import { textPart } from "../../protocol/adapter-utils.js";
 import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
@@ -59,50 +60,154 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requiresStatelessV3(body: Readonly<Record<string, unknown>>): boolean {
-  if (body.store === false) return true;
-  if (typeof body.model === "string" && body.model.endsWith("-max")) return true;
+type StatelessV3Reason =
+  | "store_false"
+  | "max_effort"
+  | "parallel_tool_calls_false"
+  | "custom_or_namespace_tool"
+  | "encrypted_reasoning"
+  | "collaboration_input"
+  | "native_instruction_role_unsupported";
+
+type StatelessV3Requirement = {
+  readonly reason: StatelessV3Reason;
+  readonly param: string;
+};
+
+type V3RouteDecision =
+  | {
+      readonly transport: "native";
+      readonly reason: "native_default" | "previous_native";
+    }
+  | {
+      readonly transport: "stateless";
+      readonly reason: StatelessV3Reason | "previous_stateless";
+    }
+  | {
+      readonly transport: "reject";
+      readonly reason: "native_previous_transport_conflict";
+      readonly requirement: StatelessV3Requirement;
+    };
+
+function nativeInstructionRolesSupported(model: unknown): boolean | undefined {
+  if (typeof model !== "string") return undefined;
+  try {
+    return resolveModelVariant(model).wireId.startsWith("gpt-");
+  } catch {
+    return undefined;
+  }
+}
+
+function unsupportedNativeInstructionRole(
+  body: Readonly<Record<string, unknown>>,
+): StatelessV3Requirement | undefined {
+  if (!Array.isArray(body.input) || nativeInstructionRolesSupported(body.model) !== false) {
+    return undefined;
+  }
+  for (const [index, item] of body.input.entries()) {
+    if (
+      isRecord(item) &&
+      (item.role === "system" || item.role === "developer") &&
+      (item.type === undefined || item.type === "message")
+    ) {
+      return {
+        reason: "native_instruction_role_unsupported",
+        param: `input.${index}.role`,
+      };
+    }
+  }
+  return undefined;
+}
+
+function requiresStatelessV3(
+  body: Readonly<Record<string, unknown>>,
+): StatelessV3Requirement | undefined {
+  if (body.store === false) return { reason: "store_false", param: "store" };
+  if (typeof body.model === "string" && body.model.endsWith("-max")) {
+    return { reason: "max_effort", param: "model" };
+  }
   const reasoning = body.reasoning;
-  if (isRecord(reasoning) && reasoning.effort === "max") return true;
-  if (body.parallel_tool_calls === false) return true;
+  if (isRecord(reasoning) && reasoning.effort === "max") {
+    return { reason: "max_effort", param: "reasoning.effort" };
+  }
+  if (body.parallel_tool_calls === false) {
+    return { reason: "parallel_tool_calls_false", param: "parallel_tool_calls" };
+  }
   if (
     Array.isArray(body.tools) &&
     body.tools.some(
       (tool) => isRecord(tool) && (tool.type === "custom" || tool.type === "namespace"),
     )
   ) {
-    return true;
+    return { reason: "custom_or_namespace_tool", param: "tools" };
   }
   if (
     Array.isArray(body.include) &&
     body.include.some((value) => value === "reasoning.encrypted_content")
   ) {
-    return true;
+    return { reason: "encrypted_reasoning", param: "include" };
   }
-  if (!Array.isArray(body.input)) return false;
-  return body.input.some(
-    (item) =>
-      isRecord(item) &&
-      (item.type === "additional_tools" ||
-        item.type === "agent_message" ||
-        item.type === "custom_tool_call" ||
-        item.type === "custom_tool_call_output" ||
-        (item.type === "function_call" && typeof item.namespace === "string")),
-  );
+  if (Array.isArray(body.input)) {
+    const collaborationIndex = body.input.findIndex(
+      (item) =>
+        isRecord(item) &&
+        (item.type === "additional_tools" ||
+          item.type === "agent_message" ||
+          item.type === "custom_tool_call" ||
+          item.type === "custom_tool_call_output" ||
+          (item.type === "function_call" && typeof item.namespace === "string")),
+    );
+    if (collaborationIndex >= 0) {
+      return {
+        reason: "collaboration_input",
+        param: `input.${collaborationIndex}`,
+      };
+    }
+  }
+  return unsupportedNativeInstructionRole(body);
 }
 
-function shouldUseNativeV3(body: unknown, dependencies: ResponsesDependencies): boolean {
-  if (!isRecord(body)) return true;
+function selectV3Route(body: unknown, dependencies: ResponsesDependencies): V3RouteDecision {
+  if (!isRecord(body)) return { transport: "native", reason: "native_default" };
+  const requirement = requiresStatelessV3(body);
   const previousResponseId = body.previous_response_id;
   if (typeof previousResponseId === "string") {
     const stored = dependencies.responseStore?.get(
       responseStoreTenant(dependencies.tenantId),
       previousResponseId,
     );
-    if (stored?.request !== undefined && stored.completion !== undefined) return false;
-    return true;
+    if (stored?.request !== undefined && stored.completion !== undefined) {
+      return { transport: "stateless", reason: "previous_stateless" };
+    }
+    if (stored !== undefined && requirement !== undefined) {
+      return {
+        transport: "reject",
+        reason: "native_previous_transport_conflict",
+        requirement,
+      };
+    }
+    return { transport: "native", reason: "previous_native" };
   }
-  return !requiresStatelessV3(body);
+  return requirement === undefined
+    ? { transport: "native", reason: "native_default" }
+    : { transport: "stateless", reason: requirement.reason };
+}
+
+function requestedEffort(body: unknown): string | undefined {
+  if (!isRecord(body) || !isRecord(body.reasoning)) return undefined;
+  return typeof body.reasoning.effort === "string" ? body.reasoning.effort : undefined;
+}
+
+function requestedModel(body: unknown): string | undefined {
+  return isRecord(body) && typeof body.model === "string" ? body.model : undefined;
+}
+
+function previousResponsePresent(body: unknown): boolean {
+  return (
+    isRecord(body) &&
+    typeof body.previous_response_id === "string" &&
+    body.previous_response_id.length > 0
+  );
 }
 
 /**
@@ -410,10 +515,38 @@ export async function handleResponses(
     ingress.finalize();
     return bodyResult.response;
   }
-  if (
-    config.protocol_projection_mode === "v3-auto" &&
-    shouldUseNativeV3(bodyResult.value, dependencies)
-  ) {
+  const v3Route =
+    config.protocol_projection_mode === "v3-auto"
+      ? selectV3Route(bodyResult.value, dependencies)
+      : undefined;
+  if (v3Route !== undefined) {
+    auditLog(v3Route.transport === "reject" ? "warn" : "info", "responses_route_selected", {
+      request_id: ingress.requestId,
+      transport: v3Route.transport,
+      reason: v3Route.reason,
+      model: requestedModel(bodyResult.value),
+      requested_effort: requestedEffort(bodyResult.value),
+      previous_response_present: previousResponsePresent(bodyResult.value),
+      ...(v3Route.transport === "reject"
+        ? {
+            required_transport: "stateless",
+            requirement: v3Route.requirement.reason,
+            param: v3Route.requirement.param,
+          }
+        : {}),
+    });
+  }
+  if (v3Route?.transport === "reject") {
+    ingress.finalize();
+    return openAiError(
+      400,
+      `Response continuation cannot switch from native to stateless transport for ${v3Route.requirement.param}`,
+      "invalid_request_error",
+      "native_response_transport_conflict",
+      v3Route.requirement.param,
+    );
+  }
+  if (v3Route?.transport === "native") {
     let nativeStreamOwnsResources = false;
     try {
       ingress.disableIdleTimeout();

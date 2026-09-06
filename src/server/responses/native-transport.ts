@@ -90,6 +90,8 @@ interface PreparedNativeRequest {
   readonly request: ResponsesRequest;
   readonly requestedModel: string;
   readonly wireModel: string;
+  readonly requestedEffort?: string;
+  readonly effectiveEffort?: string;
   readonly stream: boolean;
   readonly body: Readonly<Record<string, unknown>>;
   readonly inputItems: readonly unknown[];
@@ -336,6 +338,7 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
   }
   body.model = variant.wireId;
   const requestedEffort = isRecord(request.reasoning) ? request.reasoning.effort : undefined;
+  const effectiveEffort = typeof requestedEffort === "string" ? requestedEffort : variant.effort;
   if (isRecord(request.reasoning) || variant.effort !== undefined) {
     const reasoning: Record<string, unknown> = {};
     if (isRecord(request.reasoning)) {
@@ -356,6 +359,8 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
     request,
     requestedModel: request.model,
     wireModel: variant.wireId,
+    ...(typeof requestedEffort === "string" ? { requestedEffort } : {}),
+    ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
     stream: request.stream,
     body,
     inputItems: responseInputItems(request.input),
@@ -413,6 +418,17 @@ function upstreamError(upstream: Response, value: unknown): Response {
   );
 }
 
+function upstreamReasonHash(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const reason =
+    typeof value.reason === "string"
+      ? value.reason
+      : typeof value.message === "string"
+        ? value.message
+        : undefined;
+  return reason === undefined ? undefined : auditHash(reason);
+}
+
 function recordAffinity(
   dependencies: RouteDependencies,
   tenantId: string,
@@ -445,6 +461,7 @@ function normalizedEventFrame(
   prepared: PreparedNativeRequest,
 ): {
   readonly frame: string;
+  readonly eventType?: string;
   readonly terminal?: ResponseStateObject;
   readonly responseId?: string;
 } {
@@ -468,6 +485,7 @@ function normalizedEventFrame(
   const eventName = typeof event.type === "string" ? event.type : undefined;
   return {
     frame: `${eventName === undefined ? "" : `event: ${eventName}\n`}data: ${JSON.stringify(normalized)}\n\n`,
+    ...(eventName === undefined ? {} : { eventType: eventName }),
     ...(eventName === "response.completed" ||
     eventName === "response.failed" ||
     eventName === "response.incomplete" ||
@@ -484,6 +502,8 @@ function nativeStreamResponse(input: {
   readonly account: ManagedAccount;
   readonly dependencies: RouteDependencies;
   readonly tenantId: string;
+  readonly requestId: string;
+  readonly attempt: number;
   readonly release: () => void;
   readonly finalize: () => void;
 }): Response {
@@ -495,6 +515,36 @@ function nativeStreamResponse(input: {
   const encoder = new TextEncoder();
   let buffer = "";
   let released = false;
+  let terminalLogged = false;
+  const logTerminal = (
+    level: "info" | "warn",
+    provenance: string,
+    options: {
+      readonly eventType?: string;
+      readonly responseStatus?: string;
+      readonly completionWitnessed?: boolean;
+      readonly reasonHash?: string;
+    } = {},
+  ): void => {
+    if (terminalLogged) return;
+    terminalLogged = true;
+    auditLog(level, "native_responses_terminal", {
+      request_id: input.requestId,
+      attempt: input.attempt,
+      account_hash: auditHash(input.account.id),
+      model: input.prepared.requestedModel,
+      wire_model: input.prepared.wireModel,
+      requested_effort: input.prepared.requestedEffort,
+      effective_effort: input.prepared.effectiveEffort,
+      stream: true,
+      http_status: input.upstream.status,
+      terminal_provenance: provenance,
+      terminal_event: options.eventType,
+      response_status: options.responseStatus,
+      completion_witnessed: options.completionWitnessed ?? false,
+      reason_hash: options.reasonHash,
+    });
+  };
   const observe = (normalized: ReturnType<typeof normalizedEventFrame>): void => {
     if (normalized.responseId !== undefined) {
       recordAffinity(input.dependencies, input.tenantId, input.account, normalized.responseId);
@@ -505,6 +555,13 @@ function nativeStreamResponse(input: {
         normalized.terminal,
         input.prepared.inputItems,
       );
+      const completed =
+        normalized.eventType === "response.completed" && normalized.terminal.status === "completed";
+      logTerminal(completed ? "info" : "warn", "terminal_event", {
+        eventType: normalized.eventType,
+        responseStatus: normalized.terminal.status,
+        completionWitnessed: completed,
+      });
     }
   };
   const finish = (): void => {
@@ -537,6 +594,7 @@ function nativeStreamResponse(input: {
                 observe(normalized);
                 controller.enqueue(encoder.encode(normalized.frame));
               }
+              logTerminal("warn", "clean_eof_without_terminal");
               controller.close();
               finish();
               return;
@@ -544,6 +602,9 @@ function nativeStreamResponse(input: {
             buffer += decoder.decode(next.value, { stream: true });
           }
         } catch (error) {
+          logTerminal("warn", "stream_error", {
+            reasonHash: auditHash(error instanceof Error ? error.message : String(error)),
+          });
           controller.error(error);
           finish();
         }
@@ -552,6 +613,7 @@ function nativeStreamResponse(input: {
         try {
           await reader.cancel(reason);
         } finally {
+          logTerminal("info", "consumer_cancel");
           finish();
         }
       },
@@ -608,6 +670,33 @@ export async function proxyNativeResponses(
   }
   const release = await acquireAccountQueue(account.id, options.signals.combined);
   let releaseOwned = true;
+  let attempt = 0;
+  const logTerminal = (
+    level: "info" | "warn",
+    provenance: string,
+    fields: {
+      readonly httpStatus?: number;
+      readonly responseStatus?: string;
+      readonly completionWitnessed?: boolean;
+      readonly reasonHash?: string;
+    } = {},
+  ): void => {
+    auditLog(level, "native_responses_terminal", {
+      request_id: options.requestId,
+      attempt,
+      account_hash: auditHash(account.id),
+      model: prepared.requestedModel,
+      wire_model: prepared.wireModel,
+      requested_effort: prepared.requestedEffort,
+      effective_effort: prepared.effectiveEffort,
+      stream: prepared.stream,
+      http_status: fields.httpStatus,
+      terminal_provenance: provenance,
+      response_status: fields.responseStatus,
+      completion_witnessed: fields.completionWitnessed ?? false,
+      reason_hash: fields.reasonHash,
+    });
+  };
   try {
     const initialAuth = options.dependencies.accountManager.toAuthDetails(account);
     let refreshed = await options.dependencies.tokenRefresher.refreshIfNeeded(
@@ -638,16 +727,20 @@ export async function proxyNativeResponses(
       options.config.test_upstream_endpoint ??
       KIRO_CONSTANTS.RUNTIME_ENDPOINT.replace("{{region}}", auth.region);
     const fetcher = options.dependencies.nativeResponsesFetch ?? fetch;
-    auditLog("info", "native_responses_dispatch_started", {
-      request_id: options.requestId,
-      account_hash: auditHash(refreshed.id),
-      model: prepared.requestedModel,
-      wire_model: prepared.wireModel,
-      stream: prepared.stream,
-      previous_response_present: prepared.request.previous_response_id !== undefined,
-    });
-    const dispatch = (): Promise<Response> =>
-      fetcher(`${endpoint}/v1/responses`, {
+    const dispatch = (): Promise<Response> => {
+      attempt += 1;
+      auditLog("info", "native_responses_dispatch_started", {
+        request_id: options.requestId,
+        attempt,
+        account_hash: auditHash(refreshed.id),
+        model: prepared.requestedModel,
+        wire_model: prepared.wireModel,
+        requested_effort: prepared.requestedEffort,
+        effective_effort: prepared.effectiveEffort,
+        stream: prepared.stream,
+        previous_response_present: prepared.request.previous_response_id !== undefined,
+      });
+      return fetcher(`${endpoint}/v1/responses`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${auth.access}`,
@@ -660,6 +753,7 @@ export async function proxyNativeResponses(
         signal: options.signals.combined,
         ...(resolveProxyUrl(options.config) ? { proxy: resolveProxyUrl(options.config) } : {}),
       });
+    };
     let upstream = await dispatch();
     if (upstream.status === 401 || upstream.status === 403) {
       await upstream.body?.cancel();
@@ -680,6 +774,10 @@ export async function proxyNativeResponses(
     }
     if (!upstream.ok) {
       const value = await upstream.json().catch(() => undefined);
+      logTerminal("warn", "upstream_error", {
+        httpStatus: upstream.status,
+        reasonHash: upstreamReasonHash(value),
+      });
       return { response: upstreamError(upstream, value), streamOwnsResources: false };
     }
     if (prepared.stream) {
@@ -691,6 +789,8 @@ export async function proxyNativeResponses(
           account: refreshed,
           dependencies: options.dependencies,
           tenantId,
+          requestId: options.requestId,
+          attempt,
           release,
           finalize: options.finalize,
         }),
@@ -700,6 +800,9 @@ export async function proxyNativeResponses(
     const value = await upstream.json().catch(() => undefined);
     const normalized = normalizeResponseObject(value, prepared);
     if (!normalized) {
+      logTerminal("warn", "invalid_upstream_response", {
+        httpStatus: upstream.status,
+      });
       return {
         response: openAiError(
           502,
@@ -712,6 +815,12 @@ export async function proxyNativeResponses(
     }
     recordAffinity(options.dependencies, tenantId, refreshed, normalized.id);
     options.dependencies.responseStore?.putNative(tenantId, normalized, prepared.inputItems);
+    const completed = normalized.status === "completed";
+    logTerminal(completed ? "info" : "warn", "non_stream_response", {
+      httpStatus: upstream.status,
+      responseStatus: normalized.status,
+      completionWitnessed: completed,
+    });
     return {
       response: Response.json(normalized, {
         headers: responseHeaders(upstream, "application/json; charset=utf-8"),
@@ -720,12 +829,20 @@ export async function proxyNativeResponses(
     };
   } catch (error) {
     if (options.signals.deadline.aborted) {
+      logTerminal("warn", "deadline", {
+        reasonHash: auditHash(
+          options.signals.deadline.reason instanceof Error
+            ? options.signals.deadline.reason.message
+            : "deadline",
+        ),
+      });
       return {
         response: openAiError(504, "Request deadline exceeded", "timeout_error", "request_timeout"),
         streamOwnsResources: false,
       };
     }
     if (options.signals.client.aborted) {
+      logTerminal("info", "client_abort");
       return {
         response: openAiError(
           499,
@@ -740,6 +857,9 @@ export async function proxyNativeResponses(
       request_id: options.requestId,
       error_type: error instanceof Error ? error.name : typeof error,
       error_hash: auditHash(error instanceof Error ? error.message : String(error)),
+    });
+    logTerminal("warn", "transport_error", {
+      reasonHash: auditHash(error instanceof Error ? error.message : String(error)),
     });
     return {
       response: openAiError(

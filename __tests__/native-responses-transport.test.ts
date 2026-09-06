@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
+import { auditHash } from "../src/core/audit-log.js";
 import type {
   PipelineAccountManager,
   PipelineTokenRefresher,
@@ -13,6 +14,7 @@ import {
 import { SqliteResponseStore } from "../src/server/responses/store.js";
 import { handleResponses, type ResponsesDependencies } from "../src/server/routes/responses.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
+import { captureAuditEvents } from "./audit-test-helpers.js";
 
 function account(id = "native-account"): ManagedAccount {
   return {
@@ -221,7 +223,7 @@ describe("native KiroRuntime Responses transport", () => {
       expect(storeFalseContinuation.status).toBe(400);
       expect(await storeFalseContinuation.json()).toMatchObject({
         error: {
-          code: "native_store_false_requires_stateless_transport",
+          code: "native_response_transport_conflict",
           param: "store",
         },
       });
@@ -239,7 +241,7 @@ describe("native KiroRuntime Responses transport", () => {
       expect(serialContinuation.status).toBe(400);
       expect(await serialContinuation.json()).toMatchObject({
         error: {
-          code: "native_parallel_tool_control_requires_stateless_transport",
+          code: "native_response_transport_conflict",
           param: "parallel_tool_calls",
         },
       });
@@ -256,8 +258,28 @@ describe("native KiroRuntime Responses transport", () => {
       expect(maxContinuation.status).toBe(400);
       expect(await maxContinuation.json()).toMatchObject({
         error: {
-          code: "native_max_effort_requires_stateless_transport",
+          code: "native_response_transport_conflict",
           param: "model",
+        },
+      });
+
+      const instructionRoleContinuation = await handleResponses(
+        request({
+          model: "claude-opus-5-xhigh",
+          previous_response_id: "resp_native_1",
+          input: [
+            { type: "message", role: "developer", content: "new policy" },
+            { type: "message", role: "user", content: "continue" },
+          ],
+        }),
+        config(),
+        dependencies,
+      );
+      expect(instructionRoleContinuation.status).toBe(400);
+      expect(await instructionRoleContinuation.json()).toMatchObject({
+        error: {
+          code: "native_response_transport_conflict",
+          param: "input.0.role",
         },
       });
       expect(call).toBe(2);
@@ -267,6 +289,7 @@ describe("native KiroRuntime Responses transport", () => {
   });
 
   test("normalizes standard SSE events and stores the completed response", async () => {
+    const audit = captureAuditEvents();
     const database = new AccountsDatabase(":memory:");
     const responseStore = new SqliteResponseStore(database);
     const created = nativeResponse("resp_stream");
@@ -307,7 +330,18 @@ describe("native KiroRuntime Responses transport", () => {
         id: "resp_stream",
         model: "gpt-5.6-sol-xhigh",
       });
+      expect(audit.events("native_responses_terminal")).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          effective_effort: "xhigh",
+          terminal_provenance: "terminal_event",
+          terminal_event: "response.completed",
+          response_status: "completed",
+          completion_witnessed: true,
+        }),
+      ]);
     } finally {
+      audit.restore();
       database.close();
     }
   });
@@ -445,5 +479,280 @@ describe("native KiroRuntime Responses transport", () => {
     expect(nativeCalls).toBe(0);
     expect(pipelineBodies[0]?.projectionMode).toBe("legacy-user-prefix");
     expect(pipelineBodies[0]?.tools[0]?.wireName).toMatch(/^kiro_ns_/);
+  });
+
+  test.each(["developer", "system"] as const)(
+    "routes Claude input role %s through the stateless pipeline",
+    async (role) => {
+      const audit = captureAuditEvents();
+      let nativeCalls = 0;
+      let pipelineBody: RunChatCompletionOptions["body"] | undefined;
+      const dependencies: ResponsesDependencies = {
+        accountManager: new StubAccountManager(),
+        tokenRefresher,
+        nativeResponsesFetch: async () => {
+          nativeCalls += 1;
+          return Response.json(nativeResponse("unexpected"));
+        },
+        runPipeline: async (options) => {
+          pipelineBody = options.body;
+          return new Response(
+            JSON.stringify({
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              conversationId: "claude-stateless",
+              model: "claude-opus-5-xhigh",
+              createdAt: Date.now(),
+              text: "OK",
+              toolCalls: [],
+              finishReason: "stop",
+              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            }),
+            { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } },
+          );
+        },
+      };
+
+      try {
+        const response = await handleResponses(
+          request({
+            model: "claude-opus-5-xhigh",
+            instructions: "top-level policy",
+            input: [
+              { type: "message", role, content: "role policy" },
+              { type: "message", role: "user", content: "hello" },
+            ],
+          }),
+          config(),
+          dependencies,
+        );
+
+        expect(response.status).toBe(200);
+        expect(nativeCalls).toBe(0);
+        expect(pipelineBody?.projectionMode).toBe("legacy-user-prefix");
+        expect(pipelineBody?.messages.some((message) => message.role === role)).toBe(true);
+        expect(audit.events("responses_route_selected")).toEqual([
+          expect.objectContaining({
+            transport: "stateless",
+            reason: "native_instruction_role_unsupported",
+            model: "claude-opus-5-xhigh",
+          }),
+        ]);
+      } finally {
+        audit.restore();
+      }
+    },
+  );
+
+  test("routes auto plus developer input through stateless but keeps GPT native", async () => {
+    const nativeBodies: Array<Record<string, unknown>> = [];
+    const pipelineModels: string[] = [];
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher,
+      nativeResponsesFetch: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        nativeBodies.push(body);
+        return Response.json(nativeResponse(`native_${nativeBodies.length}`, String(body.model)));
+      },
+      runPipeline: async (options) => {
+        pipelineModels.push(options.model);
+        return new Response(
+          JSON.stringify({
+            canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+            conversationId: "auto-stateless",
+            model: options.model,
+            createdAt: Date.now(),
+            text: "OK",
+            toolCalls: [],
+            finishReason: "stop",
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          }),
+          { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } },
+        );
+      },
+    };
+    const roleInput = [
+      { type: "message", role: "developer", content: "policy" },
+      { type: "message", role: "user", content: "hello" },
+    ];
+
+    const automatic = await handleResponses(
+      request({ model: "auto", input: roleInput }),
+      config(),
+      dependencies,
+    );
+    const gpt = await handleResponses(
+      request({ model: "gpt-5.6-sol-xhigh", input: roleInput }),
+      config(),
+      dependencies,
+    );
+
+    expect(automatic.status).toBe(200);
+    expect(gpt.status).toBe(200);
+    expect(pipelineModels).toEqual(["auto"]);
+    expect(nativeBodies).toHaveLength(1);
+    expect(nativeBodies[0]).toMatchObject({
+      model: "gpt-5.6-sol",
+      input: roleInput,
+      reasoning: { effort: "xhigh" },
+    });
+  });
+
+  test("keeps Claude top-level instructions plus user input on native Responses", async () => {
+    let nativeBody: Record<string, unknown> | undefined;
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher,
+      nativeResponsesFetch: async (_url, init) => {
+        nativeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json(nativeResponse("claude_native", "claude-opus-5"));
+      },
+    };
+
+    const response = await handleResponses(
+      request({
+        model: "claude-opus-5-xhigh",
+        instructions: "top-level policy",
+        input: "hello",
+      }),
+      config(),
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(nativeBody).toMatchObject({
+      model: "claude-opus-5",
+      instructions: "top-level policy",
+      input: "hello",
+      reasoning: { effort: "xhigh" },
+    });
+  });
+
+  test("records native route, dispatch attempt, effective effort, and terminal outcome", async () => {
+    const audit = captureAuditEvents();
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher,
+      nativeResponsesFetch: async () =>
+        Response.json(nativeResponse("telemetry_native", "gpt-5.6-sol")),
+    };
+
+    try {
+      const response = await handleResponses(
+        request({ model: "gpt-5.6-sol-xhigh", input: "hello" }),
+        config(),
+        dependencies,
+      );
+      expect(response.status).toBe(200);
+      expect(audit.events("responses_route_selected")).toEqual([
+        expect.objectContaining({
+          transport: "native",
+          reason: "native_default",
+          model: "gpt-5.6-sol-xhigh",
+        }),
+      ]);
+      expect(audit.events("native_responses_dispatch_started")).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          model: "gpt-5.6-sol-xhigh",
+          wire_model: "gpt-5.6-sol",
+          effective_effort: "xhigh",
+        }),
+      ]);
+      expect(audit.events("native_responses_terminal")).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          http_status: 200,
+          terminal_provenance: "non_stream_response",
+          response_status: "completed",
+          completion_witnessed: true,
+          effective_effort: "xhigh",
+        }),
+      ]);
+    } finally {
+      audit.restore();
+    }
+  });
+
+  test("records a sanitized terminal event for native upstream errors", async () => {
+    const audit = captureAuditEvents();
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher,
+      nativeResponsesFetch: async () =>
+        Response.json(
+          {
+            reason: "kiro_runtime_error",
+            message: "synthetic upstream failure",
+          },
+          { status: 502 },
+        ),
+    };
+
+    try {
+      const response = await handleResponses(
+        request({ model: "claude-opus-5-xhigh", input: "hello" }),
+        config(),
+        dependencies,
+      );
+      expect(response.status).toBe(502);
+      expect(audit.events("native_responses_terminal")).toEqual([
+        expect.objectContaining({
+          attempt: 1,
+          http_status: 502,
+          terminal_provenance: "upstream_error",
+          completion_witnessed: false,
+          effective_effort: "xhigh",
+          reason_hash: auditHash("kiro_runtime_error"),
+        }),
+      ]);
+      expect(JSON.stringify(audit.events())).not.toContain("synthetic upstream failure");
+    } finally {
+      audit.restore();
+    }
+  });
+
+  test("numbers each real native dispatch attempt across one bearer refresh", async () => {
+    const audit = captureAuditEvents();
+    let calls = 0;
+    let forcedRefreshes = 0;
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher: {
+        refreshIfNeeded: async (selected) => selected,
+        forceRefresh: async (selected) => {
+          forcedRefreshes += 1;
+          return selected;
+        },
+      },
+      nativeResponsesFetch: async () => {
+        calls += 1;
+        return calls === 1
+          ? Response.json({ reason: "unauthorized", message: "synthetic" }, { status: 401 })
+          : Response.json(nativeResponse("retry_native", "gpt-5.6-sol"));
+      },
+    };
+
+    try {
+      const response = await handleResponses(
+        request({ model: "gpt-5.6-sol-xhigh", input: "hello" }),
+        config(),
+        dependencies,
+      );
+      expect(response.status).toBe(200);
+      expect(forcedRefreshes).toBe(1);
+      expect(
+        audit.events("native_responses_dispatch_started").map((event) => event.attempt),
+      ).toEqual([1, 2]);
+      expect(audit.events("native_responses_terminal")).toEqual([
+        expect.objectContaining({
+          attempt: 2,
+          http_status: 200,
+          completion_witnessed: true,
+        }),
+      ]);
+    } finally {
+      audit.restore();
+    }
   });
 });
