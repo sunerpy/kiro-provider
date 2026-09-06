@@ -2,9 +2,18 @@
 
 ## [3.0.0](https://github.com/sunerpy/kiro-provider/compare/v0.8.1...v3.0.0) (2026-09-06)
 
+### ⚠ BREAKING CHANGES
+
+* 默认 `protocol_projection_mode` 改为 `v3-auto`
+* `/v1/responses/compact` 与 `/v1/responses/input_tokens` 明确返回 HTTP 501
 
 ### Features
 
 * **api:** 增加 KiroRuntime V3 Responses 提供器 ([459d010](https://github.com/sunerpy/kiro-provider/commit/459d0106e2235f70a4df1b2830fafb8a46a21e25))
+* **responses:** 增加 native/stateless 自动路由与租户隔离的 Response 生命周期
+* **telemetry:** 增加 payload-free 路由、attempt、effective effort 与 terminal 事件
+* **research:** 增加 Kiro CLI 脱敏差分探针与 effort 对照研究工具
 
-## Changelog
+### Bug Fixes
+
+* **responses:** Claude input 含 `system`/`developer` role 时自动回退 stateless
