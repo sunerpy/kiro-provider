@@ -90,6 +90,8 @@ function request(
 describe("route dispatch", () => {
   test.each([
     ["GET", "/v1/responses", "POST"],
+    ["GET", "/v1/responses/compact", "POST"],
+    ["GET", "/v1/responses/input_tokens", "POST"],
     ["GET", "/v1/chat/completions", "POST"],
     ["PUT", "/v1/models", "GET"],
     ["POST", "/health", "GET, HEAD"],
@@ -166,6 +168,24 @@ describe("route dispatch", () => {
     expect(response.status).toBe(405);
     expect(response.headers.get("Allow")).toBe("POST");
   });
+
+  test.each(["/v1/responses/compact", "/v1/responses/input_tokens"])(
+    "returns an explicit OpenAI envelope for unsupported KiroRuntime operation %s",
+    async (path) => {
+      const response = await app()(
+        request(path, {
+          method: "POST",
+          headers: { ...bearer, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.6-sol", input: "synthetic" }),
+        }),
+      );
+
+      expect(response.status).toBe(501);
+      expect(await response.json()).toMatchObject({
+        error: { type: "invalid_request_error", code: "unsupported_endpoint" },
+      });
+    },
+  );
 });
 
 describe("authentication gate over HTTP", () => {

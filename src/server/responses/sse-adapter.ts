@@ -44,6 +44,7 @@ import {
 import {
   outputTextContent,
   type ResponseRequestConfiguration,
+  type ResponseStateObject,
   type ResponseUsage,
   responseUsage,
 } from "./state.js";
@@ -54,12 +55,15 @@ import {
 } from "./tool-bridge.js";
 
 type AdapterOptions = {
+  readonly responseId?: string;
+  readonly createdAt?: number;
   readonly model: string;
   readonly signals: IngressSignals;
   readonly finalize: () => void;
   readonly bridge?: ResponsesToolBridge;
   readonly configuration: ResponseRequestConfiguration;
   readonly includeEncryptedReasoning: boolean;
+  readonly onCompleted?: (response: ResponseStateObject) => void;
 };
 
 type AdapterOutcome =
@@ -106,9 +110,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   const reader = upstream.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const responseId = `resp_${randomUUID()}`;
+  const responseId = options.responseId ?? `resp_${randomUUID()}`;
   const messageId = `msg_${randomUUID()}`;
-  const createdAt = Math.floor(Date.now() / 1000);
+  const createdAt = options.createdAt ?? Math.floor(Date.now() / 1000);
   const tools = new Map<number, ToolCallAccumulator>();
   const completedOutput = new Map<number, ResponseOutputItem>();
   const pendingFrames: Uint8Array[] = [];
@@ -186,8 +190,8 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
           if (!terminalCompletion) {
             throw new TypeError("Responses stream completed without terminal data");
           }
-          emit((sequence) =>
-            responseCompleted({
+          emit((sequence) => {
+            const event = responseCompleted({
               responseId,
               model: options.model,
               output: terminalCompletion?.output ?? [],
@@ -200,8 +204,10 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               createdAt,
               completedAt: Math.floor(Date.now() / 1000),
               configuration: options.configuration,
-            }),
-          );
+            });
+            options.onCompleted?.(event.response);
+            return event;
+          });
         } else if (
           outcome === "deadline" ||
           outcome === "upstream-error" ||

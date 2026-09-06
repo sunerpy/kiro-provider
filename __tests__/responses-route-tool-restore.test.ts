@@ -18,6 +18,7 @@ const MODEL = "gpt-5.6-sol";
 function config(): Config {
   return ConfigSchema.parse({
     api_keys: ["sk-responses"],
+    protocol_projection_mode: "safe",
     request_timeout_ms: 1_000,
     max_request_body_bytes: 16_384,
   });

@@ -127,6 +127,157 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
     ).toThrow(/safe mode cannot project/);
   });
 
+  test("native-context-safe projects one leading instruction through systemPrompt", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [message("developer", "NATIVE\r\n{", "messages.0"), message("user", "q", "messages.1")],
+        { projectionMode: "native-context-safe" },
+      ),
+      MODEL,
+      auth,
+      false,
+      20_000,
+      { nativeSystemPromptEnabled: true },
+    );
+
+    expect(prepared.systemPrompt).toBe("NATIVE\r\n{");
+    expect(prepared.conversationState.history).toBeUndefined();
+    expect(currentUserInput(prepared).content).toBe("q");
+    expect(prepared.diagnostics.projection).toMatchObject({
+      projectionMode: "native-context-safe",
+      instructionChannel: "kiro-runtime-system-prompt",
+      prefixInstructionCount: 1,
+      prefixAction: "native_system_prompt",
+      suffixAction: "none",
+    });
+  });
+
+  test("native-context-safe remains fail-closed without a verified feature flag", () => {
+    expect(() =>
+      transformToSdkRequest(
+        request([message("system", "SYS", "messages.0"), message("user", "q", "messages.1")], {
+          projectionMode: "native-context-safe",
+        }),
+        MODEL,
+        auth,
+      ),
+    ).toThrow(/did not advertise system_field_injection/);
+  });
+
+  test("native-context-safe rejects ambiguous instruction sequences and positions", () => {
+    const enabled = { nativeSystemPromptEnabled: true };
+    expect(() =>
+      transformToSdkRequest(
+        request(
+          [
+            message("system", "SYS", "messages.0"),
+            message("developer", "DEV", "messages.1"),
+            message("user", "q", "messages.2"),
+          ],
+          { projectionMode: "native-context-safe" },
+        ),
+        MODEL,
+        auth,
+        false,
+        20_000,
+        enabled,
+      ),
+    ).toThrow(/cannot preserve multiple system\/developer message boundaries/);
+    expect(() =>
+      transformToSdkRequest(
+        request(
+          [message("user", "q", "messages.0"), message("developer", "TRAILING", "messages.1")],
+          { projectionMode: "native-context-safe" },
+        ),
+        MODEL,
+        auth,
+        false,
+        20_000,
+        enabled,
+      ),
+    ).toThrow(/intermediate or trailing/);
+  });
+
+  test("native-context-safe preserves whitespace-only instruction bytes", () => {
+    const prepared = transformToSdkRequest(
+      request([message("system", " \t", "messages.0"), message("user", "q", "messages.1")], {
+        projectionMode: "native-context-safe",
+      }),
+      MODEL,
+      auth,
+      false,
+      20_000,
+      { nativeSystemPromptEnabled: true },
+    );
+
+    expect(prepared.systemPrompt).toBe(" \t");
+  });
+
+  test("v3-auto uses the KAS forced-role fallback when native context is unavailable", () => {
+    const prepared = transformToSdkRequest(
+      request([message("system", "SYSTEM", "messages.0"), message("user", "hello", "messages.1")], {
+        projectionMode: "v3-auto",
+      }),
+      MODEL,
+      auth,
+    );
+
+    expect(prepared.runtimeProtocol).toBe("kiro-runtime");
+    expect(prepared.systemPrompt).toBeUndefined();
+    expect(
+      prepared.conversationState.history?.map(
+        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
+      ),
+    ).toEqual(["SYSTEM", "I will follow these instructions."]);
+    expect(currentUserInput(prepared).content).toBe("hello");
+    expect(prepared.diagnostics.projection).toMatchObject({
+      projectionMode: "v3-auto",
+      instructionChannel: "kiro-cli-forced-role",
+      prefixAction: "kiro_cli_forced_role",
+    });
+  });
+
+  test("v3-auto upgrades one leading instruction to native systemPrompt when available", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [message("developer", "NATIVE", "messages.0"), message("user", "hello", "messages.1")],
+        { projectionMode: "v3-auto" },
+      ),
+      MODEL,
+      auth,
+      false,
+      20_000,
+      { nativeSystemPromptEnabled: true },
+    );
+
+    expect(prepared.runtimeProtocol).toBe("kiro-runtime");
+    expect(prepared.systemPrompt).toBe("NATIVE");
+    expect(prepared.conversationState.history).toBeUndefined();
+    expect(currentUserInput(prepared).content).toBe("hello");
+  });
+
+  test("v3-auto keeps a trailing instruction executable after assistant history", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message("user", "question", "messages.0"),
+          message("assistant", "answer", "messages.1"),
+          message("developer", "RECONCILE", "messages.2"),
+        ],
+        { projectionMode: "v3-auto" },
+      ),
+      MODEL,
+      auth,
+    );
+
+    expect(currentUserInput(prepared).content).toBe("Now follow the instruction.");
+    expect(prepared.diagnostics.projection).toMatchObject({
+      instructionChannel: "kiro-cli-forced-role",
+      trailingInstructionCount: 1,
+      suffixAction: "synthetic_user",
+    });
+  });
+
   test("legacy mode performs only exact double-newline prefixing", () => {
     const prepared = transformToSdkRequest(
       request(

@@ -23,6 +23,9 @@ fact, so where records overlap the newer one supersedes the older conclusion.
 | [kiro-ab-probes-2026-09-03.zh.md](kiro-ab-probes-2026-09-03.zh.md) | 真机 A/B：签名-only 推理回放与独立指令轮均无显著差异，两项待探针关闭 |
 | [kiro-provider-projection-optimization-2026-09-05.md](kiro-provider-projection-optimization-2026-09-05.md) | Request-boundary correction, payload-free request/attempt telemetry, and runnable native-context, effort, and Kiro CLI differential research tooling. |
 | [kiro-provider-projection-optimization-2026-09-05.zh.md](kiro-provider-projection-optimization-2026-09-05.zh.md) | 请求边界修复、无正文 request/attempt 遥测，以及 native-context、effort 与 Kiro CLI 差分研究工具。 |
+| [kiro-provider-v3-openai-responses-validation-2026-09-05.md](kiro-provider-v3-openai-responses-validation-2026-09-05.md) | V3 native Responses、stateless fallback、本地 Response 生命周期、KiroRuntime 扩展端点与 Codex 0.153.0 验证。 |
+| [kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md](kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md) | V3 原生 Responses、stateless fallback、本地 Response 生命周期、KiroRuntime 扩展端点与 Codex 0.153.0 验证。 |
+| [kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md](kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md) | Kiro CLI GenerateAssistantResponse、KAS CreateResponse 与 Provider V3 原生/fallback 通道的脱敏结构差异及可移植性决策。 |
 
 Older v0.4 evidence lives outside this directory in
 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and

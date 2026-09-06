@@ -105,6 +105,7 @@ describe("AccountsDatabase schema versioning", () => {
       "reasoning_replay",
       "removed_accounts",
       "session_affinity",
+      "stored_responses",
     ]);
   });
 

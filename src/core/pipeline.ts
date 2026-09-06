@@ -69,7 +69,11 @@ import {
 } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type { PipelineAffinityBinding, RunChatCompletionOptions } from "./pipeline-types.js";
-import { createSdkClient, mergeModelRequestFields } from "./sdk-client.js";
+import {
+  attachKiroRuntimeRequest,
+  createSdkClient,
+  mergeModelRequestFields,
+} from "./sdk-client.js";
 import {
   normalizeStreamFailure,
   type StreamFailure,
@@ -84,11 +88,18 @@ export type {
   PipelineClientFactory,
   PipelineReasoningReplayStore,
   PipelineModelCapabilities,
+  PipelineNativeContextCapabilities,
   PipelineQuotaRechecker,
   PipelineSdkClient,
   PipelineTokenRefresher,
   RunChatCompletionOptions,
 } from "./pipeline-types.js";
+
+function hasInstructionInput(request: CanonicalRequest): boolean {
+  return request.messages.some(
+    (message) => message.role === "system" || message.role === "developer",
+  );
+}
 
 type CompletionResult =
   | { readonly kind: "response"; readonly response: Response }
@@ -987,10 +998,51 @@ async function runAttempt(
         return { kind: "model-unavailable", account };
       }
     }
+    let nativeSystemPromptEnabled = false;
+    if (
+      (options.body.projectionMode === "v3-auto" ||
+        options.body.projectionMode === "native-context-safe") &&
+      hasInstructionInput(options.body)
+    ) {
+      const capability = options.nativeContextCapabilities
+        ? await abortable(
+            options.nativeContextCapabilities.ensureAccountNativeContext(account, auth, signal),
+            signal,
+          )
+        : {
+            status: "unknown" as const,
+            source: "probe-error" as const,
+            featureCount: 0,
+            systemFieldInjection: false,
+            systemPromptMigration: false,
+          };
+      auditLog("debug", "native_context_capability_selected", {
+        request_id: options.requestId,
+        account_hash: auditHash(account.id),
+        status: capability.status,
+        source: capability.source,
+        feature_count: capability.featureCount,
+        system_field_injection: capability.systemFieldInjection,
+        system_prompt_migration: capability.systemPromptMigration,
+      });
+      if (
+        options.body.projectionMode === "native-context-safe" &&
+        capability.status !== "available"
+      ) {
+        throw new RequestTransformError(
+          capability.status === "unknown"
+            ? "Kiro Runtime native instruction capability could not be verified; native-context-safe remains fail-closed"
+            : "Kiro Runtime did not advertise system_field_injection for this account; native-context-safe remains fail-closed",
+          "native_context_capability_unavailable",
+        );
+      }
+      nativeSystemPromptEnabled = capability.status === "available";
+    }
     const parsedEffort = EffortSchema.safeParse(options.config.effort);
     const prepared = transformToSdkRequest(options.body, options.model, auth, think, budget, {
       autoEffortMapping: options.config.auto_effort_mapping,
       conversationId: state.requestConversationId,
+      nativeSystemPromptEnabled,
       resolvedReasoningReplays: state.replayState.replays,
       ...(parsedEffort.success ? { effort: parsedEffort.data } : {}),
     });
@@ -1003,6 +1055,7 @@ async function runAttempt(
       model: options.model,
       conversation_hash: conversationHash,
       projection_mode: prepared.diagnostics.projection.projectionMode,
+      instruction_channel: prepared.diagnostics.projection.instructionChannel,
       input_message_count: prepared.diagnostics.projection.inputMessageCount,
       output_message_count: prepared.diagnostics.projection.outputMessageCount,
       prefix_instruction_count: prepared.diagnostics.projection.prefixInstructionCount,
@@ -1054,6 +1107,11 @@ async function runAttempt(
       throw new TypeError("Transformed request is not a valid SDK command input");
     }
     const command = new GenerateAssistantResponseCommand(commandInput);
+    if (prepared.runtimeProtocol === "kiro-runtime") {
+      attachKiroRuntimeRequest(command, {
+        ...(prepared.systemPrompt !== undefined ? { systemPrompt: prepared.systemPrompt } : {}),
+      });
+    }
     // Each attempt owns an AbortController so the upstream socket can be
     // destroyed on idle timeout, consumer cancel, or a failed collection
     // even though the ingress signal itself never fires (A1).
@@ -1071,6 +1129,8 @@ async function runAttempt(
       account_hash: accountHash,
       conversation_hash: conversationHash,
       mode: options.stream ? "stream" : "non-stream",
+      upstream_operation:
+        prepared.runtimeProtocol === "kiro-runtime" ? "kiro-runtime" : "codewhisperer",
     });
     upstreamStarted = true;
     const sdkResponse = await abortable(

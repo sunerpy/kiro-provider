@@ -1,7 +1,7 @@
 {
   "name": "@sunerpy/kiro-provider",
   "version": "0.8.1",
-  "description": "Protocol-fidelity AWS Kiro gateway for verified OpenAI Responses and Anthropic Messages subsets",
+  "description": "OpenAI Responses-compatible AWS KiroRuntime provider with native and stateless fallback transports",
   "homepage": "https://github.com/sunerpy/kiro-provider#readme",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
   "license": "MIT",
@@ -30,6 +30,8 @@
     "build:binary": "bun build --compile --minify src/cli/bin.ts --outfile dist/kiro-provider",
     "build:npm": "bun build src/cli/bin.ts --outfile dist/cli.js --target=bun --minify && chmod +x dist/cli.js",
     "probe:projection-fidelity": "bun run scripts/probe-projection-fidelity.ts",
+    "probe:v3-fields": "bun run scripts/probe-v3-request-fields.ts",
+    "probe:v3-create-response": "bun run scripts/probe-v3-create-response.ts",
     "study:effort": "bun run scripts/effort-study.ts",
     "study:effort:run": "bun run scripts/run-effort-study.ts",
     "study:effort:responses": "bun run scripts/responses-effort-study.ts",

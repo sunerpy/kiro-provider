@@ -33,7 +33,7 @@ Configuration is validated once at startup; any violation raises a `ConfigLoadEr
 | `port`                       | integer, `0`-`65535`, default `8787`                                      | `KIRO_PROVIDER_PORT`                       | HTTP listen port. `0` asks the OS for an ephemeral port (the bound address is printed at startup); `serve --port 0` is rejected. Fractional and out-of-range values are rejected, and an empty `KIRO_PROVIDER_PORT` no longer becomes `0`.                                              |
 | `api_keys`                   | `string[]`, **required, non-empty after trimming**                        | `KIRO_PROVIDER_API_KEYS`                   | Accepted Bearer keys. The environment value is a comma-separated list. An empty or whitespace-only list is rejected and the server refuses to start (fail-closed).                                                                                                                    |
 | `enable_legacy_chat_completions` | `boolean`, default `false`                                            | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` | Exposes `POST /v1/chat/completions`. Keep this disabled unless a client cannot use Responses or Anthropic Messages. Environment values accept `true`, `false`, `1`, `0`.                                                                                                             |
-| `protocol_projection_mode`   | `"safe" \| "legacy-user-prefix"`, default `"safe"`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`   | `safe` forbids model-visible compatibility text and rejects unprojectable instruction roles. `legacy-user-prefix` is a deprecated, explicit instruction compatibility mode; removal is gated on native instruction fidelity or completed client migration.                              |
+| `protocol_projection_mode`   | `"v3-auto" \| "safe" \| "native-context-safe" \| "legacy-user-prefix"`, default `"v3-auto"` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` | `v3-auto` uses KiroRuntime native Responses when the request is losslessly supported, then falls back for `store:false`, max effort, encrypted reasoning, custom/namespace tools, and Codex collaboration items. The other values preserve explicit legacy projection controls. |
 | `session_affinity_mode`      | `"explicit-only" \| "legacy-initial-input"`, default `"explicit-only"` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`      | `explicit-only` never derives a logical session from prompt text. `legacy-initial-input` temporarily restores the old initial-input fingerprint heuristics without changing model-visible content.                                                                                     |
 | `auth_source` | `"local"`, default `"local"` | `KIRO_PROVIDER_AUTH_SOURCE` | Authentication authority. Only the provider-owned local store is supported. The former `"opencode-shared"` value is rejected at startup with a migration message since 0.7.0: copy accounts once with `kiro-provider accounts import`, then use `"local"`. |
 | `opencode_auth_db_path` | `string \| null`, default `null` | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` | Deprecated since 0.7.0 and ignored (a warning is logged); scheduled for removal. Point `kiro-provider accounts import --from <path>` at a non-default OpenCode database instead. |
@@ -216,13 +216,19 @@ Only `http://` and `https://` schemes are accepted; an invalid or non-HTTP(S) UR
   object reports whether model metadata currently comes from live, stale,
   static-fallback, or disabled discovery.
 
-`protocol_projection_mode: "safe"` is the production default. Live GPT and
-Claude probes showed that Kiro accepts a valid required-label
+`protocol_projection_mode: "v3-auto"` is the production default. Ordinary
+Responses requests use KiroRuntime CreateResponse, including its native
+`instructions` field. Request shapes that need `store:false`, max effort,
+encrypted reasoning replay, custom/namespace tools, serial-tool compatibility,
+or Codex collaboration items use the stateless canonical pipeline.
+
+Explicit `safe` still applies to the older GenerateAssistantResponse path.
+Live GPT and Claude probes showed that Kiro accepts a valid required-label
 `additionalContext` shape but does not preserve its instruction content or
-instruction-over-user priority. Safe mode therefore returns
-`unsupported_instruction_projection` for Responses `instructions`, OpenAI
-`system`/`developer`, and Anthropic `system`. It never falls back to a user
-prefix.
+instruction-over-user priority. `safe` therefore returns
+`unsupported_instruction_projection` for instruction roles. The stricter
+`native-context-safe` mode uses `systemPrompt` only when Kiro advertises the
+private feature; it is not currently enabled for the tested account.
 
 `legacy-user-prefix` joins only the original instruction text with exactly
 `\n\n`. Leading and intermediate instruction blocks prefix the first user
@@ -241,9 +247,11 @@ or completed migration of affected clients.
 The exact accepted/rejected API subset is documented in
 [`PROTOCOL_COMPATIBILITY.md`](PROTOCOL_COMPATIBILITY.md).
 
-The token-count endpoint uses the provider's fallback estimator because Kiro
-does not expose a standalone tokenizer. Its successful response includes
-`x-kiro-token-count-mode: estimate`.
+Anthropic `POST /v1/messages/count_tokens` uses the provider's fallback
+estimator because Kiro does not expose a standalone tokenizer. Its successful
+response includes `x-kiro-token-count-mode: estimate`. OpenAI
+`POST /v1/responses/input_tokens` is recognized separately and returns typed
+HTTP 501 `unsupported_endpoint`.
 
 ## Kiro runtime and model catalog
 
@@ -331,10 +339,13 @@ is disabled or different lock paths are used, queue serialization becomes
 per-process; that is safe only with independent credentials/state or an
 external cross-process serializer.
 
-The gateway is stateless with respect to OpenAI response objects.
-`previous_response_id` and `conversation` therefore return
-`unsupported_stateful_responses` instead of being silently ignored. Resend
-the complete Responses input.
+The gateway mirrors stored OpenAI response objects in its provider-owned
+SQLite database for 30 days, bounded to 10,000 entries. Tenant-local
+`previous_response_id`, retrieve, delete, cancel, and input-items pagination
+use this mirror. A deleted, expired, unknown, or cross-tenant ID returns
+`response_not_found`. Responses `conversation` objects remain unsupported.
+Deleting the local mirror blocks gateway continuation but does not prove that
+Kiro physically deleted its upstream response state.
 
 ## Encrypted reasoning replay
 
@@ -401,7 +412,7 @@ If you need a hard upper bound on connection lifetime regardless of client read 
   "port": 8787,
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
-  "protocol_projection_mode": "safe",
+  "protocol_projection_mode": "v3-auto",
   "session_affinity_mode": "explicit-only",
   "auth_source": "local",
   "opencode_auth_db_path": null,

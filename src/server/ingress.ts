@@ -5,6 +5,7 @@ import type {
   PipelineAffinityStore,
   PipelineClientFactory,
   PipelineModelCapabilities,
+  PipelineNativeContextCapabilities,
   PipelineQuotaRechecker,
   PipelineReasoningReplayStore,
   PipelineTokenRefresher,
@@ -21,6 +22,8 @@ import {
 } from "./errors.js";
 import type { IngressSignals, RequestIdleTimeoutLease } from "./request-lifecycle.js";
 import { auditRequestShape } from "./request-shape.js";
+import type { NativeResponsesFetch } from "./responses/native-transport.js";
+import type { PipelineResponseStore } from "./responses/store.js";
 
 /**
  * Dependencies shared by every request route. The HTTP entry point assembles
@@ -34,6 +37,9 @@ export type RouteDependencies = {
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly modelCapabilities?: PipelineModelCapabilities;
+  readonly nativeContextCapabilities?: PipelineNativeContextCapabilities;
+  readonly responseStore?: PipelineResponseStore;
+  readonly nativeResponsesFetch?: NativeResponsesFetch;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
@@ -329,6 +335,9 @@ export function buildPipelineOptions(input: PipelineOptionsInput): RunChatComple
       : {}),
     ...(dependencies.modelCapabilities
       ? { modelCapabilities: dependencies.modelCapabilities }
+      : {}),
+    ...(dependencies.nativeContextCapabilities
+      ? { nativeContextCapabilities: dependencies.nativeContextCapabilities }
       : {}),
     deadlineSignal: input.deadlineSignal,
     ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),

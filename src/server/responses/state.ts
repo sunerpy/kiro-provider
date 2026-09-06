@@ -134,6 +134,10 @@ export interface ResponseRequestConfiguration {
   readonly reasoningEffort: CanonicalRequest["requestedReasoningEffort"] | null;
   readonly toolChoice: "auto" | "none";
   readonly tools: readonly ResponseTool[];
+  readonly store?: boolean;
+  readonly previousResponseId?: string | null;
+  readonly serviceTier?: "auto" | "default";
+  readonly user?: string;
 }
 
 function responseTool(tool: CanonicalToolDeclaration): ResponseTool {
@@ -163,6 +167,10 @@ export function responseConfigurationFromCanonical(
     reasoningEffort: request.requestedReasoningEffort ?? null,
     toolChoice: request.toolChoice,
     tools: request.tools.filter((tool) => tool.origin === "request").map(responseTool),
+    store: request.store ?? false,
+    previousResponseId: request.previousResponseId ?? null,
+    serviceTier: request.serviceTier,
+    user: request.user,
   };
 }
 
@@ -173,6 +181,10 @@ const DEFAULT_CONFIGURATION: ResponseRequestConfiguration = {
   reasoningEffort: null,
   toolChoice: "auto",
   tools: [],
+  store: false,
+  previousResponseId: null,
+  serviceTier: undefined,
+  user: undefined,
 };
 
 export interface ResponseStateObject {
@@ -191,13 +203,13 @@ export interface ResponseStateObject {
   readonly model: string;
   readonly output: readonly ResponseOutputItem[];
   readonly parallel_tool_calls: true;
-  readonly previous_response_id: null;
+  readonly previous_response_id: string | null;
   readonly reasoning: {
     readonly effort: CanonicalRequest["requestedReasoningEffort"] | null;
     readonly summary: null;
   };
-  readonly service_tier: null;
-  readonly store: false;
+  readonly service_tier: "auto" | "default" | null;
+  readonly store: boolean;
   readonly temperature: null;
   readonly text: { readonly format: { readonly type: "text" } };
   readonly tool_choice: "auto" | "none";
@@ -205,7 +217,7 @@ export interface ResponseStateObject {
   readonly top_logprobs: null;
   readonly top_p: null;
   readonly truncation: "disabled";
-  readonly user: null;
+  readonly user: string | null;
   readonly usage: ResponseUsage | null;
 }
 
@@ -238,10 +250,10 @@ export function responseState(input: {
     model: input.model,
     output: (input.output ?? []).map(normalizedOutputItem),
     parallel_tool_calls: true,
-    previous_response_id: null,
+    previous_response_id: configuration.previousResponseId ?? null,
     reasoning: { effort: configuration.reasoningEffort, summary: null },
-    service_tier: null,
-    store: false,
+    service_tier: configuration.serviceTier ?? null,
+    store: configuration.store ?? false,
     temperature: null,
     text: { format: { type: "text" } },
     tool_choice: configuration.toolChoice,
@@ -249,7 +261,7 @@ export function responseState(input: {
     top_logprobs: null,
     top_p: null,
     truncation: "disabled",
-    user: null,
+    user: configuration.user ?? null,
     usage: input.usage === undefined ? null : normalizedUsage(input.usage),
   };
 }

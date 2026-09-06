@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../../config/schema.js";
-import { auditLog } from "../../core/audit-log.js";
+import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
+import { resolveModelVariant } from "../../kiro/models.js";
+import { textPart } from "../../protocol/adapter-utils.js";
+import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
@@ -19,7 +22,7 @@ import {
   readJsonBody,
   withRetryAfter,
 } from "../ingress.js";
-import { parseResponsesRequest } from "../request-schema.js";
+import { parseResponsesRequest, type ResponsesInputItem } from "../request-schema.js";
 import type {
   MessageOutputItem,
   OutputTextContent,
@@ -28,18 +31,184 @@ import type {
   ResponseToolCallItem,
   ResponseUsage,
 } from "../responses/events.js";
+import { proxyNativeResponses } from "../responses/native-transport.js";
 import { isGptSolReasoningPlaceholder } from "../responses/reasoning.js";
-import { adaptResponsesRequest } from "../responses/request-adapter.js";
+import {
+  adaptResponsesRequest,
+  type ResponsesPreviousContext,
+} from "../responses/request-adapter.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
 import {
   type ResponseRequestConfiguration,
+  type ResponseStateObject,
   responseConfigurationFromCanonical,
   responseState,
 } from "../responses/state.js";
+import {
+  canonicalCompletionFromResponse,
+  responseInputItems,
+  responseStoreTenant,
+  type StoredResponse,
+} from "../responses/store.js";
 import { type ResponsesToolBridge, reportToolRestoreFailure } from "../responses/tool-bridge.js";
 import { canonicalSessionLineage, responsesSessionAffinity } from "../session-affinity.js";
 
 export type ResponsesDependencies = RouteDependencies;
+export type StoredResponseAction = "retrieve" | "delete" | "input_items" | "cancel";
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type StatelessV3Reason =
+  | "store_false"
+  | "max_effort"
+  | "parallel_tool_calls_false"
+  | "custom_or_namespace_tool"
+  | "encrypted_reasoning"
+  | "collaboration_input"
+  | "native_instruction_role_unsupported";
+
+type StatelessV3Requirement = {
+  readonly reason: StatelessV3Reason;
+  readonly param: string;
+};
+
+type V3RouteDecision =
+  | {
+      readonly transport: "native";
+      readonly reason: "native_default" | "previous_native";
+    }
+  | {
+      readonly transport: "stateless";
+      readonly reason: StatelessV3Reason | "previous_stateless";
+    }
+  | {
+      readonly transport: "reject";
+      readonly reason: "native_previous_transport_conflict";
+      readonly requirement: StatelessV3Requirement;
+    };
+
+function nativeInstructionRolesSupported(model: unknown): boolean | undefined {
+  if (typeof model !== "string") return undefined;
+  try {
+    return resolveModelVariant(model).wireId.startsWith("gpt-");
+  } catch {
+    return undefined;
+  }
+}
+
+function unsupportedNativeInstructionRole(
+  body: Readonly<Record<string, unknown>>,
+): StatelessV3Requirement | undefined {
+  if (!Array.isArray(body.input) || nativeInstructionRolesSupported(body.model) !== false) {
+    return undefined;
+  }
+  for (const [index, item] of body.input.entries()) {
+    if (
+      isRecord(item) &&
+      (item.role === "system" || item.role === "developer") &&
+      (item.type === undefined || item.type === "message")
+    ) {
+      return {
+        reason: "native_instruction_role_unsupported",
+        param: `input.${index}.role`,
+      };
+    }
+  }
+  return undefined;
+}
+
+function requiresStatelessV3(
+  body: Readonly<Record<string, unknown>>,
+): StatelessV3Requirement | undefined {
+  if (body.store === false) return { reason: "store_false", param: "store" };
+  if (typeof body.model === "string" && body.model.endsWith("-max")) {
+    return { reason: "max_effort", param: "model" };
+  }
+  const reasoning = body.reasoning;
+  if (isRecord(reasoning) && reasoning.effort === "max") {
+    return { reason: "max_effort", param: "reasoning.effort" };
+  }
+  if (body.parallel_tool_calls === false) {
+    return { reason: "parallel_tool_calls_false", param: "parallel_tool_calls" };
+  }
+  if (
+    Array.isArray(body.tools) &&
+    body.tools.some(
+      (tool) => isRecord(tool) && (tool.type === "custom" || tool.type === "namespace"),
+    )
+  ) {
+    return { reason: "custom_or_namespace_tool", param: "tools" };
+  }
+  if (
+    Array.isArray(body.include) &&
+    body.include.some((value) => value === "reasoning.encrypted_content")
+  ) {
+    return { reason: "encrypted_reasoning", param: "include" };
+  }
+  if (Array.isArray(body.input)) {
+    const collaborationIndex = body.input.findIndex(
+      (item) =>
+        isRecord(item) &&
+        (item.type === "additional_tools" ||
+          item.type === "agent_message" ||
+          item.type === "custom_tool_call" ||
+          item.type === "custom_tool_call_output" ||
+          (item.type === "function_call" && typeof item.namespace === "string")),
+    );
+    if (collaborationIndex >= 0) {
+      return {
+        reason: "collaboration_input",
+        param: `input.${collaborationIndex}`,
+      };
+    }
+  }
+  return unsupportedNativeInstructionRole(body);
+}
+
+function selectV3Route(body: unknown, dependencies: ResponsesDependencies): V3RouteDecision {
+  if (!isRecord(body)) return { transport: "native", reason: "native_default" };
+  const requirement = requiresStatelessV3(body);
+  const previousResponseId = body.previous_response_id;
+  if (typeof previousResponseId === "string") {
+    const stored = dependencies.responseStore?.get(
+      responseStoreTenant(dependencies.tenantId),
+      previousResponseId,
+    );
+    if (stored?.request !== undefined && stored.completion !== undefined) {
+      return { transport: "stateless", reason: "previous_stateless" };
+    }
+    if (stored !== undefined && requirement !== undefined) {
+      return {
+        transport: "reject",
+        reason: "native_previous_transport_conflict",
+        requirement,
+      };
+    }
+    return { transport: "native", reason: "previous_native" };
+  }
+  return requirement === undefined
+    ? { transport: "native", reason: "native_default" }
+    : { transport: "stateless", reason: requirement.reason };
+}
+
+function requestedEffort(body: unknown): string | undefined {
+  if (!isRecord(body) || !isRecord(body.reasoning)) return undefined;
+  return typeof body.reasoning.effort === "string" ? body.reasoning.effort : undefined;
+}
+
+function requestedModel(body: unknown): string | undefined {
+  return isRecord(body) && typeof body.model === "string" ? body.model : undefined;
+}
+
+function previousResponsePresent(body: unknown): boolean {
+  return (
+    isRecord(body) &&
+    typeof body.previous_response_id === "string" &&
+    body.previous_response_id.length > 0
+  );
+}
 
 /**
  * Responses `usage` from a canonical completion. Kiro reports no cache or
@@ -70,12 +239,18 @@ export function completedToolCallItems(
   return items.map((item) => ({ ...item, status: "completed" as const }));
 }
 
+type CompletedResponseProjection =
+  | { readonly ok: true; readonly state: ResponseStateObject }
+  | { readonly ok: false; readonly response: Response };
+
 function completedResponse(
   payload: CanonicalCompletion,
   model: string,
   bridge: ResponsesToolBridge,
   configuration: ResponseRequestConfiguration,
-): Response {
+  responseId: string,
+  createdAt: number,
+): CompletedResponseProjection {
   const restored = bridge.restoreCalls(
     payload.toolCalls.map((call) => ({
       itemId: `fc_${randomUUID()}`,
@@ -86,7 +261,10 @@ function completedResponse(
   );
   if (!restored.ok) {
     const failure = reportToolRestoreFailure(restored);
-    return openAiError(502, failure.message, "upstream_error", failure.code);
+    return {
+      ok: false,
+      response: openAiError(502, failure.message, "upstream_error", failure.code),
+    };
   }
   const output: ResponseOutputItem[] = [];
   const reasoningText = payload.reasoning?.text;
@@ -116,16 +294,213 @@ function completedResponse(
     output.push(message);
   }
   output.push(...completedToolCallItems(restored.items));
-  return Response.json(
-    responseState({
-      id: `resp_${randomUUID()}`,
+  return {
+    ok: true,
+    state: responseState({
+      id: responseId,
       status: "completed",
       model,
       output,
       usage: responsesUsage(payload.usage),
       configuration,
+      createdAt,
     }),
+  };
+}
+
+function parsedToolInput(input: string): unknown {
+  try {
+    return JSON.parse(input);
+  } catch (error) {
+    if (error instanceof SyntaxError) return input;
+    throw error;
+  }
+}
+
+function previousContext(stored: StoredResponse): ResponsesPreviousContext {
+  if (!stored.request || !stored.completion) {
+    throw new TypeError("Stored native response cannot be expanded through the legacy adapter");
+  }
+  const messages: CanonicalMessage[] = stored.request.messages
+    .filter((message) => message.path !== "instructions")
+    .map((message) => ({
+      ...message,
+      content: message.content.map((part) =>
+        part.type === "tool_result"
+          ? { ...part, content: part.content.map((content) => ({ ...content })) }
+          : { ...part },
+      ),
+      toolCalls: message.toolCalls.map((call) => ({ ...call })),
+    }));
+  if (stored.completion.text.length > 0 || stored.completion.toolCalls.length > 0) {
+    messages.push({
+      role: "assistant",
+      content:
+        stored.completion.text.length > 0
+          ? [textPart(stored.completion.text, `stored_response.${stored.response.id}.text`)]
+          : [],
+      toolCalls: stored.completion.toolCalls.map((call) => ({
+        id: call.id,
+        name: call.name,
+        input: parsedToolInput(call.input),
+        path: `stored_response.${stored.response.id}.tool_calls.${call.id}`,
+      })),
+      path: `stored_response.${stored.response.id}`,
+    });
+  }
+  const items: ResponsesInputItem[] = [];
+  for (const item of stored.response.output) {
+    if (item.type === "function_call") {
+      items.push({
+        type: "function_call",
+        id: item.id,
+        status: item.status,
+        call_id: item.call_id,
+        ...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
+        name: item.name,
+        arguments: item.arguments,
+      });
+      continue;
+    }
+    if (item.type === "custom_tool_call") {
+      items.push({
+        type: "custom_tool_call",
+        id: item.id,
+        status: item.status,
+        call_id: item.call_id,
+        ...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
+        name: item.name,
+        input: item.input,
+      });
+    }
+  }
+  return { messages, items };
+}
+
+function persistResponse(
+  dependencies: ResponsesDependencies,
+  tenantId: string,
+  state: ResponseStateObject,
+  inputItems: readonly unknown[],
+  request: Parameters<NonNullable<ResponsesDependencies["responseStore"]>["put"]>[3],
+): void {
+  if (!state.store || !dependencies.responseStore) return;
+  try {
+    dependencies.responseStore.put(
+      tenantId,
+      state,
+      inputItems,
+      request,
+      canonicalCompletionFromResponse(state),
+    );
+  } catch (error) {
+    auditLog("error", "response_state_store_failed", {
+      response_hash: auditHash(state.id),
+      tenant_hash: auditHash(tenantId),
+      error_type: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
+function storedResponseNotFound(responseId: string): Response {
+  return openAiError(
+    404,
+    `Response ${responseId} was not found`,
+    "invalid_request_error",
+    "response_not_found",
+    "response_id",
   );
+}
+
+function inputItemId(item: unknown): string | null {
+  return typeof item === "object" && item !== null && "id" in item && typeof item.id === "string"
+    ? item.id
+    : null;
+}
+
+export function handleStoredResponse(
+  request: Request,
+  dependencies: ResponsesDependencies,
+  responseId: string,
+  action: StoredResponseAction,
+): Response {
+  const tenantId = responseStoreTenant(dependencies.tenantId);
+  const store = dependencies.responseStore;
+  if (!store) {
+    return openAiError(
+      503,
+      "Responses state storage is unavailable",
+      "service_unavailable",
+      "response_store_unavailable",
+    );
+  }
+  const stored = store.get(tenantId, responseId);
+  if (!stored) return storedResponseNotFound(responseId);
+
+  switch (action) {
+    case "retrieve":
+      return Response.json(stored.response);
+    case "delete":
+      store.delete(tenantId, responseId);
+      return Response.json({
+        id: responseId,
+        object: "response.deleted",
+        deleted: true,
+      });
+    case "cancel":
+      return openAiError(
+        400,
+        `Response ${responseId} is already ${stored.response.status}`,
+        "invalid_request_error",
+        "response_not_cancellable",
+        "response_id",
+      );
+    case "input_items": {
+      const url = new URL(request.url);
+      const requestedLimit = Number(url.searchParams.get("limit") ?? "20");
+      if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 100) {
+        return openAiError(
+          400,
+          "limit must be an integer between 1 and 100",
+          "invalid_request_error",
+          "invalid_parameter",
+          "limit",
+        );
+      }
+      const order = url.searchParams.get("order") ?? "desc";
+      if (order !== "asc" && order !== "desc") {
+        return openAiError(
+          400,
+          "order must be asc or desc",
+          "invalid_request_error",
+          "invalid_parameter",
+          "order",
+        );
+      }
+      const ordered = order === "asc" ? [...stored.inputItems] : [...stored.inputItems].reverse();
+      const after = url.searchParams.get("after");
+      const afterIndex =
+        after === null ? undefined : ordered.findIndex((item) => inputItemId(item) === after);
+      if (after !== null && afterIndex === -1) {
+        return openAiError(
+          400,
+          `Input item cursor ${after} was not found`,
+          "invalid_request_error",
+          "invalid_cursor",
+          "after",
+        );
+      }
+      const start = afterIndex === undefined ? 0 : afterIndex + 1;
+      const data = ordered.slice(start, start + requestedLimit);
+      return Response.json({
+        object: "list",
+        data,
+        first_id: data.length > 0 ? inputItemId(data[0]) : null,
+        last_id: data.length > 0 ? inputItemId(data[data.length - 1]) : null,
+        has_more: start + data.length < ordered.length,
+      });
+    }
+  }
 }
 
 // allow: SIZE_OK — mirrors the established ingress boundary and owns one response conversion.
@@ -140,23 +515,104 @@ export async function handleResponses(
     ingress.finalize();
     return bodyResult.response;
   }
+  const v3Route =
+    config.protocol_projection_mode === "v3-auto"
+      ? selectV3Route(bodyResult.value, dependencies)
+      : undefined;
+  if (v3Route !== undefined) {
+    auditLog(v3Route.transport === "reject" ? "warn" : "info", "responses_route_selected", {
+      request_id: ingress.requestId,
+      transport: v3Route.transport,
+      reason: v3Route.reason,
+      model: requestedModel(bodyResult.value),
+      requested_effort: requestedEffort(bodyResult.value),
+      previous_response_present: previousResponsePresent(bodyResult.value),
+      ...(v3Route.transport === "reject"
+        ? {
+            required_transport: "stateless",
+            requirement: v3Route.requirement.reason,
+            param: v3Route.requirement.param,
+          }
+        : {}),
+    });
+  }
+  if (v3Route?.transport === "reject") {
+    ingress.finalize();
+    return openAiError(
+      400,
+      `Response continuation cannot switch from native to stateless transport for ${v3Route.requirement.param}`,
+      "invalid_request_error",
+      "native_response_transport_conflict",
+      v3Route.requirement.param,
+    );
+  }
+  if (v3Route?.transport === "native") {
+    let nativeStreamOwnsResources = false;
+    try {
+      ingress.disableIdleTimeout();
+      const proxied = await proxyNativeResponses({
+        requestId: ingress.requestId,
+        rawBody: bodyResult.value,
+        request,
+        config,
+        dependencies,
+        signals: ingress.signals,
+        finalize: ingress.finalize,
+      });
+      nativeStreamOwnsResources = proxied.streamOwnsResources;
+      return proxied.response;
+    } finally {
+      if (!nativeStreamOwnsResources) ingress.finalize();
+    }
+  }
 
   const parsed = parseResponsesRequest(bodyResult.value);
   if (!parsed.ok) {
     ingress.finalize();
     return parsed.response;
   }
+  if (parsed.value.safety_identifier !== undefined || parsed.value.user !== undefined) {
+    auditLog("debug", "responses_client_identity", {
+      request_id: ingress.requestId,
+      safety_identifier_hash:
+        parsed.value.safety_identifier === undefined
+          ? undefined
+          : auditHash(parsed.value.safety_identifier),
+      deprecated_user_hash:
+        parsed.value.user === undefined ? undefined : auditHash(parsed.value.user),
+    });
+  }
+  const tenantId = responseStoreTenant(dependencies.tenantId);
+  let previous: ResponsesPreviousContext | undefined;
+  if (parsed.value.previous_response_id !== undefined) {
+    const stored = dependencies.responseStore?.get(tenantId, parsed.value.previous_response_id);
+    if (!stored) {
+      ingress.finalize();
+      return openAiError(
+        404,
+        `Response ${parsed.value.previous_response_id} was not found`,
+        "invalid_request_error",
+        "response_not_found",
+        "previous_response_id",
+      );
+    }
+    previous = previousContext(stored);
+  }
   const affinity = responsesSessionAffinity(
     parsed.value,
     dependencies.tenantId,
     config.session_affinity_mode,
   );
-  const adapted = adaptResponsesRequest(parsed.value, config.protocol_projection_mode);
+  const projectionMode =
+    config.protocol_projection_mode === "v3-auto"
+      ? "legacy-user-prefix"
+      : config.protocol_projection_mode;
+  const adapted = adaptResponsesRequest(parsed.value, projectionMode, previous);
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
       request_id: ingress.requestId,
       protocol: "responses",
-      projection_mode: config.protocol_projection_mode,
+      projection_mode: projectionMode,
       code: adapted.code,
       param: adapted.param,
     });
@@ -171,6 +627,9 @@ export async function handleResponses(
   }
   const responseConfiguration = responseConfigurationFromCanonical(adapted.body);
   const lineage = canonicalSessionLineage(adapted.body, dependencies.tenantId);
+  const responseId = `resp_${randomUUID()}`;
+  const createdAt = Math.floor(Date.now() / 1000);
+  const inputItems = responseInputItems(parsed.value.input);
 
   const stream = parsed.value.stream;
   let streamOwnsRouteResources = false;
@@ -210,12 +669,16 @@ export async function handleResponses(
         );
       }
       const streaming = responsesSseAdapter(pipelineResponse, {
+        responseId,
+        createdAt,
         model: adapted.body.model,
         signals: ingress.signals,
         finalize: ingress.finalize,
         bridge: adapted.bridge,
         configuration: responseConfiguration,
         includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
+        onCompleted: (state) =>
+          persistResponse(dependencies, tenantId, state, inputItems, adapted.body),
       });
       streamOwnsRouteResources = true;
       return streaming;
@@ -223,12 +686,17 @@ export async function handleResponses(
     if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
       const payload = parseCanonicalCompletion(await pipelineResponse.json());
       if (payload && payload.model === adapted.body.model) {
-        return completedResponse(
+        const projected = completedResponse(
           payload,
           adapted.body.model,
           adapted.bridge,
           responseConfiguration,
+          responseId,
+          createdAt,
         );
+        if (!projected.ok) return projected.response;
+        persistResponse(dependencies, tenantId, projected.state, inputItems, adapted.body);
+        return Response.json(projected.state);
       }
       return openAiError(
         500,

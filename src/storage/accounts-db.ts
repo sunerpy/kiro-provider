@@ -90,6 +90,30 @@ interface ReasoningReplayRow {
   expires_at: number;
 }
 
+export interface StoredResponseRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly model: string;
+  readonly responseJson: string;
+  readonly inputItemsJson: string;
+  readonly canonicalJson: string;
+  readonly createdAt: number;
+  readonly lastSeen: number;
+  readonly expiresAt: number;
+}
+
+interface StoredResponseRow {
+  id: string;
+  tenant_id: string;
+  model: string;
+  response_json: string;
+  input_items_json: string;
+  canonical_json: string;
+  created_at: number;
+  last_seen: number;
+  expires_at: number;
+}
+
 export interface SessionAffinityBinding {
   readonly keyHash: string;
   readonly accountId: string;
@@ -134,6 +158,20 @@ function rowToReasoningReplay(row: ReasoningReplayRow): ReasoningReplayRecord {
     nonce: row.nonce,
     ciphertext: row.ciphertext,
     authTag: row.auth_tag,
+    createdAt: row.created_at,
+    lastSeen: row.last_seen,
+    expiresAt: row.expires_at,
+  };
+}
+
+function rowToStoredResponse(row: StoredResponseRow): StoredResponseRecord {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    model: row.model,
+    responseJson: row.response_json,
+    inputItemsJson: row.input_items_json,
+    canonicalJson: row.canonical_json,
     createdAt: row.created_at,
     lastSeen: row.last_seen,
     expiresAt: row.expires_at,
@@ -266,6 +304,30 @@ const MIGRATIONS: readonly Migration[] = [
     db.run(`
       CREATE INDEX IF NOT EXISTS reasoning_replay_key_id_idx
       ON reasoning_replay (key_id, expires_at)
+    `);
+  },
+  // v6: tenant-isolated OpenAI Responses state and continuation context.
+  (db) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS stored_responses (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        response_json TEXT NOT NULL,
+        input_items_json TEXT NOT NULL,
+        canonical_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS stored_responses_tenant_lookup_idx
+      ON stored_responses (tenant_id, id, expires_at)
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS stored_responses_lru_idx
+      ON stored_responses (last_seen, id)
     `);
   },
 ];
@@ -620,6 +682,72 @@ export class AccountsDatabase {
     return this.withImmediateTransaction(() => this.pruneReasoningReplayInternal(now, maxEntries));
   }
 
+  putStoredResponse(
+    record: StoredResponseRecord,
+    maxEntries: number,
+    now: number = Date.now(),
+  ): void {
+    this.withImmediateTransaction(() => {
+      this.db.query("DELETE FROM stored_responses WHERE expires_at <= ?").run(now);
+      this.db
+        .query(`
+          INSERT INTO stored_responses (
+            id, tenant_id, model, response_json, input_items_json, canonical_json,
+            created_at, last_seen, expires_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            tenant_id = excluded.tenant_id,
+            model = excluded.model,
+            response_json = excluded.response_json,
+            input_items_json = excluded.input_items_json,
+            canonical_json = excluded.canonical_json,
+            last_seen = excluded.last_seen,
+            expires_at = excluded.expires_at
+        `)
+        .run(
+          record.id,
+          record.tenantId,
+          record.model,
+          record.responseJson,
+          record.inputItemsJson,
+          record.canonicalJson,
+          record.createdAt,
+          record.lastSeen,
+          record.expiresAt,
+        );
+      this.pruneStoredResponsesInternal(now, maxEntries, record.id);
+    });
+  }
+
+  getStoredResponse(
+    id: string,
+    tenantId: string,
+    now: number = Date.now(),
+  ): StoredResponseRecord | undefined {
+    const row = this.db
+      .query<StoredResponseRow, [string, string, number]>(`
+        SELECT * FROM stored_responses
+        WHERE id = ? AND tenant_id = ? AND expires_at > ?
+      `)
+      .get(id, tenantId, now);
+    if (row === null) return undefined;
+    this.db
+      .query("UPDATE stored_responses SET last_seen = ? WHERE id = ? AND tenant_id = ?")
+      .run(now, id, tenantId);
+    return rowToStoredResponse({ ...row, last_seen: now });
+  }
+
+  deleteStoredResponse(id: string, tenantId: string): boolean {
+    return (
+      this.db.query("DELETE FROM stored_responses WHERE id = ? AND tenant_id = ?").run(id, tenantId)
+        .changes > 0
+    );
+  }
+
+  pruneStoredResponses(now: number = Date.now(), maxEntries = 10_000): number {
+    return this.withImmediateTransaction(() => this.pruneStoredResponsesInternal(now, maxEntries));
+  }
+
   checkWritable(): boolean {
     try {
       this.withImmediateTransaction(() => {
@@ -711,6 +839,39 @@ export class AccountsDatabase {
 	    `);
     changes += (preserveTokenHash ? prune.run(preserveTokenHash, overflow) : prune.run(overflow))
       .changes;
+    return changes;
+  }
+
+  private pruneStoredResponsesInternal(
+    now: number,
+    maxEntries: number,
+    preserveId?: string,
+  ): number {
+    let changes = this.db
+      .query("DELETE FROM stored_responses WHERE expires_at <= ?")
+      .run(now).changes;
+    const row = this.db.query<CountRow, []>("SELECT COUNT(*) AS count FROM stored_responses").get();
+    const overflow = Math.max(0, (row?.count ?? 0) - maxEntries);
+    if (overflow <= 0) return changes;
+    const prune = preserveId
+      ? this.db.query(`
+          DELETE FROM stored_responses
+          WHERE id IN (
+            SELECT id FROM stored_responses
+            WHERE id != ?
+            ORDER BY last_seen ASC, id ASC
+            LIMIT ?
+          )
+        `)
+      : this.db.query(`
+          DELETE FROM stored_responses
+          WHERE id IN (
+            SELECT id FROM stored_responses
+            ORDER BY last_seen ASC, id ASC
+            LIMIT ?
+          )
+        `);
+    changes += (preserveId ? prune.run(preserveId, overflow) : prune.run(overflow)).changes;
     return changes;
   }
 

@@ -5,14 +5,15 @@ changelog. Per-major-version files live here, one Markdown file per major series
 
 - `CHANGELOG-v0.x.md` — the `0.x` series
 - `CHANGELOG-v1.x.md` — the `1.x` series
+- `CHANGELOG-v3.x.md` — the `3.x` series
 - …
 
 **How updates work:**
 
-- The active changelog file (currently `CHANGELOG-v0.x.md`) is maintained
+- The active changelog file (currently `CHANGELOG-v3.x.md`) is maintained
   automatically by release-please in its release PR. The
   [`release-please-config.json`](../release-please-config.json) sets
-  `"changelog-path": "changelog/CHANGELOG-v0.x.md"`. When a new major series
+  `"changelog-path": "changelog/CHANGELOG-v3.x.md"`. When a new major series
   begins, create `CHANGELOG-vN.x.md` and update `changelog-path`.
 - GitHub Release notes are rendered separately by
   [git-cliff](https://git-cliff.org) using

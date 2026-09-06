@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-export type ProtocolProjectionMode = "safe" | "legacy-user-prefix";
+export type ProtocolProjectionMode =
+  | "v3-auto"
+  | "safe"
+  | "native-context-safe"
+  | "legacy-user-prefix";
 export type CanonicalProtocol = "responses" | "chat-completions" | "anthropic-messages";
 export type CanonicalRole = "system" | "developer" | "user" | "assistant" | "tool";
 
@@ -121,6 +125,10 @@ export interface CanonicalRequest {
   readonly includeEncryptedReasoning: boolean;
   readonly promptCacheKey?: string;
   readonly metadata?: Readonly<Record<string, string>>;
+  readonly store?: boolean;
+  readonly previousResponseId?: string;
+  readonly serviceTier?: "auto" | "default";
+  readonly user?: string;
 }
 
 export interface CanonicalAssistantOutput {

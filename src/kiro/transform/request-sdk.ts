@@ -10,6 +10,7 @@ export interface EffortConfig {
   readonly effort?: Effort;
   readonly autoEffortMapping?: boolean;
   readonly conversationId?: string;
+  readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
 }
 
@@ -21,10 +22,16 @@ export function transformToSdkRequest(
   budget = 20_000,
   effortConfig?: EffortConfig,
 ): SdkPreparedRequest {
-  const { request, resolved, convId, diagnostics } = buildCodeWhispererRequest(body, model, auth, {
-    conversationId: effortConfig?.conversationId,
-    resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays,
-  });
+  const { request, resolved, convId, systemPrompt, diagnostics } = buildCodeWhispererRequest(
+    body,
+    model,
+    auth,
+    {
+      conversationId: effortConfig?.conversationId,
+      nativeSystemPromptEnabled: effortConfig?.nativeSystemPromptEnabled,
+      resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays,
+    },
+  );
   const effort = resolveEffectiveEffort({
     model,
     think,
@@ -43,6 +50,11 @@ export function transformToSdkRequest(
   return {
     conversationState: request.conversationState,
     ...(request.profileArn ? { profileArn: request.profileArn } : {}),
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    runtimeProtocol:
+      body.projectionMode === "v3-auto" || body.projectionMode === "native-context-safe"
+        ? "kiro-runtime"
+        : "codewhisperer",
     ...(outputTokenProjection?.ok === true
       ? {
           additionalModelRequestFields: outputTokenProjection.additionalModelRequestFields,

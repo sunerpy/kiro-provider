@@ -127,7 +127,7 @@ describe("ConfigSchema", () => {
       port: 8787,
       api_keys: ["sk-test"],
       enable_legacy_chat_completions: false,
-      protocol_projection_mode: "safe",
+      protocol_projection_mode: "v3-auto",
       session_affinity_mode: "explicit-only",
       proxy_url: null,
       sdk_http_keep_alive: false,

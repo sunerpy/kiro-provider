@@ -438,7 +438,7 @@ describe("Chat protocol-fidelity validation", () => {
     ).toMatchObject({ ok: true });
   });
 
-  test("keeps instruction projection fail-closed unless legacy mode is explicit", () => {
+  test("keeps safe projection fail-closed while native and legacy modes preserve the input", () => {
     const raw = {
       model: "gpt-5.6-sol",
       messages: [
@@ -454,6 +454,16 @@ describe("Chat protocol-fidelity validation", () => {
     expect(adapt(raw, "legacy-user-prefix")).toMatchObject({
       ok: true,
       value: {
+        messages: [
+          { role: "developer", content: [{ text: "do not rewrite this" }] },
+          { role: "user", content: [{ text: "hello" }] },
+        ],
+      },
+    });
+    expect(adapt(raw, "native-context-safe")).toMatchObject({
+      ok: true,
+      value: {
+        projectionMode: "native-context-safe",
         messages: [
           { role: "developer", content: [{ text: "do not rewrite this" }] },
           { role: "user", content: [{ text: "hello" }] },

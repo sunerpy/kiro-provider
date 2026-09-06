@@ -9,25 +9,12 @@ function fixture(name: string): unknown {
 }
 
 describe("redacted Codex Responses fixtures", () => {
-  test("accepts a first turn containing only exact function/custom declarations", () => {
+  test("accepts the current Codex first-turn shape including namespace and custom grammar", () => {
     const raw = fixture("codex-first-turn.json") as {
       input: Array<{
         type?: string;
-        tools?: Array<{ type?: string; format?: unknown }>;
       }>;
-      parallel_tool_calls?: boolean;
-      text?: unknown;
-      reasoning?: { context?: unknown; effort?: unknown };
     };
-    for (const item of raw.input) {
-      if (item.type === "additional_tools" && item.tools) {
-        item.tools = item.tools.filter((tool) => tool.type !== "namespace");
-        for (const tool of item.tools) delete tool.format;
-      }
-    }
-    delete raw.parallel_tool_calls;
-    delete raw.text;
-    if (raw.reasoning) delete raw.reasoning.context;
     raw.input.push({
       type: "message",
       role: "user",
@@ -38,22 +25,20 @@ describe("redacted Codex Responses fixtures", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.body.tools.some((tool) => tool.publicType === "custom")).toBe(true);
+    expect(result.body.tools.some((tool) => tool.wireName.startsWith("kiro_ns_"))).toBe(true);
+    expect(JSON.stringify(result.body.tools)).not.toContain('"encrypted"');
     expect(result.body.messages.at(-1)?.role).toBe("user");
   });
 
-  test("rejects the current Codex verbosity request at its exact field path", () => {
+  test("accepts current Codex compatibility metadata without making it model-visible", () => {
     const result = adaptResponsesRequest(
       parsedResponses(fixture("codex-first-turn.json")),
       "legacy-user-prefix",
     );
-    expect(result).toMatchObject({
-      ok: false,
-      code: "unsupported_parameter",
-      param: "text.verbosity",
-    });
+    expect(result).toMatchObject({ ok: true });
   });
 
-  test("rejects the Codex custom grammar constraint instead of silently dropping it", () => {
+  test("projects a custom grammar into the private wrapper description", () => {
     const result = adaptResponsesRequest(
       parsedResponses({
         model: "gpt-5.6-sol",
@@ -72,9 +57,10 @@ describe("redacted Codex Responses fixtures", () => {
       }),
     );
     expect(result).toMatchObject({
-      ok: false,
-      code: "unsupported_custom_tool_format",
-      param: "tools.0.format",
+      ok: true,
+      body: {
+        tools: [{ description: expect.stringContaining("CUSTOM_TOOL_GRAMMAR_REDACTED") }],
+      },
     });
   });
 

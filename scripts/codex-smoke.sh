@@ -98,7 +98,7 @@ has_expected_model_content() {
 }
 
 has_internal_alias_leak() {
-	grep -Eq 'kiro_(custom|ns)_[0-9]+' "$@"
+	grep -Eq 'kiro_(custom|ns)_[0-9]+|"internal_alias_present":true' "$@"
 }
 
 has_completed_command_event() {
@@ -119,6 +119,7 @@ has_completed_wait_event() {
 
 write_capture_proxy_script() {
 	cat >"$1" <<'TYPESCRIPT'
+import { createHash } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 
 const upstreamRootRaw = process.env.CAPTURE_UPSTREAM_ROOT
@@ -150,6 +151,73 @@ function projectHeaders(source: Headers, allowlist: readonly string[]): Headers 
   return projected
 }
 
+function hash16(value: string | Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16)
+}
+
+function contentContains(item: unknown, marker: string): boolean {
+  if (typeof item !== 'object' || item === null || !('content' in item)) return false
+  return JSON.stringify(item.content).includes(marker)
+}
+
+function sanitizeItem(item: unknown, inputIndex: number): Record<string, unknown> {
+  if (typeof item !== 'object' || item === null) {
+    return { input_index: inputIndex, type: typeof item }
+  }
+  const record = item as Record<string, unknown>
+  const callId = typeof record.call_id === 'string' ? record.call_id : undefined
+  const author = typeof record.author === 'string' ? record.author : undefined
+  const recipient = typeof record.recipient === 'string' ? record.recipient : undefined
+  const name = typeof record.name === 'string' ? record.name : undefined
+  return {
+    input_index: inputIndex,
+    type: typeof record.type === 'string' ? record.type : 'message',
+    role: typeof record.role === 'string' ? record.role : undefined,
+    is_collaboration_spawn:
+      record.type === 'function_call' &&
+      record.namespace === 'collaboration' &&
+      name === 'spawn_agent',
+    call_id_hash: callId === undefined ? undefined : hash16(callId),
+    author_hash: author === undefined ? undefined : hash16(author),
+    recipient_hash: recipient === undefined ? undefined : hash16(recipient),
+    directed: author !== undefined && recipient !== undefined && author !== recipient,
+    new_task_marker: contentContains(record, 'Message Type: NEW_TASK'),
+    child_sentinel: contentContains(record, 'NAMESPACE_CHILD_OK'),
+    content_types: Array.isArray(record.content)
+      ? record.content.map((part) =>
+          typeof part === 'object' && part !== null && 'type' in part ? part.type : 'unknown'
+        )
+      : undefined,
+    encrypted_content_present:
+      typeof record.encrypted_content === 'string' ||
+      (Array.isArray(record.content) &&
+        record.content.some(
+          (part) => typeof part === 'object' && part !== null && part.type === 'encrypted_content'
+        )),
+    output_kind: Array.isArray(record.output)
+      ? 'array'
+      : typeof record.output === 'string'
+        ? 'string'
+        : undefined,
+    internal_alias_present:
+      name !== undefined && /^kiro_(?:custom|ns)_[0-9]+$/.test(name)
+  }
+}
+
+function sanitizePayload(payload: unknown, body: Uint8Array): Record<string, unknown> {
+  if (typeof payload !== 'object' || payload === null) {
+    return { malformed_json: true, body_bytes: body.byteLength, body_hash: hash16(body) }
+  }
+  const record = payload as Record<string, unknown>
+  return {
+    body_bytes: body.byteLength,
+    body_hash: hash16(body),
+    input: Array.isArray(record.input)
+      ? record.input.map((item, inputIndex) => sanitizeItem(item, inputIndex))
+      : []
+  }
+}
+
 const server = Bun.serve({
   hostname: '127.0.0.1',
   port: 0,
@@ -175,11 +243,12 @@ const server = Bun.serve({
     try {
       payload = JSON.parse(text)
     } catch {
-      payload = { malformed_json_body: text }
+      payload = undefined
     }
+    const sanitizedPayload = sanitizePayload(payload, body)
     appendFileSync(
       capturePath,
-      `${JSON.stringify({ method: request.method, path: sourceUrl.pathname, payload })}\n`,
+      `${JSON.stringify({ method: request.method, path: sourceUrl.pathname, payload: sanitizedPayload })}\n`,
       { mode: 0o600 }
     )
 
@@ -225,36 +294,32 @@ const items = records.flatMap((record) =>
 )
 const spawnIds = new Set(
   items
-    .filter(
-      (item) =>
-        item?.type === 'function_call' &&
-        item?.namespace === 'collaboration' &&
-        item?.name === 'spawn_agent' &&
-        typeof item?.call_id === 'string'
-    )
-    .map((item) => item.call_id)
+    .filter((item) => item?.is_collaboration_spawn === true && typeof item?.call_id_hash === 'string')
+    .map((item) => item.call_id_hash)
 )
 const outputIds = new Set(
   items
-    .filter((item) => item?.type === 'function_call_output' && typeof item?.call_id === 'string')
-    .map((item) => item.call_id)
+    .filter(
+      (item) => item?.type === 'function_call_output' && typeof item?.call_id_hash === 'string'
+    )
+    .map((item) => item.call_id_hash)
 )
 const newTasks = items.filter(
   (item) =>
     item?.type === 'agent_message' &&
-    typeof item?.author === 'string' &&
-    typeof item?.recipient === 'string' &&
-    item.author !== item.recipient &&
-    JSON.stringify(item.content).includes('Message Type: NEW_TASK')
+    typeof item?.author_hash === 'string' &&
+    typeof item?.recipient_hash === 'string' &&
+    item.directed === true &&
+    item.new_task_marker === true
 )
 const childAnswer = newTasks.some((task) =>
   items.some(
     (item) =>
       item?.type === 'agent_message' &&
-      item?.author === task.recipient &&
-      item?.recipient === task.author &&
-      JSON.stringify(item.content).includes('NAMESPACE_CHILD_OK') &&
-      !JSON.stringify(item.content).includes('Message Type: NEW_TASK')
+      item?.author_hash === task.recipient_hash &&
+      item?.recipient_hash === task.author_hash &&
+      item?.child_sentinel === true &&
+      item?.new_task_marker !== true
   )
 )
 const checks = {
@@ -268,6 +333,11 @@ const missing = Object.entries(checks)
   .map(([name]) => name)
 if (missing.length > 0) {
   console.error(`codex-smoke: capture missing namespace evidence: ${missing.join(', ')}`)
+  const requestShapes = records.map((record, requestIndex) => ({
+    request_index: requestIndex,
+    input: Array.isArray(record?.payload?.input) ? record.payload.input : []
+  }))
+  console.error(`codex-smoke: sanitized request shapes: ${JSON.stringify(requestShapes)}`)
   process.exit(1)
 }
 console.log('codex-smoke: capture verified public spawn/output, directed child task, and child answer')
@@ -377,7 +447,7 @@ run_json_turn() {
 	if (
 		cd "$TOOL_WORKSPACE"
 		NO_COLOR=1 TERM=dumb timeout --signal=TERM --kill-after=5 120 \
-			codex exec --json --skip-git-repo-check \
+			"$CODEX_EXECUTABLE" exec --json --skip-git-repo-check \
 			-c approval_policy=never \
 			-c "sandbox_mode=$CODEX_SANDBOX_MODE" \
 			"$prompt" </dev/null
@@ -466,7 +536,7 @@ run_namespace_probe_attempt() {
 	if (
 		cd "$TOOL_WORKSPACE"
 		NO_COLOR=1 TERM=dumb timeout --signal=TERM --kill-after=5 120 \
-			codex exec --json --skip-git-repo-check \
+			"$CODEX_EXECUTABLE" exec --json --skip-git-repo-check \
 			-c approval_policy=never \
 			-c "sandbox_mode=$CODEX_SANDBOX_MODE" \
 			"$prompt" </dev/null
@@ -1193,6 +1263,16 @@ if [ "${KIRO_PROVIDER_SMOKE_GUARD_SELF_TEST:-0}" = "1" ]; then
 	exit 0
 fi
 
+CODEX_EXECUTABLE="${CODEX_SMOKE_CODEX_BIN:-}"
+if [ -z "$CODEX_EXECUTABLE" ]; then
+	CODEX_CANDIDATE="$(command -v codex 2>/dev/null || true)"
+	if [ -n "$CODEX_CANDIDATE" ] && [[ "$CODEX_CANDIDATE" == */mise/shims/* ]] && command -v mise >/dev/null 2>&1; then
+		CODEX_EXECUTABLE="$(mise which codex 2>/dev/null || true)"
+	else
+		CODEX_EXECUTABLE="$CODEX_CANDIDATE"
+	fi
+fi
+
 export CODEX_HOME="$WORK/codex-home"
 export CODEX_SQLITE_HOME="$WORK/codex-sqlite-home"
 assert_isolated_codex_path "CODEX_HOME" "$CODEX_HOME"
@@ -1210,7 +1290,7 @@ if [ "${KIRO_PROVIDER_SMOKE_NAMESPACE_SELF_TEST:-0}" = "1" ]; then
 	exit 0
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
+if [ -z "$CODEX_EXECUTABLE" ] || [ ! -x "$CODEX_EXECUTABLE" ]; then
 	echo "codex-smoke: ERROR: codex is not installed or not on PATH" >&2
 	exit 1
 fi
@@ -1230,14 +1310,9 @@ fi
 EXPECTED_CODEX_VERSION="${CODEX_SMOKE_EXPECTED_VERSION:-0.149.0}"
 SMOKE_MODE="${KIRO_PROVIDER_SMOKE_MODE:-connectivity}"
 case "$SMOKE_MODE" in
-	connectivity) ;;
-	tools)
-		echo "codex-smoke: ERROR: tools mode is disabled in v0.5 because the old custom/namespace alias bridge was intentionally removed" >&2
-		echo "codex-smoke: run connectivity mode as a compatibility probe; do not restore request rewriting" >&2
-		exit 1
-		;;
+	connectivity | tools) ;;
 	*)
-		echo "codex-smoke: ERROR: KIRO_PROVIDER_SMOKE_MODE must be connectivity" >&2
+		echo "codex-smoke: ERROR: KIRO_PROVIDER_SMOKE_MODE must be connectivity or tools" >&2
 		exit 1
 		;;
 esac
@@ -1257,7 +1332,7 @@ case "$CODEX_SANDBOX_MODE" in
 		exit 1
 		;;
 esac
-CODEX_VERSION="$(codex --version 2>&1)"
+CODEX_VERSION="$("$CODEX_EXECUTABLE" --version 2>&1)"
 RUNNING_CODEX_VERSION="$(printf '%s\n' "$CODEX_VERSION" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
 if [ "$RUNNING_CODEX_VERSION" != "$EXPECTED_CODEX_VERSION" ]; then
 	echo "codex-smoke: ERROR: expected exact codex version '$EXPECTED_CODEX_VERSION', got: $CODEX_VERSION" >&2
@@ -1362,7 +1437,7 @@ set +e
 (
 	cd "$WORK"
 	NO_COLOR=1 TERM=dumb timeout --signal=TERM --kill-after=5 120 \
-		codex exec --skip-git-repo-check \
+		"$CODEX_EXECUTABLE" exec --skip-git-repo-check \
 		-c approval_policy=never \
 		-c "sandbox_mode=$CODEX_SANDBOX_MODE" \
 		"Reply with exactly: OK" </dev/null

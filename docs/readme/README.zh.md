@@ -1,6 +1,6 @@
 # kiro-provider
 
-> 一个基于 AWS Kiro（CodeWhisperer）、强调协议保真的 OpenAI Responses 与 Anthropic Messages 已验证子集网关。
+> 一个基于 AWS KiroRuntime、兼容 OpenAI Responses，并带协议保真 stateless fallback 的 Provider。
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
@@ -29,16 +29,18 @@
 
 ## 特性
 
-- OpenAI Responses `POST /v1/responses` 与 Anthropic Messages `POST /v1/messages`（均支持流式和非流式），以及 `POST /v1/messages/count_tokens`、`GET /v1/models`、`GET /health` 和需鉴权的 `GET /ready`。
+- OpenAI Responses 创建，以及本地镜像的 retrieve、delete、input-items 与
+  cancel 路由；Anthropic Messages `POST /v1/messages`；显式开关后的旧版 Chat
+  Completions；`GET /v1/models`、`GET /health` 和需鉴权的 `GET /ready`。
 - 旧版 OpenAI Chat Completions 位于 `POST /v1/chat/completions`，默认关闭，必须通过 `enable_legacy_chat_completions` 显式开启。
 - Bearer API Key 校验，且默认拒绝启动：未配置任何 Key 时服务不会启动，默认绑定地址为 `127.0.0.1`。
 - 默认使用 provider 自有认证库：`auth_source: "local"` 将凭证保存在 `~/.config/kiro-provider/accounts.db`。已有 `opencode-kiro-auth` 账号可通过 `kiro-provider accounts import` 一次性导入；之后 token、用量、额度恢复和账号健康均由 kiro-provider 独立维护，不再读取或锁定 OpenCode 数据库。
 - 默认只使用显式会话亲和：Responses 可通过标准 `metadata`、兼容 `client_metadata` 或 `prompt_cache_key` 选择加入；重传完整历史的标准客户端也能通过精确的上轮 assistant 输出 lineage 续轮。Provider 绝不会对 user prompt 做指纹来猜会话。配套的 Zuno 原生 OpenAI transport 会自动发送 `metadata.zuno_session_id`。
 - 账号级调度与缓存的 SDK/transport 对象：不同账号可以并行，同一账号上的 Kiro 流不会重叠；access token 轮换时重建绑定凭据的 SDK client，但保留账号 transport。生产默认服务锁会阻止多个进程静默拆分队列和池。Kiro 模型调用的 HTTP keep-alive 默认关闭，必须显式选择开启。
 - 通过 Kiro 管理面实时按账号发现模型并做账号感知路由，提供受限的陈旧缓存/静态兜底；生产调用使用实测确认的 `runtime.<region>.kiro.dev` 方言。带 token usage 的 metadata 是立即完成证据；当前 runtime 的合法 metering 只有后续为 clean EOF 时才被接受。
-- 默认 `safe` 模式零 provider 自有提示词注入：统一输入 IR 保留客户端文本、
-  角色、内容块边界、工具身份、顺序与来源路径；Kiro 输出先进入独立的统一
-  completion/event IR，再编码为各外部协议。
+- 默认 `v3-auto` 自动选择传输：普通请求使用 KiroRuntime 原生 OpenAI
+  Responses；需要 `store:false`、max effort、加密 reasoning、custom grammar、
+  namespace 工具或 Codex 协作的请求使用 canonical stateless fallback。
 - 对完整 Kiro 原生 reasoning envelope 提供加密回放：随机 `kr1_...` 令牌、AES-256-GCM、本租户/模型/账号/conversation/输出绑定、TTL/LRU 清理和回放账号锁定。
 - 多账号轮询、自动令牌刷新与故障切换。耗尽账号不会进入模型尝试，只有经过有界、去重的 Kiro 用量探测确认新额度周期后才自动回池；后台维护循环还会在服务空闲时刷新临近过期的 token 和陈旧用量。
 - `kiro-provider login` 与 `accounts import` 直接写入 provider 自有本地认证库。原有的 `auth_source: "opencode-shared"` 兼容模式已在 0.7.0 移除；仍选择该值的配置会在启动时报错并给出迁移指引（先导入一次，再改用 `local`）。
@@ -47,45 +49,26 @@
 
 ## 协议兼容范围
 
-v0.5 明确定位为**经过验证的兼容子集**，不会接收字段后静默丢弃。默认
-`protocol_projection_mode: "safe"` 不会前置或改写客户端指令、合并相邻
-消息、清空重复 assistant 输出、删除 `{` 等尾部文本，也不会生成模型可见的
-补偿说明。
+V3 实现 OpenAI Responses 核心资源，并明确暴露所有上游差异：
 
-主要边界：
+- 原生 JSON/SSE 创建、instructions、function 工具、经过验证的 effort/token
+  控制，以及原生 `previous_response_id`；
+- 对 `store:false`、max effort、加密 reasoning、custom grammar、namespace
+  工具与 Codex 多代理 item 自动使用 stateless fallback；
+- 按租户隔离的本地 Response 镜像，支持 retrieve、delete、input-items 分页
+  与续轮；
+- Kiro 无法保真的能力返回字段级 OpenAI error envelope，包括 Responses
+  conversation、background、Structured Outputs、托管工具、远程文件引用、
+  compact 与精确 input-token 计数。
 
-- 普通文本、连续同角色回合、function/custom 工具声明、调用和结果保持原始
-  结构与顺序；
-- 纯文本顶层块在统一 IR 中仍保持独立，只在 Kiro 单文本字段边界按原字节
-  无分隔拼接；若多个文本块与图片或工具内容交错，仍返回
-  `unsupported_content_block_projection`；
-- safe 模式下 `instructions`、`system`、`developer` 返回
-  `unsupported_instruction_projection`，因为实测 Kiro 虽接受合法的
-  `additionalContext` 结构，却没有保留其中的指令内容或优先级；
-- 支持 `tool_choice: auto`；`parallel_tool_calls: false` 只在没有可调用工具
-  （包括 `tool_choice: none`）时作为无副作用字段接受，否则返回
-  `unsupported_parallel_tool_calls`；required/指定工具、strict schema、
-  custom grammar 和 namespace 工具会被拒绝，不会被弱化；
-- 支持 base64/data URL 图片；远程图片 URL 与 detail 控制会被拒绝；
-- Responses `input_file` 支持 Kiro 原生格式的内联 base64/data URL 文档。
-  Canonical 请求保留原始文件名；降级时把已识别扩展名放入独立 `format`
-  字段，并在 SDK 调用前校验去扩展名后的 ASCII 名称。任何需要有损改名的
-  输入返回 `invalid_file_name`；因 Provider 没有 OpenAI 文件存储，
-  `file_id` 引用会被拒绝；
-- 输出 token 上限已对 `claude-sonnet-5` 与 `claude-opus-5` 变体的
-  1,024–128,000 范围完成探针确认；
-- Responses 只隐藏 GPT 5.6 Sol 返回的精确 `...`/`…` reasoning 占位块；
-  Opus reasoning、Sol 的非占位 reasoning、effort 映射与加密回放均不变；
-- Stateful Responses 与 Kiro 原生 Web Search 仍不支持，Provider 不会伪造
-  搜索或引用事件。
+旧 GenerateAssistantResponse 的 `safe` 模式继续默认拒绝，因为
+`additionalContext` 没有保留指令内容或优先级，当前账号也没有公开私有
+`systemPrompt` feature。默认 `v3-auto` 改用 KiroRuntime CreateResponse
+原生 `instructions` 字段。
 
-当前已验证子集的状态、每次发布背后的编译后二进制验收记录，以及
-2026-09-02 的全面代码审视与修复方案，均记录在
-[`docs/audits/`](../audits/README.md)。稳定版继续以这些记录为门禁，
-不会靠静默丢弃不支持字段换取“通过”。
-
-完整能力矩阵、错误码、reasoning 回放契约与 v0.4 迁移步骤见
-[`docs/readme/PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md)。
+传输选择、Response 状态、数据保留边界、模型控制与客户端验证见
+[`PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md) 和
+[`docs/audits/`](../audits/README.md)。
 
 ## 安装
 
@@ -125,11 +108,11 @@ irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install
 两个脚本都会同时下载对应平台资产和该发布的 `SHA256SUMS`，校验通过后才安装到 `~/.local/bin`（可用 `KIRO_PROVIDER_INSTALL_DIR` 覆盖），校验不一致会直接中止。默认跟随 `releases/latest`；常驻服务或需要可复现安装时，建议用 `KIRO_PROVIDER_VERSION` 固定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=0.5.1 sh
+curl -fsSL https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.sh | KIRO_PROVIDER_VERSION=3.0.0 sh
 ```
 
 ```powershell
-$env:KIRO_PROVIDER_VERSION = "0.5.1"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
+$env:KIRO_PROVIDER_VERSION = "3.0.0"; irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
 ### 3. 从源码构建（开发者）
@@ -479,7 +462,7 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 | `port` | `8787` | `KIRO_PROVIDER_PORT` |
 | `api_keys` | 必填，不可为空 | `KIRO_PROVIDER_API_KEYS` |
 | `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
-| `protocol_projection_mode` | `safe` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
+| `protocol_projection_mode` | `v3-auto` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
 | `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
 | `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
 | `opencode_auth_db_path` | `null`（0.7.0 起弃用并忽略） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
@@ -536,12 +519,10 @@ OpenAI Responses 客户端使用 `POST /v1/responses`；Anthropic Messages
 LangChain 适配器，或采用该包的 OpenCode 自定义 provider）指向
 `POST /v1/chat/completions`。
 
-标准客户端也必须落在已验证子集内。safe 模式下，始终发送
-system/developer、custom grammar、namespace 工具或 Anthropic
-`cache_control` 的客户端会收到字段级 400；网关不会修改请求强行通过 Kiro。
-可选的 `legacy-user-prefix` 是显式的指令兼容模式。它仍处于弃用状态，但
-移除采用证据门控：只有 Kiro 提供协议保真的原生指令通道，或受影响客户端
-完成迁移后，才会删除。
+默认 `v3-auto` 通过 KiroRuntime 原生 Responses 字段接收标准指令。需要
+custom grammar、namespace 工具、Codex 协作 item、加密 reasoning、max effort
+或 `store:false` 的请求会自动使用 stateless 兼容通道。不支持的托管能力会
+返回字段级 OpenAI 错误，不会被静默忽略。
 
 默认 `session_affinity_mode: "explicit-only"` 绝不会通过 prompt 文本猜测
 会话。Responses 按顺序检查 `metadata.zuno_session_id`、
@@ -555,8 +536,9 @@ Kiro SDK 的直连/代理 agent 默认使用新 socket；只有部署环境验�
 行为后，才应设置 `sdk_http_keep_alive: true`。临时的
 `legacy-initial-input` 只恢复旧版亲和推导并输出启动警告，不会修改请求正文。
 
-在真正的响应状态存储完成前，Responses 的 `previous_response_id` 和
-`conversation` 会明确返回 400，客户端应重传完整输入。
+`previous_response_id` 已支持同一租户本地镜像中的 Response；
+`conversation` 对象仍不支持。Retrieve、delete、input-items 与 cancel 使用
+本地镜像；删除本地镜像不等于证明 Kiro 上游状态已物理删除。
 
 <details>
 <summary>Agent 命令参考</summary>

@@ -154,13 +154,39 @@ function customSchema(): Record<string, unknown> {
   };
 }
 
+function sanitizeToolSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeToolSchema);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "encrypted")
+      .map(([key, child]) => [key, sanitizeToolSchema(child)]),
+  );
+}
+
+function customDescription(
+  tool: Extract<ResponsesKnownTool, { type: "custom" }>,
+): string | undefined {
+  const grammar =
+    tool.format === undefined
+      ? undefined
+      : [
+          `Raw input must follow this ${tool.format.syntax} grammar:`,
+          tool.format.definition,
+          "Return the complete raw input in the input field.",
+        ].join("\n");
+  return descriptions(tool.description, grammar);
+}
+
 function functionTool(tool: Extract<ResponsesKnownTool, { type: "function" }>): InternalTool {
   return {
     type: "function",
     function: {
       name: tool.name,
       ...(tool.description !== undefined ? { description: tool.description } : {}),
-      ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {}),
+      ...(tool.parameters !== undefined
+        ? { parameters: sanitizeToolSchema(tool.parameters) as Record<string, unknown> }
+        : {}),
     },
   };
 }
@@ -322,14 +348,17 @@ function malformedNamespace(tool: Extract<ResponsesKnownTool, { type: "namespace
   return false;
 }
 
-export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildResult {
+export function createResponsesToolBridge(
+  req: ResponsesRequest,
+  previousItems: readonly ResponsesInputItem[] = [],
+): BridgeBuildResult {
   const declarations = new Map<string, Declaration>();
   const ordinaryKindsByName = new Map<string, "function" | "custom">();
   const ordinaryNames = new Set<string>();
   const historical: HistoricalCall[] = [];
   const inputs = typeof req.input === "string" ? [] : req.input;
 
-  for (const item of inputs) {
+  for (const item of [...previousItems, ...inputs]) {
     if (isCallItem(item) && item.type === "function_call" && item.namespace === undefined) {
       ordinaryNames.add(item.name);
     }
@@ -376,11 +405,24 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
           type: "function",
           function: {
             name: "",
-            ...(descriptions(tool.description, child.description) !== undefined
-              ? { description: descriptions(tool.description, child.description) }
+            ...(descriptions(
+              tool.description,
+              child.type === "custom" ? customDescription(child) : child.description,
+            ) !== undefined
+              ? {
+                  description: descriptions(
+                    tool.description,
+                    child.type === "custom" ? customDescription(child) : child.description,
+                  ),
+                }
               : {}),
             parameters:
-              child.type === "custom" ? customSchema() : (child.parameters ?? { type: "object" }),
+              child.type === "custom"
+                ? customSchema()
+                : (sanitizeToolSchema(child.parameters ?? { type: "object" }) as Record<
+                    string,
+                    unknown
+                  >),
           },
         };
         const failure = registerDeclaration({
@@ -414,7 +456,9 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
             type: "function",
             function: {
               name: "",
-              ...(tool.description !== undefined ? { description: tool.description } : {}),
+              ...(customDescription(tool) !== undefined
+                ? { description: customDescription(tool) }
+                : {}),
               parameters: customSchema(),
             },
           };
@@ -449,6 +493,19 @@ export function createResponsesToolBridge(req: ResponsesRequest): BridgeBuildRes
   }
 
   const callsById = new Map<string, HistoricalCall>();
+  for (const [index, item] of previousItems.entries()) {
+    if (!isCallItem(item)) continue;
+    if (callsById.has(item.call_id)) {
+      return {
+        ok: false,
+        code: "invalid_tool_history",
+        message: `Duplicate tool call id ${item.call_id}`,
+      };
+    }
+    const call = { index: index - previousItems.length, identity: callIdentity(item) };
+    callsById.set(item.call_id, call);
+    historical.push(call);
+  }
   for (const [index, item] of inputs.entries()) {
     if (!isCallItem(item)) continue;
     if (callsById.has(item.call_id)) {

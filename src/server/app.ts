@@ -11,6 +11,7 @@ import type {
   PipelineAccountManager,
   PipelineAffinityStore,
   PipelineClientFactory,
+  PipelineNativeContextCapabilities,
   PipelineQuotaRechecker,
   PipelineReasoningReplayStore,
   PipelineTokenRefresher,
@@ -29,6 +30,10 @@ import {
   ModelCapabilityService,
   type PipelineModelCapabilities,
 } from "../kiro/model-capabilities.js";
+import {
+  KIRO_RUNTIME_COMPATIBILITY,
+  NativeContextCapabilityService,
+} from "../kiro/native-context-capabilities.js";
 import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
 import { anthropicError } from "./anthropic/errors.js";
@@ -46,12 +51,18 @@ import {
   type ShutdownServer,
 } from "./lifecycle.js";
 import type { RequestIdleTimeoutLease, RequestIdleTimeoutLeaseMaker } from "./request-lifecycle.js";
+import type { NativeResponsesFetch } from "./responses/native-transport.js";
+import { type PipelineResponseStore, SqliteResponseStore } from "./responses/store.js";
 import { handleChatCompletions } from "./routes/chat-completions.js";
 import { handleHealth } from "./routes/health.js";
 import { handleMessages, handleMessageTokenCount } from "./routes/messages.js";
 import { handleModels } from "./routes/models.js";
 import { handleReadiness } from "./routes/readiness.js";
-import { handleResponses } from "./routes/responses.js";
+import {
+  handleResponses,
+  handleStoredResponse,
+  type StoredResponseAction,
+} from "./routes/responses.js";
 import {
   acquireServiceInstanceLock,
   bindServiceInstanceLease,
@@ -72,6 +83,9 @@ export type AppDependencies = {
   readonly affinityStore?: PipelineAffinityStore;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly modelCapabilities?: PipelineModelCapabilities;
+  readonly nativeContextCapabilities?: PipelineNativeContextCapabilities;
+  readonly responseStore?: PipelineResponseStore;
+  readonly nativeResponsesFetch?: NativeResponsesFetch;
   readonly makeClient?: PipelineClientFactory;
   readonly createRequestIdleTimeoutLease?: RequestIdleTimeoutLeaseMaker;
 };
@@ -128,9 +142,26 @@ export type ServerDependencyFactories = {
     config: Config,
   ) => PipelineReasoningReplayStore;
   readonly createModelCapabilityService?: (config: Config) => PipelineModelCapabilities;
+  readonly createNativeContextCapabilityService?: (
+    config: Config,
+  ) => PipelineNativeContextCapabilities;
+  readonly createResponseStore?: (
+    database: AccountsDatabase,
+    config: Config,
+  ) => PipelineResponseStore;
 };
 
-type RouteName = "health" | "ready" | "models" | "chat" | "responses" | "messages" | "count_tokens";
+type RouteName =
+  | "health"
+  | "ready"
+  | "models"
+  | "chat"
+  | "responses"
+  | "responses_compact"
+  | "responses_input_tokens"
+  | "stored_response"
+  | "messages"
+  | "count_tokens";
 
 interface RouteDefinition {
   readonly name: RouteName;
@@ -151,9 +182,58 @@ const ROUTES: ReadonlyMap<string, RouteDefinition> = new Map<string, RouteDefini
   ["/v1/models", { name: "models", methods: ["GET"], protocol: "openai" }],
   ["/v1/chat/completions", { name: "chat", methods: ["POST"], protocol: "openai" }],
   ["/v1/responses", { name: "responses", methods: ["POST"], protocol: "openai" }],
+  ["/v1/responses/compact", { name: "responses_compact", methods: ["POST"], protocol: "openai" }],
+  [
+    "/v1/responses/input_tokens",
+    { name: "responses_input_tokens", methods: ["POST"], protocol: "openai" },
+  ],
   ["/v1/messages", { name: "messages", methods: ["POST"], protocol: "anthropic" }],
   ["/v1/messages/count_tokens", { name: "count_tokens", methods: ["POST"], protocol: "anthropic" }],
 ]);
+
+interface StoredResponseRoute {
+  readonly responseId: string;
+  readonly route: RouteDefinition;
+  action(method: string): StoredResponseAction;
+}
+
+function storedResponseRoute(pathname: string): StoredResponseRoute | undefined {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts[0] !== "v1" || parts[1] !== "responses" || parts.length < 3) return undefined;
+  let responseId: string;
+  try {
+    responseId = decodeURIComponent(parts[2] as string);
+  } catch {
+    return undefined;
+  }
+  if (responseId.length === 0) return undefined;
+  if (parts.length === 3) {
+    return {
+      responseId,
+      route: {
+        name: "stored_response",
+        methods: ["GET", "DELETE"],
+        protocol: "openai",
+      },
+      action: (method) => (method === "DELETE" ? "delete" : "retrieve"),
+    };
+  }
+  if (parts.length === 4 && parts[3] === "input_items") {
+    return {
+      responseId,
+      route: { name: "stored_response", methods: ["GET"], protocol: "openai" },
+      action: () => "input_items",
+    };
+  }
+  if (parts.length === 4 && parts[3] === "cancel") {
+    return {
+      responseId,
+      route: { name: "stored_response", methods: ["POST"], protocol: "openai" },
+      action: () => "cancel",
+    };
+  }
+  return undefined;
+}
 
 export function normalizeRoutePath(pathname: string): string {
   return pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
@@ -180,7 +260,9 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
   return async (request: Request, server?: Bun.Server<undefined>): Promise<Response> => {
     const url = new URL(request.url);
     const pathname = normalizeRoutePath(url.pathname);
-    const route = ROUTES.get(pathname);
+    const staticRoute = ROUTES.get(pathname);
+    const storedRoute = staticRoute === undefined ? storedResponseRoute(pathname) : undefined;
+    const route = staticRoute ?? storedRoute?.route;
     const anthropicRoute = route?.protocol === "anthropic";
     if (route && !route.methods.includes(request.method)) {
       return methodNotAllowed(route, request.method);
@@ -212,6 +294,13 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
       ...(dependencies.modelCapabilities
         ? { modelCapabilities: dependencies.modelCapabilities }
         : {}),
+      ...(dependencies.nativeContextCapabilities
+        ? { nativeContextCapabilities: dependencies.nativeContextCapabilities }
+        : {}),
+      ...(dependencies.responseStore ? { responseStore: dependencies.responseStore } : {}),
+      ...(dependencies.nativeResponsesFetch
+        ? { nativeResponsesFetch: dependencies.nativeResponsesFetch }
+        : {}),
       ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
       ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
     };
@@ -229,6 +318,30 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
           return await handleChatCompletions(request, config, routeDependencies);
         case "responses":
           return await handleResponses(request, config, routeDependencies);
+        case "responses_compact":
+          return openAiError(
+            501,
+            "KiroRuntime does not expose an OpenAI-compatible Responses compaction operation",
+            "invalid_request_error",
+            "unsupported_endpoint",
+          );
+        case "responses_input_tokens":
+          return openAiError(
+            501,
+            "KiroRuntime does not expose an OpenAI-compatible Responses input-token counting operation",
+            "invalid_request_error",
+            "unsupported_endpoint",
+          );
+        case "stored_response":
+          if (!storedRoute) {
+            return openAiError(404, "Route not found", "invalid_request_error", "not_found");
+          }
+          return handleStoredResponse(
+            request,
+            routeDependencies,
+            storedRoute.responseId,
+            storedRoute.action(request.method),
+          );
         case "messages":
           return await handleMessages(request, config, routeDependencies);
         case "count_tokens":
@@ -280,6 +393,15 @@ export function buildServerDeps(
       removal_gate: "native_instruction_fidelity_or_client_migration",
     });
   }
+  if (config.protocol_projection_mode === "native-context-safe") {
+    auditLog("warn", "native_context_projection_enabled", {
+      projection_mode: config.protocol_projection_mode,
+      client_version: KIRO_RUNTIME_COMPATIBILITY.cliVersion,
+      capability_gate: "system_field_injection",
+      fidelity_scope: "single_leading_text_instruction",
+      failure_policy: "fail_closed_before_model_dispatch",
+    });
+  }
   if (config.session_affinity_mode === "legacy-initial-input") {
     auditLog("warn", "legacy_session_affinity_enabled", {
       session_affinity_mode: config.session_affinity_mode,
@@ -294,6 +416,11 @@ export function buildServerDeps(
     new ReasoningReplayStore(database, config);
   const modelCapabilities =
     factories.createModelCapabilityService?.(config) ?? new ModelCapabilityService(config);
+  const nativeContextCapabilities =
+    factories.createNativeContextCapabilityService?.(config) ??
+    new NativeContextCapabilityService(config);
+  const responseStore =
+    factories.createResponseStore?.(database, config) ?? new SqliteResponseStore(database);
   const proxyUrl = resolveProxyUrl(config);
   const accountManager = new AccountManager(
     database.getAccounts(),
@@ -335,6 +462,8 @@ export function buildServerDeps(
     affinityStore: database,
     reasoningReplayStore,
     modelCapabilities,
+    nativeContextCapabilities,
+    responseStore,
   };
 }
 

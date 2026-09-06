@@ -4,6 +4,7 @@ import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type {
   PipelineAccountManager,
   PipelineClientFactory,
+  PipelineNativeContextCapabilities,
   PipelineSdkClient,
   PipelineTokenRefresher,
 } from "../src/core/pipeline.js";
@@ -21,6 +22,15 @@ function config(): Config {
     api_keys: ["sk-route-transform"],
     enable_legacy_chat_completions: true,
     protocol_projection_mode: "legacy-user-prefix",
+    request_timeout_ms: 5_000,
+    rate_limit_retry_delay_ms: 1,
+  });
+}
+
+function nativeConfig(): Config {
+  return ConfigSchema.parse({
+    api_keys: ["sk-route-transform"],
+    protocol_projection_mode: "native-context-safe",
     request_timeout_ms: 5_000,
     rate_limit_retry_delay_ms: 1,
   });
@@ -124,6 +134,93 @@ function rejectingDependencies(): {
 }
 
 describe("public route transform failures", () => {
+  test("native-context-safe rejects a disabled account capability before SDK dispatch", async () => {
+    const fixture = rejectingDependencies();
+    let capabilityChecks = 0;
+    const nativeContextCapabilities: PipelineNativeContextCapabilities = {
+      async ensureAccountNativeContext() {
+        capabilityChecks += 1;
+        return {
+          status: "unavailable",
+          source: "live",
+          featureCount: 4,
+          systemFieldInjection: false,
+          systemPromptMigration: false,
+        };
+      },
+    };
+    const response = await handleResponses(
+      post("/v1/responses", {
+        model: "gpt-5.6-sol",
+        stream: false,
+        instructions: "Reply exactly NATIVE",
+        input: "hello",
+      }),
+      nativeConfig(),
+      { ...fixture.dependencies, nativeContextCapabilities },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        code: "native_context_capability_unavailable",
+      },
+    });
+    expect(capabilityChecks).toBe(1);
+    expect(fixture.calls()).toEqual({ factories: 0, sends: 0 });
+  });
+
+  test("native-context-safe dispatches when the account advertises system_field_injection", async () => {
+    let sends = 0;
+    const client: PipelineSdkClient = {
+      async send() {
+        sends += 1;
+        return sdkResponse([
+          { assistantResponseEvent: { content: "NATIVE" } },
+          {
+            metadataEvent: {
+              tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            },
+          },
+        ]);
+      },
+    };
+    const nativeContextCapabilities: PipelineNativeContextCapabilities = {
+      async ensureAccountNativeContext() {
+        return {
+          status: "available",
+          source: "live",
+          featureCount: 5,
+          systemFieldInjection: true,
+          systemPromptMigration: false,
+        };
+      },
+    };
+    const response = await handleResponses(
+      post("/v1/responses", {
+        model: "gpt-5.6-sol",
+        stream: false,
+        instructions: "Reply exactly NATIVE",
+        input: "hello",
+      }),
+      nativeConfig(),
+      {
+        accountManager: new StubAccountManager(),
+        tokenRefresher,
+        nativeContextCapabilities,
+        makeClient: () => client,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "completed",
+      instructions: "Reply exactly NATIVE",
+    });
+    expect(sends).toBe(1);
+  });
+
   test("Responses preserves missing_current_input code and param without creating an SDK client", async () => {
     const fixture = rejectingDependencies();
     const response = await handleResponses(

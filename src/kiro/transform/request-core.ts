@@ -26,12 +26,14 @@ export interface RequestTransformResult {
   readonly request: CodeWhispererRequest;
   readonly resolved: string;
   readonly convId: string;
+  readonly systemPrompt?: string;
   readonly variantEffort?: Effort;
   readonly diagnostics: RequestTransformDiagnostics;
 }
 
 export interface RequestTransformIdentity {
   readonly conversationId?: string;
+  readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
 }
 
@@ -57,6 +59,73 @@ function instructionText(messages: readonly CanonicalMessage[]): string {
     .join("\n\n");
 }
 
+function forcedInstructionText(messages: readonly CanonicalMessage[]): string {
+  if (messages.length <= 1) return instructionText(messages);
+  return messages.map((message) => `[${message.role}]\n${instructionText([message])}`).join("\n\n");
+}
+
+type NativeInstructionProjection =
+  | {
+      readonly ok: true;
+      readonly instruction?: CanonicalMessage;
+      readonly systemPrompt?: string;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly code: string;
+      readonly param?: string;
+    };
+
+function nativeInstructionProjection(
+  request: CanonicalRequest,
+  instructions: readonly CanonicalMessage[],
+): NativeInstructionProjection {
+  const firstExecutableIndex = request.messages.findIndex((message) => !isInstruction(message));
+  const instructionAfterExecutable =
+    firstExecutableIndex < 0
+      ? undefined
+      : request.messages.slice(firstExecutableIndex).find((message) => isInstruction(message));
+  if (instructionAfterExecutable !== undefined) {
+    return {
+      ok: false,
+      message:
+        "Kiro Runtime systemPrompt can represent only a leading instruction; intermediate or trailing system/developer input cannot use the native field",
+      code: "unsupported_instruction_position",
+      param: instructionAfterExecutable.path,
+    };
+  }
+
+  const nonEmptyInstructions = instructions.filter(
+    (instruction) => instructionText([instruction]).length > 0,
+  );
+  if (nonEmptyInstructions.length > 1) {
+    return {
+      ok: false,
+      message:
+        "Kiro Runtime exposes one systemPrompt string and cannot preserve multiple system/developer message boundaries or role priority",
+      code: "unsupported_instruction_sequence",
+      param: nonEmptyInstructions[1]?.path,
+    };
+  }
+  const instruction = nonEmptyInstructions[0];
+  if (instruction !== undefined && instruction.content.length !== 1) {
+    return {
+      ok: false,
+      message:
+        "Kiro Runtime exposes one systemPrompt string and cannot preserve multiple instruction content-block boundaries",
+      code: "unsupported_instruction_sequence",
+      param: instruction.content[1]?.path ?? instruction.path,
+    };
+  }
+  return {
+    ok: true,
+    ...(instruction !== undefined
+      ? { instruction, systemPrompt: instructionText([instruction]) }
+      : {}),
+  };
+}
+
 function validateContentBlockProjection(messages: readonly CanonicalMessage[]): void {
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
@@ -73,9 +142,13 @@ function validateContentBlockProjection(messages: readonly CanonicalMessage[]): 
   }
 }
 
-function projectMessages(request: CanonicalRequest): {
+function projectMessages(
+  request: CanonicalRequest,
+  nativeSystemPromptEnabled: boolean,
+): {
   readonly messages: CanonicalMessage[];
   readonly projectedIndexByOriginal: ReadonlyMap<number, number>;
+  readonly systemPrompt?: string;
   readonly diagnostics: RequestProjectionDiagnostics;
 } {
   const instructions = request.messages.filter(isInstruction);
@@ -95,6 +168,125 @@ function projectMessages(request: CanonicalRequest): {
         "unsupported_instruction_projection",
       );
     }
+  }
+
+  const nativeProjection = nativeInstructionProjection(request, instructions);
+  const useNativeProjection =
+    request.projectionMode === "native-context-safe" ||
+    (request.projectionMode === "v3-auto" && nativeSystemPromptEnabled && nativeProjection.ok);
+  if (useNativeProjection) {
+    if (!nativeProjection.ok) {
+      throw new RequestTransformError(
+        nativeProjection.message,
+        nativeProjection.code,
+        nativeProjection.param,
+      );
+    }
+    if (nativeProjection.instruction !== undefined && !nativeSystemPromptEnabled) {
+      throw new RequestTransformError(
+        "Kiro Runtime did not advertise system_field_injection for this account; native-context-safe remains fail-closed",
+        "native_context_capability_unavailable",
+        nativeProjection.instruction.path,
+      );
+    }
+
+    const messages: CanonicalMessage[] = [];
+    const projectedIndexByOriginal = new Map<number, number>();
+    for (const [index, message] of request.messages.entries()) {
+      if (isInstruction(message)) continue;
+      projectedIndexByOriginal.set(index, messages.length);
+      messages.push(cloneMessage(message));
+    }
+    const systemPrompt = nativeProjection.systemPrompt;
+    return {
+      messages,
+      projectedIndexByOriginal,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      diagnostics: {
+        projectionMode: request.projectionMode,
+        instructionChannel: systemPrompt === undefined ? "none" : "kiro-runtime-system-prompt",
+        inputMessageCount: request.messages.length,
+        outputMessageCount: messages.length,
+        prefixInstructionCount: instructions.length,
+        trailingInstructionCount: 0,
+        prefixAction: systemPrompt === undefined ? "none" : "native_system_prompt",
+        suffixAction: "none",
+      },
+    };
+  }
+
+  if (request.projectionMode === "v3-auto") {
+    const messages: CanonicalMessage[] = [];
+    const projectedIndexByOriginal = new Map<number, number>();
+    for (const [index, message] of request.messages.entries()) {
+      if (isInstruction(message)) continue;
+      projectedIndexByOriginal.set(index, messages.length);
+      messages.push(cloneMessage(message));
+    }
+    const executableMessageCount = messages.length;
+    const nonEmptyInstructions = instructions.filter(
+      (instruction) => instructionText([instruction]).length > 0,
+    );
+    let prefixAction: RequestProjectionDiagnostics["prefixAction"] = "none";
+    let suffixAction: RequestProjectionDiagnostics["suffixAction"] = "none";
+    if (executableMessageCount > 0 && nonEmptyInstructions.length > 0) {
+      const sourcePath = nonEmptyInstructions[0]?.path ?? "kiro-cli-forced-role";
+      messages.unshift(
+        {
+          role: "user",
+          content: [textPart(forcedInstructionText(nonEmptyInstructions), "kiro-cli-forced-role")],
+          toolCalls: [],
+          path: sourcePath,
+        },
+        {
+          role: "assistant",
+          content: [
+            textPart("I will follow these instructions.", "kiro-cli-forced-role-acknowledgement"),
+          ],
+          toolCalls: [],
+          path: "kiro-cli-forced-role-acknowledgement",
+        },
+      );
+      prefixAction = "kiro_cli_forced_role";
+      for (const [key, value] of projectedIndexByOriginal) {
+        projectedIndexByOriginal.set(key, value + 2);
+      }
+      if (messages.at(-1)?.role === "assistant") {
+        messages.push({
+          role: "user",
+          content: [textPart("Now follow the instruction.", sourcePath)],
+          toolCalls: [],
+          path: sourcePath,
+        });
+        suffixAction = "synthetic_user";
+      }
+    }
+    let trailingInstructionStart = request.messages.length;
+    while (
+      trailingInstructionStart > 0 &&
+      isInstruction(request.messages[trailingInstructionStart - 1] as CanonicalMessage)
+    ) {
+      trailingInstructionStart -= 1;
+    }
+    const trailingInstructionCount =
+      trailingInstructionStart < request.messages.length &&
+      request.messages.slice(0, trailingInstructionStart).some((message) => !isInstruction(message))
+        ? request.messages.length - trailingInstructionStart
+        : 0;
+    return {
+      messages,
+      projectedIndexByOriginal,
+      diagnostics: {
+        projectionMode: request.projectionMode,
+        instructionChannel: nonEmptyInstructions.length === 0 ? "none" : "kiro-cli-forced-role",
+        inputMessageCount: request.messages.length,
+        outputMessageCount: messages.length,
+        prefixInstructionCount: instructions.length - trailingInstructionCount,
+        trailingInstructionCount,
+        prefixAction,
+        suffixAction,
+      },
+    };
   }
 
   let trailingInstructionStart = request.messages.length;
@@ -183,6 +375,7 @@ function projectMessages(request: CanonicalRequest): {
     projectedIndexByOriginal,
     diagnostics: {
       projectionMode: request.projectionMode,
+      instructionChannel: instructions.length === 0 ? "none" : "legacy-user-prefix",
       inputMessageCount: request.messages.length,
       outputMessageCount: messages.length,
       prefixInstructionCount: prefixInstructions.length,
@@ -286,7 +479,7 @@ export function buildCodeWhispererRequest(
     }
     throw error;
   }
-  const projection = projectMessages(canonical);
+  const projection = projectMessages(canonical, identity.nativeSystemPromptEnabled === true);
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
   }
@@ -363,7 +556,12 @@ export function buildCodeWhispererRequest(
       reasoningReplayCount: historyReplays.length,
     },
   };
-  return variantEffort === undefined
-    ? { request, resolved, convId, diagnostics }
-    : { request, resolved, convId, variantEffort, diagnostics };
+  const base = {
+    request,
+    resolved,
+    convId,
+    ...(projection.systemPrompt !== undefined ? { systemPrompt: projection.systemPrompt } : {}),
+    diagnostics,
+  };
+  return variantEffort === undefined ? base : { ...base, variantEffort };
 }

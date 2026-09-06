@@ -483,7 +483,7 @@ describe("POST /v1/chat/completions", () => {
         body: {
           canonicalVersion: 1,
           protocol: "chat-completions",
-          projectionMode: "safe",
+          projectionMode: "v3-auto",
           model: "auto",
           stream: true,
           messages: [

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { GenerateAssistantResponseCommandInput } from "@aws/codewhisperer-streaming-client";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type {
   PipelineAccountManager,
@@ -26,6 +27,7 @@ const MODEL = "gpt-5.6-sol";
 function testConfig(overrides: Partial<Config> = {}): Config {
   return ConfigSchema.parse({
     api_keys: [API_KEY],
+    protocol_projection_mode: "safe",
     request_timeout_ms: 1_000,
     stream_idle_timeout_ms: 1_000,
     max_request_body_bytes: 16_384,
@@ -1105,8 +1107,8 @@ describe("POST /v1/responses", () => {
     expect(new Set(affinities.map((affinity) => affinity.keyHash)).size).toBe(2);
   });
 
-  test("rejects namespace tools before invoking the SDK", async () => {
-    const server = scriptedServer([eventsWith({ text: "must not run" })]);
+  test("projects namespace tools through private wire aliases", async () => {
+    const server = scriptedServer([eventsWith({ text: "ok" })]);
     const response = await postResponse(server, {
       model: MODEL,
       input: "run tool",
@@ -1115,17 +1117,28 @@ describe("POST /v1/responses", () => {
         {
           type: "namespace",
           name: "collaboration",
-          tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object" } }],
+          description: "Collaboration tools",
+          tools: [
+            {
+              type: "function",
+              name: "spawn_agent",
+              description: "Spawn one agent",
+              parameters: { type: "object" },
+            },
+          ],
         },
       ],
     });
     const body: unknown = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(body).toMatchObject({
-      error: { code: "unsupported_tool_type", param: "tools.0" },
-    });
-    expect(server.capturedCommandInputs).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ status: "completed" });
+    expect(server.capturedCommandInputs).toHaveLength(1);
+    const commandInput = server.capturedCommandInputs[0] as GenerateAssistantResponseCommandInput;
+    expect(
+      commandInput.conversationState?.currentMessage?.userInputMessage?.userInputMessageContext
+        ?.tools?.[0]?.toolSpecification?.name,
+    ).toBe("kiro_ns_0");
   });
 
   test("returns an atomic 502 when a later custom wrapper is malformed", async () => {
@@ -1307,21 +1320,34 @@ describe("POST /v1/responses", () => {
     expect(server.capturedCommandInputs).toHaveLength(0);
   });
 
-  test.each([
-    ["previous_response_id", { previous_response_id: "resp_previous" }],
-    ["conversation", { conversation: "conv_previous" }],
-  ])("rejects unsupported stateful Responses field %s explicitly", async (_field, extra) => {
+  test("returns response_not_found for an unknown previous_response_id without invoking the SDK", async () => {
     const server = scriptedServer([eventsWith({ text: "unused" })]);
     const response = await postResponse(server, {
       model: MODEL,
       input: "hello",
-      ...extra,
+      previous_response_id: "resp_previous",
+    });
+    const body: unknown = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body).toMatchObject({
+      error: { code: "response_not_found", param: "previous_response_id" },
+    });
+    expect(server.capturedCommandInputs).toHaveLength(0);
+  });
+
+  test("rejects unsupported stateful Responses field conversation explicitly", async () => {
+    const server = scriptedServer([eventsWith({ text: "unused" })]);
+    const response = await postResponse(server, {
+      model: MODEL,
+      input: "hello",
+      conversation: "conv_previous",
     });
     const body: unknown = await response.json();
 
     expect(response.status).toBe(400);
     expect(body).toMatchObject({
-      error: { code: "unsupported_stateful_responses" },
+      error: { code: "unsupported_stateful_responses", param: "conversation" },
     });
     expect(server.capturedCommandInputs).toHaveLength(0);
   });
