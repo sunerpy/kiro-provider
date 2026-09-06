@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/sunerpy/kiro-provider/compare/v3.0.0...v3.0.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **models:** 修正 GPT-5.6 一百万上下文元数据 ([f611b6a](https://github.com/sunerpy/kiro-provider/commit/f611b6a9d8247fcc1cd02f6033d25e8a7d455c4c))
+
 ## [3.0.0](https://github.com/sunerpy/kiro-provider/compare/v0.8.1...v3.0.0) (2026-09-06)
 
 ### ⚠ BREAKING CHANGES
