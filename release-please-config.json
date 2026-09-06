@@ -6,7 +6,6 @@
     ".": {
       "release-type": "node",
       "package-name": "kiro-provider",
-      "release-as": "3.0.0",
       "bump-minor-pre-major": true,
       "include-v-in-tag": true,
       "draft": true,
