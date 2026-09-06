@@ -76,6 +76,26 @@ describe("GET /v1/models", () => {
         { effort: "max" },
       ],
     });
+
+    for (const family of ["sol", "terra", "luna"]) {
+      const id = `gpt-5.6-${family}`;
+      const model = entries.find((entry) => entry.id === id) as
+        | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
+        | undefined;
+      const codex = body.models.find((entry) => entry.slug === id);
+      expect(model).toMatchObject({ context_limit: 872_000, output_limit: 128_000 });
+      expect(codex).toMatchObject({
+        context_window: 872_000,
+        auto_compact_token_limit: 784_800,
+        supported_reasoning_levels: [
+          { effort: "low" },
+          { effort: "medium" },
+          { effort: "high" },
+          { effort: "xhigh" },
+          { effort: "max" },
+        ],
+      });
+    }
   });
 
   test("runs due quota recovery before excluding still-exhausted accounts from catalog refresh", async () => {

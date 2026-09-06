@@ -108,6 +108,14 @@ export const SUPPORTED_MODELS = Object.keys(MODEL_MAPPING);
 // overrides both when dynamic_model_catalog is enabled.
 export const DEFAULT_MODEL_CONTEXT_LIMIT = 200000;
 
+// Live KiroRuntime probes on 2026-09-06 established a 1,000,000-token total
+// window for GPT 5.6 Sol: at most 872,000 prompt tokens plus 128,000 output
+// tokens. Terra and Luna intentionally share the same family limits by product
+// policy. The management catalog still reports its older 272,000 input limit.
+export const GPT_56_PROMPT_TOKEN_LIMIT = 872000;
+export const GPT_56_OUTPUT_TOKEN_LIMIT = 128000;
+export const GPT_56_TOTAL_CONTEXT_LIMIT = GPT_56_PROMPT_TOKEN_LIMIT + GPT_56_OUTPUT_TOKEN_LIMIT;
+
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   auto: 200000,
   "claude-haiku-4-5": 200000,
@@ -128,9 +136,9 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "minimax-m2.5": 196000,
   "minimax-m2.1": 196000,
   "qwen3-coder-next": 256000,
-  "gpt-5.6-sol": 272000,
-  "gpt-5.6-terra": 272000,
-  "gpt-5.6-luna": 272000,
+  "gpt-5.6-sol": GPT_56_PROMPT_TOKEN_LIMIT,
+  "gpt-5.6-terra": GPT_56_PROMPT_TOKEN_LIMIT,
+  "gpt-5.6-luna": GPT_56_PROMPT_TOKEN_LIMIT,
 };
 
 export function getModelContextLimit(baseModel: string): number {
