@@ -1,55 +1,30 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
-import { acquireAccountQueue } from "../../core/pipeline-runtime.js";
+import { abortable, abortableSleep, acquireAccountQueue } from "../../core/pipeline-runtime.js";
 import { resolveProxyUrl } from "../../core/proxy.js";
+import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { KIRO_CONSTANTS } from "../../kiro/constants.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import type { ManagedAccount } from "../../kiro/types.js";
 import { openAiError } from "../errors.js";
 import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
+import type { ResponsesInputItem } from "../request-schema.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
+import { RESPONSES_CAPABILITY_EVIDENCE, responsesCapability } from "./capabilities.js";
+import type { NativeResponseOwner, ResponseContinuationContext } from "./continuation.js";
+import { ResponseContextError } from "./continuation.js";
+import type { NativeResponsesAdaptation } from "./native-adaptation.js";
+import { nativeInputItems, nativeReplayHistory } from "./native-replay.js";
+import { createNativeStream, NativeStreamError } from "./native-stream.js";
+import { type NormalizedResponsesRequest, normalizeResponsesRequest } from "./request-policy.js";
 import type { ResponseStateObject } from "./state.js";
+import type { StoredResponse } from "./store.js";
 import { responseInputItems, responseStoreTenant } from "./store.js";
 
 const NATIVE_RESPONSE_AFFINITY_TTL_MS = 30 * 24 * 60 * 60_000;
 const NATIVE_RESPONSE_AFFINITY_MAX_ENTRIES = 100_000;
-
-const NATIVE_REQUEST_KEYS = new Set([
-  "model",
-  "input",
-  "instructions",
-  "stream",
-  "stream_options",
-  "tools",
-  "tool_choice",
-  "parallel_tool_calls",
-  "reasoning",
-  "include",
-  "store",
-  "text",
-  "service_tier",
-  "prompt_cache_key",
-  "metadata",
-  "client_metadata",
-  "previous_response_id",
-  "conversation",
-  "max_output_tokens",
-  "temperature",
-  "top_p",
-  "truncation",
-  "background",
-  "max_tool_calls",
-  "context_management",
-  "moderation",
-  "prompt",
-  "prompt_cache_options",
-  "prompt_cache_retention",
-  "safety_identifier",
-  "top_logprobs",
-  "user",
-]);
 
 const FORWARDED_REQUEST_KEYS = new Set([
   "model",
@@ -74,6 +49,11 @@ export type NativeResponsesFetch = (
 export interface NativeResponsesProxyOptions {
   readonly requestId: string;
   readonly rawBody: unknown;
+  readonly normalized?: NormalizedResponsesRequest;
+  readonly adaptation?: NativeResponsesAdaptation;
+  readonly onCompatibility?: (
+    losses: readonly import("./request-policy.js").CompatibilityLoss[],
+  ) => void;
   readonly request: Request;
   readonly config: Config;
   readonly dependencies: RouteDependencies;
@@ -84,6 +64,7 @@ export interface NativeResponsesProxyOptions {
 export interface NativeResponsesProxyResult {
   readonly response: Response;
   readonly streamOwnsResources: boolean;
+  readonly transport?: "native" | "native-adapted";
 }
 
 interface PreparedNativeRequest {
@@ -114,30 +95,14 @@ function validationError(message: string, code: string, param?: string): Respons
   return openAiError(400, message, "invalid_request_error", code, param);
 }
 
-function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Response {
-  if (!isRecord(rawBody)) {
-    return validationError("Request body must be a JSON object", "invalid_request");
-  }
-  for (const key of Object.keys(rawBody)) {
-    if (!NATIVE_REQUEST_KEYS.has(key)) {
-      return validationError(
-        `Responses parameter ${key} is not supported`,
-        "unsupported_parameter",
-        key,
-      );
-    }
-  }
-  const parsed = ResponsesRequestSchema.safeParse(rawBody);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const param = issue?.path.length ? issue.path.join(".") : undefined;
-    return validationError(
-      `Invalid request: ${issue?.message ?? "schema validation failed"}`,
-      "invalid_request",
-      param,
-    );
-  }
-  const request = parsed.data;
+function prepareNativeRequest(
+  rawBody: unknown,
+  config: Config,
+  normalized?: NormalizedResponsesRequest,
+): PreparedNativeRequest | Response {
+  const parsed = normalized ?? normalizeResponsesRequest(rawBody, config);
+  if (parsed instanceof Response) return parsed;
+  const request = parsed.request;
   if (request.store === false) {
     return validationError(
       "store=false must use the stateless Responses transport and cannot continue a native stored response",
@@ -169,7 +134,11 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
       "include",
     );
   }
-  if (request.parallel_tool_calls === false) {
+  if (
+    request.parallel_tool_calls === false &&
+    request.tool_choice !== "none" &&
+    (request.tools?.length ?? 0) > 0
+  ) {
     return validationError(
       "parallel_tool_calls=false requires the stateless Responses transport",
       "native_parallel_tool_control_requires_stateless_transport",
@@ -301,7 +270,7 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
   }
   const isGpt = variant.wireId.startsWith("gpt-");
   const isClaude = variant.wireId.startsWith("claude-");
-  if (variant.effort === "max" || request.reasoning?.effort === "max") {
+  if ((request.reasoning?.effort ?? variant.effort) === "max") {
     return validationError(
       "reasoning effort max requires the stateless Responses transport",
       "native_max_effort_requires_stateless_transport",
@@ -337,8 +306,8 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
     }
   }
   body.model = variant.wireId;
-  const requestedEffort = isRecord(request.reasoning) ? request.reasoning.effort : undefined;
-  const effectiveEffort = typeof requestedEffort === "string" ? requestedEffort : variant.effort;
+  const requestedEffort = parsed.requestedEffort;
+  const effectiveEffort = parsed.effectiveEffort;
   if (isRecord(request.reasoning) || variant.effort !== undefined) {
     const reasoning: Record<string, unknown> = {};
     if (isRecord(request.reasoning)) {
@@ -349,7 +318,7 @@ function prepareNativeRequest(rawBody: unknown): PreparedNativeRequest | Respons
         reasoning.summary = request.reasoning.summary;
       }
     }
-    if (variant.effort !== undefined && requestedEffort === undefined) {
+    if (variant.effort !== undefined && request.reasoning?.effort === undefined) {
       reasoning.effort = variant.effort;
     }
     if (Object.keys(reasoning).length > 0) body.reasoning = reasoning;
@@ -376,6 +345,18 @@ function responseHeaders(upstream: Response, contentType: string): Headers {
   return headers;
 }
 
+function validateNativeToolChoice(item: unknown, prepared: PreparedNativeRequest): void {
+  if (
+    prepared.request.tool_choice === "none" &&
+    isRecord(item) &&
+    (item.type === "function_call" || item.type === "custom_tool_call")
+  )
+    throw new NativeStreamError(
+      "upstream_tool_choice_violation",
+      "Upstream called a tool despite tool_choice=none",
+    );
+}
+
 function normalizeResponseObject(
   value: unknown,
   prepared: PreparedNativeRequest,
@@ -388,10 +369,18 @@ function normalizeResponseObject(
   ) {
     return undefined;
   }
+  for (const item of value.output) validateNativeToolChoice(item, prepared);
   const normalized: Record<string, unknown> = { ...value };
   delete normalized.billing;
   normalized.model = prepared.requestedModel;
   normalized.store = prepared.request.store !== false;
+  if (
+    prepared.request.parallel_tool_calls === false &&
+    (prepared.request.tool_choice === "none" || !prepared.request.tools?.length)
+  )
+    normalized.parallel_tool_calls = false;
+  normalized.previous_response_id =
+    prepared.request.previous_response_id ?? normalized.previous_response_id ?? null;
   normalized.metadata = prepared.request.metadata ?? {};
   normalized.service_tier =
     prepared.request.service_tier === "auto" || prepared.request.service_tier === "default"
@@ -403,22 +392,50 @@ function normalizeResponseObject(
   return normalized as unknown as ResponseStateObject;
 }
 
-function upstreamError(upstream: Response, value: unknown): Response {
-  const record = isRecord(value) ? value : {};
-  const message =
+function upstreamErrorRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  return isRecord(value.error) ? value.error : isRecord(value.Output) ? value.Output : value;
+}
+
+function upstreamError(
+  upstream: Response,
+  value: unknown,
+  adaptation?: NativeResponsesAdaptation,
+): Response {
+  const record = upstreamErrorRecord(value);
+  let message =
     typeof record.message === "string"
       ? record.message
       : `Kiro upstream returned HTTP ${upstream.status}`;
-  const reason = typeof record.reason === "string" ? record.reason : "kiro_runtime_error";
-  return openAiError(
+  for (const binding of adaptation?.bridge?.bindings ?? []) {
+    const name =
+      binding.identity.kind === "namespace"
+        ? `${binding.identity.namespace}.${binding.identity.name}`
+        : binding.identity.name;
+    message = message.replaceAll(binding.wireName, name);
+  }
+  const reason =
+    typeof record.code === "string"
+      ? record.code
+      : typeof record.reason === "string"
+        ? record.reason
+        : "kiro_runtime_error";
+  const response = openAiError(
     upstream.status >= 400 && upstream.status < 500 ? upstream.status : 502,
     message,
     upstream.status >= 500 ? "upstream_error" : "invalid_request_error",
     reason,
+    typeof record.param === "string" ? record.param : undefined,
   );
+  for (const name of ["retry-after", "x-request-id", "x-amzn-requestid"]) {
+    const value = upstream.headers.get(name);
+    if (value !== null) response.headers.set(name, value);
+  }
+  return response;
 }
 
 function upstreamReasonHash(value: unknown): string | undefined {
+  value = upstreamErrorRecord(value);
   if (!isRecord(value)) return undefined;
   const reason =
     typeof value.reason === "string"
@@ -435,14 +452,20 @@ function recordAffinity(
   account: ManagedAccount,
   responseId: string,
 ): void {
-  dependencies.affinityStore?.claimSessionAffinity(
-    nativeAffinityKey(tenantId, responseId),
-    account.id,
-    responseId,
-    Date.now(),
-    NATIVE_RESPONSE_AFFINITY_TTL_MS,
-    NATIVE_RESPONSE_AFFINITY_MAX_ENTRIES,
-  );
+  try {
+    dependencies.affinityStore?.claimSessionAffinity(
+      nativeAffinityKey(tenantId, responseId),
+      account.id,
+      responseId,
+      Date.now(),
+      NATIVE_RESPONSE_AFFINITY_TTL_MS,
+      NATIVE_RESPONSE_AFFINITY_MAX_ENTRIES,
+    );
+  } catch {
+    auditLog("warn", "native_response_affinity_cache_failed", {
+      response_hash: auditHash(responseId),
+    });
+  }
 }
 
 function preferredAccountId(
@@ -456,183 +479,53 @@ function preferredAccountId(
   )?.accountId;
 }
 
-function normalizedEventFrame(
-  frame: string,
+function nativeContinuation(
   prepared: PreparedNativeRequest,
-): {
-  readonly frame: string;
-  readonly eventType?: string;
-  readonly terminal?: ResponseStateObject;
-  readonly responseId?: string;
-} {
-  const originalFrame = `${frame}\n\n`;
-  const lines = frame.split(/\r?\n/);
-  const data = lines
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
-  if (data.length === 0 || data === "[DONE]") return { frame: originalFrame };
-  let event: unknown;
-  try {
-    event = JSON.parse(data);
-  } catch {
-    return { frame: originalFrame };
-  }
-  if (!isRecord(event)) return { frame: originalFrame };
-  const response = normalizeResponseObject(event.response, prepared);
-  if (response === undefined) return { frame: originalFrame };
-  const normalized = { ...event, response };
-  const eventName = typeof event.type === "string" ? event.type : undefined;
+  account: ManagedAccount,
+  response: ResponseStateObject,
+  adaptation?: NativeResponsesAdaptation,
+  nativeReplay?: ResponseContinuationContext["nativeReplay"],
+): ResponseContinuationContext {
   return {
-    frame: `${eventName === undefined ? "" : `event: ${eventName}\n`}data: ${JSON.stringify(normalized)}\n\n`,
-    ...(eventName === undefined ? {} : { eventType: eventName }),
-    ...(eventName === "response.completed" ||
-    eventName === "response.failed" ||
-    eventName === "response.incomplete" ||
-    eventName === "response.cancelled"
-      ? { terminal: response }
-      : {}),
-    responseId: response.id,
+    transport:
+      adaptation || (nativeReplay && prepared.request.previous_response_id)
+        ? "native-adapted"
+        : "native",
+    request: adaptation?.original ?? prepared.request,
+    ...(adaptation?.instruction ? { instruction: adaptation.instruction } : {}),
+    ...(nativeReplay ? { nativeReplay } : {}),
+    ...(adaptation?.bridge ? { tools: [...adaptation.bridge.bindings] } : {}),
+    owner: {
+      accountId: account.id,
+      region: account.region,
+      ...(account.profileArn ? { profileArn: account.profileArn } : {}),
+      responseId: response.id,
+    },
   };
 }
 
-function nativeStreamResponse(input: {
-  readonly upstream: Response;
-  readonly prepared: PreparedNativeRequest;
-  readonly account: ManagedAccount;
-  readonly dependencies: RouteDependencies;
-  readonly tenantId: string;
-  readonly requestId: string;
-  readonly attempt: number;
-  readonly release: () => void;
-  readonly finalize: () => void;
-}): Response {
-  const upstreamBody =
-    input.upstream.body ??
-    new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
-  const reader = upstreamBody.getReader();
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
-  let released = false;
-  let terminalLogged = false;
-  const logTerminal = (
-    level: "info" | "warn",
-    provenance: string,
-    options: {
-      readonly eventType?: string;
-      readonly responseStatus?: string;
-      readonly completionWitnessed?: boolean;
-      readonly reasonHash?: string;
-    } = {},
-  ): void => {
-    if (terminalLogged) return;
-    terminalLogged = true;
-    auditLog(level, "native_responses_terminal", {
-      request_id: input.requestId,
-      attempt: input.attempt,
-      account_hash: auditHash(input.account.id),
-      model: input.prepared.requestedModel,
-      wire_model: input.prepared.wireModel,
-      requested_effort: input.prepared.requestedEffort,
-      effective_effort: input.prepared.effectiveEffort,
-      stream: true,
-      http_status: input.upstream.status,
-      terminal_provenance: provenance,
-      terminal_event: options.eventType,
-      response_status: options.responseStatus,
-      completion_witnessed: options.completionWitnessed ?? false,
-      reason_hash: options.reasonHash,
-    });
-  };
-  const observe = (normalized: ReturnType<typeof normalizedEventFrame>): void => {
-    if (normalized.responseId !== undefined) {
-      recordAffinity(input.dependencies, input.tenantId, input.account, normalized.responseId);
-    }
-    if (normalized.terminal !== undefined) {
-      input.dependencies.responseStore?.putNative(
-        input.tenantId,
-        normalized.terminal,
-        input.prepared.inputItems,
-      );
-      const completed =
-        normalized.eventType === "response.completed" && normalized.terminal.status === "completed";
-      logTerminal(completed ? "info" : "warn", "terminal_event", {
-        eventType: normalized.eventType,
-        responseStatus: normalized.terminal.status,
-        completionWitnessed: completed,
-      });
-    }
-  };
-  const finish = (): void => {
-    if (released) return;
-    released = true;
-    input.release();
-    input.finalize();
-  };
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          while (true) {
-            const separator = buffer.search(/\r?\n\r?\n/);
-            if (separator >= 0) {
-              const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
-              const separatorLength = match?.[0].length ?? 2;
-              const frame = buffer.slice(0, separator);
-              buffer = buffer.slice(separator + separatorLength);
-              const normalized = normalizedEventFrame(frame, input.prepared);
-              observe(normalized);
-              controller.enqueue(encoder.encode(normalized.frame));
-              return;
-            }
-            const next = await reader.read();
-            if (next.done) {
-              buffer += decoder.decode();
-              if (buffer.trim().length > 0) {
-                const normalized = normalizedEventFrame(buffer, input.prepared);
-                observe(normalized);
-                controller.enqueue(encoder.encode(normalized.frame));
-              }
-              logTerminal("warn", "clean_eof_without_terminal");
-              controller.close();
-              finish();
-              return;
-            }
-            buffer += decoder.decode(next.value, { stream: true });
-          }
-        } catch (error) {
-          logTerminal("warn", "stream_error", {
-            reasonHash: auditHash(error instanceof Error ? error.message : String(error)),
-          });
-          controller.error(error);
-          finish();
-        }
-      },
-      async cancel(reason) {
-        try {
-          await reader.cancel(reason);
-        } finally {
-          logTerminal("info", "consumer_cancel");
-          finish();
-        }
-      },
-    }),
-    {
-      status: input.upstream.status,
-      headers: responseHeaders(input.upstream, "text/event-stream; charset=utf-8"),
-    },
-  );
+export function nativeRetryDelay(upstream: Response, fallbackMs: number, now = Date.now()): number {
+  const value = upstream.headers.get("retry-after");
+  if (value === null || value.trim() === "") return fallbackMs;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 2_147_483_647);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.min(Math.max(0, date - now), 2_147_483_647) : fallbackMs;
 }
 
 export async function proxyNativeResponses(
   options: NativeResponsesProxyOptions,
 ): Promise<NativeResponsesProxyResult> {
-  const prepared = prepareNativeRequest(options.rawBody);
+  const prepared = prepareNativeRequest(options.rawBody, options.config, options.normalized);
   if (prepared instanceof Response) {
     return { response: prepared, streamOwnsResources: false };
   }
   const tenantId = responseStoreTenant(options.dependencies.tenantId);
+  const inputItems = options.adaptation
+    ? responseInputItems(options.adaptation.original.input)
+    : prepared.inputItems;
+  let owner: NativeResponseOwner | undefined;
+  let previousStored: StoredResponse | undefined;
   if (prepared.request.previous_response_id !== undefined) {
     const previous = options.dependencies.responseStore?.get(
       tenantId,
@@ -650,27 +543,63 @@ export async function proxyNativeResponses(
         streamOwnsResources: false,
       };
     }
+    previousStored = previous;
+    owner = previous.continuation?.owner;
+    if (!owner) {
+      const legacyId = preferredAccountId(
+        options.dependencies,
+        tenantId,
+        prepared.request.previous_response_id,
+      );
+      const legacyAccount = options.dependencies.accountManager
+        .reconcileFromDb()
+        .find((candidate) => candidate.id === legacyId);
+      if (legacyAccount)
+        owner = {
+          accountId: legacyAccount.id,
+          region: legacyAccount.region,
+          ...(legacyAccount.profileArn ? { profileArn: legacyAccount.profileArn } : {}),
+          responseId: prepared.request.previous_response_id,
+        };
+    }
+    if (!owner)
+      return {
+        response: openAiError(
+          409,
+          "Response account binding is unavailable",
+          "invalid_request_error",
+          "response_context_unavailable",
+          "previous_response_id",
+        ),
+        streamOwnsResources: false,
+      };
   }
-  const preferred = preferredAccountId(
-    options.dependencies,
-    tenantId,
-    prepared.request.previous_response_id,
+  const account = options.dependencies.accountManager.selectHealthyAccount(
+    owner?.accountId,
+    owner ? new Set([owner.accountId]) : options.adaptation?.eligibleAccounts,
   );
-  const account = options.dependencies.accountManager.selectHealthyAccount(preferred);
-  if (!account) {
-    return {
-      response: openAiError(
-        503,
-        "No healthy Kiro account is available",
-        "service_unavailable",
-        "no_healthy_accounts",
-      ),
-      streamOwnsResources: false,
-    };
+  if (!account || (owner && account.id !== owner.accountId)) {
+    const bound =
+      owner &&
+      options.dependencies.accountManager
+        .reconcileFromDb()
+        .find((candidate) => candidate.id === owner.accountId);
+    const delay = bound ? bound.rateLimitResetTime - Date.now() : 0;
+    const response = openAiError(
+      delay > 0 ? 429 : 503,
+      owner ? "The response's Kiro account is unavailable" : "No healthy Kiro account is available",
+      "service_unavailable",
+      owner ? "response_account_unavailable" : "no_healthy_accounts",
+    );
+    if (delay > 0) response.headers.set("Retry-After", String(Math.ceil(delay / 1000)));
+    return { response, streamOwnsResources: false };
   }
-  const release = await acquireAccountQueue(account.id, options.signals.combined);
+  let release = (): void => {};
   let releaseOwned = true;
   let attempt = 0;
+  let continuationMode = prepared.request.previous_response_id ? "upstream" : "none";
+  let replayInput: ResponsesInputItem[] | undefined;
+  let rawOutput: ResponsesInputItem[] = [];
   const logTerminal = (
     level: "info" | "warn",
     provenance: string,
@@ -690,6 +619,7 @@ export async function proxyNativeResponses(
       requested_effort: prepared.requestedEffort,
       effective_effort: prepared.effectiveEffort,
       stream: prepared.stream,
+      continuation_mode: continuationMode,
       http_status: fields.httpStatus,
       terminal_provenance: provenance,
       response_status: fields.responseStatus,
@@ -698,6 +628,7 @@ export async function proxyNativeResponses(
     });
   };
   try {
+    release = await acquireAccountQueue(account.id, options.signals.combined);
     const initialAuth = options.dependencies.accountManager.toAuthDetails(account);
     let refreshed = await options.dependencies.tokenRefresher.refreshIfNeeded(
       account,
@@ -705,6 +636,23 @@ export async function proxyNativeResponses(
       options.signals.combined,
     );
     let auth = options.dependencies.accountManager.toAuthDetails(refreshed);
+    if (
+      owner &&
+      (refreshed.id !== owner.accountId ||
+        auth.region !== owner.region ||
+        auth.profileArn !== owner.profileArn)
+    ) {
+      return {
+        response: openAiError(
+          409,
+          "Response account identity has changed",
+          "invalid_request_error",
+          "response_context_unavailable",
+          "previous_response_id",
+        ),
+        streamOwnsResources: false,
+      };
+    }
     if (options.dependencies.modelCapabilities) {
       const availability = await options.dependencies.modelCapabilities.ensureAccountModel(
         refreshed,
@@ -723,11 +671,65 @@ export async function proxyNativeResponses(
         };
       }
     }
-    const endpoint =
-      options.config.test_upstream_endpoint ??
-      KIRO_CONSTANTS.RUNTIME_ENDPOINT.replace("{{region}}", auth.region);
+    const dispatchBody: Record<string, unknown> = { ...prepared.body };
+    const priority = RESPONSES_CAPABILITY_EVIDENCE.find(
+      (cell) =>
+        cell.feature === "instruction_priority" &&
+        cell.model === prepared.wireModel &&
+        cell.region === auth.region,
+    );
+    if (prepared.request.instructions?.length && priority?.status === "unverified") {
+      const loss = { code: "native_instruction_priority_unverified", param: "instructions" };
+      options.onCompatibility?.([loss]);
+      if (options.config.responses_fidelity_mode === "strict") {
+        return {
+          response: openAiError(
+            400,
+            "Instruction priority is not verified for this native model and region",
+            "invalid_request_error",
+            "unsupported_response_semantics",
+            loss.param,
+          ),
+          streamOwnsResources: false,
+        };
+      }
+    }
+    if (
+      responsesCapability("native_previous_response", prepared.wireModel, auth.region) ===
+        "unsupported" ||
+      previousStored?.continuation?.nativeReplay !== undefined
+    ) {
+      replayInput = nativeInputItems(prepared.request.input);
+      if (previousStored) {
+        replayInput = [
+          ...nativeReplayHistory(previousStored, options.dependencies.responseStore, tenantId),
+          ...replayInput,
+        ];
+        if (
+          !ResponsesRequestSchema.safeParse({ ...prepared.request, input: replayInput }).success
+        ) {
+          throw new ResponseContextError("Stored native output is not a complete replayable input");
+        }
+        dispatchBody.input = replayInput;
+        delete dispatchBody.previous_response_id;
+        continuationMode = "local_replay";
+      }
+    }
+    const storedContinuation = (state: ResponseStateObject): ResponseContinuationContext =>
+      nativeContinuation(
+        prepared,
+        refreshed,
+        state,
+        options.adaptation,
+        replayInput ? { input: replayInput, output: rawOutput } : undefined,
+      );
     const fetcher = options.dependencies.nativeResponsesFetch ?? fetch;
+    let nativeAbort = new AbortController();
     const dispatch = (): Promise<Response> => {
+      nativeAbort = new AbortController();
+      const endpoint =
+        options.config.test_upstream_endpoint ??
+        KIRO_CONSTANTS.RUNTIME_ENDPOINT.replace("{{region}}", auth.region);
       attempt += 1;
       auditLog("info", "native_responses_dispatch_started", {
         request_id: options.requestId,
@@ -749,56 +751,189 @@ export async function proxyNativeResponses(
           "x-amzn-kiro-origin": KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
           ...(auth.profileArn ? { "x-amzn-kiro-profile": auth.profileArn } : {}),
         },
-        body: JSON.stringify(prepared.body),
-        signal: options.signals.combined,
+        body: JSON.stringify(dispatchBody),
+        signal: AbortSignal.any([options.signals.combined, nativeAbort.signal]),
         ...(resolveProxyUrl(options.config) ? { proxy: resolveProxyUrl(options.config) } : {}),
       });
     };
-    let upstream = await dispatch();
-    if (upstream.status === 401 || upstream.status === 403) {
-      await upstream.body?.cancel();
-      refreshed = await options.dependencies.tokenRefresher.forceRefresh(
-        refreshed,
-        options.signals.combined,
-      );
-      auth = options.dependencies.accountManager.toAuthDetails(refreshed);
-      upstream = await dispatch();
-    }
-    if (upstream.status === 429) {
-      const retryAfterSeconds = Number(upstream.headers.get("retry-after"));
-      const resetTime =
-        Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-          ? Date.now() + retryAfterSeconds * 1_000
-          : Date.now() + options.config.rate_limit_retry_delay_ms;
-      options.dependencies.accountManager.markRateLimited(refreshed, resetTime);
-    }
-    if (!upstream.ok) {
-      const value = await upstream.json().catch(() => undefined);
-      logTerminal("warn", "upstream_error", {
-        httpStatus: upstream.status,
-        reasonHash: upstreamReasonHash(value),
+    // HTTP and network failures share the existing retry budget across all
+    // pre-publication stream attempts. Authentication refresh is allowed once.
+    let transportRetries = 0;
+    let authenticationRefreshed = false;
+    const requestUpstream = async (): Promise<Response> => {
+      while (true) {
+        options.signals.combined.throwIfAborted();
+        let result: Response;
+        try {
+          result = await abortable(dispatch(), options.signals.combined);
+        } catch (error) {
+          nativeAbort.abort();
+          if (
+            options.signals.combined.aborted ||
+            transportRetries >= options.config.rate_limit_max_retries
+          )
+            throw error;
+          transportRetries += 1;
+          await abortableSleep(options.config.rate_limit_retry_delay_ms, options.signals.combined);
+          continue;
+        }
+        if ((result.status === 401 || result.status === 403) && !authenticationRefreshed) {
+          authenticationRefreshed = true;
+          await boundedCleanup(() => result.body?.cancel());
+          refreshed = await options.dependencies.tokenRefresher.forceRefresh(
+            refreshed,
+            options.signals.combined,
+          );
+          auth = options.dependencies.accountManager.toAuthDetails(refreshed);
+          if (
+            owner &&
+            (refreshed.id !== owner.accountId ||
+              auth.region !== owner.region ||
+              auth.profileArn !== owner.profileArn)
+          )
+            throw new ResponseContextError(
+              "Response account identity changed during authentication refresh",
+            );
+          continue;
+        }
+        const delay = nativeRetryDelay(result, options.config.rate_limit_retry_delay_ms);
+        if (result.status === 429)
+          options.dependencies.accountManager.markRateLimited(refreshed, Date.now() + delay);
+        if (
+          (result.status === 429 || result.status >= 500) &&
+          transportRetries < options.config.rate_limit_max_retries
+        ) {
+          transportRetries += 1;
+          await boundedCleanup(() => result.body?.cancel());
+          await abortableSleep(delay, options.signals.combined);
+          continue;
+        }
+        return result;
+      }
+    };
+    let upstream = await requestUpstream();
+    let streamAttempt = 0;
+    const openStream = async (): Promise<Response> => {
+      streamAttempt += 1;
+      if (
+        !(upstream.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream")
+      ) {
+        await boundedCleanup(() => upstream.body?.cancel());
+        throw new NativeStreamError(
+          "invalid_upstream_response",
+          "Kiro did not return an SSE response",
+        );
+      }
+      let terminalLogged = false;
+      return createNativeStream({
+        upstream,
+        headers: responseHeaders(upstream, "text/event-stream; charset=utf-8"),
+        model: prepared.requestedModel,
+        signals: options.signals,
+        idleTimeoutMs: options.config.stream_idle_timeout_ms,
+        normalize: (event) => {
+          validateNativeToolChoice(event.item, prepared);
+          const response = normalizeResponseObject(event.response, prepared);
+          if (
+            response &&
+            [
+              "response.completed",
+              "response.failed",
+              "response.incomplete",
+              "response.cancelled",
+            ].includes(String(event.type))
+          ) {
+            rawOutput = response.output as ResponsesInputItem[];
+          }
+          const normalized = { ...event, ...(response ? { response } : {}) };
+          return options.adaptation?.event(normalized) ?? [normalized];
+        },
+        renumber: options.adaptation !== undefined,
+        commit: (state) => {
+          options.dependencies.responseStore?.putNative(
+            tenantId,
+            state,
+            inputItems,
+            storedContinuation(state),
+          );
+          recordAffinity(options.dependencies, tenantId, refreshed, state.id);
+        },
+        terminal: (provenance, eventType, state) => {
+          if (terminalLogged) return;
+          terminalLogged = true;
+          auditLog(state?.status === "completed" ? "info" : "warn", "native_responses_terminal", {
+            request_id: options.requestId,
+            attempt,
+            model: prepared.requestedModel,
+            wire_model: prepared.wireModel,
+            account_hash: auditHash(refreshed.id),
+            stream: true,
+            requested_effort: prepared.requestedEffort,
+            effective_effort: prepared.effectiveEffort,
+            http_status: upstream.status,
+            terminal_provenance: provenance,
+            terminal_event: eventType,
+            response_status: state?.status,
+            completion_witnessed: state?.status === "completed",
+          });
+        },
+        abortUpstream: () => nativeAbort.abort(),
+        finish: () => {
+          release();
+          options.finalize();
+        },
       });
-      return { response: upstreamError(upstream, value), streamOwnsResources: false };
-    }
-    if (prepared.stream) {
-      releaseOwned = false;
-      return {
-        response: nativeStreamResponse({
-          upstream,
-          prepared,
-          account: refreshed,
-          dependencies: options.dependencies,
-          tenantId,
-          requestId: options.requestId,
+    };
+    while (true) {
+      if (!upstream.ok) {
+        const value = await upstream.json().catch(() => undefined);
+        logTerminal("warn", "upstream_error", {
+          httpStatus: upstream.status,
+          reasonHash: upstreamReasonHash(value),
+        });
+        return {
+          response: upstreamError(upstream, value, options.adaptation),
+          streamOwnsResources: false,
+        };
+      }
+      if (!prepared.stream) break;
+      try {
+        const response = await openStream();
+        releaseOwned = false;
+        return {
+          response,
+          streamOwnsResources: true,
+          transport:
+            options.adaptation || continuationMode === "local_replay" ? "native-adapted" : "native",
+        };
+      } catch (error) {
+        if (
+          options.signals.combined.aborted ||
+          streamAttempt >= options.config.stream_max_attempts ||
+          !(error instanceof NativeStreamError) ||
+          ![
+            "upstream_stream_incomplete",
+            "upstream_stream_idle_timeout",
+            "upstream_stream_error",
+          ].includes(error.code)
+        )
+          throw error;
+        auditLog("warn", "native_responses_stream_retry", {
+          request_id: options.requestId,
           attempt,
-          release,
-          finalize: options.finalize,
-        }),
-        streamOwnsResources: true,
-      };
+          stream_attempt: streamAttempt,
+          reason: error.code,
+        });
+        await abortableSleep(options.config.rate_limit_retry_delay_ms, options.signals.combined);
+        upstream = await requestUpstream();
+      }
     }
     const value = await upstream.json().catch(() => undefined);
-    const normalized = normalizeResponseObject(value, prepared);
+    const rawNormalized = normalizeResponseObject(value, prepared);
+    if (rawNormalized) rawOutput = rawNormalized.output as ResponsesInputItem[];
+    const normalized = rawNormalized
+      ? (options.adaptation?.restoreResponse(rawNormalized) ?? rawNormalized)
+      : undefined;
     if (!normalized) {
       logTerminal("warn", "invalid_upstream_response", {
         httpStatus: upstream.status,
@@ -814,7 +949,19 @@ export async function proxyNativeResponses(
       };
     }
     recordAffinity(options.dependencies, tenantId, refreshed, normalized.id);
-    options.dependencies.responseStore?.putNative(tenantId, normalized, prepared.inputItems);
+    try {
+      options.dependencies.responseStore?.putNative(
+        tenantId,
+        normalized,
+        inputItems,
+        storedContinuation(normalized),
+      );
+    } catch {
+      throw new NativeStreamError(
+        "response_state_store_failed",
+        "Response continuation could not be stored",
+      );
+    }
     const completed = normalized.status === "completed";
     logTerminal(completed ? "info" : "warn", "non_stream_response", {
       httpStatus: upstream.status,
@@ -822,6 +969,8 @@ export async function proxyNativeResponses(
       completionWitnessed: completed,
     });
     return {
+      transport:
+        options.adaptation || continuationMode === "local_replay" ? "native-adapted" : "native",
       response: Response.json(normalized, {
         headers: responseHeaders(upstream, "application/json; charset=utf-8"),
       }),
@@ -850,6 +999,25 @@ export async function proxyNativeResponses(
           "request_aborted",
           "client_disconnected",
         ),
+        streamOwnsResources: false,
+      };
+    }
+    if (error instanceof ResponseContextError) {
+      return {
+        response: openAiError(
+          409,
+          error.message,
+          "invalid_request_error",
+          error.code,
+          "previous_response_id",
+        ),
+        streamOwnsResources: false,
+      };
+    }
+    if (error instanceof NativeStreamError) {
+      logTerminal("warn", error.code);
+      return {
+        response: openAiError(502, error.message, "upstream_error", error.code),
         streamOwnsResources: false,
       };
     }

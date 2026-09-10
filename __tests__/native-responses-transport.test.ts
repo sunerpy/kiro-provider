@@ -74,7 +74,9 @@ function config(): Config {
   return ConfigSchema.parse({
     api_keys: ["sk-native"],
     protocol_projection_mode: "v3-auto",
+    responses_native_tool_bridge: "off",
     request_timeout_ms: 5_000,
+    rate_limit_max_retries: 0,
     test_upstream_endpoint: "https://runtime.example.invalid",
   });
 }
@@ -238,13 +240,8 @@ describe("native KiroRuntime Responses transport", () => {
         config(),
         dependencies,
       );
-      expect(serialContinuation.status).toBe(400);
-      expect(await serialContinuation.json()).toMatchObject({
-        error: {
-          code: "native_response_transport_conflict",
-          param: "parallel_tool_calls",
-        },
-      });
+      expect(serialContinuation.status).toBe(200);
+      expect(await serialContinuation.json()).toMatchObject({ parallel_tool_calls: false });
 
       const maxContinuation = await handleResponses(
         request({
@@ -259,7 +256,7 @@ describe("native KiroRuntime Responses transport", () => {
       expect(await maxContinuation.json()).toMatchObject({
         error: {
           code: "native_response_transport_conflict",
-          param: "model",
+          param: "reasoning.effort",
         },
       });
 
@@ -282,7 +279,7 @@ describe("native KiroRuntime Responses transport", () => {
           param: "input.0.role",
         },
       });
-      expect(call).toBe(2);
+      expect(call).toBe(3);
     } finally {
       database.close();
     }
