@@ -417,7 +417,9 @@ function reasoningCaptureOptions(
   readonly captureOutput?: SdkOutputCaptureHandler;
 } {
   const canonical = options.body;
-  const emitEncryptedReasoning = canonical.includeEncryptedReasoning === true;
+  const emitEncryptedReasoning =
+    canonical.includeEncryptedReasoning === true ||
+    (canonical.protocol === "responses" && canonical.store !== false);
   const emitAnthropicReasoningMetadata = canonical.protocol === "anthropic-messages";
   const captureOutput =
     options.lineage && options.affinityStore
@@ -1001,7 +1003,9 @@ async function runAttempt(
     let nativeSystemPromptEnabled = false;
     if (
       (options.body.projectionMode === "v3-auto" ||
-        options.body.projectionMode === "native-context-safe") &&
+        options.body.projectionMode === "native-context-safe" ||
+        (options.body.protocol === "responses" &&
+          options.body.projectionMode === "legacy-user-prefix")) &&
       hasInstructionInput(options.body)
     ) {
       const capability = options.nativeContextCapabilities
@@ -1046,6 +1050,7 @@ async function runAttempt(
       resolvedReasoningReplays: state.replayState.replays,
       ...(parsedEffort.success ? { effort: parsedEffort.data } : {}),
     });
+    options.onProjection?.(prepared.diagnostics);
     const plannedAttempt = state.sdkDispatches + 1;
     const conversationHash = auditHash(prepared.conversationId);
     const accountHash = auditHash(account.id);

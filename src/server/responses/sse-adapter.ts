@@ -12,6 +12,7 @@ import {
   parseCanonicalOutputEventLine,
 } from "../../protocol/output.js";
 import type { IngressSignals } from "../request-lifecycle.js";
+import { publicResponseState } from "./continuation.js";
 import {
   contentPartAdded,
   contentPartDone,
@@ -63,6 +64,7 @@ type AdapterOptions = {
   readonly bridge?: ResponsesToolBridge;
   readonly configuration: ResponseRequestConfiguration;
   readonly includeEncryptedReasoning: boolean;
+  readonly captureEncryptedReasoning?: boolean;
   readonly onCompleted?: (response: ResponseStateObject) => void;
 };
 
@@ -134,7 +136,16 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let canonicalCompleted = false;
 
   const emit = (create: (sequence: number) => ResponsesEvent): void => {
-    pendingFrames.push(encoder.encode(formatSseEvent(create(sequenceNumber))));
+    let event = create(sequenceNumber);
+    if (!options.includeEncryptedReasoning) {
+      if ("response" in event)
+        event = { ...event, response: publicResponseState(event.response, false) };
+      if ("item" in event && event.item.type === "reasoning") {
+        const { encrypted_content: _privateReplay, ...item } = event.item;
+        event = { ...event, item };
+      }
+    }
+    pendingFrames.push(encoder.encode(formatSseEvent(event)));
     sequenceNumber += 1;
   };
   const closeIfDrained = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
@@ -178,6 +189,28 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     reason?: unknown,
     failure?: TerminalFailure,
   ): void => {
+    if (terminalOutcome !== undefined) return;
+    if (outcome === "normal-complete" && terminalCompletion) {
+      try {
+        options.onCompleted?.(
+          responseCompleted({
+            responseId,
+            model: options.model,
+            output: terminalCompletion.output,
+            usage: terminalCompletion.usage,
+            sequenceNumber,
+            createdAt,
+            configuration: options.configuration,
+          }).response,
+        );
+      } catch {
+        outcome = "upstream-error";
+        failure = {
+          code: "response_state_store_failed",
+          message: "Response continuation could not be stored",
+        };
+      }
+    }
     if (!claimTerminal(outcome)) return;
     terminalFailure = failure;
     if (outcome === "consumer-cancel") pendingFrames.length = 0;
@@ -205,7 +238,6 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               completedAt: Math.floor(Date.now() / 1000),
               configuration: options.configuration,
             });
-            options.onCompleted?.(event.response);
             return event;
           });
         } else if (
@@ -310,10 +342,11 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   };
   const finishReasoning = (run: ReasoningRun): void => {
     if (isGptSolReasoningPlaceholder(options.model, run.text)) {
-      if (!options.includeEncryptedReasoning) return;
+      if (!options.includeEncryptedReasoning && !options.captureEncryptedReasoning) return;
+      const encryptedContent = claimEncryptedContent();
+      if (encryptedContent === undefined) return;
       const outputIndex = nextOutputIndex;
       nextOutputIndex += 1;
-      const encryptedContent = claimEncryptedContent();
       const item: ReasoningOutputItem = {
         id: run.id,
         type: "reasoning",
@@ -376,7 +409,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   // complete() where output_item.done can carry the same encrypted_content as
   // response.completed. Without encrypted replay the item closes eagerly.
   const closeReasoningBeforeOutput = (): void => {
-    if (options.includeEncryptedReasoning) return;
+    if (options.includeEncryptedReasoning || options.captureEncryptedReasoning) return;
     closeReasoning();
   };
   const flushDeferredReasoning = (): void => {
@@ -432,7 +465,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         return;
       }
       case "reasoning_encrypted":
-        if (options.includeEncryptedReasoning) {
+        if (options.includeEncryptedReasoning || options.captureEncryptedReasoning) {
           reasoningEncryptedContent = event.encryptedContent;
         }
         return;

@@ -121,6 +121,9 @@ export type PipelineReasoningReplayStore = Pick<
 >;
 
 export interface RunChatCompletionOptions {
+  readonly onProjection?: (
+    diagnostics: import("../kiro/types.js").RequestTransformDiagnostics,
+  ) => void;
   readonly requestId?: string;
   readonly body: CanonicalRequest;
   readonly model: string;

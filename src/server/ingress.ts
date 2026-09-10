@@ -120,6 +120,7 @@ export function createIngress(
   );
   let lease: RequestIdleTimeoutLease | undefined;
   let leaseRequested = false;
+  let finalized = false;
   return {
     requestId,
     signals: {
@@ -135,6 +136,8 @@ export function createIngress(
       lease?.disable();
     },
     finalize(): void {
+      if (finalized) return;
+      finalized = true;
       runCleanupSteps(
         () => clearTimeout(deadlineTimer),
         () => lease?.restore(),

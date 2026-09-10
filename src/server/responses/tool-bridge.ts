@@ -47,7 +47,7 @@ export type RestorableToolCall = {
   readonly arguments: string;
 };
 
-type PublicToolIdentity =
+export type PublicToolIdentity =
   | { readonly kind: "function"; readonly name: string }
   | { readonly kind: "custom"; readonly name: string }
   | {
@@ -57,6 +57,16 @@ type PublicToolIdentity =
       readonly toolType: "function" | "custom";
     };
 
+export interface ToolBridgeBinding {
+  readonly wireName: string;
+  readonly identity: PublicToolIdentity;
+}
+
+export interface ToolBridgeOptions {
+  readonly stable?: boolean;
+  readonly bindings?: readonly ToolBridgeBinding[];
+  readonly allowHistoricalWithoutDeclarations?: boolean;
+}
 type BridgeErrorCode =
   | "invalid_tool_declaration"
   | "invalid_tool_history"
@@ -168,7 +178,7 @@ function customDescription(
   tool: Extract<ResponsesKnownTool, { type: "custom" }>,
 ): string | undefined {
   const grammar =
-    tool.format === undefined
+    tool.format === undefined || tool.format.type === "text"
       ? undefined
       : [
           `Raw input must follow this ${tool.format.syntax} grammar:`,
@@ -178,14 +188,21 @@ function customDescription(
   return descriptions(tool.description, grammar);
 }
 
-function functionTool(tool: Extract<ResponsesKnownTool, { type: "function" }>): InternalTool {
+function functionTool(
+  tool: Extract<ResponsesKnownTool, { type: "function" }>,
+  preserveSchema = false,
+): InternalTool {
   return {
     type: "function",
     function: {
       name: tool.name,
       ...(tool.description !== undefined ? { description: tool.description } : {}),
       ...(tool.parameters !== undefined
-        ? { parameters: sanitizeToolSchema(tool.parameters) as Record<string, unknown> }
+        ? {
+            parameters: preserveSchema
+              ? tool.parameters
+              : (sanitizeToolSchema(tool.parameters) as Record<string, unknown>),
+          }
         : {}),
     },
   };
@@ -273,6 +290,10 @@ export class ResponsesToolBridge {
   readonly #wireNameByIdentity: ReadonlyMap<string, string>;
   readonly #identityByWireName: ReadonlyMap<string, PublicToolIdentity>;
 
+  get bindings(): readonly ToolBridgeBinding[] {
+    return [...this.#identityByWireName].map(([wireName, identity]) => ({ wireName, identity }));
+  }
+
   constructor(input: {
     readonly internalTools: readonly InternalTool[];
     readonly declarations: readonly BridgedToolDeclaration[];
@@ -351,6 +372,7 @@ function malformedNamespace(tool: Extract<ResponsesKnownTool, { type: "namespace
 export function createResponsesToolBridge(
   req: ResponsesRequest,
   previousItems: readonly ResponsesInputItem[] = [],
+  options: ToolBridgeOptions = {},
 ): BridgeBuildResult {
   const declarations = new Map<string, Declaration>();
   const ordinaryKindsByName = new Map<string, "function" | "custom">();
@@ -419,10 +441,12 @@ export function createResponsesToolBridge(
             parameters:
               child.type === "custom"
                 ? customSchema()
-                : (sanitizeToolSchema(child.parameters ?? { type: "object" }) as Record<
-                    string,
-                    unknown
-                  >),
+                : options.stable
+                  ? (child.parameters ?? { type: "object" })
+                  : (sanitizeToolSchema(child.parameters ?? { type: "object" }) as Record<
+                      string,
+                      unknown
+                    >),
           },
         };
         const failure = registerDeclaration({
@@ -451,7 +475,7 @@ export function createResponsesToolBridge(
     const identity: PublicToolIdentity = { kind: tool.type, name: tool.name };
     const internalTool: InternalTool =
       tool.type === "function"
-        ? functionTool(tool)
+        ? functionTool(tool, options.stable)
         : {
             type: "function",
             function: {
@@ -555,7 +579,7 @@ export function createResponsesToolBridge(
   const ordered = [...declarations.values()];
   for (const call of historical) {
     const key = identityKey(call.identity);
-    if (declarations.has(key)) continue;
+    if (declarations.has(key) || options.allowHistoricalWithoutDeclarations) continue;
     return {
       ok: false,
       code: "missing_tool_declaration",
@@ -568,6 +592,23 @@ export function createResponsesToolBridge(
   const usedWireNames = new Set(ordinaryNames);
   const wireNameByIdentity = new Map<string, string>();
   const identityByWireName = new Map<string, PublicToolIdentity>();
+  for (const binding of options.bindings ?? []) {
+    const key = identityKey(binding.identity);
+    const prior = identityByWireName.get(binding.wireName);
+    if (
+      (prior && identityKey(prior) !== key) ||
+      (wireNameByIdentity.has(key) && wireNameByIdentity.get(key) !== binding.wireName)
+    ) {
+      return {
+        ok: false,
+        code: "invalid_tool_declaration",
+        message: "Stored tool aliases collide",
+      };
+    }
+    wireNameByIdentity.set(key, binding.wireName);
+    identityByWireName.set(binding.wireName, binding.identity);
+    usedWireNames.add(binding.wireName);
+  }
   let customIndex = 0;
   let namespaceIndex = 0;
   const nextAlias = (kind: "custom" | "namespace"): string => {
@@ -583,17 +624,55 @@ export function createResponsesToolBridge(
   };
   const internalTools: InternalTool[] = [];
   const bridgedDeclarations: BridgedToolDeclaration[] = [];
-  for (const declaration of ordered) {
-    const key = identityKey(declaration.identity);
-    const wireName =
-      declaration.identity.kind === "function"
-        ? declaration.identity.name
-        : nextAlias(declaration.identity.kind);
+  const allocate = (identity: PublicToolIdentity): string => {
+    const key = identityKey(identity);
+    return (
+      wireNameByIdentity.get(key) ??
+      (identity.kind === "function"
+        ? identity.name
+        : options.stable
+          ? `${identity.kind === "namespace" ? NAMESPACE_ALIAS_PREFIX : CUSTOM_ALIAS_PREFIX}${canonicalFingerprint(identity).slice(0, 40)}`
+          : nextAlias(identity.kind))
+    );
+  };
+  for (const identity of [
+    ...ordered.map((declaration) => declaration.identity),
+    ...(options.allowHistoricalWithoutDeclarations ? historical.map((call) => call.identity) : []),
+  ]) {
+    const key = identityKey(identity);
+    const wireName = allocate(identity);
+    const prior = identityByWireName.get(wireName);
+    if (
+      (prior && identityKey(prior) !== key) ||
+      (identity.kind !== "function" && ordinaryNames.has(wireName))
+    ) {
+      return {
+        ok: false,
+        code: "invalid_tool_declaration",
+        message: "Tool wire alias collides with another identity",
+      };
+    }
     wireNameByIdentity.set(key, wireName);
-    identityByWireName.set(wireName, declaration.identity);
+    identityByWireName.set(wireName, identity);
+  }
+  for (const declaration of ordered) {
+    const wireName = wireNameByIdentity.get(identityKey(declaration.identity)) as string;
+    const publicName =
+      declaration.identity.kind === "namespace"
+        ? `${declaration.identity.namespace}.${declaration.identity.name}`
+        : declaration.identity.name;
+    // The caller's public identity must remain model-visible even with an opaque wire name.
+    const description =
+      options.stable && declaration.identity.kind !== "function"
+        ? descriptions(publicName, declaration.tool.function.description)
+        : declaration.tool.function.description;
     internalTools.push({
       type: "function",
-      function: { ...declaration.tool.function, name: wireName },
+      function: {
+        ...declaration.tool.function,
+        name: wireName,
+        ...(description !== undefined ? { description } : {}),
+      },
     });
     bridgedDeclarations.push({
       publicType: isCustomIdentity(declaration.identity) ? "custom" : "function",
@@ -616,6 +695,14 @@ export function createResponsesToolBridge(
   }
   for (const name of ordinaryNames) {
     const identity: PublicToolIdentity = { kind: "function", name };
+    const prior = identityByWireName.get(name);
+    if (prior && identityKey(prior) !== identityKey(identity)) {
+      return {
+        ok: false,
+        code: "invalid_tool_declaration",
+        message: "Tool name collides with a stored alias",
+      };
+    }
     wireNameByIdentity.set(identityKey(identity), name);
     identityByWireName.set(name, identity);
   }

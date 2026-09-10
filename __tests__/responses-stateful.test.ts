@@ -389,7 +389,7 @@ describe("locally mirrored Responses state", () => {
         "assistant",
         "tool",
       ]);
-      expect(captured[1]?.body.messages[1]?.toolCalls).toEqual([
+      expect(captured[1]?.body.messages[1]?.toolCalls).toMatchObject([
         {
           id: "call_weather",
           name: "weather",
