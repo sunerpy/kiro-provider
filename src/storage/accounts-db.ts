@@ -757,8 +757,8 @@ export class AccountsDatabase {
             CASE WHEN json_valid(response_json) THEN response_json ELSE '{}' END,
             '$.output'
           ) AS item
-          WHERE json_extract(item.value, '$.type') = 'reasoning'
-            AND json_extract(item.value, '$.encrypted_content') = ?
+          WHERE json_extract(CASE WHEN item.type = 'object' THEN item.value ELSE '{}' END, '$.type') = 'reasoning'
+            AND json_extract(CASE WHEN item.type = 'object' THEN item.value ELSE '{}' END, '$.encrypted_content') = ?
         )
       `)
       .all(tenantId, now, encryptedContent)

@@ -111,6 +111,20 @@ test("manual native opaque replay recovers its owner after a store restart and r
   try {
     const first = await f.send({ model: "gpt-5.6-sol", input: "First" });
     await first.text();
+    const record = f.database.getStoredResponse("resp_opaque_1", "fidelity-test");
+    if (!record) throw new Error("Missing native fixture");
+    f.database.putStoredResponse(
+      {
+        ...record,
+        id: "resp_future",
+        responseJson: JSON.stringify({
+          ...nativeResponse("resp_future"),
+          output: ["future-item", null, 42],
+        }),
+        canonicalJson: '{"version":99}',
+      },
+      100,
+    );
     const freshStore = new SqliteResponseStore(f.database);
     const input = [
       ...(freshStore.get("fidelity-test", "resp_opaque_1")?.response.output ?? []),
@@ -126,6 +140,9 @@ test("manual native opaque replay recovers its owner after a store restart and r
     expect((await f.send({ model: "gpt-5.6-sol", input })).status).toBe(400);
     expect(f.requests).toHaveLength(2);
     expect(f.canonical).toHaveLength(0);
+    expect(f.database.getStoredResponse("resp_future", "fidelity-test")?.canonicalJson).toBe(
+      '{"version":99}',
+    );
   } finally {
     f.database.close();
   }
