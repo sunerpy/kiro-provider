@@ -793,6 +793,32 @@ describe("native Responses stream contract", () => {
 });
 
 describe("native retry-after", () => {
+  test.each([true, false])(
+    "returns throttling instead of waiting past the ingress deadline, header=%s",
+    async (withHeader) => {
+      const f = fidelityFixture({
+        config: {
+          request_timeout_ms: 100,
+          rate_limit_retry_delay_ms: 1000,
+          rate_limit_max_retries: 3,
+        },
+        native: () =>
+          Response.json(
+            { message: "busy" },
+            { status: 429, headers: withHeader ? { "Retry-After": "15" } : {} },
+          ),
+      });
+      try {
+        const response = await f.send(basic);
+        expect(response.status).toBe(429);
+        expect(response.headers.get("retry-after")).toBe(withHeader ? "15" : "1");
+        expect(f.requests).toHaveLength(1);
+      } finally {
+        f.database.close();
+      }
+    },
+  );
+
   test("retries network failures within the configured transport budget", async () => {
     const f = fidelityFixture({
       config: { rate_limit_max_retries: 1 },

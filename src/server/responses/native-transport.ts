@@ -401,6 +401,7 @@ function upstreamError(
   upstream: Response,
   value: unknown,
   adaptation?: NativeResponsesAdaptation,
+  fallbackRetryMs?: number,
 ): Response {
   const record = upstreamErrorRecord(value);
   let message =
@@ -431,6 +432,12 @@ function upstreamError(
     const value = upstream.headers.get(name);
     if (value !== null) response.headers.set(name, value);
   }
+  if (
+    upstream.status === 429 &&
+    !response.headers.has("retry-after") &&
+    fallbackRetryMs !== undefined
+  )
+    response.headers.set("Retry-After", String(Math.ceil(fallbackRetryMs / 1000)));
   return response;
 }
 
@@ -801,7 +808,8 @@ export async function proxyNativeResponses(
           options.dependencies.accountManager.markRateLimited(refreshed, Date.now() + delay);
         if (
           (result.status === 429 || result.status >= 500) &&
-          transportRetries < options.config.rate_limit_max_retries
+          transportRetries < options.config.rate_limit_max_retries &&
+          delay < (options.signals.deadlineAt ?? Number.POSITIVE_INFINITY) - Date.now()
         ) {
           transportRetries += 1;
           await boundedCleanup(() => result.body?.cancel());
@@ -892,7 +900,12 @@ export async function proxyNativeResponses(
           reasonHash: upstreamReasonHash(value),
         });
         return {
-          response: upstreamError(upstream, value, options.adaptation),
+          response: upstreamError(
+            upstream,
+            value,
+            options.adaptation,
+            options.config.rate_limit_retry_delay_ms,
+          ),
           streamOwnsResources: false,
         };
       }
