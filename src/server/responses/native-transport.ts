@@ -475,17 +475,6 @@ function recordAffinity(
   }
 }
 
-function preferredAccountId(
-  dependencies: RouteDependencies,
-  tenantId: string,
-  previousResponseId: string | undefined,
-): string | undefined {
-  if (!previousResponseId) return undefined;
-  return dependencies.affinityStore?.getSessionAffinity(
-    nativeAffinityKey(tenantId, previousResponseId),
-  )?.accountId;
-}
-
 function nativeContinuation(
   prepared: PreparedNativeRequest,
   account: ManagedAccount,
@@ -552,23 +541,6 @@ export async function proxyNativeResponses(
     }
     previousStored = previous;
     owner = previous.continuation?.owner;
-    if (!owner) {
-      const legacyId = preferredAccountId(
-        options.dependencies,
-        tenantId,
-        prepared.request.previous_response_id,
-      );
-      const legacyAccount = options.dependencies.accountManager
-        .reconcileFromDb()
-        .find((candidate) => candidate.id === legacyId);
-      if (legacyAccount)
-        owner = {
-          accountId: legacyAccount.id,
-          region: legacyAccount.region,
-          ...(legacyAccount.profileArn ? { profileArn: legacyAccount.profileArn } : {}),
-          responseId: prepared.request.previous_response_id,
-        };
-    }
     if (!owner)
       return {
         response: openAiError(

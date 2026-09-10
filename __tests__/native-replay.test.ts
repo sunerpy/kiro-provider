@@ -127,7 +127,7 @@ test("a native replay lineage keeps its exact history when the next model change
   }
 });
 
-test("legacy native records recover from their stored inputs and affinity without rewriting them", async () => {
+test("legacy native records stay readable but a cache cannot invent missing owner metadata", async () => {
   const f = fidelityFixture();
   try {
     const first = (await (await f.send({ model, input: "LEGACY" })).json()) as Body;
@@ -138,12 +138,10 @@ test("legacy native records recover from their stored inputs and affinity withou
       100,
     );
     const response = await f.send({ model, previous_response_id: first.id, input: "NEXT" });
-    expect(response.status).toBe(200);
-    expect(f.requests[1]?.input).toMatchObject([
-      { role: "user", content: [{ type: "input_text", text: "LEGACY" }] },
-      { role: "assistant" },
-      { role: "user", content: "NEXT" },
-    ]);
+    expect(response.status).toBe(409);
+    expect(await response.text()).toContain("response_context_unavailable");
+    expect(f.requests).toHaveLength(1);
+    expect(f.responseStore.get("fidelity-test", first.id)?.response.id).toBe(first.id);
     expect(
       JSON.parse(f.database.getStoredResponse(first.id, "fidelity-test")?.canonicalJson ?? "{}")
         .version,

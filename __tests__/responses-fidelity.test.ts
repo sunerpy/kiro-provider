@@ -112,6 +112,25 @@ describe("Responses fidelity regression", () => {
     }
   });
 
+  test("strict mode rejects an effort value that the legacy model would clamp", async () => {
+    const f = fidelityFixture({ config: { responses_fidelity_mode: "strict" } });
+    try {
+      const response = await f.send({
+        model: "claude-sonnet-4-6",
+        store: false,
+        input: "Hi",
+        reasoning: { effort: "xhigh" },
+      });
+      expect(response.status).toBe(400);
+      expect(response.headers.get("x-kiro-compatibility")).toContain(
+        "reasoning_effort_approximated",
+      );
+      expect(f.canonical).toHaveLength(0);
+    } finally {
+      f.database.close();
+    }
+  });
+
   test("routes kr1 replay by token ownership even without include", async () => {
     const f = fidelityFixture();
     try {

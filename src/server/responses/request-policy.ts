@@ -1,5 +1,7 @@
 import type { Config } from "../../config/schema.js";
+import { resolveEffort } from "../../kiro/effort.js";
 import { resolveModelVariant } from "../../kiro/models.js";
+import type { Effort } from "../../kiro/types.js";
 import { isRecord } from "../../protocol/adapter-utils.js";
 import { openAiError } from "../errors.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
@@ -221,7 +223,13 @@ export function responsesCompatibility(
   if (request.reasoning?.summary != null && request.reasoning.summary !== "none") {
     losses.push({ code: "reasoning_summary_ignored", param: "reasoning.summary" });
   }
-  if (request.reasoning?.effort === "none" || request.reasoning?.effort === "minimal") {
+  const effort = request.reasoning?.effort;
+  if (
+    effort &&
+    (effort === "none" ||
+      effort === "minimal" ||
+      resolveEffort(resolveModelVariant(request.model).wireId, effort as Effort) !== effort)
+  ) {
     losses.push({ code: "reasoning_effort_approximated", param: "reasoning.effort" });
   }
   if (Array.isArray(request.input)) {
