@@ -1,0 +1,1052 @@
+{
+  "schema_version": 1,
+  "sdk": "openai@7.13.0",
+  "generated_at": "2026-09-10T18:15:45.769Z",
+  "label": "strict-c01bef1",
+  "models": [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna"
+  ],
+  "features": [
+    "strict"
+  ],
+  "results": [
+    {
+      "model": "claude-opus-5",
+      "case": "strict-admission",
+      "passed": true,
+      "checks": [
+        "PASS: a supported request succeeds in strict mode",
+        "PASS: strict rejection identifies text.verbosity",
+        "PASS: strict rejection identifies reasoning.context",
+        "PASS: strict rejection identifies parallel_tool_calls",
+        "PASS: strict rejection identifies tools.0.strict",
+        "PASS: strict rejection identifies tools.0.format",
+        "PASS: strict rejection identifies made_up_control"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Reply exactly SDK_OK",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native",
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_6fyzzglij35s46wsbhuqdh5gm6c4tvjgf2bvye5vysetxec57cwa",
+            "object": "response",
+            "created_at": 1789064128,
+            "completed_at": 1789064128,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-opus-5",
+            "previous_response_id": null,
+            "instructions": null,
+            "output": [
+              {
+                "type": "reasoning",
+                "id": "rs_a9b730b893d64be8aa98ab1926845526",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 56
+                  }
+                ]
+              },
+              {
+                "type": "message",
+                "id": "msg_8f359935ac0d4424b405d68b1c0c56cd",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "SDK_OK",
+                    "annotations": []
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0047,
+              "total_tokens": 47,
+              "output_tokens": 29,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.007173427628524047
+              },
+              "input_tokens": 18,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "SDK_OK"
+          },
+          "duration_ms": 5498
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "text": {
+              "verbosity": "low"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "text_verbosity_ignored"
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "reasoning": {
+              "context": "all_turns"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "reasoning_context_ignored"
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "parallel_tool_calls": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "parallel_tool_calls_unenforced"
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": true
+              }
+            ]
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "grammar",
+                "description": "Grammar",
+                "format": {
+                  "type": "grammar",
+                  "syntax": "regex",
+                  "definition": "[a-z]+"
+                }
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "custom_grammar_unenforced"
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Hi",
+            "made_up_control": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-sonnet-5",
+      "case": "strict-admission",
+      "passed": true,
+      "checks": [
+        "PASS: a supported request succeeds in strict mode",
+        "PASS: strict rejection identifies text.verbosity",
+        "PASS: strict rejection identifies reasoning.context",
+        "PASS: strict rejection identifies parallel_tool_calls",
+        "PASS: strict rejection identifies tools.0.strict",
+        "PASS: strict rejection identifies tools.0.format",
+        "PASS: strict rejection identifies made_up_control"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Reply exactly SDK_OK",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native",
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_mfwhobykxijgjndz4jr3cdqrzw5c6rgjlve27aotyp6oy5nqnltq",
+            "object": "response",
+            "created_at": 1789064131,
+            "completed_at": 1789064131,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-sonnet-5",
+            "previous_response_id": null,
+            "instructions": null,
+            "output": [
+              {
+                "type": "message",
+                "id": "msg_06c2d0ce894440abb33b6e4804726d5d",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "SDK_OK",
+                    "annotations": []
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0026,
+              "total_tokens": 26,
+              "output_tokens": 8,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0012227278275290215
+              },
+              "input_tokens": 18,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "SDK_OK"
+          },
+          "duration_ms": 3348
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "text": {
+              "verbosity": "low"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "text_verbosity_ignored"
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "reasoning": {
+              "context": "all_turns"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "reasoning_context_ignored"
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "parallel_tool_calls": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "parallel_tool_calls_unenforced"
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": true
+              }
+            ]
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "grammar",
+                "description": "Grammar",
+                "format": {
+                  "type": "grammar",
+                  "syntax": "regex",
+                  "definition": "[a-z]+"
+                }
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "custom_grammar_unenforced"
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Hi",
+            "made_up_control": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "strict-admission",
+      "passed": true,
+      "checks": [
+        "PASS: a supported request succeeds in strict mode",
+        "PASS: strict rejection identifies text.verbosity",
+        "PASS: strict rejection identifies reasoning.context",
+        "PASS: strict rejection identifies parallel_tool_calls",
+        "PASS: strict rejection identifies tools.0.strict",
+        "PASS: strict rejection identifies tools.0.format",
+        "PASS: strict rejection identifies made_up_control"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Reply exactly SDK_OK",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789064134,
+            "created_at": 1789064133,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_wojdoswdsirlbepe42zswl3pqk6deuqjqcxzxiz6eqsocsw7meba",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "SDK_OK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_5e2697ed79d85efe9e1bae2cd2460629",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.005882353,
+              "total_tokens": 16,
+              "output_tokens": 6,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0016665400995024874
+              },
+              "input_tokens": 10,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "SDK_OK"
+          },
+          "duration_ms": 2733
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "text": {
+              "verbosity": "low"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "text_verbosity_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "reasoning": {
+              "context": "all_turns"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "reasoning_context_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "parallel_tool_calls": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "parallel_tool_calls_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": true
+              }
+            ]
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "grammar",
+                "description": "Grammar",
+                "format": {
+                  "type": "grammar",
+                  "syntax": "regex",
+                  "definition": "[a-z]+"
+                }
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "custom_grammar_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Hi",
+            "made_up_control": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "case": "strict-admission",
+      "passed": true,
+      "checks": [
+        "PASS: a supported request succeeds in strict mode",
+        "PASS: strict rejection identifies text.verbosity",
+        "PASS: strict rejection identifies reasoning.context",
+        "PASS: strict rejection identifies parallel_tool_calls",
+        "PASS: strict rejection identifies tools.0.strict",
+        "PASS: strict rejection identifies tools.0.format",
+        "PASS: strict rejection identifies made_up_control"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Reply exactly SDK_OK",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789064142,
+            "created_at": 1789064140,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_5pjd5dyuikovbxogjxrnd5j4u4hphpmpi5paenttjwm7hfmnfywq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-terra",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 756,
+                  "sha256": "afb3b2f7f6985e2cebd8e7f728eac7262c3c3d746c56cfdc8cd934eeae798cbd"
+                },
+                "id": "rs_3abe625bd11955c19d106df750292639",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "SDK_OK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_fe76480d64265a2a832cbbbb31ccdf84",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.009558824,
+              "total_tokens": 26,
+              "output_tokens": 16,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0017991960199004974
+              },
+              "input_tokens": 10,
+              "output_tokens_details": {
+                "reasoning_tokens": 8
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "SDK_OK"
+          },
+          "duration_ms": 7833
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "text": {
+              "verbosity": "low"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "text_verbosity_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "reasoning": {
+              "context": "all_turns"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "reasoning_context_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "parallel_tool_calls": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "parallel_tool_calls_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": true
+              }
+            ]
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "grammar",
+                "description": "Grammar",
+                "format": {
+                  "type": "grammar",
+                  "syntax": "regex",
+                  "definition": "[a-z]+"
+                }
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "custom_grammar_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Hi",
+            "made_up_control": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "case": "strict-admission",
+      "passed": true,
+      "checks": [
+        "PASS: a supported request succeeds in strict mode",
+        "PASS: strict rejection identifies text.verbosity",
+        "PASS: strict rejection identifies reasoning.context",
+        "PASS: strict rejection identifies parallel_tool_calls",
+        "PASS: strict rejection identifies tools.0.strict",
+        "PASS: strict rejection identifies tools.0.format",
+        "PASS: strict rejection identifies made_up_control"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Reply exactly SDK_OK",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789064144,
+            "created_at": 1789064144,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_cea2zks5n76752jnu7wm2bqhyiwoxgkjf23xwv4lcsubxps2rczq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-luna",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "SDK_OK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_929b887859cc56c4b55885e4becbdf9d",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.005882353,
+              "total_tokens": 16,
+              "output_tokens": 6,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 6.943917081260364e-05
+              },
+              "input_tokens": 10,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "SDK_OK"
+          },
+          "duration_ms": 2340
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "text": {
+              "verbosity": "low"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "text_verbosity_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "reasoning": {
+              "context": "all_turns"
+            }
+          },
+          "status": 400,
+          "transport": "native",
+          "compatibility": "reasoning_context_ignored"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "parallel_tool_calls": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": false
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "parallel_tool_calls_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "function",
+                "name": "echo",
+                "description": "Echo text",
+                "parameters": {
+                  "type": "object"
+                },
+                "strict": true
+              }
+            ]
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "grammar",
+                "description": "Grammar",
+                "format": {
+                  "type": "grammar",
+                  "syntax": "regex",
+                  "definition": "[a-z]+"
+                }
+              }
+            ]
+          },
+          "status": 400,
+          "transport": "stateless",
+          "compatibility": "custom_grammar_unenforced"
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Hi",
+            "made_up_control": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    }
+  ]
+}

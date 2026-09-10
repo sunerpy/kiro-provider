@@ -59,11 +59,11 @@ flowchart TD
 以下请求自动选择 stateless 通道：
 
 - `store: false`；
-- `max` effort 或 `-max` 模型变体；
-- custom grammar 与 namespace 工具；
-- Codex `additional_tools`、`agent_message` 与带 namespace 的调用历史；
-- `parallel_tool_calls: false`；
-- `include: ["reasoning.encrypted_content"]`。
+- 按显式参数、模型后缀和配置归一化后，生效值为 `max` 的 effort；
+- custom grammar 与尚未验证的原生工具桥接组合；
+- Codex `additional_tools` 与 `agent_message`；
+- 存在可调用工具时的 `parallel_tool_calls: false`；
+- `include: ["reasoning.encrypted_content"]`，或 input 中带有 Provider `kr1_` token。
 
 引用原生已存储 Response 的请求会继续使用原生通道。如果新请求要求把该原生
 lineage 切换到 stateless 通道，V3 会明确报错，不会弱化 `store`、effort、
@@ -84,10 +84,10 @@ CLI 不会直接调用另一个公开 Mantle 端点。
 
 | 能力 | GPT-5.6 Sol | Claude Opus 5 |
 | --- | --- | --- |
-| `instructions` | 支持 | 支持 |
+| `instructions` | 支持 | 原样转发；us-east-1 的优先级仍未通过验证 |
 | 标准 Responses JSON 与 SSE | 支持 | 支持 |
 | Function 工具 | 支持 | 支持 |
-| `previous_response_id` | 结合 Response/账号亲和支持 | 结合 Response/账号亲和支持 |
+| `previous_response_id` | 绑定持久归属；受影响的 opaque 历史精确回放 | us-east-1 中恢复完整历史后调用 CreateResponse |
 | `max_output_tokens` | 支持 | 支持 |
 | `reasoning.effort: xhigh` | 支持 | 支持 |
 | `truncation: disabled` | 支持 | 支持 |
@@ -127,8 +127,14 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 - 30 天 TTL；
 - 最多 10,000 条的有界保留；
 - 用于 cursor 分页的稳定 input item ID；
-- stateless 续轮所需的可选 canonical request/completion；
-- 原生 KiroRuntime 续轮所需的 Response/账号亲和。
+- stateless 续轮所需的逻辑 item 快照和私有 replay 附件；
+- 原生续接的账号、区域、profile 持久绑定；亲和缓存仅用于加速。
+
+当前 us-east-1 的 Opus 5、Sonnet 5 原生 previous ID 未恢复历史，因此 Provider
+恢复完整 wire 历史后调用 CreateResponse。已验证范围内，Sol 的 opaque reasoning
+历史也采用精确回放；其他 GPT 历史保留上游续接。手动传回 native opaque token 时，
+从同租户持久记录恢复归属，不猜测账号。读取器兼容 V1/V2，
+新的 V3 快照使本地回放不依赖祖先镜像仍然存在。
 
 只有同一租户镜像中存在的 ID 才能作为 `previous_response_id`。未知、过期、
 跨租户或本地已删除的 ID 返回 HTTP 404 `response_not_found`。
@@ -143,7 +149,7 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 | 文本、消息数组、图片、内联文档 | 在已记录的 Kiro 格式限制内支持。 |
 | `instructions`、`system`、`developer` | 普通 V3 通道使用原生字段；stateless fallback 保序投影。 |
 | Function 工具 | 能走原生时走原生，否则 fallback。 |
-| Custom grammar 与 namespace 工具 | Stateless fallback，并在响应中恢复公开身份。 |
+| Namespace 与自由文本 custom 工具 | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。 |
 | `agent_message` | Stateless fallback；保留可见内容，不把子代理加密元数据注入父模型。 |
 | `tool_choice: auto` / `none` | 在不存在冲突的未完成工具状态时支持。 |
 | Required、指定或受约束 tool choice | 拒绝。 |
@@ -229,3 +235,26 @@ OpenAI 官方方法参考：
 - [Delete a response](https://developers.openai.com/api/reference/resources/responses/methods/delete)
 - [Cancel a response](https://developers.openai.com/api/reference/resources/responses/methods/cancel)
 - [List input items](https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list)
+
+## 8. 保真控制与验证边界
+
+`responses_fidelity_mode` 默认 `compatible`，通过响应头报告已登记的语义损失；
+`strict` 在生成前拒绝这些行为。`responses_instruction_lift` 和
+`responses_native_tool_bridge` 支持 `auto`（默认）、`off`、`experimental`。
+实验选项不绕过存储、账号归属或 reasoning 校验。
+
+`X-Kiro-Transport` 区分 native、native-adapted、stateless；
+`X-Kiro-Compatibility` 使用稳定原因代码。us-east-1 的 Opus 5、Sonnet 5
+指令优先级探针未稳定通过，兼容模式明确提示，严格模式拒绝。指令提升没有通过完整
+续接门禁，auto 保持关闭；关闭桥接开关不会丢弃已有会话的工具映射。
+
+Nullable 字段在路由前归一化，显式 Responses effort 优先于模型后缀。缺少终止
+事件的流不能成功结束；未公开的 replay 附件也不会从存储续接中丢失。
+`store:false` 默认返回可用的 replay token，不要求 include，也不编造缺少完整
+上游 envelope 的 token。
+
+V1 stateless 的已知 canonical 历史保存在新 V3 记录中。V2 native 缺少完整归属，
+仍可 Retrieve，但不能依赖亲和缓存补造区域/profile 后继续使用该 ID。
+需要回放却缺少原始 reasoning 位置的旧记录会明确报错；回滚须使用匹配的数据库备份。
+
+详见[真实验证报告](../audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)。

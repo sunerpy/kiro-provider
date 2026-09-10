@@ -1,0 +1,387 @@
+{
+  "schema_version": 1,
+  "isolated_catalog_extensions": [
+    "gpt-5.6-terra"
+  ],
+  "results": [
+    {
+      "client": "codex",
+      "case": "codex-recovery",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 37.55,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 8,
+      "tool_events": 0,
+      "failure_23_observed": true,
+      "requests": 6,
+      "tool_result_requests": 5,
+      "namespace_requests": 6,
+      "custom_tool_requests": 6,
+      "custom_call_requests": 5,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "low"
+      ],
+      "requested_models": [
+        "gpt-5.6-sol"
+      ],
+      "reasoning_replay_requests": 6,
+      "encrypted_input_items": 7,
+      "local_replay_items": 7,
+      "reasoning_events": 0,
+      "stdout_sha256": "50d94566ed0aa74ba2284701965da5c7f9ecfec6ebf3f7b9a10d2ebb758310cb",
+      "stderr_sha256": "1aa26269eb1cc57f86b235a03cda53c004edb5b1e9fc99d4da4f00843293d721",
+      "passed": true
+    },
+    {
+      "client": "codex",
+      "case": "codex-custom",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 22.26,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 2,
+      "tool_events": 0,
+      "failure_23_observed": false,
+      "requests": 3,
+      "tool_result_requests": 2,
+      "namespace_requests": 3,
+      "custom_tool_requests": 3,
+      "custom_call_requests": 2,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "low"
+      ],
+      "requested_models": [
+        "gpt-5.6-sol"
+      ],
+      "reasoning_replay_requests": 3,
+      "encrypted_input_items": 0,
+      "local_replay_items": 0,
+      "reasoning_events": 0,
+      "stdout_sha256": "b202143cbf98c9fe5e1121a16fab7a297c3629df5bc6287e0a87274a679bd709",
+      "stderr_sha256": "1aa26269eb1cc57f86b235a03cda53c004edb5b1e9fc99d4da4f00843293d721",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-recovery-claude-opus-5",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 34.09,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 5,
+      "failure_23_observed": true,
+      "requests": 6,
+      "tool_result_requests": 5,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "claude-opus-5"
+      ],
+      "reasoning_replay_requests": 6,
+      "encrypted_input_items": 2,
+      "local_replay_items": 2,
+      "reasoning_events": 39,
+      "stdout_sha256": "0a988821363be4e0ccbe1fccb638a75ea71096a48e9b64eb0bf680b5c0799988",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-plan-tail-claude-opus-5",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 9.44,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 1,
+      "failure_23_observed": false,
+      "requests": 2,
+      "tool_result_requests": 1,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 1,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "claude-opus-5"
+      ],
+      "reasoning_replay_requests": 2,
+      "encrypted_input_items": 0,
+      "local_replay_items": 0,
+      "reasoning_events": 0,
+      "stdout_sha256": "6e787b8f2583ea881397491ff37a1ce3db02f83e41545074930f184e56c9d22d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-recovery-claude-sonnet-5",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 40.6,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 4,
+      "failure_23_observed": true,
+      "requests": 5,
+      "tool_result_requests": 4,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "claude-sonnet-5"
+      ],
+      "reasoning_replay_requests": 5,
+      "encrypted_input_items": 0,
+      "local_replay_items": 0,
+      "reasoning_events": 0,
+      "stdout_sha256": "d4cdc12e0e03a56e9337196b6ef2e08238dcba3e76c60cffe16f486017eb323c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-plan-tail-claude-sonnet-5",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 17.66,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 1,
+      "failure_23_observed": false,
+      "requests": 2,
+      "tool_result_requests": 1,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 1,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "claude-sonnet-5"
+      ],
+      "reasoning_replay_requests": 2,
+      "encrypted_input_items": 0,
+      "local_replay_items": 0,
+      "reasoning_events": 0,
+      "stdout_sha256": "6c38f2b09cecb300e1a40206ab5761817fb41779c419fb8244cf197b365813c4",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-recovery-gpt-5.6-sol",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 43.06,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 6,
+      "failure_23_observed": true,
+      "requests": 7,
+      "tool_result_requests": 6,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-sol"
+      ],
+      "reasoning_replay_requests": 7,
+      "encrypted_input_items": 21,
+      "local_replay_items": 21,
+      "reasoning_events": 0,
+      "stdout_sha256": "7878644816587584a60ddee9401fa8aa88278a6547801e15d53f9c0b3e2477f5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-plan-tail-gpt-5.6-sol",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 43.02,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 6,
+      "failure_23_observed": false,
+      "requests": 7,
+      "tool_result_requests": 6,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 6,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-sol"
+      ],
+      "reasoning_replay_requests": 7,
+      "encrypted_input_items": 21,
+      "local_replay_items": 21,
+      "reasoning_events": 0,
+      "stdout_sha256": "ce5fd4f4858dc98d0a1808533e9d2134ad171cb7b049ba29e92b258e44e3fe2e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-recovery-gpt-5.6-terra",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 33.09,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 5,
+      "failure_23_observed": true,
+      "requests": 6,
+      "tool_result_requests": 5,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-terra"
+      ],
+      "reasoning_replay_requests": 6,
+      "encrypted_input_items": 15,
+      "local_replay_items": 15,
+      "reasoning_events": 6,
+      "stdout_sha256": "5d321216b1d572a86aff27214f7c0980cc247a2a6fbb269a5ea5d0a18e01e9df",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-plan-tail-gpt-5.6-terra",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 27.28,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 3,
+      "failure_23_observed": false,
+      "requests": 4,
+      "tool_result_requests": 3,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 3,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-terra"
+      ],
+      "reasoning_replay_requests": 4,
+      "encrypted_input_items": 6,
+      "local_replay_items": 6,
+      "reasoning_events": 4,
+      "stdout_sha256": "6913f0d38c2f49c3e7105042607dd336388c080c4e24388b517a9f7a1cea7523",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-recovery-gpt-5.6-luna",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 30.18,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 5,
+      "failure_23_observed": true,
+      "requests": 6,
+      "tool_result_requests": 5,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 0,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-luna"
+      ],
+      "reasoning_replay_requests": 6,
+      "encrypted_input_items": 15,
+      "local_replay_items": 15,
+      "reasoning_events": 6,
+      "stdout_sha256": "b31628252f8761bee851c2725757da423058bbf780985f5f4e6ed0c85801cf2f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    },
+    {
+      "client": "zuno",
+      "case": "zuno-plan-tail-gpt-5.6-luna",
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 37.65,
+      "final_marker": true,
+      "file_marker": true,
+      "command_events": 0,
+      "tool_events": 6,
+      "failure_23_observed": false,
+      "requests": 7,
+      "tool_result_requests": 6,
+      "namespace_requests": 0,
+      "custom_tool_requests": 0,
+      "custom_call_requests": 0,
+      "injected_tail_requests": 6,
+      "requested_efforts": [
+        "max"
+      ],
+      "requested_models": [
+        "gpt-5.6-luna"
+      ],
+      "reasoning_replay_requests": 7,
+      "encrypted_input_items": 21,
+      "local_replay_items": 21,
+      "reasoning_events": 7,
+      "stdout_sha256": "247038a08bfbba7dfc57de53d2ff6e8c00f8061af385024959712a466543bf4b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "passed": true
+    }
+  ],
+  "client_versions": {
+    "codex": "0.153.4",
+    "zuno": "0.10.29"
+  },
+  "source_profile": "kiro-local; original profile unchanged; only missing Terra entry copied from the gateway catalog into isolated configuration",
+  "requested_zuno_variant": "max",
+  "ledger_oracle_cents": 11302
+}

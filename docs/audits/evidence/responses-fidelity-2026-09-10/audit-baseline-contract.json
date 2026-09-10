@@ -1,0 +1,299 @@
+[
+  {
+    "name": "truncated_stream",
+    "result": {
+      "status": 200,
+      "readRejected": false,
+      "terminal": false,
+      "containsPartial": true,
+      "mirrored": false
+    }
+  },
+  {
+    "name": "completed_stream_control",
+    "result": {
+      "status": 200,
+      "readRejected": false,
+      "terminal": true,
+      "containsPartial": false,
+      "mirrored": true
+    }
+  },
+  {
+    "name": "malformed_stream",
+    "result": {
+      "status": 200,
+      "readRejected": false,
+      "terminal": false,
+      "containsPartial": false,
+      "mirrored": false
+    }
+  },
+  {
+    "name": "json_instead_of_sse",
+    "result": {
+      "status": 200,
+      "contentType": "text/event-stream; charset=utf-8",
+      "body": "{\"message\":\"wrong content type\"}\n\n"
+    }
+  },
+  {
+    "name": "continuation_account_unavailable",
+    "result": {
+      "status": 200,
+      "selection": [
+        {
+          "selected": "a"
+        },
+        {
+          "preferred": "a",
+          "selected": "b"
+        }
+      ],
+      "forwardedPrevious": "resp_probe_1"
+    }
+  },
+  {
+    "name": "kr1_replay_without_include",
+    "result": {
+      "status": 200,
+      "nativeCalls": 1,
+      "statelessCalls": 0,
+      "upstreamReceivedKr1": true
+    }
+  },
+  {
+    "name": "accepted_then_dropped_controls",
+    "result": {
+      "status": 200,
+      "upstream": {
+        "model": "gpt-5.6-sol",
+        "input": "Hi",
+        "stream": false,
+        "reasoning": {
+          "effort": "low"
+        }
+      }
+    }
+  },
+  {
+    "name": "nullable_instructions",
+    "accepted": false,
+    "issue": {
+      "code": "invalid_type",
+      "expected": "string",
+      "received": "null",
+      "path": [
+        "instructions"
+      ],
+      "message": "Expected string, received null"
+    }
+  },
+  {
+    "name": "nullable_previous_response_id",
+    "accepted": false,
+    "issue": {
+      "code": "invalid_type",
+      "expected": "string",
+      "received": "null",
+      "path": [
+        "previous_response_id"
+      ],
+      "message": "Expected string, received null"
+    }
+  },
+  {
+    "name": "nullable_temperature",
+    "accepted": false,
+    "issue": {
+      "code": "invalid_type",
+      "expected": "number",
+      "received": "null",
+      "path": [
+        "temperature"
+      ],
+      "message": "Expected number, received null"
+    }
+  },
+  {
+    "name": "nullable_max_output_tokens",
+    "accepted": false,
+    "issue": {
+      "code": "invalid_type",
+      "expected": "number",
+      "received": "null",
+      "path": [
+        "max_output_tokens"
+      ],
+      "message": "Expected number, received null"
+    }
+  },
+  {
+    "name": "nullable_store",
+    "accepted": false,
+    "issue": {
+      "code": "invalid_type",
+      "expected": "boolean",
+      "received": "null",
+      "path": [
+        "store"
+      ],
+      "message": "Expected boolean, received null"
+    }
+  },
+  {
+    "name": "assistant_phase_store_true",
+    "result": {
+      "status": 200,
+      "nativeCalls": 1,
+      "error": null,
+      "phaseForwarded": true
+    }
+  },
+  {
+    "name": "assistant_phase_store_false",
+    "result": {
+      "status": 400,
+      "nativeCalls": 0,
+      "error": {
+        "message": "Responses field input.0.phase is not supported",
+        "type": "invalid_request_error",
+        "code": "unsupported_parameter",
+        "param": "input.0.phase"
+      },
+      "phaseForwarded": false
+    }
+  },
+  {
+    "name": "parallel_false_two_calls",
+    "result": {
+      "status": 200,
+      "calls": 2,
+      "responseParallel": true,
+      "compatibility": null,
+      "canonicalHasParallel": false
+    }
+  },
+  {
+    "name": "parallel_false_without_tools_loses_token_limit",
+    "result": {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Kiro has no probe-confirmed native output-token control for model gpt-5.6-sol",
+          "type": "invalid_request_error",
+          "code": "unsupported_output_token_limit",
+          "param": "max_output_tokens"
+        }
+      },
+      "nativeCalls": 0
+    }
+  },
+  {
+    "name": "rate_limit_retry_after_null",
+    "result": {
+      "status": 429,
+      "returnedRetryAfter": null,
+      "cooldowns": [
+        {
+          "account": "a",
+          "delayMs": 0
+        }
+      ]
+    }
+  },
+  {
+    "name": "rate_limit_retry_after_15",
+    "result": {
+      "status": 429,
+      "returnedRetryAfter": null,
+      "cooldowns": [
+        {
+          "account": "a",
+          "delayMs": 15000
+        }
+      ]
+    }
+  },
+  {
+    "name": "input_items_easy_message",
+    "result": {
+      "status": 200,
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "role": "user",
+            "content": "Hi",
+            "id": "item_c704822b-d43c-4e4b-8da0-0eca16e0cbb4",
+            "status": "completed"
+          }
+        ],
+        "first_id": "item_c704822b-d43c-4e4b-8da0-0eca16e0cbb4",
+        "last_id": "item_c704822b-d43c-4e4b-8da0-0eca16e0cbb4",
+        "has_more": false
+      }
+    }
+  },
+  {
+    "name": "reasoning_content_standard_text_field",
+    "result": {
+      "status": 400,
+      "error": {
+        "message": "Invalid request: known input items must have a valid payload",
+        "type": "invalid_request_error",
+        "code": "invalid_request",
+        "param": "input.0"
+      },
+      "nativeCalls": 0
+    }
+  },
+  {
+    "name": "stored_stateless_continuation_loses_reasoning",
+    "result": {
+      "status": 200,
+      "firstHasEncrypted": true,
+      "subsequentReplayCount": 0,
+      "subsequentContainsPriorToken": false
+    }
+  },
+  {
+    "name": "effort_changes_with_store",
+    "result": {
+      "nativeEffort": "low",
+      "statelessEffort": "xhigh"
+    }
+  },
+  {
+    "name": "intermediate_instruction_moves_before_first_user",
+    "result": {
+      "projected": {
+        "chatTriggerType": "MANUAL",
+        "conversationId": "323578ac-a602-44ee-9759-72c6b6fe475e",
+        "agentContinuationId": "05bf2cf0-5200-4793-bdc4-d56db42f664f",
+        "agentTaskType": "vibe",
+        "currentMessage": {
+          "userInputMessage": {
+            "content": "SECOND_QUESTION",
+            "modelId": "claude-opus-5",
+            "origin": "AI_EDITOR"
+          }
+        },
+        "history": [
+          {
+            "userInputMessage": {
+              "content": "FROM_NOW_ON_NEW_POLICY\n\nFIRST_QUESTION",
+              "modelId": "claude-opus-5",
+              "origin": "AI_EDITOR"
+            }
+          },
+          {
+            "assistantResponseMessage": {
+              "content": "FIRST_ANSWER"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

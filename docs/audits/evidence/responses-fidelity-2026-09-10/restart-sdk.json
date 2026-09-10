@@ -1,0 +1,9 @@
+{
+  "sdk": "openai@7.13.0",
+  "native_opaque": true,
+  "native_after_restart": true,
+  "signed_after_restart": true,
+  "native_status": "completed",
+  "signed_status": "completed",
+  "affinity_cache_cleared": true
+}

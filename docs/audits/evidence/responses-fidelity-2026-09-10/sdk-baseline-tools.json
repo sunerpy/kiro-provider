@@ -1,0 +1,808 @@
+{
+  "schema_version": 1,
+  "sdk": "openai@7.13.0",
+  "generated_at": "2026-09-10T17:14:37.771Z",
+  "label": "baseline-v3.0.1-tool-controls",
+  "models": [
+    "claude-opus-5",
+    "gpt-5.6-sol"
+  ],
+  "features": [
+    "tools",
+    "custom"
+  ],
+  "results": [
+    {
+      "model": "claude-opus-5",
+      "case": "namespace-tool-json",
+      "passed": false,
+      "checks": [
+        "PASS: namespace and JSON arguments are restored",
+        "PASS: exactly one intended tool call"
+      ],
+      "observations": [],
+      "error": "HTTP 400: missing_tool_declaration",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Call catalog.lookup exactly once for SKU p42, then use its returned price. Do not invent a price.",
+            "tools": [
+              {
+                "type": "namespace",
+                "name": "catalog",
+                "description": "Synthetic local inventory",
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Return the price in cents for a SKU",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sku"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "strict": false
+                  }
+                ]
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_fb4a7e86-4902-4f78-b69a-ad2e1ffc1314",
+            "object": "response",
+            "created_at": 1789060459,
+            "completed_at": 1789060464,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "claude-opus-5",
+            "output": [
+              {
+                "id": "rs_e8cebd05-ac7f-43a6-bc44-66e8be20e855",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 72
+                  }
+                ]
+              },
+              {
+                "id": "fc_48c6c6ee-6f26-47bc-8552-9b5181441b19",
+                "type": "function_call",
+                "call_id": "toolu_bdrk_01YRr1f1CL9mJ6ADkG3Myjeu",
+                "namespace": "catalog",
+                "name": "lookup",
+                "arguments": "{\"sku\": \"p42\"}",
+                "status": "completed"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "service_tier": null,
+            "store": true,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "catalog.lookup",
+                "description": "Synthetic local inventory\n\nReturn the price in cents for a SKU",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sku"
+                  ],
+                  "additionalProperties": false
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 7260,
+              "output_tokens": 0,
+              "total_tokens": 7260,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": ""
+          },
+          "duration_ms": 6372
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "previous_response_id": "resp_fb4a7e86-4902-4f78-b69a-ad2e1ffc1314",
+            "input": [
+              {
+                "type": "function_call_output",
+                "call_id": "toolu_bdrk_01YRr1f1CL9mJ6ADkG3Myjeu",
+                "output": "{\"sku\":\"p42\",\"price_cents\":1267}"
+              },
+              {
+                "role": "user",
+                "content": "Now buy seven units. Add tax by rounding 13 percent of the subtotal to the nearest integer cent. Reply only the final integer total in cents. Do not call any tools."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-5",
+      "case": "custom-tool-json",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-5",
+      "case": "namespace-tool-sse",
+      "passed": false,
+      "checks": [
+        "PASS: namespace and JSON arguments are restored",
+        "PASS: exactly one intended tool call"
+      ],
+      "observations": [],
+      "error": "HTTP 400: missing_tool_declaration",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Call catalog.lookup exactly once for SKU p42, then use its returned price. Do not invent a price.",
+            "tools": [
+              {
+                "type": "namespace",
+                "name": "catalog",
+                "description": "Synthetic local inventory",
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Return the price in cents for a SKU",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sku"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "strict": false
+                  }
+                ]
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_3aa2f6bb-46e0-48a1-bc0f-66a8426ed103",
+            "object": "response",
+            "created_at": 1789060465,
+            "completed_at": 1789060469,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "claude-opus-5",
+            "output": [
+              {
+                "id": "rs_89a6c90d-a7cc-4728-bf91-103e851fd8b1",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 63
+                  }
+                ]
+              },
+              {
+                "id": "fc_adc6a676-9097-40d0-b306-30e08fd46e28",
+                "type": "function_call",
+                "call_id": "toolu_bdrk_01CvjFNBHU1VPPS3oe9NbqhW",
+                "namespace": "catalog",
+                "name": "lookup",
+                "arguments": "{\"sku\": \"p42\"}",
+                "status": "completed",
+                "parsed_arguments": null
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "service_tier": null,
+            "store": true,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "catalog.lookup",
+                "description": "Synthetic local inventory\n\nReturn the price in cents for a SKU",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sku"
+                  ],
+                  "additionalProperties": false
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 7256,
+              "output_tokens": 0,
+              "total_tokens": 7256,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": "",
+            "output_parsed": null
+          },
+          "duration_ms": 4623,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 2,
+            "response.reasoning_summary_part.added": 1,
+            "response.reasoning_summary_text.delta": 9,
+            "response.reasoning_summary_text.done": 1,
+            "response.reasoning_summary_part.done": 1,
+            "response.output_item.done": 2,
+            "response.function_call_arguments.delta": 1,
+            "response.function_call_arguments.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "previous_response_id": "resp_3aa2f6bb-46e0-48a1-bc0f-66a8426ed103",
+            "input": [
+              {
+                "type": "function_call_output",
+                "call_id": "toolu_bdrk_01CvjFNBHU1VPPS3oe9NbqhW",
+                "output": "{\"sku\":\"p42\",\"price_cents\":1267}"
+              },
+              {
+                "role": "user",
+                "content": "Now buy seven units. Add tax by rounding 13 percent of the subtotal to the nearest integer cent. Reply only the final integer total in cents. Do not call any tools."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-5",
+      "case": "custom-tool-sse",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "namespace-tool-json",
+      "passed": false,
+      "checks": [
+        "PASS: namespace and JSON arguments are restored",
+        "PASS: exactly one intended tool call"
+      ],
+      "observations": [],
+      "error": "HTTP 400: missing_tool_declaration",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Call catalog.lookup exactly once for SKU p42, then use its returned price. Do not invent a price.",
+            "tools": [
+              {
+                "type": "namespace",
+                "name": "catalog",
+                "description": "Synthetic local inventory",
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Return the price in cents for a SKU",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sku"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "strict": false
+                  }
+                ]
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_ba122004-6a8e-47ed-8bd3-f2591603b3b4",
+            "object": "response",
+            "created_at": 1789060470,
+            "completed_at": 1789060472,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "output": [
+              {
+                "id": "fc_653842da-14ea-4118-bf20-2f166bc0cf01",
+                "type": "function_call",
+                "call_id": "call_e09523e4-b3af-4d46-bbec-cc4574498fe0",
+                "namespace": "catalog",
+                "name": "lookup",
+                "arguments": "{\"sku\":\"p42\"}",
+                "status": "completed"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "service_tier": null,
+            "store": true,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "catalog.lookup",
+                "description": "Synthetic local inventory\n\nReturn the price in cents for a SKU",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sku"
+                  ],
+                  "additionalProperties": false
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 5421,
+              "output_tokens": 0,
+              "total_tokens": 5421,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": ""
+          },
+          "duration_ms": 3041
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_ba122004-6a8e-47ed-8bd3-f2591603b3b4",
+            "input": [
+              {
+                "type": "function_call_output",
+                "call_id": "call_e09523e4-b3af-4d46-bbec-cc4574498fe0",
+                "output": "{\"sku\":\"p42\",\"price_cents\":1267}"
+              },
+              {
+                "role": "user",
+                "content": "Now buy seven units. Add tax by rounding 13 percent of the subtotal to the nearest integer cent. Reply only the final integer total in cents. Do not call any tools."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "custom-tool-json",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "namespace-tool-sse",
+      "passed": false,
+      "checks": [
+        "PASS: namespace and JSON arguments are restored",
+        "PASS: exactly one intended tool call"
+      ],
+      "observations": [],
+      "error": "HTTP 400: missing_tool_declaration",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Call catalog.lookup exactly once for SKU p42, then use its returned price. Do not invent a price.",
+            "tools": [
+              {
+                "type": "namespace",
+                "name": "catalog",
+                "description": "Synthetic local inventory",
+                "tools": [
+                  {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Return the price in cents for a SKU",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "sku": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "sku"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "strict": false
+                  }
+                ]
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_6a592197-43d9-4e6b-a9ea-7f3f04909979",
+            "object": "response",
+            "created_at": 1789060473,
+            "completed_at": 1789060476,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "output": [
+              {
+                "id": "fc_75aa5419-a5b1-49f6-9281-f66f2f95cd90",
+                "type": "function_call",
+                "call_id": "call_9e5ccfb2-e496-486e-8ff5-c29be3bda011",
+                "namespace": "catalog",
+                "name": "lookup",
+                "arguments": "{\"sku\":\"p42\"}",
+                "status": "completed",
+                "parsed_arguments": null
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "service_tier": null,
+            "store": true,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "catalog.lookup",
+                "description": "Synthetic local inventory\n\nReturn the price in cents for a SKU",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sku"
+                  ],
+                  "additionalProperties": false
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 5386,
+              "output_tokens": 0,
+              "total_tokens": 5386,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": "",
+            "output_parsed": null
+          },
+          "duration_ms": 4218,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 1,
+            "response.function_call_arguments.delta": 1,
+            "response.function_call_arguments.done": 1,
+            "response.output_item.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_6a592197-43d9-4e6b-a9ea-7f3f04909979",
+            "input": [
+              {
+                "type": "function_call_output",
+                "call_id": "call_9e5ccfb2-e496-486e-8ff5-c29be3bda011",
+                "output": "{\"sku\":\"p42\",\"price_cents\":1267}"
+              },
+              {
+                "role": "user",
+                "content": "Now buy seven units. Add tax by rounding 13 percent of the subtotal to the nearest integer cent. Reply only the final integer total in cents. Do not call any tools."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "custom-tool-sse",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    }
+  ]
+}
