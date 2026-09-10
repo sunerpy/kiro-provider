@@ -26,7 +26,8 @@ const REPLAY_TOKEN = "kr1_replay_token_material";
 const LEAK_MARKERS = [
   SYSTEM_TEXT,
   USER_TEXT,
-  "4471",
+  // A four-digit fragment can occur in a random request ID or numeric counter.
+  "4471-tango",
   TOOL_NAME,
   TOOL_ARGUMENT,
   TOOL_OUTPUT,
