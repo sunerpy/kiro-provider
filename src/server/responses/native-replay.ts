@@ -14,6 +14,7 @@ export function nativeInputItems(input: ResponsesRequest["input"]): ResponsesInp
 
 function legacyWireItems(stored: StoredResponse): ResponsesInputItem[] {
   const context = stored.continuation;
+  if (context?.wireSnapshot) return [...context.wireSnapshot.input, ...context.wireSnapshot.output];
   let input = context
     ? nativeInputItems(context.request.input)
     : (stored.inputItems as ResponsesInputItem[]);

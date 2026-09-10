@@ -44,6 +44,13 @@ export const ResponseContinuationSchema = z.object({
       output: z.array(RecordedItemSchema),
     })
     .optional(),
+  /** One adapted turn before public tool identities replace native wire items. */
+  wireSnapshot: z
+    .object({
+      input: z.array(RecordedItemSchema),
+      output: z.array(RecordedItemSchema),
+    })
+    .optional(),
 });
 
 export type ResponseContinuationContext = z.infer<typeof ResponseContinuationSchema>;

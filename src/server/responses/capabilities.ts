@@ -5,6 +5,7 @@ export type ResponsesNativeFeature =
   | "namespace_functions"
   | "custom_freeform"
   | "native_previous_response"
+  | "native_previous_with_reasoning"
   | "instruction_priority";
 export interface ResponsesCapabilityEvidence {
   readonly feature: ResponsesNativeFeature;
@@ -17,6 +18,14 @@ export interface ResponsesCapabilityEvidence {
 // Admission is evidence-driven, never inferred from a successful HTTP status.
 // Add only model/region cells that pass the complete live continuation matrix.
 export const RESPONSES_CAPABILITY_EVIDENCE: readonly ResponsesCapabilityEvidence[] = [
+  {
+    feature: "native_previous_with_reasoning",
+    model: "gpt-5.6-sol",
+    region: "us-east-1",
+    status: "unsupported",
+    evidence:
+      "2026-09-10: streamed opaque reasoning plus tool call rejects previous ID; exact wire replay succeeds on the same account",
+  },
   {
     feature: "namespace_functions",
     model: "claude-opus-5",

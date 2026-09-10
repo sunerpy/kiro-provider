@@ -50,6 +50,7 @@ export interface PipelineResponseStore {
     continuation?: ResponseContinuationContext,
   ): void;
   get(tenantId: string, responseId: string): StoredResponse | undefined;
+  findNativeReasoning?(tenantId: string, encryptedContent: string): readonly StoredResponse[];
   delete(tenantId: string, responseId: string): boolean;
 }
 
@@ -241,7 +242,8 @@ export class SqliteResponseStore implements PipelineResponseStore {
     private readonly database: Pick<
       AccountsDatabase,
       "putStoredResponse" | "getStoredResponse" | "deleteStoredResponse"
-    >,
+    > &
+      Partial<Pick<AccountsDatabase, "findStoredResponsesByReasoning">>,
     private readonly ttlMs = RESPONSE_STORE_TTL_MS,
     private readonly maxEntries = RESPONSE_STORE_MAX_ENTRIES,
     private readonly now: () => number = Date.now,
@@ -379,5 +381,14 @@ export class SqliteResponseStore implements PipelineResponseStore {
       deleted,
     });
     return deleted;
+  }
+
+  findNativeReasoning(tenantId: string, encryptedContent: string): readonly StoredResponse[] {
+    return (
+      this.database.findStoredResponsesByReasoning?.(tenantId, encryptedContent, this.now()) ?? []
+    ).flatMap((id) => {
+      const stored = this.get(tenantId, id);
+      return stored && stored.transport !== "stateless" ? [stored] : [];
+    });
   }
 }

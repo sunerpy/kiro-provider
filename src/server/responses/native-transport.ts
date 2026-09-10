@@ -7,6 +7,7 @@ import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { KIRO_CONSTANTS } from "../../kiro/constants.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import type { ManagedAccount } from "../../kiro/types.js";
+import { canonicalFingerprint } from "../../protocol/canonical.js";
 import { openAiError } from "../errors.js";
 import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
@@ -481,6 +482,7 @@ function nativeContinuation(
   response: ResponseStateObject,
   adaptation?: NativeResponsesAdaptation,
   nativeReplay?: ResponseContinuationContext["nativeReplay"],
+  wireSnapshot?: ResponseContinuationContext["wireSnapshot"],
 ): ResponseContinuationContext {
   return {
     transport:
@@ -490,6 +492,7 @@ function nativeContinuation(
     request: adaptation?.original ?? prepared.request,
     ...(adaptation?.instruction ? { instruction: adaptation.instruction } : {}),
     ...(nativeReplay ? { nativeReplay } : {}),
+    ...(wireSnapshot ? { wireSnapshot } : {}),
     ...(adaptation?.bridge ? { tools: [...adaptation.bridge.bindings] } : {}),
     owner: {
       accountId: account.id,
@@ -522,6 +525,7 @@ export async function proxyNativeResponses(
     : prepared.inputItems;
   let owner: NativeResponseOwner | undefined;
   let previousStored: StoredResponse | undefined;
+  const reasoningOrigins: StoredResponse[] = [];
   if (prepared.request.previous_response_id !== undefined) {
     const previous = options.dependencies.responseStore?.get(
       tenantId,
@@ -553,6 +557,64 @@ export async function proxyNativeResponses(
         streamOwnsResources: false,
       };
   }
+  if (Array.isArray(prepared.request.input)) {
+    for (const item of prepared.request.input) {
+      if (
+        item.type !== "reasoning" ||
+        typeof item.encrypted_content !== "string" ||
+        !item.encrypted_content.length
+      )
+        continue;
+      const origins =
+        options.dependencies.responseStore?.findNativeReasoning?.(
+          tenantId,
+          item.encrypted_content,
+        ) ?? [];
+      if (!origins.length)
+        return {
+          response: validationError(
+            "Native reasoning has no recoverable owner in this tenant",
+            "response_context_unavailable",
+            "input",
+          ),
+          streamOwnsResources: false,
+        };
+      for (const origin of origins) {
+        const binding = origin.continuation?.owner;
+        if (
+          !binding ||
+          resolveModelVariant(origin.response.model).wireId !== prepared.wireModel ||
+          (owner &&
+            (owner.accountId !== binding.accountId ||
+              owner.region !== binding.region ||
+              owner.profileArn !== binding.profileArn))
+        )
+          return {
+            response: validationError(
+              "Native reasoning does not match the response account or model",
+              "response_context_unavailable",
+              "input",
+            ),
+            streamOwnsResources: false,
+          };
+        owner ??= binding;
+        reasoningOrigins.push(origin);
+      }
+    }
+  }
+  if (
+    owner &&
+    options.adaptation?.eligibleAccounts &&
+    !options.adaptation.eligibleAccounts.has(owner.accountId)
+  )
+    return {
+      response: validationError(
+        "Native adaptation is not verified for the reasoning owner",
+        "unsupported_response_semantics",
+        "input",
+      ),
+      streamOwnsResources: false,
+    };
   const account = options.dependencies.accountManager.selectHealthyAccount(
     owner?.accountId,
     owner ? new Set([owner.accountId]) : options.adaptation?.eligibleAccounts,
@@ -651,6 +713,27 @@ export async function proxyNativeResponses(
       }
     }
     const dispatchBody: Record<string, unknown> = { ...prepared.body };
+    if (reasoningOrigins.length && Array.isArray(prepared.request.input)) {
+      const originals = reasoningOrigins.flatMap(
+        (origin) => origin.continuation?.wireSnapshot?.output ?? [],
+      );
+      dispatchBody.input = prepared.request.input.map((item) => {
+        if (item.type !== "function_call") return item;
+        const raw = originals.find(
+          (candidate) => candidate.type === "function_call" && candidate.call_id === item.call_id,
+        );
+        if (!raw) return item;
+        if (
+          raw.name !== item.name ||
+          typeof raw.arguments !== "string" ||
+          typeof item.arguments !== "string" ||
+          canonicalFingerprint(JSON.parse(raw.arguments)) !==
+            canonicalFingerprint(JSON.parse(item.arguments))
+        )
+          throw new ResponseContextError("Native reasoning tool output was changed before replay");
+        return { ...item, arguments: raw.arguments };
+      });
+    }
     const priority = RESPONSES_CAPABILITY_EVIDENCE.find(
       (cell) =>
         cell.feature === "instruction_priority" &&
@@ -673,10 +756,24 @@ export async function proxyNativeResponses(
         };
       }
     }
+    const opaqueHistoryRequiresReplay =
+      responsesCapability("native_previous_with_reasoning", prepared.wireModel, auth.region) ===
+      "unsupported";
+    const hasOpaqueReasoning = (items: readonly unknown[]): boolean =>
+      items.some(
+        (item) =>
+          isRecord(item) &&
+          item.type === "reasoning" &&
+          typeof item.encrypted_content === "string" &&
+          item.encrypted_content.length > 0,
+      );
     if (
       responsesCapability("native_previous_response", prepared.wireModel, auth.region) ===
         "unsupported" ||
-      previousStored?.continuation?.nativeReplay !== undefined
+      previousStored?.continuation?.nativeReplay !== undefined ||
+      (opaqueHistoryRequiresReplay &&
+        previousStored !== undefined &&
+        hasOpaqueReasoning(previousStored.response.output))
     ) {
       replayInput = nativeInputItems(prepared.request.input);
       if (previousStored) {
@@ -694,14 +791,35 @@ export async function proxyNativeResponses(
         continuationMode = "local_replay";
       }
     }
-    const storedContinuation = (state: ResponseStateObject): ResponseContinuationContext =>
-      nativeContinuation(
+    const storedContinuation = (state: ResponseStateObject): ResponseContinuationContext => {
+      let snapshotInput = replayInput;
+      if (
+        !snapshotInput &&
+        opaqueHistoryRequiresReplay &&
+        (hasOpaqueReasoning(rawOutput) ||
+          (Array.isArray(prepared.request.input) && hasOpaqueReasoning(prepared.request.input)))
+      ) {
+        snapshotInput = [
+          ...(previousStored
+            ? nativeReplayHistory(previousStored, options.dependencies.responseStore, tenantId)
+            : []),
+          ...nativeInputItems(dispatchBody.input as ResponsesRequest["input"]),
+        ];
+      }
+      return nativeContinuation(
         prepared,
         refreshed,
         state,
         options.adaptation,
-        replayInput ? { input: replayInput, output: rawOutput } : undefined,
+        snapshotInput ? { input: snapshotInput, output: rawOutput } : undefined,
+        options.adaptation
+          ? {
+              input: nativeInputItems(dispatchBody.input as ResponsesRequest["input"]),
+              output: rawOutput,
+            }
+          : undefined,
       );
+    };
     const fetcher = options.dependencies.nativeResponsesFetch ?? fetch;
     let nativeAbort = new AbortController();
     const dispatch = (): Promise<Response> => {
@@ -994,7 +1112,7 @@ export async function proxyNativeResponses(
           error.message,
           "invalid_request_error",
           error.code,
-          "previous_response_id",
+          prepared.request.previous_response_id ? "previous_response_id" : "input",
         ),
         streamOwnsResources: false,
       };

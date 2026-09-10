@@ -744,6 +744,27 @@ export class AccountsDatabase {
     );
   }
 
+  findStoredResponsesByReasoning(
+    tenantId: string,
+    encryptedContent: string,
+    now: number = Date.now(),
+  ): string[] {
+    return this.db
+      .query<{ id: string }, [string, number, string]>(`
+        SELECT id FROM stored_responses
+        WHERE tenant_id = ? AND expires_at > ? AND EXISTS (
+          SELECT 1 FROM json_each(
+            CASE WHEN json_valid(response_json) THEN response_json ELSE '{}' END,
+            '$.output'
+          ) AS item
+          WHERE json_extract(item.value, '$.type') = 'reasoning'
+            AND json_extract(item.value, '$.encrypted_content') = ?
+        )
+      `)
+      .all(tenantId, now, encryptedContent)
+      .map((row) => row.id);
+  }
+
   pruneStoredResponses(now: number = Date.now(), maxEntries = 10_000): number {
     return this.withImmediateTransaction(() => this.pruneStoredResponsesInternal(now, maxEntries));
   }

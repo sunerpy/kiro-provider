@@ -1,11 +1,223 @@
 import { expect, test } from "bun:test";
 import type { PipelineAffinityStore } from "../src/core/pipeline.js";
-import { canonicalCompletionFromResponse } from "../src/server/responses/store.js";
-import { fidelityFixture, nativeResponse } from "./responses-fidelity-helpers.js";
+import {
+  canonicalCompletionFromResponse,
+  SqliteResponseStore,
+} from "../src/server/responses/store.js";
+import { fidelityFixture, nativeResponse, sse } from "./responses-fidelity-helpers.js";
 import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 
 const model = "claude-opus-5";
 type Body = { id: string; previous_response_id: string | null; status: string };
+
+test.each([false, true])(
+  "opaque native custom output retains exact wire history for continuation, stream=%s",
+  async (stream) => {
+    const argumentsText = '{"input" : "x\\\\y\\n雪"}';
+    const f = fidelityFixture({
+      native: (body, call) => {
+        const response = nativeResponse(`resp_native_${call}`);
+        if (call === 1)
+          response.output = [
+            {
+              type: "reasoning",
+              id: "rs_native",
+              summary: [],
+              content: [],
+              encrypted_content: "native-opaque",
+            },
+            {
+              type: "function_call",
+              id: "fc_native",
+              call_id: "call_native",
+              name: (body.tools as Array<{ name: string }>)[0]?.name,
+              arguments: argumentsText,
+              status: "completed",
+            },
+          ];
+        if (!stream) return Response.json(response);
+        return new Response(
+          [
+            {
+              type: "response.created",
+              sequence_number: 0,
+              response: { ...response, status: "in_progress", output: [] },
+            },
+            { type: "response.completed", sequence_number: 1, response },
+          ]
+            .map(sse)
+            .join(""),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      },
+    });
+    try {
+      const first = await f.send({
+        model: "gpt-5.6-sol",
+        stream,
+        input: "Use emit",
+        tools: [{ type: "custom", name: "emit", description: "Emit text" }],
+      });
+      expect(first.status).toBe(200);
+      await first.text();
+      const stored = f.responseStore.get("fidelity-test", "resp_native_1");
+      expect(stored?.continuation?.wireSnapshot?.output[1]?.arguments).toBe(argumentsText);
+      expect(stored?.response.output[1]).toMatchObject({
+        type: "custom_tool_call",
+        input: "x\\y\n雪",
+      });
+      const next = await f.send({
+        model: "gpt-5.6-sol",
+        stream,
+        previous_response_id: "resp_native_1",
+        input: [{ type: "custom_tool_call_output", call_id: "call_native", output: "OK" }],
+      });
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(f.requests[1]?.previous_response_id).toBeUndefined();
+      const replay = f.requests[1]?.input as Array<Record<string, unknown>>;
+      expect(replay[1]?.encrypted_content).toBe("native-opaque");
+      expect(replay[2]?.arguments).toBe(argumentsText);
+      expect(replay[3]).toMatchObject({ type: "function_call_output", call_id: "call_native" });
+      expect(
+        f.responseStore.get("fidelity-test", "resp_native_2")?.continuation?.nativeReplay?.input,
+      ).toHaveLength(4);
+    } finally {
+      f.database.close();
+    }
+  },
+);
+
+test("manual native opaque replay recovers its owner after a store restart and rejects mismatched provenance", async () => {
+  const f = fidelityFixture({
+    native: (_body, call) =>
+      Response.json({
+        ...nativeResponse(`resp_opaque_${call}`),
+        output: [
+          ...(call === 1
+            ? [
+                {
+                  type: "reasoning",
+                  id: "rs_opaque",
+                  summary: [],
+                  encrypted_content: "upstream-opaque",
+                },
+              ]
+            : []),
+          ...(nativeResponse("text").output as unknown[]),
+        ],
+      }),
+  });
+  try {
+    const first = await f.send({ model: "gpt-5.6-sol", input: "First" });
+    await first.text();
+    const freshStore = new SqliteResponseStore(f.database);
+    const input = [
+      ...(freshStore.get("fidelity-test", "resp_opaque_1")?.response.output ?? []),
+      { role: "user", content: "Continue" },
+    ];
+    expect(
+      (await f.send({ model: "gpt-5.6-sol", input }, { responseStore: freshStore })).status,
+    ).toBe(200);
+    expect(f.selections[1]?.selected).toBe(f.selections[0]?.selected);
+    expect((await f.send({ model: "gpt-5.6-sol", input }, { tenantId: "other" })).status).toBe(400);
+    expect((await f.send({ model: "gpt-5.6-terra", input })).status).toBe(400);
+    freshStore.delete("fidelity-test", "resp_opaque_1");
+    expect((await f.send({ model: "gpt-5.6-sol", input })).status).toBe(400);
+    expect(f.requests).toHaveLength(2);
+    expect(f.canonical).toHaveLength(0);
+  } finally {
+    f.database.close();
+  }
+});
+
+test("the same opaque token cannot choose between conflicting account owners", async () => {
+  const f = fidelityFixture({
+    native: (_body, call) =>
+      Response.json({
+        ...nativeResponse(`resp_conflict_${call}`),
+        output: [
+          {
+            type: "reasoning",
+            id: `rs_${call}`,
+            summary: [],
+            encrypted_content: "ambiguous-opaque",
+          },
+        ],
+      }),
+  });
+  try {
+    await f.send({ model: "gpt-5.6-sol", input: "First" });
+    await f.send({ model: "gpt-5.6-sol", input: "Second" });
+    const response = await f.send({
+      model: "gpt-5.6-sol",
+      input: [
+        { type: "reasoning", summary: [], encrypted_content: "ambiguous-opaque" },
+        { role: "user", content: "Continue" },
+      ],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("response_context_unavailable");
+    expect(f.requests).toHaveLength(2);
+  } finally {
+    f.database.close();
+  }
+});
+
+test("manual native custom replay preserves the original wrapper bytes and rejects changed arguments", async () => {
+  const argumentsText = '{"input" : "raw text"}';
+  const f = fidelityFixture({
+    native: (body, call) =>
+      Response.json({
+        ...nativeResponse(`resp_manual_${call}`),
+        ...(call === 1
+          ? {
+              output: [
+                {
+                  type: "reasoning",
+                  id: "rs_manual",
+                  summary: [],
+                  encrypted_content: "opaque-manual",
+                },
+                {
+                  type: "function_call",
+                  id: "fc_manual",
+                  call_id: "call_manual",
+                  name: (body.tools as Array<{ name: string }>)[0]?.name,
+                  arguments: argumentsText,
+                  status: "completed",
+                },
+              ],
+            }
+          : {}),
+      }),
+  });
+  try {
+    await f.send({
+      model: "gpt-5.6-sol",
+      input: "Use emit",
+      tools: [{ type: "custom", name: "emit", description: "Emit text" }],
+    });
+    const original = f.responseStore.get("fidelity-test", "resp_manual_1")?.response.output ?? [];
+    const input = [
+      { role: "user", content: "Use emit" },
+      ...original,
+      { type: "custom_tool_call_output", call_id: "call_manual", output: "OK" },
+    ];
+    expect((await f.send({ model: "gpt-5.6-sol", input })).status).toBe(200);
+    expect((f.requests[1]?.input as Array<{ arguments?: string }>)[2]?.arguments).toBe(
+      argumentsText,
+    );
+    expect(f.selections[1]?.selected).toBe(f.selections[0]?.selected);
+    const changed = input.map((item) =>
+      "type" in item && item.type === "custom_tool_call" ? { ...item, input: "changed" } : item,
+    );
+    expect((await f.send({ model: "gpt-5.6-sol", input: changed })).status).toBe(409);
+    expect(f.requests).toHaveLength(2);
+  } finally {
+    f.database.close();
+  }
+});
 
 test.each([false, true])(
   "V1 stateless migration preserves known history or rejects missing replay order: %s",
