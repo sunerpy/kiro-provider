@@ -520,7 +520,7 @@ describe("Responses reasoning replay input", () => {
           content: [
             {
               type: "reasoning_text",
-              reasoning_text: "visible reasoning",
+              text: "visible reasoning",
             },
           ],
           encrypted_content: "kr1_test-token",

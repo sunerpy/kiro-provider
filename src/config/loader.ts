@@ -73,6 +73,21 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     field: "session_affinity_mode",
     kind: "string",
   },
+  {
+    env: "KIRO_PROVIDER_RESPONSES_FIDELITY_MODE",
+    field: "responses_fidelity_mode",
+    kind: "string",
+  },
+  {
+    env: "KIRO_PROVIDER_RESPONSES_INSTRUCTION_LIFT",
+    field: "responses_instruction_lift",
+    kind: "string",
+  },
+  {
+    env: "KIRO_PROVIDER_RESPONSES_NATIVE_TOOL_BRIDGE",
+    field: "responses_native_tool_bridge",
+    kind: "string",
+  },
   { env: "KIRO_PROVIDER_PROXY_URL", field: "proxy_url", kind: "string" },
   {
     env: "KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE",

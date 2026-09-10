@@ -46,11 +46,13 @@ export type ResponsesRequestAdaptationResult =
     };
 
 export interface ResponsesPreviousContext {
+  readonly input?: readonly ResponsesInputItem[];
   readonly messages: readonly CanonicalMessage[];
   readonly items?: readonly ResponsesInputItem[];
+  readonly legacyRequest?: CanonicalRequest;
 }
 
-const RESPONSES_REQUEST_KEYS = new Set([
+export const RESPONSES_REQUEST_KEYS = new Set([
   "model",
   "input",
   "instructions",
@@ -96,7 +98,7 @@ const UNSUPPORTED_RESPONSES_FIELDS = [
   "prompt_cache_retention",
 ] as const;
 
-const MESSAGE_ITEM_KEYS = new Set(["type", "id", "status", "role", "content"]);
+const MESSAGE_ITEM_KEYS = new Set(["type", "id", "status", "role", "content", "phase"]);
 const AGENT_MESSAGE_ITEM_KEYS = new Set(["type", "id", "status", "author", "recipient", "content"]);
 const FUNCTION_CALL_ITEM_KEYS = new Set([
   "type",
@@ -106,6 +108,8 @@ const FUNCTION_CALL_ITEM_KEYS = new Set([
   "namespace",
   "name",
   "arguments",
+  // The official SDK's stream accumulator decorates otherwise replayable output.
+  "parsed_arguments",
 ]);
 const CUSTOM_CALL_ITEM_KEYS = new Set([
   "type",
@@ -201,12 +205,12 @@ function mapContentParts(
       const allowed =
         part.type === "input_text"
           ? new Set(["type", "text"])
-          : new Set(["type", "text", "annotations", "logprobs"]);
+          : new Set(["type", "text", "annotations", "logprobs", "parsed"]);
       const keys = validateAllowedKeys(part, partPath, allowed);
       if (!keys.ok) return keys;
       mapped.push({
         ...textPart(part.text, `${partPath}.text`),
-        ...canonicalSource(part, `${partPath}.text`, ["annotations", "logprobs"]),
+        ...canonicalSource(part, `${partPath}.text`, ["annotations", "logprobs", "parsed"]),
       });
       continue;
     }
@@ -344,13 +348,13 @@ function outputTextParts(
       part,
       partPath,
       part.type === "output_text"
-        ? new Set(["type", "text", "annotations", "logprobs"])
+        ? new Set(["type", "text", "annotations", "logprobs", "parsed"])
         : new Set(["type", "text"]),
     );
     if (!keys.ok) return keys;
     parts.push({
       ...textPart(part.text, `${partPath}.text`),
-      ...canonicalSource(part, `${partPath}.text`, ["annotations", "logprobs"]),
+      ...canonicalSource(part, `${partPath}.text`, ["annotations", "logprobs", "parsed"]),
     });
   }
   return { ok: true, value: parts };
@@ -392,7 +396,7 @@ function validateInputItemShape(item: ResponsesInputItem, path: string): Protoco
     }
     for (const [index, part] of (item.content ?? []).entries()) {
       const partPath = `${path}.content.${index}`;
-      const partKeys = validateAllowedKeys(part, partPath, new Set(["type", "reasoning_text"]));
+      const partKeys = validateAllowedKeys(part, partPath, new Set(["type", "text"]));
       if (!partKeys.ok) return partKeys;
     }
   }
@@ -415,7 +419,7 @@ function normalizedEffort(
   return undefined;
 }
 
-function validateTextConfig(value: unknown): ProtocolResult<undefined> {
+export function validateTextConfig(value: unknown): ProtocolResult<undefined> {
   if (value === undefined) return { ok: true, value: undefined };
   if (!isRecord(value)) {
     return protocolFailure(
@@ -454,7 +458,7 @@ function validateTextConfig(value: unknown): ProtocolResult<undefined> {
   );
 }
 
-function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<undefined> {
+export function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<undefined> {
   const reasoning = request.reasoning;
   if (reasoning === undefined || reasoning === null) return { ok: true, value: undefined };
   for (const key of Object.keys(reasoning)) {
@@ -597,7 +601,7 @@ function groupOutputFingerprint(
   return { ok: true, value: assistantOutputFingerprint({ text, toolCalls }) };
 }
 
-function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<undefined> {
+export function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<undefined> {
   const validateTool = (
     tool: Readonly<Record<string, unknown>> & { readonly type: string },
     path: string,
@@ -683,6 +687,8 @@ function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<und
         new Set(["type", "syntax", "definition"]),
       );
       if (!formatKeys.ok) return formatKeys;
+      if (format.type === "text" && Object.keys(format).length === 1)
+        return { ok: true, value: undefined };
       if (
         format.type !== "grammar" ||
         typeof format.syntax !== "string" ||
@@ -720,6 +726,17 @@ export function adaptResponsesRequest(
   projectionMode: ProtocolProjectionMode = "safe",
   previous?: ResponsesPreviousContext,
 ): ResponsesRequestAdaptationResult {
+  if (previous?.input?.length) {
+    request = {
+      ...request,
+      input: [
+        ...previous.input,
+        ...(typeof request.input === "string"
+          ? [{ role: "user" as const, content: request.input }]
+          : request.input),
+      ],
+    };
+  }
   for (const key of Object.keys(request)) {
     if (!RESPONSES_REQUEST_KEYS.has(key)) {
       return protocolFailure(
@@ -1018,7 +1035,7 @@ export function adaptResponsesRequest(
           role: item.role,
           content: content.value,
           toolCalls: [],
-          ...canonicalSource(item, path),
+          ...canonicalSource(item, path, ["phase"]),
         });
         executableInputSeen = true;
         continue;
@@ -1095,6 +1112,7 @@ export function adaptResponsesRequest(
       tools,
       toolChoice: request.tool_choice === "none" ? "none" : "auto",
       ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+      ...(request.reasoning?.effort === "none" ? { thinking: { enabled: false } } : {}),
       ...(request.reasoning?.effort !== undefined
         ? { requestedReasoningEffort: request.reasoning.effort }
         : {}),
@@ -1103,7 +1121,11 @@ export function adaptResponsesRequest(
         : {}),
       ...(instructions !== undefined ? { instructions } : {}),
       reasoningReplays,
-      includeEncryptedReasoning: include.includes("reasoning.encrypted_content"),
+      includeEncryptedReasoning:
+        include.includes("reasoning.encrypted_content") || request.store === false,
+      parallelToolCalls:
+        request.parallel_tool_calls !== false ||
+        (request.tool_choice !== "none" && tools.length > 0),
       ...(request.prompt_cache_key !== undefined
         ? { promptCacheKey: request.prompt_cache_key }
         : {}),
