@@ -98,8 +98,14 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
     if (finalized) return;
     finalized = true;
     options.signals.combined.removeEventListener("abort", onAbort);
-    runCleanupSteps(options.abortUpstream, options.finish);
-    void boundedCleanup(() => reader.cancel());
+    if (witnessed && eof) {
+      // A completed fetch must not be cancelled: the runtime may still be
+      // committing its continuation state when it closes the response body.
+      runCleanupSteps(() => reader.releaseLock(), options.finish);
+    } else {
+      runCleanupSteps(options.abortUpstream, options.finish);
+      void boundedCleanup(() => reader.cancel());
+    }
   };
   const failure = (error: unknown): NativeStreamError =>
     error instanceof NativeStreamError
@@ -223,8 +229,9 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
     }
     if (data === "[DONE]") {
       if (terminalCandidate) {
-        commitTerminal();
-        return true;
+        // Drain through EOF so success never tears down an upstream operation
+        // immediately after its terminal marker.
+        return false;
       }
       throw new NativeStreamError(
         "upstream_stream_incomplete",

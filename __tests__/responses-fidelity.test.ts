@@ -767,16 +767,20 @@ describe("native Responses stream contract", () => {
   });
 
   test("accepts DONE only after a valid terminal response", async () => {
+    let upstreamSignal: AbortSignal | null | undefined;
     const f = fidelityFixture({
-      native: () =>
-        new Response(`${textEvents().map(sse).join("")}data: [DONE]\n\n`, {
+      native: (_body, _call, init) => {
+        upstreamSignal = init?.signal;
+        return new Response(`${textEvents().map(sse).join("")}data: [DONE]\n\n`, {
           headers: { "Content-Type": "text/event-stream" },
-        }),
+        });
+      },
     });
     try {
       const text = await (await f.send({ ...basic, stream: true })).text();
       expect(text.match(/event: response.completed/g)).toHaveLength(1);
       expect(text).not.toContain("event: response.failed");
+      expect(upstreamSignal?.aborted).toBe(false);
     } finally {
       f.database.close();
     }
