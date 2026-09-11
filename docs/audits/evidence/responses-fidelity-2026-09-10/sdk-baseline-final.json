@@ -1,0 +1,2407 @@
+{
+  "schema_version": 1,
+  "sdk": "openai@7.13.0",
+  "generated_at": "2026-09-10T17:07:03.019Z",
+  "label": "baseline-v3.0.1",
+  "models": [
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna"
+  ],
+  "features": [
+    "nullable",
+    "history",
+    "reasoning"
+  ],
+  "results": [
+    {
+      "model": "claude-opus-5",
+      "case": "nullable-and-input-items",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": [
+              {
+                "role": "user",
+                "content": "Reply exactly SDK_OK"
+              }
+            ],
+            "instructions": null,
+            "previous_response_id": null,
+            "temperature": null,
+            "max_output_tokens": null
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-5",
+      "case": "previous-response-history",
+      "passed": false,
+      "checks": [
+        "FAIL: previous_response_id restores content absent from the new input"
+      ],
+      "observations": [],
+      "error": "previous_response_id restores content absent from the new input",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "input": "Remember the exact synthetic test marker MEM_233b30f7fe43482da0fefd4492220f0b. Reply only ACK.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_vfjnmszlwk5647pp4w5dzmshy4ips5ixd7t2oospuloxkf6ppr2q",
+            "object": "response",
+            "created_at": 1789059948,
+            "completed_at": 1789059948,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-opus-5",
+            "previous_response_id": null,
+            "instructions": null,
+            "output": [
+              {
+                "type": "reasoning",
+                "id": "rs_fcf506baede44df08aed720519b256b1",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 65
+                  }
+                ]
+              },
+              {
+                "type": "message",
+                "id": "msg_e125ae3552944bc3b7b8adec0e550bf9",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "ACK",
+                    "annotations": []
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0079,
+              "total_tokens": 79,
+              "output_tokens": 27,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.006923001956882255
+              },
+              "input_tokens": 52,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "ACK"
+          },
+          "duration_ms": 6755
+        },
+        {
+          "request": {
+            "model": "claude-opus-5",
+            "previous_response_id": "msg_bdrk_vfjnmszlwk5647pp4w5dzmshy4ips5ixd7t2oospuloxkf6ppr2q",
+            "input": "What was the exact marker? Reply only the marker.",
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_2lfimcyxpx5jk3rprmc2gtnadmtrgmxehibtzqbtglopnlzd3ltq",
+            "object": "response",
+            "created_at": 1789059951,
+            "completed_at": 1789059953,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-opus-5",
+            "previous_response_id": "msg_bdrk_vfjnmszlwk5647pp4w5dzmshy4ips5ixd7t2oospuloxkf6ppr2q",
+            "instructions": null,
+            "output": [
+              {
+                "type": "reasoning",
+                "id": "rs_a4054cdae94343a092d1c2fb39211571",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 188
+                  }
+                ]
+              },
+              {
+                "type": "message",
+                "id": "msg_a6de2a4aecec428c8773490ad7751b39",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "I don't have any marker — this is the start of our conversation, so nothing was shared with me beforehand. If you paste the marker (or the message containing it), I can repeat it back exactly.",
+                    "annotations": [],
+                    "parsed": null
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0178,
+              "total_tokens": 178,
+              "output_tokens": 156,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.03806938812603648
+              },
+              "input_tokens": 22,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "I don't have any marker — this is the start of our conversation, so nothing was shared with me beforehand. If you paste the marker (or the message containing it), I can repeat it back exactly.",
+            "output_parsed": null
+          },
+          "duration_ms": 4704,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 2,
+            "response.reasoning_summary_part.added": 1,
+            "response.reasoning_summary_text.delta": 15,
+            "response.reasoning_summary_text.done": 1,
+            "response.reasoning_summary_part.done": 1,
+            "response.output_item.done": 2,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 14,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.completed": 1
+          }
+        }
+      ]
+    },
+    {
+      "model": "claude-opus-5",
+      "case": "private-reasoning-full-output-replay",
+      "passed": false,
+      "checks": [
+        "PASS: reasoning turn calls the intended tool with valid arguments",
+        "FAIL: store:false returns a real signed replay token without include"
+      ],
+      "observations": [],
+      "error": "store:false returns a real signed replay token without include",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-opus-5-max",
+            "store": false,
+            "input": "First determine how many binary strings of length 12 contain exactly four 1s with no adjacent 1s. Verify your calculation independently. Then call lookup exactly once with SKU p42 and that integer as answer. Wait for the tool result before calculating the total for seven units with 13 percent tax rounded to the nearest cent.",
+            "tools": [
+              {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up price in cents",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "sku",
+                    "answer"
+                  ]
+                },
+                "strict": false
+              }
+            ],
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_a673f15b-3116-48fb-8a75-7009c5a50b89",
+            "object": "response",
+            "created_at": 1789059954,
+            "completed_at": 1789059964,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "claude-opus-5-max",
+            "output": [
+              {
+                "id": "rs_18b0e4c4-ceeb-49d4-9b34-d4a036208836",
+                "type": "reasoning",
+                "summary": [
+                  {
+                    "type": "summary_text",
+                    "text_chars": 307
+                  }
+                ]
+              },
+              {
+                "id": "msg_080fdd1a-04a5-4a6b-8a1b-b59a736f43e8",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "Count: choose positions for four 1s among 12 slots with no two adjacent → C(n−k+1, k) = C(9,4) = **126**.\n\nIndependent check via gap composition: with four 1s there are five gaps of zeros (x₁…x₅) summing to 8, where the three interior gaps must be ≥ 1. Substituting yᵢ = xᵢ − 1 for the interior gaps gives five nonnegative variables summing to 5: C(5+4, 4) = C(9,4) = 126. Both methods agree.",
+                    "annotations": [],
+                    "logprobs": [],
+                    "parsed": null
+                  }
+                ]
+              },
+              {
+                "id": "fc_e76c8844-c9ad-4490-9966-31c5204eb206",
+                "type": "function_call",
+                "call_id": "toolu_bdrk_01M1yJUVs9guuBcEdPo4HhDz",
+                "name": "lookup",
+                "arguments": "{\"sku\": \"p42\", \"answer\": 126}",
+                "status": "completed",
+                "parsed_arguments": null
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": null,
+              "summary": null
+            },
+            "service_tier": null,
+            "store": false,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up price in cents",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "sku",
+                    "answer"
+                  ]
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 7679,
+              "output_tokens": 98,
+              "total_tokens": 7777,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": "Count: choose positions for four 1s among 12 slots with no two adjacent → C(n−k+1, k) = C(9,4) = **126**.\n\nIndependent check via gap composition: with four 1s there are five gaps of zeros (x₁…x₅) summing to 8, where the three interior gaps must be ≥ 1. Substituting yᵢ = xᵢ − 1 for the interior gaps gives five nonnegative variables summing to 5: C(5+4, 4) = C(9,4) = 126. Both methods agree.",
+            "output_parsed": null
+          },
+          "duration_ms": 9619,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 3,
+            "response.reasoning_summary_part.added": 1,
+            "response.reasoning_summary_text.delta": 33,
+            "response.reasoning_summary_text.done": 1,
+            "response.reasoning_summary_part.done": 1,
+            "response.output_item.done": 3,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 33,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.function_call_arguments.delta": 1,
+            "response.function_call_arguments.done": 1,
+            "response.completed": 1
+          }
+        }
+      ]
+    },
+    {
+      "model": "claude-sonnet-5",
+      "case": "nullable-and-input-items",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": [
+              {
+                "role": "user",
+                "content": "Reply exactly SDK_OK"
+              }
+            ],
+            "instructions": null,
+            "previous_response_id": null,
+            "temperature": null,
+            "max_output_tokens": null
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "claude-sonnet-5",
+      "case": "previous-response-history",
+      "passed": false,
+      "checks": [
+        "FAIL: previous_response_id restores content absent from the new input"
+      ],
+      "observations": [],
+      "error": "previous_response_id restores content absent from the new input",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "input": "Remember the exact synthetic test marker MEM_3880d97dd51e424cbdddf1bdf1bfb35d. Reply only ACK.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_oj3rpune4avbzubvr4edxwkbpunvohsq5feuend35ey7lk24yw3q",
+            "object": "response",
+            "created_at": 1789059967,
+            "completed_at": 1789059967,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-sonnet-5",
+            "previous_response_id": null,
+            "instructions": null,
+            "output": [
+              {
+                "type": "message",
+                "id": "msg_65b4ae73630f41f2b86748379cc96997",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "ACK",
+                    "annotations": []
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0061,
+              "total_tokens": 61,
+              "output_tokens": 5,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0009475092039800994
+              },
+              "input_tokens": 56,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "ACK"
+          },
+          "duration_ms": 4368
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5",
+            "previous_response_id": "msg_bdrk_oj3rpune4avbzubvr4edxwkbpunvohsq5feuend35ey7lk24yw3q",
+            "input": "What was the exact marker? Reply only the marker.",
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "msg_bdrk_i5jpuw56bsafu3scuh2rrabgrazwqnhrziwr53mmwnrau3oivbsq",
+            "object": "response",
+            "created_at": 1789059970,
+            "completed_at": 1789059972,
+            "status": "completed",
+            "incomplete_details": null,
+            "model": "claude-sonnet-5",
+            "previous_response_id": "msg_bdrk_oj3rpune4avbzubvr4edxwkbpunvohsq5feuend35ey7lk24yw3q",
+            "instructions": null,
+            "output": [
+              {
+                "type": "message",
+                "id": "msg_63dd228350fd4a18b1eb8568008adb85",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "I don't see any previous context, image, or content in our conversation that references a \"marker.\" Could you please provide more details about what you're referring to? For example:\n\n- Is this related to a chart, map, or diagram you'd like to share?\n- Is this about a specific document or dataset?\n- Are you referring to a previous conversation that I don't have access to?\n\nPlease share the relevant content or clarify your question, and I'll do my best to help.",
+                    "annotations": [],
+                    "parsed": null
+                  }
+                ]
+              }
+            ],
+            "error": null,
+            "tools": [],
+            "tool_choice": "auto",
+            "top_p": null,
+            "temperature": null,
+            "reasoning": {
+              "effort": "low",
+              "summary": null
+            },
+            "max_output_tokens": 64000,
+            "service_tier": null,
+            "truncation": "disabled",
+            "parallel_tool_calls": true,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "presence_penalty": 0,
+            "frequency_penalty": 0,
+            "top_logprobs": 0,
+            "usage": {
+              "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0155,
+              "total_tokens": 155,
+              "output_tokens": 133,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.019192182636815918
+              },
+              "input_tokens": 22,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "max_tool_calls": null,
+            "store": true,
+            "background": false,
+            "metadata": {},
+            "user": null,
+            "safety_identifier": null,
+            "prompt_cache_key": null,
+            "output_text": "I don't see any previous context, image, or content in our conversation that references a \"marker.\" Could you please provide more details about what you're referring to? For example:\n\n- Is this related to a chart, map, or diagram you'd like to share?\n- Is this about a specific document or dataset?\n- Are you referring to a previous conversation that I don't have access to?\n\nPlease share the relevant content or clarify your question, and I'll do my best to help.",
+            "output_parsed": null
+          },
+          "duration_ms": 4887,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 1,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 35,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.output_item.done": 1,
+            "response.completed": 1
+          }
+        }
+      ]
+    },
+    {
+      "model": "claude-sonnet-5",
+      "case": "private-reasoning-full-output-replay",
+      "passed": false,
+      "checks": [
+        "PASS: reasoning turn calls the intended tool with valid arguments"
+      ],
+      "observations": [
+        "No signed reasoning envelope was returned for this model/turn; signed replay is not claimed by this case."
+      ],
+      "error": "HTTP 400: unsupported_parameter",
+      "traces": [
+        {
+          "request": {
+            "model": "claude-sonnet-5-max",
+            "store": false,
+            "input": "First determine how many binary strings of length 12 contain exactly four 1s with no adjacent 1s. Verify your calculation independently. Then call lookup exactly once with SKU p42 and that integer as answer. Wait for the tool result before calculating the total for seven units with 13 percent tax rounded to the nearest cent.",
+            "tools": [
+              {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up price in cents",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "sku",
+                    "answer"
+                  ]
+                },
+                "strict": false
+              }
+            ],
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "id": "resp_286873d4-cea5-4c77-91a4-3480c9cc6206",
+            "object": "response",
+            "created_at": 1789059973,
+            "completed_at": 1789059985,
+            "status": "completed",
+            "background": false,
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": null,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "claude-sonnet-5-max",
+            "output": [
+              {
+                "id": "msg_c67e6d6f-3fd9-417d-8c36-1e5bee01c302",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "Binary strings of length 12 with exactly four 1s and no two adjacent: using the stars-and-bars/gap method, place the 8 zeros first, creating 9 gaps (including both ends), then choose 4 of those gaps for the 1s: C(9,4) = 126.\n\nVerification via substitution method: if the four 1-positions are x₁<x₂<x₃<x₄ with xᵢ₊₁−xᵢ≥2, letting yᵢ = xᵢ−(i−1) gives strictly increasing y₁<...<y₄ within 1..9, so the count is C(9,4) = 126. Both methods agree.",
+                    "annotations": [],
+                    "logprobs": [],
+                    "parsed": null
+                  }
+                ]
+              },
+              {
+                "id": "fc_4fff43ef-45bb-4bc5-991a-e701f34348ca",
+                "type": "function_call",
+                "call_id": "toolu_bdrk_016ccYtJgzq1dCj8DQ1rUPMu",
+                "name": "lookup",
+                "arguments": "{\"sku\": \"p42\", \"answer\": 126}",
+                "status": "completed",
+                "parsed_arguments": null
+              }
+            ],
+            "parallel_tool_calls": true,
+            "previous_response_id": null,
+            "reasoning": {
+              "effort": null,
+              "summary": null
+            },
+            "service_tier": null,
+            "store": false,
+            "temperature": null,
+            "text": {
+              "format": {
+                "type": "text"
+              }
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up price in cents",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "sku",
+                    "answer"
+                  ]
+                },
+                "strict": false
+              }
+            ],
+            "top_logprobs": null,
+            "top_p": null,
+            "truncation": "disabled",
+            "user": null,
+            "usage": {
+              "input_tokens": 8067,
+              "output_tokens": 110,
+              "total_tokens": 8177,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_text": "Binary strings of length 12 with exactly four 1s and no two adjacent: using the stars-and-bars/gap method, place the 8 zeros first, creating 9 gaps (including both ends), then choose 4 of those gaps for the 1s: C(9,4) = 126.\n\nVerification via substitution method: if the four 1-positions are x₁<x₂<x₃<x₄ with xᵢ₊₁−xᵢ≥2, letting yᵢ = xᵢ−(i−1) gives strictly increasing y₁<...<y₄ within 1..9, so the count is C(9,4) = 126. Both methods agree.",
+            "output_parsed": null
+          },
+          "duration_ms": 11598,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 2,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 38,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.output_item.done": 2,
+            "response.function_call_arguments.delta": 1,
+            "response.function_call_arguments.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "claude-sonnet-5-max",
+            "store": false,
+            "tools": [
+              {
+                "type": "function",
+                "name": "lookup",
+                "description": "Look up price in cents",
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "sku": {
+                      "type": "string"
+                    },
+                    "answer": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "sku",
+                    "answer"
+                  ]
+                },
+                "strict": false
+              }
+            ],
+            "tool_choice": "none",
+            "input": [
+              {
+                "role": "user",
+                "content": "First determine how many binary strings of length 12 contain exactly four 1s with no adjacent 1s. Verify your calculation independently. Then call lookup exactly once with SKU p42 and that integer as answer. Wait for the tool result before calculating the total for seven units with 13 percent tax rounded to the nearest cent."
+              },
+              {
+                "id": "msg_c67e6d6f-3fd9-417d-8c36-1e5bee01c302",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "Binary strings of length 12 with exactly four 1s and no two adjacent: using the stars-and-bars/gap method, place the 8 zeros first, creating 9 gaps (including both ends), then choose 4 of those gaps for the 1s: C(9,4) = 126.\n\nVerification via substitution method: if the four 1-positions are x₁<x₂<x₃<x₄ with xᵢ₊₁−xᵢ≥2, letting yᵢ = xᵢ−(i−1) gives strictly increasing y₁<...<y₄ within 1..9, so the count is C(9,4) = 126. Both methods agree.",
+                    "annotations": [],
+                    "logprobs": [],
+                    "parsed": null
+                  }
+                ]
+              },
+              {
+                "id": "fc_4fff43ef-45bb-4bc5-991a-e701f34348ca",
+                "type": "function_call",
+                "call_id": "toolu_bdrk_016ccYtJgzq1dCj8DQ1rUPMu",
+                "name": "lookup",
+                "arguments": "{\"sku\": \"p42\", \"answer\": 126}",
+                "status": "completed",
+                "parsed_arguments": null
+              },
+              {
+                "type": "function_call_output",
+                "call_id": "toolu_bdrk_016ccYtJgzq1dCj8DQ1rUPMu",
+                "output": "{\"sku\":\"p42\",\"price_cents\":1267}"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the final integer total in cents."
+              }
+            ],
+            "stream": true
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "nullable-and-input-items",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": [
+              {
+                "role": "user",
+                "content": "Reply exactly SDK_OK"
+              }
+            ],
+            "instructions": null,
+            "previous_response_id": null,
+            "temperature": null,
+            "max_output_tokens": null
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "previous-response-history",
+      "passed": true,
+      "checks": [
+        "PASS: previous_response_id restores content absent from the new input",
+        "PASS: complete output can also be replayed through next.input",
+        "PASS: deleted ID cannot continue",
+        "PASS: a committed descendant survives deletion of its ancestor"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Remember the exact synthetic test marker MEM_9083a81753b54ecd9e329d974831a42c. Reply only ACK.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789059987,
+            "created_at": 1789059987,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_cxcspgfuhaawhpayn7a7dhuuu47afe3hg7ipsrb4z5nndw55k7gq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_5789702070ba519495c642cf7524ff6e",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.01507353,
+              "total_tokens": 41,
+              "output_tokens": 5,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0015980039800995022
+              },
+              "input_tokens": 36,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "ACK"
+          },
+          "duration_ms": 3885
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_cxcspgfuhaawhpayn7a7dhuuu47afe3hg7ipsrb4z5nndw55k7gq",
+            "input": "What was the exact marker? Reply only the marker.",
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789059989,
+            "created_at": 1789059989,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_5lmtr46o4o3ousn2oyaof7lx43agl74qx3et3svdoj4x67qchdra",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_9083a81753b54ecd9e329d974831a42c",
+                    "type": "output_text",
+                    "parsed": null
+                  }
+                ],
+                "id": "msg_6eaf5032a29b5f5fbd77fe00c7d383c7",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_cxcspgfuhaawhpayn7a7dhuuu47afe3hg7ipsrb4z5nndw55k7gq",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.029779412,
+              "total_tokens": 81,
+              "output_tokens": 23,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.006537126766169153
+              },
+              "input_tokens": 58,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_9083a81753b54ecd9e329d974831a42c",
+            "output_parsed": null
+          },
+          "duration_ms": 2228,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 1,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 19,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.output_item.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": [
+              {
+                "role": "user",
+                "content": "Remember MEM_9083a81753b54ecd9e329d974831a42c; reply only ACK."
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_5789702070ba519495c642cf7524ff6e",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the remembered marker."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789059994,
+            "created_at": 1789059994,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_wbqpqjra7zqnoziiqb3sg5fcwtuz6l4nfmned6toaf73dqrqviwq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 772,
+                  "sha256": "fe3a9ec9cf35d5d5df99f4a3e13411c866253478ba8d5d4285f1ee3f7fd6ca94"
+                },
+                "id": "rs_64d06cecc2fd5cd69d794d272f95ae57",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_9083a81753b54ecd9e329d974831a42c",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_ac48d60e43c452db91159330b1504306",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_options": {
+              "mode": "implicit",
+              "ttl": "30m"
+            },
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.030514706,
+              "total_tokens": 83,
+              "output_tokens": 35,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.009643341293532337
+              },
+              "input_tokens": 48,
+              "output_tokens_details": {
+                "reasoning_tokens": 10
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_9083a81753b54ecd9e329d974831a42c"
+          },
+          "duration_ms": 6290
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "path": "/v1/responses/resp_cxcspgfuhaawhpayn7a7dhuuu47afe3hg7ipsrb4z5nndw55k7gq"
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Continue",
+            "previous_response_id": "resp_cxcspgfuhaawhpayn7a7dhuuu47afe3hg7ipsrb4z5nndw55k7gq"
+          },
+          "status": 404,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_5lmtr46o4o3ousn2oyaof7lx43agl74qx3et3svdoj4x67qchdra",
+            "input": "Repeat that marker exactly.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789059998,
+            "created_at": 1789059997,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_reuyadx6ut7rpl7menrp5f4h7kwls4j27gxytartw3n4znlvzkgq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_9083a81753b54ecd9e329d974831a42c",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_5af314332373524682d777b5436e956d",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_5lmtr46o4o3ousn2oyaof7lx43agl74qx3et3svdoj4x67qchdra",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.04227941,
+              "total_tokens": 115,
+              "output_tokens": 23,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.00679424119402985
+              },
+              "input_tokens": 92,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_9083a81753b54ecd9e329d974831a42c"
+          },
+          "duration_ms": 2251
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "case": "nullable-and-input-items",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": [
+              {
+                "role": "user",
+                "content": "Reply exactly SDK_OK"
+              }
+            ],
+            "instructions": null,
+            "previous_response_id": null,
+            "temperature": null,
+            "max_output_tokens": null
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "case": "previous-response-history",
+      "passed": true,
+      "checks": [
+        "PASS: previous_response_id restores content absent from the new input",
+        "PASS: complete output can also be replayed through next.input",
+        "PASS: deleted ID cannot continue",
+        "PASS: a committed descendant survives deletion of its ancestor"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Remember the exact synthetic test marker MEM_43557b6f9df34371a8a4cbe6ff552f58. Reply only ACK.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060002,
+            "created_at": 1789060002,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_2k7yzerpogemijajmqh5d62z7o2bi2wv72a566f3ojgdu5leijrq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-terra",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 848,
+                  "sha256": "8a3d7337a562563af2e2c6c5eea3f7189fa7cca7878c99242b773498f62cd97f"
+                },
+                "id": "rs_4942cc730e73557abf8a7271a7992d06",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_aa84527d485550b38903765249ee84ae",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.024632353,
+              "total_tokens": 67,
+              "output_tokens": 28,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.003216337645107794
+              },
+              "input_tokens": 39,
+              "output_tokens_details": {
+                "reasoning_tokens": 21
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "ACK"
+          },
+          "duration_ms": 4411
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "previous_response_id": "resp_2k7yzerpogemijajmqh5d62z7o2bi2wv72a566f3ojgdu5leijrq",
+            "input": "What was the exact marker? Reply only the marker.",
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060005,
+            "created_at": 1789060004,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_dxsu73bqqcqnuct5vklqx7z2cm6gy35yiwelsyt52wz2naq6ooya",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-terra",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 808,
+                  "sha256": "6131fe44e3b0bc4daa2d8129adb19b0f1fdcd4cc1ce485bab96ee2b752744b56"
+                },
+                "id": "rs_0ba2bc4bb372548b9513f4ee1c2ef836",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_43557b6f9df34371a8a4cbe6ff552f58",
+                    "type": "output_text",
+                    "parsed": null
+                  }
+                ],
+                "id": "msg_18a4a1e7297f549480f5e9f90875e9e7",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_2k7yzerpogemijajmqh5d62z7o2bi2wv72a566f3ojgdu5leijrq",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.046691176,
+              "total_tokens": 127,
+              "output_tokens": 43,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.005015335157545604
+              },
+              "input_tokens": 84,
+              "output_tokens_details": {
+                "reasoning_tokens": 15
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_43557b6f9df34371a8a4cbe6ff552f58",
+            "output_parsed": null
+          },
+          "duration_ms": 2330,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 2,
+            "response.output_item.done": 2,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 22,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": [
+              {
+                "role": "user",
+                "content": "Remember MEM_43557b6f9df34371a8a4cbe6ff552f58; reply only ACK."
+              },
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 848,
+                  "sha256": "8a3d7337a562563af2e2c6c5eea3f7189fa7cca7878c99242b773498f62cd97f"
+                },
+                "id": "rs_4942cc730e73557abf8a7271a7992d06",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_aa84527d485550b38903765249ee84ae",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the remembered marker."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060009,
+            "created_at": 1789060009,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_uylj4twv43m237t644xubbxiskiea66bfok6crft7reamyu56lbq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-terra",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 756,
+                  "sha256": "20ee53eb3fe38ecfca5e4e5f775473ed8630c92cf9042b9212ca66f97d3b3dc9"
+                },
+                "id": "rs_1413d1a14cf15b448d9f4cc4184a23bd",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_43557b6f9df34371a8a4cbe6ff552f58",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_c80f008a3ea15836ae3b79462575c06a",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_options": {
+              "mode": "implicit",
+              "ttl": "30m"
+            },
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.040441174,
+              "total_tokens": 110,
+              "output_tokens": 36,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0042104630182421224
+              },
+              "input_tokens": 74,
+              "output_tokens_details": {
+                "reasoning_tokens": 8
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_43557b6f9df34371a8a4cbe6ff552f58"
+          },
+          "duration_ms": 4642
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "path": "/v1/responses/resp_2k7yzerpogemijajmqh5d62z7o2bi2wv72a566f3ojgdu5leijrq"
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "input": "Continue",
+            "previous_response_id": "resp_2k7yzerpogemijajmqh5d62z7o2bi2wv72a566f3ojgdu5leijrq"
+          },
+          "status": 404,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-terra",
+            "previous_response_id": "resp_dxsu73bqqcqnuct5vklqx7z2cm6gy35yiwelsyt52wz2naq6ooya",
+            "input": "Repeat that marker exactly.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060012,
+            "created_at": 1789060011,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_tfwogxguyco7dw4qusrkul7ieltxyn7b4hlo2srcix6a274i3u3a",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-terra",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_43557b6f9df34371a8a4cbe6ff552f58",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_31c18d20ec185e89b3450aab42f47794",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_dxsu73bqqcqnuct5vklqx7z2cm6gy35yiwelsyt52wz2naq6ooya",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.06029412,
+              "total_tokens": 164,
+              "output_tokens": 26,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0033073170812603645
+              },
+              "input_tokens": 138,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_43557b6f9df34371a8a4cbe6ff552f58"
+          },
+          "duration_ms": 2096
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "case": "nullable-and-input-items",
+      "passed": false,
+      "checks": [],
+      "observations": [],
+      "error": "HTTP 400: invalid_request",
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": [
+              {
+                "role": "user",
+                "content": "Reply exactly SDK_OK"
+              }
+            ],
+            "instructions": null,
+            "previous_response_id": null,
+            "temperature": null,
+            "max_output_tokens": null
+          },
+          "status": 400,
+          "transport": null,
+          "compatibility": null
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "case": "previous-response-history",
+      "passed": true,
+      "checks": [
+        "PASS: previous_response_id restores content absent from the new input",
+        "PASS: complete output can also be replayed through next.input",
+        "PASS: deleted ID cannot continue",
+        "PASS: a committed descendant survives deletion of its ancestor"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Remember the exact synthetic test marker MEM_6f2aeb09960546cfbad3483ec9925314. Reply only ACK.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060014,
+            "created_at": 1789060013,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_4lg7kbteeyj4iknbyt7vvgxqtyoh6soynrzi5p2fkxmi77tjxloq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-luna",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_3bd05c1dc88156d0ada103a598502f94",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.0147058815,
+              "total_tokens": 40,
+              "output_tokens": 5,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 6.6268407960199e-05
+              },
+              "input_tokens": 35,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "ACK"
+          },
+          "duration_ms": 1928
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "previous_response_id": "resp_4lg7kbteeyj4iknbyt7vvgxqtyoh6soynrzi5p2fkxmi77tjxloq",
+            "input": "What was the exact marker? Reply only the marker.",
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060016,
+            "created_at": 1789060015,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_aqhb2uvscxpj2emdvhhces5yornzj7socwr5vcqcb6s6avlurmlq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-luna",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 772,
+                  "sha256": "15d200e2d913e99cb169b181ef632064e1d21ce85614a36356162879ea043342"
+                },
+                "id": "rs_4fa588e9bcf05d0782352db303fbd89f",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_6f2aeb09960546cfbad3483ec9925314",
+                    "type": "output_text",
+                    "parsed": null
+                  }
+                ],
+                "id": "msg_f2ae5332e82452d2a30fbd1418d0a8d7",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_4lg7kbteeyj4iknbyt7vvgxqtyoh6soynrzi5p2fkxmi77tjxloq",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.033455882,
+              "total_tokens": 91,
+              "output_tokens": 34,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0003935936650082919
+              },
+              "input_tokens": 57,
+              "output_tokens_details": {
+                "reasoning_tokens": 10
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_6f2aeb09960546cfbad3483ec9925314",
+            "output_parsed": null
+          },
+          "duration_ms": 2108,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 2,
+            "response.output_item.done": 2,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 18,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": [
+              {
+                "role": "user",
+                "content": "Remember MEM_6f2aeb09960546cfbad3483ec9925314; reply only ACK."
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "ACK",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_3bd05c1dc88156d0ada103a598502f94",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the remembered marker."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060019,
+            "created_at": 1789060019,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_27z2egbttc3hf6s3fke2of7yeckjq73gma2hge6drz6xfyjkbnma",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-luna",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 864,
+                  "sha256": "c3ecbe289e22ab54d0a35306ee6056ab4a4623edb12c344103464a9c53dfc594"
+                },
+                "id": "rs_9d3fa523bfd15c389949078f2ff4e815",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_6f2aeb09960546cfbad3483ec9925314",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_eb5a9c3418af581581f1468a26103e94",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_options": {
+              "mode": "implicit",
+              "ttl": "30m"
+            },
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.035294116,
+              "total_tokens": 96,
+              "output_tokens": 49,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0005561633996683251
+              },
+              "input_tokens": 47,
+              "output_tokens_details": {
+                "reasoning_tokens": 25
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_6f2aeb09960546cfbad3483ec9925314"
+          },
+          "duration_ms": 3567
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "path": "/v1/responses/resp_4lg7kbteeyj4iknbyt7vvgxqtyoh6soynrzi5p2fkxmi77tjxloq"
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "input": "Continue",
+            "previous_response_id": "resp_4lg7kbteeyj4iknbyt7vvgxqtyoh6soynrzi5p2fkxmi77tjxloq"
+          },
+          "status": 404,
+          "transport": null,
+          "compatibility": null
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-luna",
+            "previous_response_id": "resp_aqhb2uvscxpj2emdvhhces5yornzj7socwr5vcqcb6s6avlurmlq",
+            "input": "Repeat that marker exactly.",
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": null,
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789060021,
+            "created_at": 1789060021,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_r72ieapgiohb3stdt7mqqliqjtz6bmpjqdhfrbts4spqgr4qk7wq",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-luna",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 748,
+                  "sha256": "ac2b92f50f74de22fe2895c267912f6bda01494a031c661f9a27503f57544ea1"
+                },
+                "id": "rs_51f80ae4f3ec5d8687ece9aec12a61b2",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "MEM_6f2aeb09960546cfbad3483ec9925314",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_3ae4daa8f8735bf28138bcf8704e04d7",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_aqhb2uvscxpj2emdvhhces5yornzj7socwr5vcqcb6s6avlurmlq",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.04889706,
+              "total_tokens": 133,
+              "output_tokens": 31,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.00037462864013266997
+              },
+              "input_tokens": 102,
+              "output_tokens_details": {
+                "reasoning_tokens": 7
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "MEM_6f2aeb09960546cfbad3483ec9925314"
+          },
+          "duration_ms": 2107
+        }
+      ]
+    }
+  ]
+}

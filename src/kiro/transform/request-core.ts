@@ -173,7 +173,9 @@ function projectMessages(
   const nativeProjection = nativeInstructionProjection(request, instructions);
   const useNativeProjection =
     request.projectionMode === "native-context-safe" ||
-    (request.projectionMode === "v3-auto" && nativeSystemPromptEnabled && nativeProjection.ok);
+    ((request.projectionMode === "v3-auto" || request.protocol === "responses") &&
+      nativeSystemPromptEnabled &&
+      nativeProjection.ok);
   if (useNativeProjection) {
     if (!nativeProjection.ok) {
       throw new RequestTransformError(
@@ -311,38 +313,77 @@ function projectMessages(
 
   const messages: CanonicalMessage[] = [];
   const projectedIndexByOriginal = new Map<number, number>();
-  for (const [index, message] of request.messages.entries()) {
-    if (isInstruction(message)) continue;
-    projectedIndexByOriginal.set(index, messages.length);
-    messages.push(cloneMessage(message));
-  }
-  if (prefixInstructions.length > 0) {
-    const prefix = instructionText(prefixInstructions);
-    const firstUserIndex = messages.findIndex((message) => message.role === "user");
-    if (firstUserIndex < 0) {
-      // No user turn to glue into: the instruction block becomes its own leading
-      // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
-      // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
-      // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
-      // so the standalone turn is kept.
-      messages.unshift({
+  if (request.protocol === "responses") {
+    let pending: CanonicalMessage[] = [];
+    const appendInstructionTurn = (): void => {
+      if (pending.length === 0) return;
+      messages.push({
         role: "user",
-        content: [textPart(prefix, "legacy-user-prefix")],
+        content: [textPart(instructionText(pending), pending[0]?.path ?? "instructions")],
         toolCalls: [],
-        path: "legacy-user-prefix",
+        path: pending[0]?.path ?? "instructions",
       });
+      pending = [];
       prefixAction = "synthetic_leading_user";
-      for (const [key, value] of projectedIndexByOriginal) {
-        projectedIndexByOriginal.set(key, value + 1);
+    };
+    for (const [index, message] of request.messages.entries()) {
+      if (isInstruction(message)) {
+        if (trailingInstructions.length === 0 || index < trailingInstructionStart)
+          pending.push(message);
+        continue;
       }
-    } else {
-      const firstUser = messages[firstUserIndex];
-      if (firstUser) {
-        messages[firstUserIndex] = {
-          ...firstUser,
-          content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
-        };
-        prefixAction = "prepend_first_user";
+      let projected = cloneMessage(message);
+      if (pending.length > 0) {
+        if (message.role === "user" || message.role === "tool") {
+          projected = {
+            ...projected,
+            content: [
+              textPart(`${instructionText(pending)}\n\n`, pending[0]?.path ?? "instructions"),
+              ...projected.content,
+            ],
+          };
+          pending = [];
+          prefixAction = "prepend_first_user";
+        } else appendInstructionTurn();
+      }
+      projectedIndexByOriginal.set(index, messages.length);
+      messages.push(projected);
+    }
+    appendInstructionTurn();
+  } else {
+    for (const [index, message] of request.messages.entries()) {
+      if (isInstruction(message)) continue;
+      projectedIndexByOriginal.set(index, messages.length);
+      messages.push(cloneMessage(message));
+    }
+    if (prefixInstructions.length > 0) {
+      const prefix = instructionText(prefixInstructions);
+      const firstUserIndex = messages.findIndex((message) => message.role === "user");
+      if (firstUserIndex < 0) {
+        // No user turn to glue into: the instruction block becomes its own leading
+        // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
+        // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
+        // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
+        // so the standalone turn is kept.
+        messages.unshift({
+          role: "user",
+          content: [textPart(prefix, "legacy-user-prefix")],
+          toolCalls: [],
+          path: "legacy-user-prefix",
+        });
+        prefixAction = "synthetic_leading_user";
+        for (const [key, value] of projectedIndexByOriginal) {
+          projectedIndexByOriginal.set(key, value + 1);
+        }
+      } else {
+        const firstUser = messages[firstUserIndex];
+        if (firstUser) {
+          messages[firstUserIndex] = {
+            ...firstUser,
+            content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
+          };
+          prefixAction = "prepend_first_user";
+        }
       }
     }
   }

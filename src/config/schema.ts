@@ -48,6 +48,9 @@ export const ConfigSchema = z.object({
   protocol_projection_mode: z
     .enum(["v3-auto", "safe", "native-context-safe", "legacy-user-prefix"])
     .default("v3-auto"),
+  responses_fidelity_mode: z.enum(["compatible", "strict"]).default("compatible"),
+  responses_instruction_lift: z.enum(["auto", "off", "experimental"]).default("auto"),
+  responses_native_tool_bridge: z.enum(["auto", "off", "experimental"]).default("auto"),
   session_affinity_mode: z.enum(["explicit-only", "legacy-initial-input"]).default("explicit-only"),
   proxy_url: ProxyUrlSchema,
   sdk_http_keep_alive: z.boolean().default(false),

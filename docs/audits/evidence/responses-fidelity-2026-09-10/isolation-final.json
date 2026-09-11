@@ -1,0 +1,8 @@
+{
+  "production_config_unchanged": true,
+  "production_binary_unchanged": true,
+  "production_pid_unchanged": true,
+  "production_health_status": 200,
+  "private_servers_stopped": 4,
+  "private_ports_closed": true
+}

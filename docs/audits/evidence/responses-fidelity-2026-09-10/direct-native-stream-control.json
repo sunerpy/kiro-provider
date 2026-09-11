@@ -1,0 +1,22 @@
+[
+  {
+    "stream": false,
+    "first_status": 200,
+    "output_types": [
+      "function_call"
+    ],
+    "first_store": true,
+    "next_status": 200,
+    "next_text": "DIRECT_OK"
+  },
+  {
+    "stream": true,
+    "first_status": 200,
+    "output_types": [
+      "function_call"
+    ],
+    "first_store": true,
+    "next_status": 200,
+    "next_text": "DIRECT_OK"
+  }
+]

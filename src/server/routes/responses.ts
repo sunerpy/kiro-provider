@@ -4,7 +4,6 @@ import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { resolveModelVariant } from "../../kiro/models.js";
-import { textPart } from "../../protocol/adapter-utils.js";
 import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
@@ -22,7 +21,13 @@ import {
   readJsonBody,
   withRetryAfter,
 } from "../ingress.js";
+import type { ResponsesRequest } from "../request-schema.js";
 import { parseResponsesRequest, type ResponsesInputItem } from "../request-schema.js";
+import {
+  publicResponseState,
+  ResponseContextError,
+  type ResponseContinuationContext,
+} from "../responses/continuation.js";
 import type {
   MessageOutputItem,
   OutputTextContent,
@@ -31,12 +36,23 @@ import type {
   ResponseToolCallItem,
   ResponseUsage,
 } from "../responses/events.js";
+import { prepareNativeAdaptation } from "../responses/native-adaptation.js";
 import { proxyNativeResponses } from "../responses/native-transport.js";
 import { isGptSolReasoningPlaceholder } from "../responses/reasoning.js";
 import {
   adaptResponsesRequest,
   type ResponsesPreviousContext,
 } from "../responses/request-adapter.js";
+import {
+  fidelityRejection,
+  hasCallableTools,
+  hasNativeReasoning,
+  hasProviderReasoning,
+  normalizeResponsesRequest,
+  type ResponsesExecutionPlan,
+  responseDiagnostics,
+  responsesCompatibility,
+} from "../responses/request-policy.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
 import {
   type ResponseRequestConfiguration,
@@ -123,14 +139,11 @@ function requiresStatelessV3(
   body: Readonly<Record<string, unknown>>,
 ): StatelessV3Requirement | undefined {
   if (body.store === false) return { reason: "store_false", param: "store" };
-  if (typeof body.model === "string" && body.model.endsWith("-max")) {
-    return { reason: "max_effort", param: "model" };
-  }
   const reasoning = body.reasoning;
   if (isRecord(reasoning) && reasoning.effort === "max") {
     return { reason: "max_effort", param: "reasoning.effort" };
   }
-  if (body.parallel_tool_calls === false) {
+  if (body.parallel_tool_calls === false && hasCallableTools(body as ResponsesRequest)) {
     return { reason: "parallel_tool_calls_false", param: "parallel_tool_calls" };
   }
   if (
@@ -141,6 +154,8 @@ function requiresStatelessV3(
   ) {
     return { reason: "custom_or_namespace_tool", param: "tools" };
   }
+  if (hasProviderReasoning(body as ResponsesRequest))
+    return { reason: "encrypted_reasoning", param: "input" };
   if (
     Array.isArray(body.include) &&
     body.include.some((value) => value === "reasoning.encrypted_content")
@@ -176,7 +191,10 @@ function selectV3Route(body: unknown, dependencies: ResponsesDependencies): V3Ro
       responseStoreTenant(dependencies.tenantId),
       previousResponseId,
     );
-    if (stored?.request !== undefined && stored.completion !== undefined) {
+    if (
+      stored?.transport === "stateless" ||
+      (stored?.request !== undefined && stored.completion !== undefined)
+    ) {
       return { transport: "stateless", reason: "previous_stateless" };
     }
     if (stored !== undefined && requirement !== undefined) {
@@ -308,20 +326,14 @@ function completedResponse(
   };
 }
 
-function parsedToolInput(input: string): unknown {
-  try {
-    return JSON.parse(input);
-  } catch (error) {
-    if (error instanceof SyntaxError) return input;
-    throw error;
-  }
-}
-
 function previousContext(stored: StoredResponse): ResponsesPreviousContext {
-  if (!stored.request || !stored.completion) {
-    throw new TypeError("Stored native response cannot be expanded through the legacy adapter");
+  const legacyRequest = stored.continuation?.legacyRequest ?? stored.request;
+  if (legacyRequest?.reasoningReplays.length) {
+    throw new ResponseContextError(
+      "Legacy reasoning history is missing the logical item sequence required for replay",
+    );
   }
-  const messages: CanonicalMessage[] = stored.request.messages
+  const messages: CanonicalMessage[] = (legacyRequest?.messages ?? [])
     .filter((message) => message.path !== "instructions")
     .map((message) => ({
       ...message,
@@ -332,49 +344,23 @@ function previousContext(stored: StoredResponse): ResponsesPreviousContext {
       ),
       toolCalls: message.toolCalls.map((call) => ({ ...call })),
     }));
-  if (stored.completion.text.length > 0 || stored.completion.toolCalls.length > 0) {
-    messages.push({
-      role: "assistant",
-      content:
-        stored.completion.text.length > 0
-          ? [textPart(stored.completion.text, `stored_response.${stored.response.id}.text`)]
-          : [],
-      toolCalls: stored.completion.toolCalls.map((call) => ({
-        id: call.id,
-        name: call.name,
-        input: parsedToolInput(call.input),
-        path: `stored_response.${stored.response.id}.tool_calls.${call.id}`,
-      })),
-      path: `stored_response.${stored.response.id}`,
-    });
+  if (stored.continuation?.transport === "stateless") {
+    const priorInput = stored.continuation.request.input;
+    return {
+      messages,
+      ...(legacyRequest ? { legacyRequest } : {}),
+      input: [
+        ...(typeof priorInput === "string"
+          ? [{ role: "user" as const, content: priorInput }]
+          : priorInput),
+        ...((stored.continuation.output ?? stored.response.output) as ResponsesInputItem[]),
+      ],
+    };
   }
-  const items: ResponsesInputItem[] = [];
-  for (const item of stored.response.output) {
-    if (item.type === "function_call") {
-      items.push({
-        type: "function_call",
-        id: item.id,
-        status: item.status,
-        call_id: item.call_id,
-        ...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
-        name: item.name,
-        arguments: item.arguments,
-      });
-      continue;
-    }
-    if (item.type === "custom_tool_call") {
-      items.push({
-        type: "custom_tool_call",
-        id: item.id,
-        status: item.status,
-        call_id: item.call_id,
-        ...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
-        name: item.name,
-        input: item.input,
-      });
-    }
+  if (!stored.request || !stored.completion) {
+    throw new TypeError("Stored native response cannot be expanded through the legacy adapter");
   }
-  return { messages, items };
+  return { messages, legacyRequest, input: stored.response.output as ResponsesInputItem[] };
 }
 
 function persistResponse(
@@ -383,6 +369,7 @@ function persistResponse(
   state: ResponseStateObject,
   inputItems: readonly unknown[],
   request: Parameters<NonNullable<ResponsesDependencies["responseStore"]>["put"]>[3],
+  continuation?: ResponseContinuationContext,
 ): void {
   if (!state.store || !dependencies.responseStore) return;
   try {
@@ -392,6 +379,7 @@ function persistResponse(
       inputItems,
       request,
       canonicalCompletionFromResponse(state),
+      continuation,
     );
   } catch (error) {
     auditLog("error", "response_state_store_failed", {
@@ -399,6 +387,7 @@ function persistResponse(
       tenant_hash: auditHash(tenantId),
       error_type: error instanceof Error ? error.name : typeof error,
     });
+    throw new ResponseContextError("Response continuation could not be stored");
   }
 }
 
@@ -510,19 +499,97 @@ export async function handleResponses(
   dependencies: ResponsesDependencies,
 ): Promise<Response> {
   const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
+  let plan: ResponsesExecutionPlan | undefined;
+  try {
+    const response = await handleResponsesCore(request, config, dependencies, ingress, (value) => {
+      plan = value;
+    });
+    return plan ? responseDiagnostics(response, plan) : response;
+  } catch (error) {
+    ingress.finalize();
+    if (error instanceof ResponseContextError) {
+      return openAiError(
+        409,
+        error.message,
+        "invalid_request_error",
+        error.code,
+        "previous_response_id",
+      );
+    }
+    throw error;
+  }
+}
+
+async function handleResponsesCore(
+  request: Request,
+  config: Config,
+  dependencies: ResponsesDependencies,
+  ingress: ReturnType<typeof createIngress>,
+  setPlan: (plan: ResponsesExecutionPlan) => void,
+): Promise<Response> {
   const bodyResult = await readJsonBody(request, config, ingress.signals, openAiIngressErrors);
   if (!bodyResult.ok) {
     ingress.finalize();
     return bodyResult.response;
   }
+  const normalized = normalizeResponsesRequest(bodyResult.value, config);
+  if (normalized instanceof Response) {
+    ingress.finalize();
+    return normalized;
+  }
+  const normalizedBody = normalized.request;
+  const storedPrevious = normalizedBody.previous_response_id
+    ? dependencies.responseStore?.get(
+        responseStoreTenant(dependencies.tenantId),
+        normalizedBody.previous_response_id,
+      )
+    : undefined;
+  const adaptation =
+    config.protocol_projection_mode === "v3-auto" && storedPrevious?.transport !== "stateless"
+      ? prepareNativeAdaptation(
+          normalizedBody,
+          config,
+          storedPrevious?.continuation
+            ? {
+                ...storedPrevious.continuation,
+                output:
+                  storedPrevious.continuation.output ??
+                  (storedPrevious.response.output as ResponsesInputItem[]),
+              }
+            : undefined,
+          dependencies.accountManager.reconcileFromDb(),
+        )
+      : undefined;
+  if (adaptation instanceof Response) {
+    ingress.finalize();
+    return adaptation;
+  }
+  const routingBody = adaptation?.wireRequest ?? normalizedBody;
   const v3Route =
     config.protocol_projection_mode === "v3-auto"
-      ? selectV3Route(bodyResult.value, dependencies)
+      ? selectV3Route(routingBody, dependencies)
       : undefined;
+  if (v3Route?.transport !== "reject") {
+    const transport =
+      adaptation && v3Route?.transport === "native"
+        ? "native-adapted"
+        : (v3Route?.transport ?? "stateless");
+    const compatibility = responsesCompatibility(normalizedBody, transport);
+    setPlan({ transport, reason: v3Route?.reason ?? "legacy_mode", compatibility });
+    const rejected = fidelityRejection(
+      compatibility.filter((loss) => loss.code !== "instruction_role_projection"),
+      config,
+    );
+    if (rejected) {
+      ingress.finalize();
+      return rejected;
+    }
+  }
   if (v3Route !== undefined) {
     auditLog(v3Route.transport === "reject" ? "warn" : "info", "responses_route_selected", {
       request_id: ingress.requestId,
-      transport: v3Route.transport,
+      transport:
+        adaptation && v3Route.transport === "native" ? "native-adapted" : v3Route.transport,
       reason: v3Route.reason,
       model: requestedModel(bodyResult.value),
       requested_effort: requestedEffort(bodyResult.value),
@@ -548,11 +615,24 @@ export async function handleResponses(
   }
   if (v3Route?.transport === "native") {
     let nativeStreamOwnsResources = false;
+    let nativeCompatibility: readonly import("../responses/request-policy.js").CompatibilityLoss[] =
+      [];
     try {
       ingress.disableIdleTimeout();
       const proxied = await proxyNativeResponses({
         requestId: ingress.requestId,
-        rawBody: bodyResult.value,
+        rawBody: normalizedBody,
+        normalized: { ...normalized, request: routingBody },
+        adaptation,
+        onCompatibility: (losses) => {
+          nativeCompatibility = losses;
+          const transport = adaptation ? "native-adapted" : "native";
+          setPlan({
+            transport,
+            reason: v3Route.reason,
+            compatibility: [...responsesCompatibility(normalizedBody, transport), ...losses],
+          });
+        },
         request,
         config,
         dependencies,
@@ -560,13 +640,32 @@ export async function handleResponses(
         finalize: ingress.finalize,
       });
       nativeStreamOwnsResources = proxied.streamOwnsResources;
+      if (proxied.transport)
+        setPlan({
+          transport: proxied.transport,
+          reason: v3Route.reason,
+          compatibility: [
+            ...responsesCompatibility(normalizedBody, proxied.transport),
+            ...nativeCompatibility,
+          ],
+        });
       return proxied.response;
     } finally {
       if (!nativeStreamOwnsResources) ingress.finalize();
     }
   }
 
-  const parsed = parseResponsesRequest(bodyResult.value);
+  const parsed = parseResponsesRequest(normalizedBody);
+  if (hasNativeReasoning(normalizedBody)) {
+    ingress.finalize();
+    return openAiError(
+      400,
+      "Native reasoning cannot be decoded by the stateless transport",
+      "invalid_request_error",
+      "native_response_transport_conflict",
+      "input",
+    );
+  }
   if (!parsed.ok) {
     ingress.finalize();
     return parsed.response;
@@ -603,10 +702,38 @@ export async function handleResponses(
     dependencies.tenantId,
     config.session_affinity_mode,
   );
+  const currentInput =
+    typeof parsed.value.input === "string"
+      ? [{ role: "user" as const, content: parsed.value.input }]
+      : parsed.value.input;
+  const logicalInput = [...(previous?.input ?? []), ...currentInput];
+  let compatibility = [
+    ...responsesCompatibility({ ...parsed.value, input: logicalInput }, "stateless"),
+  ];
+  for (const message of previous?.messages ?? []) {
+    if (message.role === "system" || message.role === "developer")
+      compatibility.push({ code: "instruction_role_projection", param: "previous_response_id" });
+    if (message.sourceMetadata?.phase)
+      compatibility.push({ code: "assistant_phase_unavailable", param: "previous_response_id" });
+  }
+  const strictInstructions =
+    config.responses_fidelity_mode === "strict" &&
+    compatibility.some((loss) => loss.code === "instruction_role_projection");
+  const strictRejection = fidelityRejection(
+    compatibility.filter((loss) => loss.code !== "instruction_role_projection"),
+    config,
+  );
+  setPlan({ transport: "stateless", reason: v3Route?.reason ?? "legacy_mode", compatibility });
+  if (strictRejection) {
+    ingress.finalize();
+    return strictRejection;
+  }
   const projectionMode =
-    config.protocol_projection_mode === "v3-auto"
-      ? "legacy-user-prefix"
-      : config.protocol_projection_mode;
+    strictInstructions && config.protocol_projection_mode !== "safe"
+      ? "native-context-safe"
+      : config.protocol_projection_mode === "v3-auto"
+        ? "legacy-user-prefix"
+        : config.protocol_projection_mode;
   const adapted = adaptResponsesRequest(parsed.value, projectionMode, previous);
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
@@ -626,6 +753,12 @@ export async function handleResponses(
     );
   }
   const responseConfiguration = responseConfigurationFromCanonical(adapted.body);
+  const continuation = (state: ResponseStateObject): ResponseContinuationContext => ({
+    transport: "stateless",
+    request: { ...parsed.value, input: logicalInput },
+    output: state.output as ResponsesInputItem[],
+    ...(previous?.legacyRequest ? { legacyRequest: previous.legacyRequest } : {}),
+  });
   const lineage = canonicalSessionLineage(adapted.body, dependencies.tenantId);
   const responseId = `resp_${randomUUID()}`;
   const createdAt = Math.floor(Date.now() / 1000);
@@ -636,8 +769,8 @@ export async function handleResponses(
   try {
     ingress.disableIdleTimeout();
 
-    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
-      buildPipelineOptions({
+    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
+      ...buildPipelineOptions({
         requestId: ingress.requestId,
         body: adapted.body,
         model: adapted.body.model,
@@ -648,7 +781,19 @@ export async function handleResponses(
         lineage,
         deadlineSignal: ingress.signals.combined,
       }),
-    );
+      onProjection: ({ projection }) => {
+        if (projection.instructionChannel === "kiro-runtime-system-prompt") {
+          compatibility = compatibility.filter(
+            (loss) => loss.code !== "instruction_role_projection",
+          );
+          setPlan({
+            transport: "stateless",
+            reason: v3Route?.reason ?? "legacy_mode",
+            compatibility,
+          });
+        }
+      },
+    });
     // Re-read the live request signal: a client that left while the pipeline
     // ran must not receive a body that would keep the account lease busy.
     if (request.signal.aborted && !ingress.signals.deadline.aborted) {
@@ -677,8 +822,16 @@ export async function handleResponses(
         bridge: adapted.bridge,
         configuration: responseConfiguration,
         includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
+        captureEncryptedReasoning: adapted.body.store !== false,
         onCompleted: (state) =>
-          persistResponse(dependencies, tenantId, state, inputItems, adapted.body),
+          persistResponse(
+            dependencies,
+            tenantId,
+            publicResponseState(state, adapted.body.includeEncryptedReasoning),
+            inputItems,
+            adapted.body,
+            continuation(state),
+          ),
       });
       streamOwnsRouteResources = true;
       return streaming;
@@ -695,8 +848,28 @@ export async function handleResponses(
           createdAt,
         );
         if (!projected.ok) return projected.response;
-        persistResponse(dependencies, tenantId, projected.state, inputItems, adapted.body);
-        return Response.json(projected.state);
+        const publicState = publicResponseState(
+          projected.state,
+          adapted.body.includeEncryptedReasoning,
+        );
+        try {
+          persistResponse(
+            dependencies,
+            tenantId,
+            publicState,
+            inputItems,
+            adapted.body,
+            continuation(projected.state),
+          );
+        } catch {
+          return openAiError(
+            502,
+            "Response continuation could not be stored",
+            "upstream_error",
+            "response_state_store_failed",
+          );
+        }
+        return Response.json(publicState);
       }
       return openAiError(
         500,

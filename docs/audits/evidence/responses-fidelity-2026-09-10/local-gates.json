@@ -1,0 +1,27 @@
+[
+  {
+    "check": "static",
+    "exit_code": 0,
+    "seconds": 3.88
+  },
+  {
+    "check": "tests",
+    "exit_code": 0,
+    "seconds": 29.18
+  },
+  {
+    "check": "coverage",
+    "exit_code": 0,
+    "seconds": 29.32
+  },
+  {
+    "check": "coverage_gate",
+    "exit_code": 0,
+    "seconds": 0.03
+  },
+  {
+    "check": "security",
+    "exit_code": 0,
+    "seconds": 9.51
+  }
+]

@@ -16,6 +16,7 @@ export type MessageOutputItem = {
   readonly id: string;
   readonly type: "message";
   readonly role: "assistant";
+  readonly phase?: "commentary" | "final_answer" | null;
   readonly status: "in_progress" | "completed";
   readonly content: readonly OutputTextContent[];
 };
@@ -109,7 +110,13 @@ export type ResponseError = {
   readonly message: string;
 };
 
-export type ResponseStatus = "in_progress" | "completed" | "failed";
+export type ResponseStatus =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "incomplete"
+  | "failed"
+  | "cancelled";
 
 export type ResponseFunctionTool = {
   readonly type: "function";
@@ -133,6 +140,7 @@ export interface ResponseRequestConfiguration {
   readonly metadata: Readonly<Record<string, string>>;
   readonly reasoningEffort: CanonicalRequest["requestedReasoningEffort"] | null;
   readonly toolChoice: "auto" | "none";
+  readonly parallelToolCalls?: boolean;
   readonly tools: readonly ResponseTool[];
   readonly store?: boolean;
   readonly previousResponseId?: string | null;
@@ -166,6 +174,7 @@ export function responseConfigurationFromCanonical(
     metadata: request.metadata ?? {},
     reasoningEffort: request.requestedReasoningEffort ?? null,
     toolChoice: request.toolChoice,
+    parallelToolCalls: request.parallelToolCalls,
     tools: request.tools.filter((tool) => tool.origin === "request").map(responseTool),
     store: request.store ?? false,
     previousResponseId: request.previousResponseId ?? null,
@@ -195,14 +204,14 @@ export interface ResponseStateObject {
   readonly status: ResponseStatus;
   readonly background: false;
   readonly error: { readonly code: string; readonly message: string } | null;
-  readonly incomplete_details: null;
+  readonly incomplete_details: { readonly reason: string } | null;
   readonly instructions: string | null;
   readonly max_output_tokens: number | null;
   readonly max_tool_calls: null;
   readonly metadata: Readonly<Record<string, string>>;
   readonly model: string;
   readonly output: readonly ResponseOutputItem[];
-  readonly parallel_tool_calls: true;
+  readonly parallel_tool_calls: boolean;
   readonly previous_response_id: string | null;
   readonly reasoning: {
     readonly effort: CanonicalRequest["requestedReasoningEffort"] | null;
@@ -249,7 +258,7 @@ export function responseState(input: {
     metadata: configuration.metadata,
     model: input.model,
     output: (input.output ?? []).map(normalizedOutputItem),
-    parallel_tool_calls: true,
+    parallel_tool_calls: configuration.parallelToolCalls ?? true,
     previous_response_id: configuration.previousResponseId ?? null,
     reasoning: { effort: configuration.reasoningEffort, summary: null },
     service_tier: configuration.serviceTier ?? null,

@@ -109,6 +109,7 @@ export interface CanonicalRequest {
   readonly messages: readonly CanonicalMessage[];
   readonly tools: readonly CanonicalToolDeclaration[];
   readonly toolChoice: "auto" | "none";
+  readonly parallelToolCalls?: boolean;
   readonly reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max";
   readonly requestedReasoningEffort?:
     | "none"

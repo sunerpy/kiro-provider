@@ -41,9 +41,10 @@
 - Live per-account model discovery and account-aware routing through Kiro management, with bounded stale/static fallback. Production calls use the live-probe-confirmed `runtime.<region>.kiro.dev` dialect. Token-usage metadata is an immediate completion witness; the current runtime's valid terminal metering event is accepted only when followed by clean EOF.
 - Default `v3-auto` transport selection: ordinary requests use KiroRuntime's
   native OpenAI Responses operation and request shapes requiring `store:false`,
-  max effort, encrypted reasoning replay, custom grammar, namespace tools, or
-  Codex collaboration use the canonical stateless fallback.
-- Encrypted reasoning replay for complete native Kiro envelopes: opaque `kr1_...` tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay.
+  max effort, provider `kr1_` replay, custom grammar, or Codex collaboration
+  use the canonical stateless fallback. Verified namespace/free-form tools can
+  stay on native Responses through a persistent tool bridge.
+- Complete signed Kiro envelopes use provider `kr1_...` replay tokens, AES-256-GCM storage, tenant/model/account/conversation/output binding, TTL/LRU cleanup, and account-locked replay. Native opaque tokens stay on CreateResponse and recover their owner from durable response records.
 - Multi-account rotation with automatic token refresh and failover. Exhausted accounts are hard-excluded from model attempts, then automatically rejoin only after a bounded, deduplicated Kiro usage probe confirms a new quota window. A provider-owned maintenance loop also refreshes near-expiry tokens and stale usage while the service is idle.
 - `kiro-provider login` and `accounts import` write directly to the provider-owned local authentication store. The former `auth_source: "opencode-shared"` compatibility mode was removed in 0.7.0; a configuration that still selects it fails at startup with migration instructions (import once, then use `local`).
 - A single global `proxy_url` that, when set, routes all upstream egress (model requests, token refresh, quota probes, device-code login) through one HTTP(S) proxy.
@@ -55,9 +56,9 @@ V3 implements the core OpenAI Responses resource and makes every upstream
 difference explicit:
 
 - native JSON/SSE creation, instructions, function tools, supported effort and
-  token controls, and native `previous_response_id`;
-- automatic stateless fallback for `store:false`, max effort, encrypted
-  reasoning, custom grammar, namespace tools, and Codex multi-agent items;
+  token controls, and `previous_response_id` (exact native replay for affected Claude and Sol reasoning histories);
+- automatic stateless fallback for `store:false`, max effort, provider-token
+  replay, custom grammar, unverified tool-bridge combinations, and Codex multi-agent items;
 - tenant-isolated local response mirrors for retrieve, delete, input-items
   pagination, and continuation;
 - field-level OpenAI error envelopes for capabilities Kiro cannot preserve,
@@ -70,6 +71,16 @@ The old GenerateAssistantResponse `safe` mode remains fail-closed because
 account does not advertise the private `systemPrompt` feature. The default
 `v3-auto` path instead uses KiroRuntime CreateResponse's native
 `instructions` field.
+
+`responses_fidelity_mode` defaults to `compatible` and reports known losses in
+`X-Kiro-Compatibility`; `strict` rejects those semantics before generation.
+`X-Kiro-Transport` distinguishes native, native-adapted, and stateless calls.
+Native tool bridges are enabled only for verified model/region cells. Instruction
+lifting stays experimental until its complete continuation gate passes. See the
+[Responses fidelity validation](docs/audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)
+for history, reasoning, instruction-priority boundaries, and storage migration.
+The [before/after report](docs/audits/kiro-provider-responses-before-after-2026-09-10.zh.md)
+includes real OpenAI SDK, Codex, and Zuno results.
 
 For the transport decision table, stored-response contract, data-retention
 boundary, verified model controls, and current client evidence, see

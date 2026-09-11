@@ -1,0 +1,492 @@
+{
+  "schema_version": 1,
+  "sdk": "openai@7.13.0",
+  "generated_at": "2026-09-10T18:11:43.355Z",
+  "label": "pinned-fixed-account",
+  "models": [
+    "gpt-5.6-sol"
+  ],
+  "features": [
+    "custom"
+  ],
+  "results": [
+    {
+      "model": "gpt-5.6-sol",
+      "case": "custom-tool-json",
+      "passed": true,
+      "checks": [
+        "PASS: custom input preserves newline, slash, quotes and Unicode bytes",
+        "PASS: custom result is paired by call_id and used by the model"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native-adapted",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789063880,
+            "created_at": 1789063877,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_bhq52bkj2wovgisnuqrcmvysjvmzh45cm4afpatlcqeb66jtglba",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [],
+                "encrypted_content": {
+                  "prefix": "upstream",
+                  "bytes": 916,
+                  "sha256": "2dac414a9a12d3d76ccabf95e1006f34fcc7a934dd5e140f6ea85db4d12e84a9"
+                },
+                "id": "rs_55eb6aff593c5e5e9aafda79e88b3409",
+                "summary": [],
+                "type": "reasoning"
+              },
+              {
+                "call_id": "call_ad15103ac6565e9093eedc32af9cc612",
+                "id": "fc_f632121aa32852dfa3773f4f2d061dc9",
+                "status": "completed",
+                "type": "custom_tool_call",
+                "name": "emit",
+                "input": "alpha\\beta\n{\"quote\":\"x\"}\n雪🌐"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.07794118,
+              "total_tokens": 212,
+              "output_tokens": 104,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.028392632039800993
+              },
+              "input_tokens": 108,
+              "output_tokens_details": {
+                "reasoning_tokens": 44
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": ""
+          },
+          "duration_ms": 5395
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_bhq52bkj2wovgisnuqrcmvysjvmzh45cm4afpatlcqeb66jtglba",
+            "input": [
+              {
+                "type": "custom_tool_call_output",
+                "call_id": "call_ad15103ac6565e9093eedc32af9cc612",
+                "output": "TOOL_350a5501-4f6"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the exact tool result just received."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            }
+          },
+          "status": 200,
+          "transport": "native-adapted",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789063884,
+            "created_at": 1789063882,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_slo7ynodbtyp3fh2gy423rvrwhsdcav3ysxhai55quyogebwd2aa",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "TOOL_350a5501-4f6",
+                    "type": "output_text"
+                  }
+                ],
+                "id": "msg_7560a39577db59caa2e20123460a4d33",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_bhq52bkj2wovgisnuqrcmvysjvmzh45cm4afpatlcqeb66jtglba",
+            "prompt_cache_key": null,
+            "prompt_cache_options": {
+              "mode": "implicit",
+              "ttl": "30m"
+            },
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.08272059,
+              "total_tokens": 225,
+              "output_tokens": 15,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.0055653552238805965
+              },
+              "input_tokens": 210,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "TOOL_350a5501-4f6"
+          },
+          "duration_ms": 3584
+        }
+      ]
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "case": "custom-tool-sse",
+      "passed": true,
+      "checks": [
+        "PASS: custom input preserves newline, slash, quotes and Unicode bytes",
+        "PASS: custom result is paired by call_id and used by the model"
+      ],
+      "observations": [],
+      "traces": [
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "input": "Use the emit custom tool once. Its raw input must be the exact decoded string of this JSON string literal: \"alpha\\\\beta\\n{\\\"quote\\\":\\\"x\\\"}\\n雪🌐\"",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": "native-adapted",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789063895,
+            "created_at": 1789063886,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_h22hgimkn46xtjyzo4eawflsyaenvtlxeud6yo4oty7qnubbpy2q",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "call_id": "call_e6f875f3ef825682b6707a8ad6a43ad2",
+                "id": "fc_ee22aa033f0a523083d9b7c53cf423be",
+                "status": "completed",
+                "type": "custom_tool_call",
+                "name": "emit",
+                "input": "alpha\\beta\n{\"quote\":\"x\"}\n雪🌐"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": null,
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [
+              {
+                "type": "custom",
+                "name": "emit",
+                "description": "Accept exact raw text",
+                "format": {
+                  "type": "text"
+                }
+              }
+            ],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.06102941,
+              "total_tokens": 166,
+              "output_tokens": 58,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.016195592437810942
+              },
+              "input_tokens": 108,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "",
+            "output_parsed": null
+          },
+          "duration_ms": 11344,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 1,
+            "response.custom_tool_call_input.delta": 1,
+            "response.custom_tool_call_input.done": 1,
+            "response.output_item.done": 1,
+            "response.completed": 1
+          }
+        },
+        {
+          "request": {
+            "model": "gpt-5.6-sol",
+            "previous_response_id": "resp_h22hgimkn46xtjyzo4eawflsyaenvtlxeud6yo4oty7qnubbpy2q",
+            "input": [
+              {
+                "type": "custom_tool_call_output",
+                "call_id": "call_e6f875f3ef825682b6707a8ad6a43ad2",
+                "output": "TOOL_c197593e-6f4"
+              },
+              {
+                "role": "user",
+                "content": "Reply only the exact tool result just received."
+              }
+            ],
+            "reasoning": {
+              "effort": "low"
+            },
+            "stream": true
+          },
+          "status": 200,
+          "transport": "native-adapted",
+          "compatibility": null,
+          "response": {
+            "background": false,
+            "completed_at": 1789063901,
+            "created_at": 1789063897,
+            "error": null,
+            "frequency_penalty": 0,
+            "id": "resp_kc6yfxf2f6rh6acbp3isyta6g6kzixkjda22nn2ee66muqyxaiba",
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 64000,
+            "max_tool_calls": null,
+            "metadata": {},
+            "model": "gpt-5.6-sol",
+            "object": "response",
+            "output": [
+              {
+                "content": [
+                  {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "TOOL_c197593e-6f4",
+                    "type": "output_text",
+                    "parsed": null
+                  }
+                ],
+                "id": "msg_9069e0167cdc51218783c5ee4ca7843b",
+                "phase": "final_answer",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message"
+              }
+            ],
+            "parallel_tool_calls": true,
+            "presence_penalty": 0,
+            "previous_response_id": "resp_h22hgimkn46xtjyzo4eawflsyaenvtlxeud6yo4oty7qnubbpy2q",
+            "prompt_cache_key": null,
+            "prompt_cache_retention": "in_memory",
+            "reasoning": {
+              "summary": null,
+              "effort": "low",
+              "context": "all_turns"
+            },
+            "safety_identifier": null,
+            "service_tier": "default",
+            "status": "completed",
+            "store": true,
+            "temperature": 1,
+            "text": {
+              "format": {
+                "type": "text"
+              },
+              "verbosity": "medium"
+            },
+            "tool_choice": "auto",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+              "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              },
+              "kiro:context_usage_percentage": 0.06507353,
+              "total_tokens": 177,
+              "output_tokens": 14,
+              "kiro:credits": {
+                "unit": "credit",
+                "unit_plural": "credits",
+                "value": 0.004944779303482587
+              },
+              "input_tokens": 163,
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "user": null,
+            "moderation": null,
+            "output_text": "TOOL_c197593e-6f4",
+            "output_parsed": null
+          },
+          "duration_ms": 6227,
+          "events": {
+            "response.created": 1,
+            "response.in_progress": 1,
+            "response.output_item.added": 1,
+            "response.content_part.added": 1,
+            "response.output_text.delta": 10,
+            "response.output_text.done": 1,
+            "response.content_part.done": 1,
+            "response.output_item.done": 1,
+            "response.completed": 1
+          }
+        }
+      ]
+    }
+  ]
+}

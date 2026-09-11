@@ -889,7 +889,7 @@ describe("transformToSdkRequest profile, region, effort, and output limits", () 
     expect(prepared.region).toBe("us-east-1");
   });
 
-  test("resolves effort in variant, request, config, and budget order", () => {
+  test("resolves Responses effort in request, variant, config, and budget order", () => {
     const body = (reasoningEffort?: CanonicalRequest["reasoningEffort"]): CanonicalRequest =>
       request([message("user", "reason")], {
         ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
@@ -904,7 +904,7 @@ describe("transformToSdkRequest profile, region, effort, and output limits", () 
         8_000,
         { effort: "medium" },
       ).effort,
-    ).toBe("high");
+    ).toBe("low");
     expect(
       transformToSdkRequest(body("high"), "gpt-5.6-sol", auth, true, 8_000, {
         effort: "medium",

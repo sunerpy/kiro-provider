@@ -36,7 +36,11 @@ export function transformToSdkRequest(
     model,
     think,
     budget,
-    reasoningEffort: body.reasoningEffort,
+    reasoningEffort:
+      body.protocol === "responses" && body.requestedReasoningEffort === "none"
+        ? "none"
+        : body.reasoningEffort,
+    requestFirst: body.protocol === "responses",
     configEffort: effortConfig?.effort,
     autoEffortMapping: effortConfig?.autoEffortMapping,
   });
@@ -52,7 +56,9 @@ export function transformToSdkRequest(
     ...(request.profileArn ? { profileArn: request.profileArn } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     runtimeProtocol:
-      body.projectionMode === "v3-auto" || body.projectionMode === "native-context-safe"
+      systemPrompt !== undefined ||
+      body.projectionMode === "v3-auto" ||
+      body.projectionMode === "native-context-safe"
         ? "kiro-runtime"
         : "codewhisperer",
     ...(outputTokenProjection?.ok === true

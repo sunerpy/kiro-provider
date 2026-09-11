@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "d3ce4cd400c83289cb25f5f26bdf639a4142e4c5",
+  "source_commit": "62f23c5a759d44b0f6f254a987c3b26856fcf9b6",
+  "source_tree": "e7194292fc6aca0e566fca0eb85ee03e7755b3a8",
+  "sdk_matrix_build": {
+    "commit": "c01bef12edaa1ce6fd28a20238d3a26bec7653d4",
+    "source_tree": "8560147e0cc8d6bb774aa713941f12b17109e914",
+    "binary_sha256": "c883f6a4a9ad06b7ba4b78f91dd37a2f04934e1a12ec2be32677b15c7e9ce7fc"
+  },
+  "final_build": {
+    "commit": "62f23c5a759d44b0f6f254a987c3b26856fcf9b6",
+    "source_tree": "e7194292fc6aca0e566fca0eb85ee03e7755b3a8",
+    "binary_sha256": "e6dab52fcbd27d5782512040eb6bbe79a2610a2ce6536ba46d88a198fcd7bc8b"
+  },
+  "results": {
+    "tests": {
+      "passed": 1622,
+      "failed": 0
+    },
+    "coverage": {
+      "covered_lines": 18780,
+      "total_lines": 20010,
+      "percent": 93.85,
+      "required_percent": 93
+    },
+    "sdk": {
+      "passed": 38,
+      "failed": 0
+    },
+    "clients": {
+      "passed": 12,
+      "failed": 0
+    },
+    "strict": {
+      "model_groups": 5,
+      "assertions_passed": 35
+    },
+    "pinned_account": {
+      "rounds": 3,
+      "cases_passed": 6
+    },
+    "restart": {
+      "sdk": "openai@7.13.0",
+      "native_opaque": true,
+      "native_after_restart": true,
+      "signed_after_restart": true,
+      "native_status": "completed",
+      "signed_status": "completed",
+      "affinity_cache_cleared": true
+    },
+    "static": [
+      "format",
+      "typecheck",
+      "lint",
+      "shell_syntax",
+      "python_syntax"
+    ],
+    "security": [
+      "seven security regression assertions",
+      "codex smoke security cleanup self-test"
+    ],
+    "build": [
+      "bun bundle",
+      "compiled binary"
+    ]
+  },
+  "client_versions": {
+    "codex": "0.153.4",
+    "zuno": "0.10.29",
+    "openai_sdk": "7.13.0",
+    "bun": "1.3.14"
+  },
+  "local_log_sha256": {
+    "static": "994d5d22946cb10cb0234133594a9b5a98ba0493a57ecb041535deda3411e6a5",
+    "tests": "d83036658ee9fd784e0a82eed8e342ac6ee25ec8be8151c3b01f7c717bfb3ea0",
+    "coverage": "fb2bdde3b228e5adeae10e37cf5e43df674a7161c579d7cc853fcf5835e4c1b7",
+    "coverage_gate": "22bd386e6541296883fa1a88876740516dc36065f235c6112ee39c69d612cb54",
+    "security": "7a90efa5df6ecec08cfd46aa5872e2dd584625add623936399146f763a992d60",
+    "build": "cbb2e52bb923e1f18a5f063510d180e79079037d48fbf396257046cc27c98207"
+  },
+  "ci": "All required checks must pass on the final PR head; see PR #37 checks for exact commit/run binding.",
+  "artifact_scope": "Synthetic inputs only; token values and reasoning text are redacted. No production replacement, merge or release.",
+  "local_gates": [
+    {
+      "check": "static",
+      "exit_code": 0,
+      "seconds": 3.88
+    },
+    {
+      "check": "tests",
+      "exit_code": 0,
+      "seconds": 29.18
+    },
+    {
+      "check": "coverage",
+      "exit_code": 0,
+      "seconds": 29.32
+    },
+    {
+      "check": "coverage_gate",
+      "exit_code": 0,
+      "seconds": 0.03
+    },
+    {
+      "check": "security",
+      "exit_code": 0,
+      "seconds": 9.51
+    }
+  ],
+  "test_harness_note": "Use full 4471-tango secret sentinel; the four-digit fragment 4471 collided with a random request UUID in one run. No security or coverage threshold was reduced.",
+  "isolation": {
+    "production_config_unchanged": true,
+    "production_binary_unchanged": true,
+    "production_pid_unchanged": true,
+    "production_health_status": 200,
+    "private_servers_stopped": 4,
+    "private_ports_closed": true
+  },
+  "probe_script_sha256": {
+    "probe-responses-sdk.ts": "0037af8ba08eb9d790bcaa57fe4b372f0899eda66abf537ebf3cb78eaee2f747",
+    "probe-responses-clients.py": "7e70628a40a5acb4044ecf9168408758fb40d9db562bd3a7cc6c6e20c6509309",
+    "probe-responses-fidelity.ts": "47447574b7dd7f9c0a4832aefaacf70f944a7b3c4f58833f6e5422d92979bf5e"
+  }
+}

@@ -62,11 +62,11 @@ flowchart TD
 The stateless lane is selected for:
 
 - `store: false`;
-- `max` effort or a `-max` model variant;
-- custom grammar tools and namespace tools;
-- Codex `additional_tools`, `agent_message`, and namespaced call history;
-- `parallel_tool_calls: false`;
-- `include: ["reasoning.encrypted_content"]`.
+- effective `max` effort after explicit parameter/alias/config normalization;
+- custom grammar tools and unverified native bridge combinations;
+- Codex `additional_tools` and `agent_message`;
+- `parallel_tool_calls: false` with callable tools;
+- `include: ["reasoning.encrypted_content"]` or input containing a provider `kr1_` token.
 
 If a request references a native stored response, it stays on the native lane.
 A later request that would require switching that native lineage to the
@@ -88,10 +88,10 @@ Verified native capabilities:
 
 | Capability | GPT-5.6 Sol | Claude Opus 5 |
 | --- | --- | --- |
-| `instructions` | Supported | Supported |
+| `instructions` | Supported | Forwarded; priority remains unverified in us-east-1 |
 | Standard Responses JSON and SSE | Supported | Supported |
 | Function tools | Supported | Supported |
-| `previous_response_id` | Supported with response/account affinity | Supported with response/account affinity |
+| `previous_response_id` | Durable owner binding; exact replay for affected opaque reasoning history | Full stored history replay into CreateResponse in us-east-1 |
 | `max_output_tokens` | Supported | Supported |
 | `reasoning.effort: xhigh` | Supported | Supported |
 | `truncation: disabled` | Supported | Supported |
@@ -135,8 +135,16 @@ V3 mirrors stored responses in the provider-owned SQLite database:
 - 30-day TTL;
 - 10,000-entry bounded retention;
 - stable input-item IDs for cursor pagination;
-- optional canonical request/completion state for stateless continuation;
-- native response/account affinity for KiroRuntime continuation.
+- versioned logical item snapshots and private replay attachments for stateless continuation;
+- durable native account/region/profile bindings; affinity caches are optional.
+
+Affected Opus 5 and Sonnet 5 requests in us-east-1 expand stored wire history
+through CreateResponse because the upstream previous ID does not restore their
+history. Sol opaque reasoning histories in the verified scope also use exact
+wire replay; other GPT histories keep upstream continuation. Native opaque input
+without a previous ID resolves its owner from the tenant's durable response
+records, not a guessed account. V1/V2 rows remain readable; new V3
+snapshots do not require a retained ancestor for local replay.
 
 `previous_response_id` is accepted only when the referenced ID exists in the
 same tenant mirror. Unknown, expired, cross-tenant, or locally deleted IDs
@@ -153,7 +161,7 @@ request physical deletion of Kiro's server-side response state.
 | Text, message arrays, images, inline documents | Supported within documented Kiro format limits. |
 | `instructions`, `system`, `developer` | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback. |
 | Function tools | Native where possible; stateless fallback otherwise. |
-| Custom grammar and namespace tools | Stateless fallback with public identity restored in responses. |
+| Namespace and free-form custom tools | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path. |
 | `agent_message` | Stateless fallback; visible content is preserved, encrypted child metadata is not injected into the parent model. |
 | `tool_choice: auto` / `none` | Supported where the request has no conflicting unfinished tool state. |
 | Required, named, or constrained tool choice | Rejected. |
@@ -246,3 +254,29 @@ Official OpenAI method references:
 - [Delete a response](https://developers.openai.com/api/reference/resources/responses/methods/delete)
 - [Cancel a response](https://developers.openai.com/api/reference/resources/responses/methods/cancel)
 - [List input items](https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list)
+
+## 8. Fidelity controls and verified boundaries
+
+`responses_fidelity_mode` defaults to `compatible`; `strict` rejects enumerated
+losses before model dispatch. `responses_instruction_lift` and
+`responses_native_tool_bridge` accept `auto` (default), `off`, and `experimental`.
+Experimental mode never bypasses storage, owner, or reasoning validation.
+
+`X-Kiro-Transport` is `native`, `native-adapted`, or `stateless`.
+`X-Kiro-Compatibility` lists stable loss codes. In us-east-1, the observed Opus 5
+and Sonnet 5 instruction-priority uncertainty is reported in compatible mode and
+rejected in strict mode. Unverified instruction lifting remains off in auto mode.
+Existing tool mappings remain usable after disabling new adaptation admissions.
+
+Nullable fields are normalized before route selection. Explicit Responses effort
+wins over model suffixes. A missing stream terminal is a failure, not a successful
+EOF. Private replay attachments survive stored continuation even when not
+included in the public output. Standard `store:false` returns an available replay
+token without requiring `include`; no token is fabricated without a complete envelope.
+V1 stateless records retain their known canonical history in new V3 envelopes.
+V2 native records remain readable, but cannot continue by ID without the durable
+owner metadata they never stored. An affinity cache cannot reconstruct the missing
+region/profile identity. Replay requiring missing legacy reasoning order fails explicitly.
+
+The [live validation report](audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)
+records passed and failed probes, supported cells, storage migration, and commands.

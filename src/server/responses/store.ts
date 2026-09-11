@@ -8,6 +8,11 @@ import {
 } from "../../protocol/output.js";
 import type { AccountsDatabase, StoredResponseRecord } from "../../storage/accounts-db.js";
 import type { ResponsesRequest } from "../request-schema.js";
+import {
+  ResponseContextError,
+  type ResponseContinuationContext,
+  ResponseContinuationSchema,
+} from "./continuation.js";
 import type { ResponseStateObject } from "./state.js";
 
 const RESPONSE_STORE_TTL_MS = 30 * 24 * 60 * 60_000;
@@ -25,6 +30,8 @@ export interface StoredResponse {
   readonly inputItems: readonly unknown[];
   readonly request?: CanonicalRequest;
   readonly completion?: CanonicalCompletion;
+  readonly continuation?: ResponseContinuationContext;
+  readonly transport?: "native" | "native-adapted" | "stateless";
 }
 
 export interface PipelineResponseStore {
@@ -34,9 +41,16 @@ export interface PipelineResponseStore {
     inputItems: readonly unknown[],
     request: CanonicalRequest,
     completion: CanonicalCompletion,
+    continuation?: ResponseContinuationContext,
   ): void;
-  putNative(tenantId: string, response: ResponseStateObject, inputItems: readonly unknown[]): void;
+  putNative(
+    tenantId: string,
+    response: ResponseStateObject,
+    inputItems: readonly unknown[],
+    continuation?: ResponseContinuationContext,
+  ): void;
   get(tenantId: string, responseId: string): StoredResponse | undefined;
+  findNativeReasoning?(tenantId: string, encryptedContent: string): readonly StoredResponse[];
   delete(tenantId: string, responseId: string): boolean;
 }
 
@@ -135,7 +149,25 @@ export function responseInputItems(
     ];
   }
   return input.map((item) => {
-    const record = item as Readonly<Record<string, unknown>>;
+    let record = item as Readonly<Record<string, unknown>>;
+    if (
+      (record.type === "message" || record.type === undefined) &&
+      typeof record.role === "string"
+    ) {
+      record = {
+        ...record,
+        type: "message",
+        content:
+          typeof record.content === "string"
+            ? [
+                {
+                  type: record.role === "assistant" ? "output_text" : "input_text",
+                  text: record.content,
+                },
+              ]
+            : record.content,
+      };
+    }
     return {
       ...record,
       ...(typeof record.id === "string"
@@ -210,7 +242,8 @@ export class SqliteResponseStore implements PipelineResponseStore {
     private readonly database: Pick<
       AccountsDatabase,
       "putStoredResponse" | "getStoredResponse" | "deleteStoredResponse"
-    >,
+    > &
+      Partial<Pick<AccountsDatabase, "findStoredResponsesByReasoning">>,
     private readonly ttlMs = RESPONSE_STORE_TTL_MS,
     private readonly maxEntries = RESPONSE_STORE_MAX_ENTRIES,
     private readonly now: () => number = Date.now,
@@ -222,6 +255,7 @@ export class SqliteResponseStore implements PipelineResponseStore {
     inputItems: readonly unknown[],
     request: CanonicalRequest,
     completion: CanonicalCompletion,
+    continuation?: ResponseContinuationContext,
   ): void {
     const now = this.now();
     const record: StoredResponseRecord = {
@@ -230,11 +264,15 @@ export class SqliteResponseStore implements PipelineResponseStore {
       model: response.model,
       responseJson: jsonStringify(response),
       inputItemsJson: jsonStringify(inputItems),
-      canonicalJson: jsonStringify({
-        version: 1,
-        request,
-        completion,
-      } satisfies StoredCanonicalEnvelope),
+      canonicalJson: jsonStringify(
+        continuation
+          ? { version: 3, continuation }
+          : ({
+              version: 1,
+              request,
+              completion,
+            } satisfies StoredCanonicalEnvelope),
+      ),
       createdAt: response.created_at * 1_000,
       lastSeen: now,
       expiresAt: now + this.ttlMs,
@@ -250,7 +288,12 @@ export class SqliteResponseStore implements PipelineResponseStore {
     });
   }
 
-  putNative(tenantId: string, response: ResponseStateObject, inputItems: readonly unknown[]): void {
+  putNative(
+    tenantId: string,
+    response: ResponseStateObject,
+    inputItems: readonly unknown[],
+    continuation?: ResponseContinuationContext,
+  ): void {
     const now = this.now();
     this.database.putStoredResponse(
       {
@@ -259,7 +302,11 @@ export class SqliteResponseStore implements PipelineResponseStore {
         model: response.model,
         responseJson: jsonStringify(response),
         inputItemsJson: jsonStringify(inputItems),
-        canonicalJson: jsonStringify({ version: 2, transport: "kiro-native-responses" }),
+        canonicalJson: jsonStringify(
+          continuation
+            ? { version: 3, continuation }
+            : { version: 2, transport: "kiro-native-responses" },
+        ),
         createdAt: response.created_at * 1_000,
         lastSeen: now,
         expiresAt: now + this.ttlMs,
@@ -283,18 +330,39 @@ export class SqliteResponseStore implements PipelineResponseStore {
     try {
       const response = jsonParse(record.responseJson);
       const inputItems = jsonParse(record.inputItemsJson);
-      const canonical = parseCanonicalEnvelope(jsonParse(record.canonicalJson));
+      const envelope = jsonParse(record.canonicalJson) as {
+        version?: unknown;
+        continuation?: unknown;
+      };
+      if (envelope?.version !== 1 && envelope?.version !== 2 && envelope?.version !== 3) {
+        throw new ResponseContextError("Stored response uses an unsupported continuation version");
+      }
+      const continuation =
+        envelope.version === 3
+          ? ResponseContinuationSchema.safeParse(envelope.continuation)
+          : undefined;
+      if (continuation && !continuation.success) {
+        throw new ResponseContextError("Stored response continuation is invalid");
+      }
+      const canonical = parseCanonicalEnvelope(envelope);
       if (!isResponseStateObject(response, responseId) || !Array.isArray(inputItems)) {
         throw new TypeError("Stored response state has an invalid shape");
       }
       return {
         response,
         inputItems,
+        transport: continuation?.success
+          ? continuation.data.transport
+          : envelope.version === 1
+            ? "stateless"
+            : "native",
+        ...(continuation?.success ? { continuation: continuation.data } : {}),
         ...(canonical === undefined
           ? {}
           : { request: canonical.request, completion: canonical.completion }),
       };
     } catch (error) {
+      if (error instanceof ResponseContextError) throw error;
       this.database.deleteStoredResponse(responseId, tenantId);
       auditLog("error", "response_state_corrupt", {
         response_hash: auditHash(responseId),
@@ -313,5 +381,14 @@ export class SqliteResponseStore implements PipelineResponseStore {
       deleted,
     });
     return deleted;
+  }
+
+  findNativeReasoning(tenantId: string, encryptedContent: string): readonly StoredResponse[] {
+    return (
+      this.database.findStoredResponsesByReasoning?.(tenantId, encryptedContent, this.now()) ?? []
+    ).flatMap((id) => {
+      const stored = this.get(tenantId, id);
+      return stored && stored.transport !== "stateless" ? [stored] : [];
+    });
   }
 }

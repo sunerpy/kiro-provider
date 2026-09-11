@@ -113,6 +113,7 @@ export function createIngress(
   createLease?: () => RequestIdleTimeoutLease | undefined,
 ): Ingress {
   const requestId = newRequestId();
+  const deadlineAt = Date.now() + config.request_timeout_ms;
   const deadlineController = new AbortController();
   const deadlineTimer = setTimeout(
     () => deadlineController.abort(new DOMException("Request deadline exceeded", "TimeoutError")),
@@ -120,6 +121,7 @@ export function createIngress(
   );
   let lease: RequestIdleTimeoutLease | undefined;
   let leaseRequested = false;
+  let finalized = false;
   return {
     requestId,
     signals: {
@@ -127,6 +129,7 @@ export function createIngress(
       deadline: deadlineController.signal,
       client: request.signal,
       requestId,
+      deadlineAt,
     },
     disableIdleTimeout(): void {
       if (leaseRequested) return;
@@ -135,6 +138,8 @@ export function createIngress(
       lease?.disable();
     },
     finalize(): void {
+      if (finalized) return;
+      finalized = true;
       runCleanupSteps(
         () => clearTimeout(deadlineTimer),
         () => lease?.restore(),

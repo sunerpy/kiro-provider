@@ -3,6 +3,7 @@ export type IngressSignals = {
   readonly deadline: AbortSignal;
   readonly client: AbortSignal;
   readonly requestId?: string;
+  readonly deadlineAt?: number;
 };
 
 export interface RequestIdleTimeoutLease {

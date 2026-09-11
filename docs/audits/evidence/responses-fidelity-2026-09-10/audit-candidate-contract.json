@@ -1,0 +1,295 @@
+[
+  {
+    "name": "truncated_stream",
+    "result": {
+      "status": 200,
+      "readRejected": false,
+      "terminal": true,
+      "containsPartial": true,
+      "mirrored": false
+    }
+  },
+  {
+    "name": "completed_stream_control",
+    "result": {
+      "status": 200,
+      "readRejected": false,
+      "terminal": true,
+      "containsPartial": false,
+      "mirrored": true
+    }
+  },
+  {
+    "name": "malformed_stream",
+    "result": {
+      "status": 502,
+      "readRejected": false,
+      "terminal": false,
+      "containsPartial": false,
+      "mirrored": false
+    }
+  },
+  {
+    "name": "json_instead_of_sse",
+    "result": {
+      "status": 502,
+      "contentType": "application/json",
+      "body": "{\"error\":{\"message\":\"Kiro did not return an SSE response\",\"type\":\"upstream_error\",\"code\":\"invalid_upstream_response\"}}"
+    }
+  },
+  {
+    "name": "continuation_account_unavailable",
+    "result": {
+      "status": 429,
+      "selection": [
+        {
+          "selected": "a"
+        },
+        {
+          "preferred": "a"
+        }
+      ]
+    }
+  },
+  {
+    "name": "kr1_replay_without_include",
+    "result": {
+      "status": 200,
+      "nativeCalls": 0,
+      "statelessCalls": 1,
+      "upstreamReceivedKr1": false
+    }
+  },
+  {
+    "name": "accepted_then_dropped_controls",
+    "result": {
+      "status": 400
+    }
+  },
+  {
+    "name": "nullable_instructions",
+    "accepted": true
+  },
+  {
+    "name": "nullable_previous_response_id",
+    "accepted": true
+  },
+  {
+    "name": "nullable_temperature",
+    "accepted": true
+  },
+  {
+    "name": "nullable_max_output_tokens",
+    "accepted": true
+  },
+  {
+    "name": "nullable_store",
+    "accepted": true
+  },
+  {
+    "name": "assistant_phase_store_true",
+    "result": {
+      "status": 200,
+      "nativeCalls": 1,
+      "error": null,
+      "phaseForwarded": true
+    }
+  },
+  {
+    "name": "assistant_phase_store_false",
+    "result": {
+      "status": 200,
+      "nativeCalls": 0,
+      "error": null,
+      "phaseForwarded": false
+    }
+  },
+  {
+    "name": "parallel_false_two_calls",
+    "result": {
+      "status": 200,
+      "calls": 2,
+      "responseParallel": true,
+      "compatibility": "parallel_tool_calls_unenforced",
+      "canonicalHasParallel": false
+    }
+  },
+  {
+    "name": "parallel_false_without_tools_loses_token_limit",
+    "result": {
+      "status": 200,
+      "body": {
+        "id": "resp_probe_1",
+        "object": "response",
+        "model": "gpt-5.6-sol",
+        "created_at": 1788998400,
+        "completed_at": 1788998401,
+        "status": "completed",
+        "error": null,
+        "incomplete_details": null,
+        "background": false,
+        "instructions": null,
+        "max_output_tokens": null,
+        "max_tool_calls": null,
+        "metadata": {},
+        "output": [
+          {
+            "id": "msg_resp_probe_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "OK",
+                "annotations": [],
+                "logprobs": []
+              }
+            ]
+          }
+        ],
+        "parallel_tool_calls": false,
+        "previous_response_id": null,
+        "reasoning": {
+          "effort": null,
+          "summary": null
+        },
+        "service_tier": "default",
+        "store": true,
+        "temperature": null,
+        "text": {
+          "format": {
+            "type": "text"
+          }
+        },
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": null,
+        "truncation": "disabled",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1,
+          "total_tokens": 2,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "user": null,
+        "safety_identifier": null,
+        "prompt_cache_key": null
+      },
+      "nativeCalls": 1
+    }
+  },
+  {
+    "name": "rate_limit_retry_after_null",
+    "result": {
+      "status": 429,
+      "returnedRetryAfter": "1",
+      "cooldowns": [
+        {
+          "account": "a",
+          "delayMs": 1000
+        }
+      ]
+    }
+  },
+  {
+    "name": "rate_limit_retry_after_15",
+    "result": {
+      "status": 429,
+      "returnedRetryAfter": "15",
+      "cooldowns": [
+        {
+          "account": "a",
+          "delayMs": 15000
+        }
+      ]
+    }
+  },
+  {
+    "name": "input_items_easy_message",
+    "result": {
+      "status": 200,
+      "body": {
+        "object": "list",
+        "data": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Hi"
+              }
+            ],
+            "type": "message",
+            "id": "msg_a6331f23-6beb-4384-aad7-eee94a9e3418",
+            "status": "completed"
+          }
+        ],
+        "first_id": "msg_a6331f23-6beb-4384-aad7-eee94a9e3418",
+        "last_id": "msg_a6331f23-6beb-4384-aad7-eee94a9e3418",
+        "has_more": false
+      }
+    }
+  },
+  {
+    "name": "reasoning_content_standard_text_field",
+    "result": {
+      "status": 200,
+      "error": null,
+      "nativeCalls": 1
+    }
+  },
+  {
+    "name": "stored_stateless_continuation_loses_reasoning",
+    "result": {
+      "status": 200,
+      "firstHasEncrypted": true,
+      "subsequentReplayCount": 1,
+      "subsequentContainsPriorToken": true
+    }
+  },
+  {
+    "name": "effort_changes_with_store",
+    "result": {
+      "nativeEffort": "low",
+      "statelessEffort": "low"
+    }
+  },
+  {
+    "name": "intermediate_instruction_moves_before_first_user",
+    "result": {
+      "projected": {
+        "chatTriggerType": "MANUAL",
+        "conversationId": "99089999-c983-4abd-92c0-2a11ea7aaec3",
+        "agentContinuationId": "339b8549-908e-43b8-b469-31db9bd1cc88",
+        "agentTaskType": "vibe",
+        "currentMessage": {
+          "userInputMessage": {
+            "content": "FROM_NOW_ON_NEW_POLICY\n\nSECOND_QUESTION",
+            "modelId": "claude-opus-5",
+            "origin": "AI_EDITOR"
+          }
+        },
+        "history": [
+          {
+            "userInputMessage": {
+              "content": "FIRST_QUESTION",
+              "modelId": "claude-opus-5",
+              "origin": "AI_EDITOR"
+            }
+          },
+          {
+            "assistantResponseMessage": {
+              "content": "FIRST_ANSWER"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

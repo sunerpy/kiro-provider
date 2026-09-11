@@ -1,0 +1,42 @@
+[
+  {
+    "model": "claude-sonnet-5",
+    "status": 200,
+    "transport": "native",
+    "first_ack": true,
+    "marker_present": false,
+    "marker_exact": false,
+    "previous_id_echoed": true,
+    "duration_s": 8.23
+  },
+  {
+    "model": "gpt-5.6-sol",
+    "status": 200,
+    "transport": "native",
+    "first_ack": true,
+    "marker_present": true,
+    "marker_exact": true,
+    "previous_id_echoed": true,
+    "duration_s": 10.48
+  },
+  {
+    "model": "gpt-5.6-terra",
+    "status": 200,
+    "transport": "native",
+    "first_ack": true,
+    "marker_present": true,
+    "marker_exact": true,
+    "previous_id_echoed": true,
+    "duration_s": 4.52
+  },
+  {
+    "model": "gpt-5.6-luna",
+    "status": 200,
+    "transport": "native",
+    "first_ack": true,
+    "marker_present": true,
+    "marker_exact": true,
+    "previous_id_echoed": true,
+    "duration_s": 4.31
+  }
+]

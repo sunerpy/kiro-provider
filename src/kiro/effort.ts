@@ -137,6 +137,8 @@ export interface EffectiveEffortOptions {
   readonly reasoningEffort?: string | null | undefined;
   readonly configEffort?: string | null | undefined;
   readonly autoEffortMapping?: boolean | undefined;
+  /** Responses resolves its standard request parameter before a model alias. */
+  readonly requestFirst?: boolean;
 }
 
 /**
@@ -168,7 +170,10 @@ export function resolveEffectiveEffort(options: EffectiveEffortOptions): Effort 
     return undefined;
   }
 
-  const explicitEfforts = [resolved.effort, options.reasoningEffort, options.configEffort] as const;
+  if (options.requestFirst && options.reasoningEffort === "none") return undefined;
+  const explicitEfforts = options.requestFirst
+    ? [options.reasoningEffort, resolved.effort, options.configEffort]
+    : [resolved.effort, options.reasoningEffort, options.configEffort];
   for (const effort of explicitEfforts) {
     if (isEffort(effort)) {
       return resolveEffort(resolved.wireId, effort);

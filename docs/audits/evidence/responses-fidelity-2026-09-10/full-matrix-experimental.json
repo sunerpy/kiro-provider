@@ -1,0 +1,677 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-10T15:19:30.102Z",
+  "endpoint": "http://127.0.0.1:18787/v1",
+  "repetitions": 3,
+  "results": [
+    {
+      "model": "claude-opus-5",
+      "feature": "top_instructions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 11393
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "namespace_functions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 11947
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "custom_freeform",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 9666
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7513
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "top_instructions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 6835
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "namespace_functions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 10561
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "custom_freeform",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 9174
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 9806
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "top_instructions",
+      "repetition": 3,
+      "passed": false,
+      "checks": [
+        "FAIL:instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 7038
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "namespace_functions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 10348
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "custom_freeform",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7456
+    },
+    {
+      "model": "claude-opus-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 8639
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "top_instructions",
+      "repetition": 1,
+      "passed": false,
+      "checks": [
+        "FAIL:instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 6330
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "namespace_functions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 11601
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "custom_freeform",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7518
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 6107
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "top_instructions",
+      "repetition": 2,
+      "passed": false,
+      "checks": [
+        "FAIL:instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 5077
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "namespace_functions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 11850
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "custom_freeform",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7233
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 5817
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "top_instructions",
+      "repetition": 3,
+      "passed": false,
+      "checks": [
+        "FAIL:instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 2992
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "namespace_functions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 10208
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "custom_freeform",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7235
+    },
+    {
+      "model": "claude-sonnet-5",
+      "feature": "instruction_lift_limited",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "lift_priority",
+        "persistent_input_instruction",
+        "complex_scope_guarded_auto_must_remain_disabled"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 6169
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "top_instructions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 8530
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "namespace_functions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 14533
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "custom_freeform",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 10685
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "top_instructions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 8942
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "namespace_functions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 11875
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "custom_freeform",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 15445
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "top_instructions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 4487
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "namespace_functions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 11521
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "feature": "custom_freeform",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7643
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "top_instructions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 2144
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "namespace_functions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7792
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "custom_freeform",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 4777
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "top_instructions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 2228
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "namespace_functions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7858
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "custom_freeform",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 4685
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "top_instructions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 2222
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "namespace_functions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 8033
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "feature": "custom_freeform",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 4568
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "top_instructions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 2093
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "namespace_functions",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 6901
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "custom_freeform",
+      "repetition": 1,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 4667
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "top_instructions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 3684
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "namespace_functions",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 6754
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "custom_freeform",
+      "repetition": 2,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 8293
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "top_instructions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "instruction_priority"
+      ],
+      "status": 200,
+      "transport": "native",
+      "durationMs": 1999
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "namespace_functions",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "public_tool_identity_and_arguments",
+        "reordered_tool_continuation",
+        "removed_tools_and_persisted_context"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 7777
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "feature": "custom_freeform",
+      "repetition": 3,
+      "passed": true,
+      "checks": [
+        "custom_input_bytes",
+        "custom_output_continuation"
+      ],
+      "status": 200,
+      "transport": "native-adapted",
+      "durationMs": 4742
+    }
+  ]
+}
