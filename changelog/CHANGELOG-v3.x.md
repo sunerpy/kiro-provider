@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/sunerpy/kiro-provider/compare/v3.0.1...v3.1.0) (2026-09-11)
+
+
+### Features
+
+* **responses:** 提高 V3 原生调用保真并加固续接 ([#37](https://github.com/sunerpy/kiro-provider/issues/37)) ([ee71f26](https://github.com/sunerpy/kiro-provider/commit/ee71f26e596ad485ea6107d251c2b7c18dd97699))
+
 ## [3.0.1](https://github.com/sunerpy/kiro-provider/compare/v3.0.0...v3.0.1) (2026-09-06)
 
 
