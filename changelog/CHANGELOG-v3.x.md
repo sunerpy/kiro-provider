@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.2](https://github.com/sunerpy/kiro-provider/compare/v3.1.1...v3.1.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **responses:** 分离历史工具回放与当前调用授权 ([#41](https://github.com/sunerpy/kiro-provider/issues/41)) ([880ade6](https://github.com/sunerpy/kiro-provider/commit/880ade68660e04365f5549ad4c59119c66710d3b))
+
 ## [3.1.1](https://github.com/sunerpy/kiro-provider/compare/v3.1.0...v3.1.1) (2026-09-13)
 
 
