@@ -450,10 +450,11 @@ describe("Responses exact function/custom tools", () => {
     const declaration = result.body.tools[0];
     expect(declaration?.publicType).toBe("custom");
     expect(declaration?.name).toBe("shell");
-    expect(declaration?.wireName).toBe("kiro_custom_0");
+    if (!declaration) throw new TypeError("Expected a custom declaration");
+    expect(declaration.wireName).toMatch(/^kiro_custom_[0-9a-f]{40}$/);
     expect(result.body.messages[0]?.toolCalls[0]).toMatchObject({
       id: "custom_1",
-      name: "kiro_custom_0",
+      name: declaration.wireName,
       input: { input: rawInput },
     });
 
@@ -461,7 +462,7 @@ describe("Responses exact function/custom tools", () => {
       {
         itemId: "item_1",
         id: "new_call",
-        name: "kiro_custom_0",
+        name: declaration.wireName,
         arguments: JSON.stringify({ input: rawInput }),
       },
     ]);
@@ -862,7 +863,13 @@ describe("Responses fail-closed capability validation", () => {
     ).toMatchObject({
       ok: true,
       body: {
-        tools: [{ publicType: "function", name: "ns.run", wireName: "kiro_ns_0" }],
+        tools: [
+          {
+            publicType: "function",
+            name: "ns.run",
+            wireName: expect.stringMatching(/^kiro_ns_[0-9a-f]{40}$/),
+          },
+        ],
       },
     });
   });

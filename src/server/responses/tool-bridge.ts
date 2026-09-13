@@ -64,9 +64,11 @@ export interface ToolBridgeBinding {
 
 export interface ToolBridgeOptions {
   readonly stable?: boolean;
+  /** Stable private names without opting out of stateless schema sanitization. */
+  readonly stableAliases?: boolean;
   readonly bindings?: readonly ToolBridgeBinding[];
   readonly allowHistoricalWithoutDeclarations?: boolean;
-  /** Sequential stateless aliases cannot be guessed from a public history item. */
+  /** Require saved names when continuing an upstream-persisted wire history. */
   readonly requireHistoricalBindings?: boolean;
 }
 type BridgeErrorCode =
@@ -676,7 +678,7 @@ export function createResponsesToolBridge(
       wireNameByIdentity.get(key) ??
       (identity.kind === "function"
         ? identity.name
-        : options.stable
+        : options.stable || options.stableAliases
           ? `${identity.kind === "namespace" ? NAMESPACE_ALIAS_PREFIX : CUSTOM_ALIAS_PREFIX}${canonicalFingerprint(identity).slice(0, 40)}`
           : nextAlias(identity.kind))
     );
@@ -709,8 +711,12 @@ export function createResponsesToolBridge(
         : declaration.identity.name;
     // The caller's public identity must remain model-visible even with an opaque wire name.
     const description =
-      options.stable && declaration.identity.kind !== "function"
+      (options.stable || options.stableAliases) && declaration.identity.kind !== "function"
         ? descriptions(publicName, declaration.tool.function.description)
+        : declaration.tool.function.description;
+    const declarationDescription =
+      options.stableAliases && declaration.tool.function.description?.trim()
+        ? description
         : declaration.tool.function.description;
     internalTools.push({
       type: "function",
@@ -727,9 +733,7 @@ export function createResponsesToolBridge(
           ? `${declaration.identity.namespace}.${declaration.identity.name}`
           : declaration.identity.name,
       wireName,
-      ...(declaration.tool.function.description !== undefined
-        ? { description: declaration.tool.function.description }
-        : {}),
+      ...(declarationDescription !== undefined ? { description: declarationDescription } : {}),
       parameters: declaration.tool.function.parameters ?? {},
       path: declaration.path,
       origin: declaration.origin,

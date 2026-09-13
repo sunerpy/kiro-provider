@@ -11,6 +11,7 @@ import { parseResponsesRequest } from "../src/server/request-schema.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import type { ResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 type ParsedEvent = {
   readonly type: string;
@@ -759,7 +760,10 @@ describe("responsesSseAdapter", () => {
             index: 0,
             id: "call_exec",
             type: "function",
-            function: { name: "kiro_custom_0", arguments: JSON.stringify({ input: "printf ok" }) },
+            function: {
+              name: statelessCustomWireName("exec"),
+              arguments: JSON.stringify({ input: "printf ok" }),
+            },
           },
           {
             index: 1,
@@ -818,7 +822,7 @@ describe("responsesSseAdapter", () => {
             index: 1,
             id: "call_exec",
             type: "function",
-            function: { name: "kiro_custom_0", arguments: '{"input":1}' },
+            function: { name: statelessCustomWireName("exec"), arguments: '{"input":1}' },
           },
         ],
       }),

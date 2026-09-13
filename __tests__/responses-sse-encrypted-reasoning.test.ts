@@ -7,6 +7,7 @@ import { parseResponsesRequest } from "../src/server/request-schema.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import type { ResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 type ParsedEvent = {
   readonly type: string;
@@ -408,7 +409,7 @@ describe("Responses SSE typed tool restoration failures (B26 first step)", () =>
   test("a malformed custom wrapper fails with invalid_custom_tool_input", async () => {
     const bridge = bridgeFor([{ type: "custom", name: "exec" }]);
     const events = await adapt(
-      [tool(0, "call_1", "kiro_custom_0", '{"input":1}'), completed("tool_calls")],
+      [tool(0, "call_1", statelessCustomWireName("exec"), '{"input":1}'), completed("tool_calls")],
       { bridge },
     );
 

@@ -8,6 +8,7 @@ import type {
   CanonicalToolDeclaration,
 } from "../src/protocol/canonical.js";
 import { parseResponsesRequest, type ResponsesRequest } from "../src/server/request-schema.js";
+import { createResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
 
 export const TEST_MODEL = "gpt-5.6-sol";
 
@@ -77,4 +78,21 @@ export function parsedResponses(raw: unknown): ResponsesRequest {
     throw new TypeError("Expected a valid Responses request");
   }
   return parsed.value;
+}
+
+/** Script upstream fixtures with the declared wire name, not a positional alias. */
+export function statelessCustomWireName(name: string): string {
+  const result = createResponsesToolBridge(
+    parsedResponses({
+      model: TEST_MODEL,
+      input: "fixture",
+      tools: [{ type: "custom", name, description: "Fixture tool." }],
+    }),
+    [],
+    { stableAliases: true },
+  );
+  if (!result.ok || !result.bridge.declarations[0]) {
+    throw new TypeError("Expected a custom fixture declaration");
+  }
+  return result.bridge.declarations[0].wireName;
 }

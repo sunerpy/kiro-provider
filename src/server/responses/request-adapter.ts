@@ -863,9 +863,16 @@ export function adaptResponsesRequest(
   const toolValidation = validateToolDeclarations(request);
   if (!toolValidation.ok) return toolValidation;
 
+  const reprojectLogicalHistory = previous?.legacyRequest === undefined;
   const bridgeResult = createResponsesToolBridge(request, previous?.items, {
+    // Stateless execution reprojects the complete logical history. Private
+    // aliases can therefore be rebuilt from public identities; old declarations
+    // are not needed and must not become authorization for new calls.
+    // Legacy canonical snapshots already contain wire names; retain their
+    // existing binding requirement instead of re-aliasing a partial history.
+    stableAliases: reprojectLogicalHistory,
     allowHistoricalWithoutDeclarations: true,
-    requireHistoricalBindings: true,
+    requireHistoricalBindings: !reprojectLogicalHistory,
     bindings: previous?.toolBindings,
   });
   if (!bridgeResult.ok) return bridgeResult;

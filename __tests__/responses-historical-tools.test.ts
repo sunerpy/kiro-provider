@@ -218,6 +218,9 @@ describe("stored namespace/custom identities never authorize new calls", () => {
     );
     expect(seed.ok).toBe(true);
     if (!seed.ok) return;
+    const [firstWire, secondWire, customWire] = seed.body.tools.map((item) => item.wireName);
+    if (!firstWire || !secondWire || !customWire)
+      throw new Error("Expected three wire declarations");
     const originalBindings = seed.bridge.bindings;
     const previous = { messages: [], toolBindings: originalBindings };
     const removed = adaptResponsesRequest(
@@ -231,7 +234,7 @@ describe("stored namespace/custom identities never authorize new calls", () => {
     );
     expect(removed.ok).toBe(true);
     if (!removed.ok) return;
-    expect(removed.body.tools.map((item) => item.wireName)).toEqual(["kiro_ns_1"]);
+    expect(removed.body.tools.map((item) => item.wireName)).toEqual([secondWire]);
     for (const item of historical) {
       expect(removed.bridge.lowerCall(item)).toEqual(seed.bridge.lowerCall(item));
       const wire = removed.bridge.lowerCall(item).function.name;
@@ -254,18 +257,24 @@ describe("stored namespace/custom identities never authorize new calls", () => {
     expect(reordered.ok).toBe(true);
     if (!reordered.ok) return;
     expect(reordered.body.tools.map((item) => item.wireName)).toEqual([
-      "kiro_custom_0",
-      "kiro_ns_1",
-      "kiro_ns_0",
+      customWire,
+      secondWire,
+      firstWire,
     ]);
   });
 
-  test("unknown historical aliases and collisions fail explicitly", () => {
-    expect(
-      adaptResponsesRequest(
-        parsedResponses({ model: "claude-opus-5", input: historical, tools: [] }),
-      ),
-    ).toMatchObject({ ok: false, code: "missing_historical_tool_binding", param: "input.0" });
+  test("unbound stateless history is reprojected while alias collisions still fail", () => {
+    const unbound = adaptResponsesRequest(
+      parsedResponses({ model: "claude-opus-5", input: historical, tools: [] }),
+    );
+    expect(unbound.ok).toBe(true);
+    if (!unbound.ok) return;
+    expect(unbound.body.tools).toHaveLength(0);
+    for (const item of historical) {
+      expect(
+        unbound.bridge.identityFor(unbound.bridge.lowerCall(item).function.name),
+      ).toBeUndefined();
+    }
     const conflicting = adaptResponsesRequest(
       parsedResponses({
         model: "claude-opus-5",
@@ -295,14 +304,16 @@ describe("stored namespace/custom identities never authorize new calls", () => {
   test("previous_response_id persists historical bindings separately from current tools", async () => {
     const f = fidelityFixture();
     let turn = 0;
+    let originalWireNames: readonly string[] = [];
     try {
       const runner: typeof runChatCompletion = async (options) => {
         turn += 1;
+        if (turn === 1) originalWireNames = options.body.tools.map((item) => item.wireName);
         if (turn === 2) {
           expect(options.body.tools.map((item) => item.wireName)).toEqual(["other"]);
           expect(
             options.body.messages.flatMap((message) => message.toolCalls).map((item) => item.name),
-          ).toEqual(["kiro_ns_0", "kiro_ns_1", "kiro_custom_0"]);
+          ).toEqual([...originalWireNames]);
           const projected = buildCodeWhispererRequest(options.body, options.model, TEST_AUTH);
           expect(
             projected.request.conversationState.currentMessage.userInputMessage
