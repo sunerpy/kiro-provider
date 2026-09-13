@@ -601,7 +601,9 @@ zuno models kiro --verbose
 放入 input、messages、instructions、工具描述或任何模型可见字段；内部标题/
 摘要请求也不会加入主会话。因此，同一 Zuno 会话会串行复用一份持久化的账号/
 Kiro conversation 绑定；不同会话即使首个 prompt 与上游工具别名完全相同，
-也保持隔离。工具声明和别名状态始终只属于当前请求。
+也保持隔离。当前声明只授权新调用；私有历史别名绑定可随已存储的 Responses
+续接恢复，不会重新开放已撤下工具。详见
+[历史工具联动验收与边界](../audits/historical-tool-scope-2026-09-13.zh.md)。
 
 该集成应保持 `surface: "responses"`。选择 `chat` 需要另行显式开启旧接口，
 且不会携带上述 Zuno Responses 会话元数据。

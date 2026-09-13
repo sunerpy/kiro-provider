@@ -479,26 +479,31 @@ describe("Responses exact function/custom tools", () => {
     });
   });
 
-  test("requires exact historical declarations instead of inferring schema", () => {
-    expectFailure(
-      {
-        model: TEST_MODEL,
-        input: [
-          {
-            type: "function_call",
-            call_id: "call_1",
-            name: "read_file",
-            arguments: '{"path":"x"}',
-          },
-          {
-            type: "function_call_output",
-            call_id: "call_1",
-            output: "x",
-          },
-        ],
-      },
-      "missing_tool_declaration",
-    );
+  test("preserves ordinary history without inferring or authorizing a schema", () => {
+    const result = adapt({
+      model: TEST_MODEL,
+      input: [
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "read_file",
+          arguments: '{"path":"x"}',
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "x",
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.body.tools).toHaveLength(0);
+      expect(result.body.messages[0]?.toolCalls[0]).toMatchObject({
+        name: "read_file",
+        input: { path: "x" },
+      });
+    }
   });
 });
 

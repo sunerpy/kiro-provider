@@ -166,9 +166,10 @@ The default `session_affinity_mode: "explicit-only"` accepts Responses
 compatibility `client_metadata`, or `prompt_cache_key`; Chat accepts only
 `prompt_cache_key`, and Anthropic has no verified explicit affinity field.
 The migration-only `legacy-initial-input` mode restores old fingerprint
-heuristics without changing model-visible content. Tool declarations,
-public/upstream aliases, and result correlation stay request-local so
-concurrent sessions cannot share a mutable tool map.
+heuristics without changing model-visible content. Tool declarations authorize
+only the current generation. Stored Responses continuations can carry private
+historical alias bindings; each request builds its own immutable mapping and
+keeps historical identity separate from output authorization.
 
 Authenticated `GET /ready` verifies that the configured authority can be
 read and has at least one active account. `GET /health` remains a liveness

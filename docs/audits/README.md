@@ -30,6 +30,8 @@ fact, so where records overlap the newer one supersedes the older conclusion.
 | [kiro-provider-responses-before-after-2026-09-10.zh.md](kiro-provider-responses-before-after-2026-09-10.zh.md) | 请求和响应前后示例、SDK 38 项与客户端 12 项验收、Sol opaque 续接修复、GPT effort 和未启用能力。 |
 | [stream-delivery-recovery-2026-09-13.zh.md](stream-delivery-recovery-2026-09-13.zh.md) / [English](stream-delivery-recovery-2026-09-13.md) | 响应头与工具增量交付、503 因果链、RPC 首帧解码、SDK/Chat/Zuno 真实验收及 native 权限限制。 |
 
+Latest joint replay validation: [historical tool scope](historical-tool-scope-2026-09-13.zh.md).
+
 Older v0.4 evidence lives outside this directory in
 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and
 [`../KIRO_WEB_SEARCH_PROBE_2026-08-23.md`](../KIRO_WEB_SEARCH_PROBE_2026-08-23.md).

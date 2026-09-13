@@ -64,16 +64,22 @@ describe("redacted Codex Responses fixtures", () => {
     });
   });
 
-  test("rejects continuation fixtures that omit the original declaration", () => {
-    for (const name of [
-      "codex-custom-tool-turn.json",
-      "codex-tool-turn.json",
-      "codex-tool-turn-array.json",
-    ] as const) {
-      const result = adaptResponsesRequest(parsedResponses(fixture(name)));
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.code).toBe("missing_tool_declaration");
+  test("accepts ordinary history without granting the historical tool", () => {
+    const result = adaptResponsesRequest(parsedResponses(fixture("codex-tool-turn.json")));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.body.tools).toHaveLength(0);
+      expect(result.bridge.identityFor("wait")).toBeUndefined();
     }
+  });
+
+  test("keeps unsupported result blocks and unavailable custom bindings explicit", () => {
+    expect(
+      adaptResponsesRequest(parsedResponses(fixture("codex-tool-turn-array.json"))),
+    ).toMatchObject({ ok: false, code: "unsupported_tool_result_content" });
+    expect(
+      adaptResponsesRequest(parsedResponses(fixture("codex-custom-tool-turn.json"))),
+    ).toMatchObject({ ok: false, code: "missing_historical_tool_binding" });
   });
 
   test("rejects namespace history instead of changing public tool identity", () => {
@@ -81,6 +87,6 @@ describe("redacted Codex Responses fixtures", () => {
       parsedResponses(fixture("codex-namespace-tool-turn.json")),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("missing_tool_declaration");
+    if (!result.ok) expect(result.code).toBe("missing_historical_tool_binding");
   });
 });

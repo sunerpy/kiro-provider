@@ -348,6 +348,7 @@ function previousContext(stored: StoredResponse): ResponsesPreviousContext {
     const priorInput = stored.continuation.request.input;
     return {
       messages,
+      toolBindings: stored.continuation.tools,
       ...(legacyRequest ? { legacyRequest } : {}),
       input: [
         ...(typeof priorInput === "string"
@@ -762,6 +763,7 @@ async function handleResponsesCore(
     transport: "stateless",
     request: { ...parsed.value, input: logicalInput },
     output: state.output as ResponsesInputItem[],
+    tools: [...adapted.bridge.bindings],
     ...(previous?.legacyRequest ? { legacyRequest: previous.legacyRequest } : {}),
   });
   const lineage = canonicalSessionLineage(adapted.body, dependencies.tenantId);

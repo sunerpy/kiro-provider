@@ -430,23 +430,33 @@ function projectMessages(
 function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
+  independentHistory: boolean,
 ): void {
   // The projection is the last line of defence, so it also scans `tool_use`
   // content parts; adapters validate only the `toolCalls` they produce.
-  const violation = findToolHistoryViolation(messages, tools, { includeToolUseParts: true });
+  const violation = findToolHistoryViolation(messages, tools, {
+    includeToolUseParts: true,
+    allowHistoricalWithoutDeclarations: independentHistory,
+  });
   if (!violation) return;
   switch (violation.kind) {
     case "missing_tool_declaration":
       throw new RequestTransformError(
         `Tool call ${violation.callId} references ${violation.toolName} without an exact declaration`,
         violation.code,
+        violation.path,
       );
     case "duplicate_tool_call":
-      throw new RequestTransformError(`Duplicate tool call id ${violation.callId}`, violation.code);
+      throw new RequestTransformError(
+        `Duplicate tool call id ${violation.callId}`,
+        violation.code,
+        violation.path,
+      );
     case "orphan_tool_result":
       throw new RequestTransformError(
         `Tool result ${violation.toolCallId} has no earlier unique matching call`,
         violation.code,
+        violation.path,
       );
   }
 }
@@ -524,7 +534,7 @@ export function buildCodeWhispererRequest(
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
   }
-  validateToolHistory(projection.messages, canonical.tools);
+  validateToolHistory(projection.messages, canonical.tools, canonical.protocol === "responses");
 
   const projectedReplays = (identity.resolvedReasoningReplays ?? []).map((replay) => {
     const insertBeforeMessage = projection.projectedIndexByOriginal.get(replay.insertBeforeMessage);

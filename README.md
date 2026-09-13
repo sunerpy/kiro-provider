@@ -640,8 +640,9 @@ descriptions, or any other model-visible field; internal title/summary calls
 do not join the main provider conversation. Therefore one Zuno session is
 serialized onto one persisted account/Kiro-conversation binding, while
 different sessions remain isolated even if their first prompt and upstream
-tool aliases are identical. Tool declaration and alias state remains local to
-each request.
+tool aliases are identical. Current declarations authorize new calls only.
+Private historical alias bindings can accompany stored Responses continuations;
+they never re-enable retired tools. See [historical tool scope](docs/HISTORICAL_TOOLS.md).
 
 Keep `surface: "responses"` for this integration. Selecting `chat` requires
 the separately enabled legacy endpoint and does not carry the Zuno Responses
