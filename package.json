@@ -42,7 +42,7 @@
   "dependencies": {
     "@aws-sdk/core": "3.975.3",
     "@aws/codewhisperer-streaming-client": "^1.0.34",
-    "@smithy/node-http-handler": "4.9.7",
+    "@smithy/node-http-handler": "4.12.1",
     "ajv": "8.20.0",
     "https-proxy-agent": "^9.1.0",
     "proper-lockfile": "^4.1.2",
