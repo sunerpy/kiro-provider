@@ -1,0 +1,124 @@
+{
+  "kiro-scope-baseline-104927": {
+    "source_sha256": "0a95c4a80f0f9a58a276fcb388e519a28f1083ad0bb04f853b8eddcc25944116",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-scope-baseline-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "f49c199b0641bf4b815d67389e018424d5505496df427daced31760e80f852b3",
+      "returnCode": 1,
+      "elapsedSeconds": 3.998,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 400,
+          "errorCodes": [
+            "missing_tool_declaration"
+          ],
+          "hasExpectedValue": false,
+          "elapsedSeconds": 0.013
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "9bf71332f119af7f51151819e703ee6df93024b01270ffa742afa293c5579df1",
+      "stderrSha256": "963c05bc2c703697afa2bfed7da577eda6797b250db13f8a6db5a267f6d7801e",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": false
+    }
+  },
+  "kiro-scope-candidate-104927": {
+    "source_sha256": "83a4bc7b85c443dc016bdaa5bdc77b6afa00052cfa765978025803e10bbba728",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-scope-candidate-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "f49c199b0641bf4b815d67389e018424d5505496df427daced31760e80f852b3",
+      "returnCode": 0,
+      "elapsedSeconds": 10.566,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 200,
+          "errorCodes": [],
+          "hasExpectedValue": true,
+          "elapsedSeconds": 8.395
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "b4a73e1ae2a5f9c9efd463e6061508ead294dc50c3025b7e294ca0e8b568d7ea",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": true
+    }
+  },
+  "kiro-scope-repeat2-104927": {
+    "source_sha256": "4e522b4c825c4129e63e9588978413ad5d0c9846836aed3ea765ed10940efd5a",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-scope-repeat2-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "f49c199b0641bf4b815d67389e018424d5505496df427daced31760e80f852b3",
+      "returnCode": 0,
+      "elapsedSeconds": 38.606,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 200,
+          "errorCodes": [],
+          "hasExpectedValue": true,
+          "elapsedSeconds": 35.476
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "17a5e4310288402feb53631422335a827d16a01a20f9f67953c5eb5861b5ae03",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": true
+    }
+  }
+}

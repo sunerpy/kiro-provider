@@ -761,9 +761,10 @@ describe("transformToSdkRequest exact tools and history", () => {
       ],
       "messages.1",
     );
-    expect(() => transformToSdkRequest(request([call, result]), MODEL, auth)).toThrow(
-      /without an exact declaration/,
-    );
+    expect(() => transformToSdkRequest(request([call, result]), MODEL, auth)).not.toThrow();
+    expect(() =>
+      transformToSdkRequest(request([call, result], { protocol: "chat-completions" }), MODEL, auth),
+    ).toThrow(/without an exact declaration/);
   });
 
   test("rejects an assistant-ending request locally without rewriting its content", () => {

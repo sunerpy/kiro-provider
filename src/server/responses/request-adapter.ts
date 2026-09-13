@@ -30,7 +30,11 @@ import type {
   ResponsesReasoningItem,
   ResponsesRequest,
 } from "../request-schema.js";
-import { createResponsesToolBridge, type ResponsesToolBridge } from "./tool-bridge.js";
+import {
+  createResponsesToolBridge,
+  type ResponsesToolBridge,
+  type ToolBridgeBinding,
+} from "./tool-bridge.js";
 
 export type ResponsesRequestAdaptationResult =
   | {
@@ -50,6 +54,7 @@ export interface ResponsesPreviousContext {
   readonly messages: readonly CanonicalMessage[];
   readonly items?: readonly ResponsesInputItem[];
   readonly legacyRequest?: CanonicalRequest;
+  readonly toolBindings?: readonly ToolBridgeBinding[];
 }
 
 export const RESPONSES_REQUEST_KEYS = new Set([
@@ -857,7 +862,11 @@ export function adaptResponsesRequest(
   const toolValidation = validateToolDeclarations(request);
   if (!toolValidation.ok) return toolValidation;
 
-  const bridgeResult = createResponsesToolBridge(request, previous?.items);
+  const bridgeResult = createResponsesToolBridge(request, previous?.items, {
+    allowHistoricalWithoutDeclarations: true,
+    requireHistoricalBindings: true,
+    bindings: previous?.toolBindings,
+  });
   if (!bridgeResult.ok) return bridgeResult;
   const bridge = bridgeResult.bridge;
   const tools: CanonicalToolDeclaration[] = bridge.declarations.map((tool) => ({

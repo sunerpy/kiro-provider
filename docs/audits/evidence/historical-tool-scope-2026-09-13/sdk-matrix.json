@@ -1,0 +1,86 @@
+[
+  {
+    "case": "same-sealed-history-only-other-tool",
+    "passed": true,
+    "reply": "REPLAY_VALUE=43921\n\nFrom the earlier read of `/tmp/zuno-replay-v01038.cz0APl/workspace/value.json`, marker was 7319, so 7319 × 6 + 7 = 43921. No new tool calls made; this is a restatement of the already-inspected result.",
+    "trace": {
+      "transport": "stateless",
+      "status": 200,
+      "output_types": [
+        "message"
+      ],
+      "calls": 0
+    },
+    "history_unchanged": true,
+    "current_tools": [
+      "new_lookup"
+    ]
+  },
+  {
+    "case": "same-sealed-history-new-read-schema",
+    "passed": true,
+    "reply": "REPLAY_VALUE=43921\n\nDerived from the single earlier read of `/tmp/zuno-replay-v01038.cz0APl/workspace/value.json`, which contained `{\"marker\":7319}`: 7319 × 6 + 7 = 43921. No new tool calls made; this restates the prior in-context result rather than re-verifying the file, so it holds only if the file is unchanged since that read.",
+    "trace": {
+      "transport": "stateless",
+      "status": 200,
+      "output_types": [
+        "message"
+      ],
+      "calls": 0
+    },
+    "history_unchanged": true,
+    "current_tools": [
+      "read"
+    ]
+  },
+  {
+    "case": "namespace-stored-history-tools-removed",
+    "passed": true,
+    "trace": [
+      {
+        "transport": "stateless",
+        "status": 200,
+        "output_types": [
+          "message",
+          "function_call"
+        ],
+        "calls": 1
+      },
+      {
+        "transport": "stateless",
+        "status": 200,
+        "output_types": [
+          "message"
+        ],
+        "calls": 0
+      }
+    ],
+    "reply": "43921",
+    "current_tools": []
+  },
+  {
+    "case": "custom-stored-history-tools-removed",
+    "passed": true,
+    "trace": [
+      {
+        "transport": "stateless",
+        "status": 200,
+        "output_types": [
+          "message",
+          "custom_tool_call"
+        ],
+        "calls": 1
+      },
+      {
+        "transport": "stateless",
+        "status": 200,
+        "output_types": [
+          "message"
+        ],
+        "calls": 0
+      }
+    ],
+    "reply": "43921",
+    "current_tools": []
+  }
+]

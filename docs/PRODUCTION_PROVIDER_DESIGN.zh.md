@@ -160,8 +160,9 @@ SDK 客户端只在账号、effort 和 access token 均未变化时缓存；toke
 这里承诺“尽可能复用账号、Kiro conversation 与 SDK 对象”，不保证固定一条
 TCP socket。缺少显式会话键时仍可复用账号级 SDK/transport 对象，但不会复用
 conversation，除非后续完整历史命中已保存的 assistant 输出 lineage。
-工具声明、公开名/上游别名和结果关联始终属于当前请求，多个并发会话不会共享
-可变工具映射。reasoning 回放会进一步锁死原账号和原 Kiro conversation。
+工具声明只授权当前生成；已存储的 Responses 续接可携带私有历史别名绑定，
+每个请求独立构造映射，多个并发会话不共享可变工具状态。历史身份不会扩大
+当前调用权限。reasoning 回放会进一步锁死原账号和原 Kiro conversation。
 
 生产默认 `enforce_single_instance: true`，服务绑定端口前取得平台配置目录的
 进程锁，避免进程内会话/账号队列和 SDK/socket 池被多个 Provider 静默拆分。

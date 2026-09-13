@@ -1,0 +1,122 @@
+[
+  {
+    "source_sha256": "2828ae3f469fc147b8eaaf81c45de1fe0a2f8c91d03729e01d57d88ad73d2421",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-local-zuno-1-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "990cf387f368983d1e8b3e9567f5fc5ac4c535d687ef42124f16a7ad8cd079eb",
+      "returnCode": 0,
+      "elapsedSeconds": 8.785,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 200,
+          "errorCodes": [],
+          "hasExpectedValue": true,
+          "elapsedSeconds": 7.334
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "ec4cdc77c0743b2f71ccd106dca1a224d1bdc010b9cef07bec5ef57c752c587e",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": true
+    }
+  },
+  {
+    "source_sha256": "a7c5f52de2cbc0a41c50f816e94f4d20cba0e7ae3f9fb1da962ff811553d36be",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-local-zuno-2-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "990cf387f368983d1e8b3e9567f5fc5ac4c535d687ef42124f16a7ad8cd079eb",
+      "returnCode": 0,
+      "elapsedSeconds": 7.88,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 200,
+          "errorCodes": [],
+          "hasExpectedValue": true,
+          "elapsedSeconds": 6.127
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "2891663dbd84592ceeb8903526cf7461b9339efee4ea6acfc231c7eff54a42e5",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": true
+    }
+  },
+  {
+    "source_sha256": "1e99216a580c4dc82858bcb53208ecef127c467becfa5522620e2222ea24a981",
+    "data": {
+      "stage": "resume",
+      "label": "kiro-local-zuno-3-104927",
+      "upstreamPort": 18791,
+      "binarySha256": "990cf387f368983d1e8b3e9567f5fc5ac4c535d687ef42124f16a7ad8cd079eb",
+      "returnCode": 0,
+      "elapsedSeconds": 7.809,
+      "requests": [
+        {
+          "model": "claude-opus-5",
+          "reasoning": {
+            "effort": "max"
+          },
+          "include": [
+            "reasoning.encrypted_content"
+          ],
+          "tools": [],
+          "calls": [
+            "2cdb3fc14597223e63f485bc5a5e18dc4dbe107b153210cea65435580d4d095a"
+          ],
+          "capsules": [
+            "d1681ee97cd068148a6f66115a76e87def5855b8e67b4448e449053fd9a81fa8"
+          ],
+          "status": 200,
+          "errorCodes": [],
+          "hasExpectedValue": true,
+          "elapsedSeconds": 5.825
+        }
+      ],
+      "noGoal": true,
+      "stdoutSha256": "0c142e73130475be2c36b4bff37ca611640984a995675d11842d1648dc079560",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "originalCallsPreserved": true,
+      "originalCapsulesPreserved": true,
+      "noToolsExposed": true,
+      "succeeded": true
+    }
+  }
+]

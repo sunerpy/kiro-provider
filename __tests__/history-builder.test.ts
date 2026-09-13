@@ -255,7 +255,7 @@ describe("safe and legacy instruction projection", () => {
 });
 
 describe("exact tool history declarations", () => {
-  test("rejects historical calls when the original declaration is absent", () => {
+  test("allows Responses historical calls without changing legacy declaration policy", () => {
     const request = canonicalRequest([
       {
         role: "assistant",
@@ -273,9 +273,21 @@ describe("exact tool history declarations", () => {
       message("user", "continue", "messages.1"),
     ]);
 
-    expect(() => buildCodeWhispererRequest(request, TEST_MODEL, TEST_AUTH)).toThrow(
-      /without an exact declaration/,
-    );
+    const projected = buildCodeWhispererRequest(request, TEST_MODEL, TEST_AUTH);
+    expect(
+      projected.request.conversationState.history?.[0]?.assistantResponseMessage?.toolUses,
+    ).toEqual([{ toolUseId: "call_1", name: "read_file", input: { path: "x" } }]);
+    expect(
+      projected.request.conversationState.currentMessage.userInputMessage?.userInputMessageContext
+        ?.tools,
+    ).toBeUndefined();
+    expect(() =>
+      buildCodeWhispererRequest(
+        { ...request, protocol: "chat-completions" },
+        TEST_MODEL,
+        TEST_AUTH,
+      ),
+    ).toThrow(/without an exact declaration/);
   });
 
   test("preserves declared tool call and result structure without schema inference", () => {

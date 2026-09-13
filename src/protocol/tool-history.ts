@@ -36,6 +36,8 @@ export interface ToolHistoryOptions {
    * protocol adapters only scan `message.toolCalls`, the shape they produce.
    */
   readonly includeToolUseParts?: boolean;
+  /** Historical calls are input, not authorization for this generation. */
+  readonly allowHistoricalWithoutDeclarations?: boolean;
 }
 
 interface HistoryToolCall {
@@ -58,9 +60,10 @@ function toolCallsOf(
 }
 
 /**
- * Find the first tool-history violation in message order: a call must name an
- * exactly declared tool, call ids must be unique, and a result must follow a
- * unique earlier call. Returns `undefined` when the history is consistent.
+ * Find the first tool-history violation in message order. Legacy surfaces may
+ * require an exact current declaration; Responses validates history independently.
+ * Call ids stay unique and results must follow a unique earlier call. None of
+ * these checks authorizes a new output call.
  */
 export function findToolHistoryViolation(
   messages: readonly CanonicalMessage[],
@@ -72,7 +75,7 @@ export function findToolHistoryViolation(
   const results = new Set<string>();
   for (const [index, message] of messages.entries()) {
     for (const call of toolCallsOf(message, options.includeToolUseParts === true)) {
-      if (!declarations.has(call.name)) {
+      if (!options.allowHistoricalWithoutDeclarations && !declarations.has(call.name)) {
         return {
           kind: "missing_tool_declaration",
           code: "missing_tool_declaration",

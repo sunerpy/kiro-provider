@@ -66,6 +66,8 @@ export interface ToolBridgeOptions {
   readonly stable?: boolean;
   readonly bindings?: readonly ToolBridgeBinding[];
   readonly allowHistoricalWithoutDeclarations?: boolean;
+  /** Sequential stateless aliases cannot be guessed from a public history item. */
+  readonly requireHistoricalBindings?: boolean;
 }
 type BridgeErrorCode =
   | "invalid_tool_declaration"
@@ -111,8 +113,13 @@ export function reportToolRestoreFailure(failure: BridgeFailure): ToolRestoreFai
 
 type BridgeBuildFailure = {
   readonly ok: false;
-  readonly code: "invalid_tool_declaration" | "invalid_tool_history" | "missing_tool_declaration";
+  readonly code:
+    | "invalid_tool_declaration"
+    | "invalid_tool_history"
+    | "missing_tool_declaration"
+    | "missing_historical_tool_binding";
   readonly message: string;
+  readonly param?: string;
 };
 
 export type BridgeBuildResult =
@@ -132,6 +139,7 @@ type Declaration = {
 type HistoricalCall = {
   readonly index: number;
   readonly identity: PublicToolIdentity;
+  readonly path: string;
 };
 
 const CUSTOM_ALIAS_PREFIX = "kiro_custom_";
@@ -289,6 +297,7 @@ export class ResponsesToolBridge {
   readonly declarations: readonly BridgedToolDeclaration[];
   readonly #wireNameByIdentity: ReadonlyMap<string, string>;
   readonly #identityByWireName: ReadonlyMap<string, PublicToolIdentity>;
+  readonly #callableWireNames: ReadonlySet<string>;
 
   get bindings(): readonly ToolBridgeBinding[] {
     return [...this.#identityByWireName].map(([wireName, identity]) => ({ wireName, identity }));
@@ -296,7 +305,9 @@ export class ResponsesToolBridge {
 
   /** Resolve public identity without parsing an unfinished argument string. */
   identityFor(wireName: string): PublicToolIdentity | undefined {
-    return this.#identityByWireName.get(wireName);
+    return this.#callableWireNames.has(wireName)
+      ? this.#identityByWireName.get(wireName)
+      : undefined;
   }
 
   constructor(input: {
@@ -309,6 +320,7 @@ export class ResponsesToolBridge {
     this.declarations = input.declarations;
     this.#wireNameByIdentity = input.wireNameByIdentity;
     this.#identityByWireName = input.identityByWireName;
+    this.#callableWireNames = new Set(input.internalTools.map((tool) => tool.function.name));
   }
 
   lowerCall(item: ResponsesFunctionCallItem | ResponsesCustomToolCallItem): InternalToolCall {
@@ -330,12 +342,12 @@ export class ResponsesToolBridge {
   ): { readonly ok: true; readonly items: readonly ResponseToolCallItem[] } | BridgeFailure {
     const items: ResponseToolCallItem[] = [];
     for (const call of calls) {
-      const identity = this.#identityByWireName.get(call.name);
+      const identity = this.identityFor(call.name);
       if (!identity) {
         return {
           ok: false,
           code: "unknown_tool_alias",
-          message: `Upstream returned undeclared tool ${call.name}`,
+          message: "Upstream returned an undeclared tool",
           toolName: call.name,
         };
       }
@@ -529,9 +541,14 @@ export function createResponsesToolBridge(
         ok: false,
         code: "invalid_tool_history",
         message: `Duplicate tool call id ${item.call_id}`,
+        param: "previous_response_id",
       };
     }
-    const call = { index: index - previousItems.length, identity: callIdentity(item) };
+    const call = {
+      index: index - previousItems.length,
+      identity: callIdentity(item),
+      path: "previous_response_id",
+    };
     callsById.set(item.call_id, call);
     historical.push(call);
   }
@@ -542,9 +559,10 @@ export function createResponsesToolBridge(
         ok: false,
         code: "invalid_tool_history",
         message: `Duplicate tool call id ${item.call_id}`,
+        param: `input.${index}.call_id`,
       };
     }
-    const call = { index, identity: callIdentity(item) };
+    const call = { index, identity: callIdentity(item), path: `input.${index}` };
     callsById.set(item.call_id, call);
     historical.push(call);
   }
@@ -557,6 +575,7 @@ export function createResponsesToolBridge(
         ok: false,
         code: "invalid_tool_history",
         message: `Duplicate tool output id ${item.call_id}`,
+        param: `input.${index}.call_id`,
       };
     }
     outputIds.add(item.call_id);
@@ -566,6 +585,7 @@ export function createResponsesToolBridge(
         ok: false,
         code: "invalid_tool_history",
         message: `Tool output ${item.call_id} has no matching call`,
+        param: `input.${index}.call_id`,
       };
     }
     const callIsCustom = isCustomIdentity(call.identity);
@@ -577,20 +597,41 @@ export function createResponsesToolBridge(
         ok: false,
         code: "invalid_tool_history",
         message: `Tool output ${item.call_id} is out of order or has the wrong type`,
+        param: `input.${index}`,
       };
     }
   }
 
   const ordered = [...declarations.values()];
+  const boundIdentities = new Set(
+    (options.bindings ?? []).map((binding) => identityKey(binding.identity)),
+  );
   for (const call of historical) {
     const key = identityKey(call.identity);
-    if (declarations.has(key) || options.allowHistoricalWithoutDeclarations) continue;
+    if (declarations.has(key)) continue;
+    if (options.allowHistoricalWithoutDeclarations) {
+      if (
+        options.requireHistoricalBindings &&
+        call.identity.kind !== "function" &&
+        !boundIdentities.has(key)
+      ) {
+        return {
+          ok: false,
+          code: "missing_historical_tool_binding",
+          message:
+            "Historical namespace/custom wire identity is unavailable; a stored continuation with its original tool mapping is required",
+          param: call.path,
+        };
+      }
+      continue;
+    }
     return {
       ok: false,
       code: "missing_tool_declaration",
       message:
         `Historical ${call.identity.kind} tool call has no exact declaration; ` +
         "resend the original tool declaration",
+      param: call.path,
     };
   }
 
