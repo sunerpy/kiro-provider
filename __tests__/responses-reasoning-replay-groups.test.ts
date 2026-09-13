@@ -29,6 +29,13 @@ const FUNCTION_CALL_OUTPUT = {
 
 const USER_NEXT = { role: "user", content: "next" } as const;
 
+const AGENT_MESSAGE = {
+  type: "agent_message",
+  author: "/root/reviewer",
+  recipient: "/root",
+  content: [{ type: "output_text", text: "The release audit is ready." }],
+} as const;
+
 function reasoningItem(
   overrides: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {
@@ -156,6 +163,99 @@ describe("Responses reasoning replay turn groups (A8)", () => {
       TURN_FINGERPRINT,
       assistantOutputFingerprint({ text: "done", toolCalls: [] }),
     ]);
+  });
+
+  test("keeps child reasoning out of the parent tool replay after an agent report", () => {
+    const result = adapt([
+      reasoningItem({ encrypted_content: "kr1_child" }),
+      AGENT_MESSAGE,
+      reasoningItem({ encrypted_content: "kr1_parent" }),
+      FUNCTION_CALL,
+      FUNCTION_CALL_OUTPUT,
+      USER_NEXT,
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.reasoningReplays).toEqual([
+      {
+        lookup: { kind: "responses-token", encryptedContent: "kr1_parent" },
+        outputFingerprint: assistantOutputFingerprint({
+          text: "",
+          toolCalls: [{ id: "call_1", name: "lookup", input: '{"q":"status"}' }],
+        }),
+        insertBeforeMessage: 1,
+        path: "input.2",
+      },
+    ]);
+    expect(result.body.messages.map((entry) => entry.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    expect(result.body.messages[0]?.content).toContainEqual({
+      type: "text",
+      text: "The release audit is ready.",
+      path: "input.1.content.0.text",
+    });
+  });
+
+  test("preserves both parent assistant turns separated by an agent report", () => {
+    const result = adapt([
+      reasoningItem({ encrypted_content: "kr1_parent_before" }),
+      { role: "assistant", content: "answer" },
+      AGENT_MESSAGE,
+      reasoningItem({ encrypted_content: "kr1_parent_after" }),
+      FUNCTION_CALL,
+      FUNCTION_CALL_OUTPUT,
+      USER_NEXT,
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.reasoningReplays.map((replay) => replay.insertBeforeMessage)).toEqual([
+      0, 2,
+    ]);
+    expect(result.body.reasoningReplays.map((replay) => replay.outputFingerprint)).toEqual([
+      assistantOutputFingerprint({ text: "answer", toolCalls: [] }),
+      assistantOutputFingerprint({
+        text: "",
+        toolCalls: [{ id: "call_1", name: "lookup", input: '{"q":"status"}' }],
+      }),
+    ]);
+  });
+
+  test("separates multiple child reports from a later parent replay", () => {
+    const result = adapt([
+      reasoningItem({ encrypted_content: "kr1_child_first" }),
+      AGENT_MESSAGE,
+      reasoningItem({ encrypted_content: "kr1_child_second" }),
+      { ...AGENT_MESSAGE, author: "/root/second-reviewer" },
+      reasoningItem({ encrypted_content: "kr1_parent" }),
+      FUNCTION_CALL,
+      FUNCTION_CALL_OUTPUT,
+      USER_NEXT,
+    ]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.reasoningReplays).toHaveLength(1);
+    expect(result.body.reasoningReplays[0]).toMatchObject({
+      lookup: { kind: "responses-token", encryptedContent: "kr1_parent" },
+      insertBeforeMessage: 2,
+      path: "input.4",
+    });
+  });
+
+  test("does not classify an orphan parent reasoning after an agent report as child metadata", () => {
+    expect(
+      adapt([AGENT_MESSAGE, reasoningItem({ encrypted_content: "kr1_orphan" }), USER_NEXT]),
+    ).toMatchObject({
+      ok: false,
+      code: "invalid_reasoning_replay",
+      param: "input.1",
+    });
   });
 
   test("still rejects plaintext reasoning when no sibling item carries a token", () => {
