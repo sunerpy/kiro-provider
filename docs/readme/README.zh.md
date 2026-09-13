@@ -671,6 +671,7 @@ Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
 当前账号管理与真实用量验证记录见
 [`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)。
 v0.5.0 类型化流错误契约与 Zuno 下游接入说明见
+[`流交付与 SDK/Zuno 修复前后报告`](../audits/stream-delivery-recovery-2026-09-13.zh.md)、
 [`docs/STREAM_ERROR_CONTRACT.md`](../STREAM_ERROR_CONTRACT.md) 和
 [`docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md`](../ZUNO_STREAM_ERROR_HANDOFF.zh.md)。
 此前本地认证生命周期记录保留在

@@ -40,8 +40,10 @@
     "prepublishOnly": "bun run build:npm"
   },
   "dependencies": {
+    "@aws-sdk/core": "3.975.3",
     "@aws/codewhisperer-streaming-client": "^1.0.34",
     "@smithy/node-http-handler": "4.9.7",
+    "ajv": "8.20.0",
     "https-proxy-agent": "^9.1.0",
     "proper-lockfile": "^4.1.2",
     "zod": "^3.24.0"

@@ -61,7 +61,6 @@ import {
   abandonPreparedStream,
   createPipelineStreamResponse,
   createStreamTelemetry,
-  isSemanticOutputEvent,
   type PreparedCanonicalStream,
   prepareCanonicalStream,
   StreamIdleTimeoutError,
@@ -80,6 +79,9 @@ import {
   streamErrorAuditFields,
 } from "./stream-error.js";
 import { AccountUnavailableError } from "./token-refresher.js";
+import { sendAcceptedStream } from "./upstream-acceptance.js";
+import { RequestDiagnostics } from "./request-diagnostics.js";
+import { toolOutputValidator } from "./tool-output-validation.js";
 import { isSelectableAccount } from "./account-selection.js";
 
 export type {
@@ -979,12 +981,14 @@ async function runAttempt(
   let account = selected;
   let upstreamStarted = false;
   try {
+    options.diagnostics?.phase("token_refresh");
     const initialAuth = options.accountManager.toAuthDetails(selected);
     account = await abortable(
       options.tokenRefresher.refreshIfNeeded(selected, initialAuth, signal),
       signal,
     );
     const auth = options.accountManager.toAuthDetails(account);
+    options.diagnostics?.phase("request_validation");
     if (options.modelCapabilities) {
       const availability = await abortable(
         options.modelCapabilities.ensureAccountModel(account, auth, options.model, signal),
@@ -1091,6 +1095,7 @@ async function runAttempt(
       resolveProxyUrl(options.config),
       account.id,
       options.config.sdk_http_keep_alive,
+      prepared.runtimeProtocol,
     );
     // Effort travels in the command input (B7); the SDK client no longer
     // re-parses and re-serializes the request body to inject it.
@@ -1125,6 +1130,17 @@ async function runAttempt(
       if (!attempt.signal.aborted) attempt.abort(reason);
     };
     state.sdkDispatches = plannedAttempt;
+    options.diagnostics?.addSecrets([
+      account.id,
+      account.email,
+      account.accessToken,
+      account.refreshToken,
+      auth.access,
+      auth.refresh,
+      auth.clientSecret,
+      auth.profileArn,
+    ]);
+    options.diagnostics?.dispatch(plannedAttempt);
     auditLog("info", "sdk_dispatch_started", {
       request_id: options.requestId,
       attempt: plannedAttempt,
@@ -1138,10 +1154,25 @@ async function runAttempt(
         prepared.runtimeProtocol === "kiro-runtime" ? "kiro-runtime" : "codewhisperer",
     });
     upstreamStarted = true;
-    const sdkResponse = await abortable(
-      client.send(command, { abortSignal: AbortSignal.any([signal, attempt.signal]) }),
-      signal,
-    );
+    const sendOptions = {
+      abortSignal: AbortSignal.any([signal, attempt.signal]),
+      onResponseHeaders: (metadata: import("./upstream-acceptance.js").UpstreamHeaders): void => {
+        options.diagnostics?.headers(metadata.status, metadata.headers);
+      },
+    };
+    let sdkResponse: SdkStreamResponse;
+    try {
+      sdkResponse = await abortable(
+        options.stream
+          ? sendAcceptedStream(client, command, sendOptions)
+          : client.send(command, sendOptions),
+        signal,
+      );
+    } catch (error) {
+      abortUpstream(error);
+      throw error;
+    }
+    options.diagnostics?.accepted();
     const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId);
     const attemptContext: AttemptStreamContext = {
       options,
@@ -1161,6 +1192,7 @@ async function runAttempt(
       ? await runStreamAttempt(attemptContext, releaseAccount)
       : await runCollectAttempt(attemptContext);
   } catch (caught) {
+    if (!signal.aborted) options.diagnostics?.failure(caught);
     return { kind: "failed", account, caught, upstreamStarted };
   }
 }
@@ -1247,16 +1279,15 @@ function nextWithIdleTimeout(
 }
 
 type PrefetchOutcome =
-  | { readonly kind: "semantic" }
+  | { readonly kind: "accepted" }
   | { readonly kind: "failed"; readonly error: Error };
 
 /**
- * Drives the canonical stream into the prefetch buffer until the first
- * semantic event. A failure before that point is reported (and the attempt's
- * upstream torn down) so the loop can decide on a replacement attempt; an
- * external abort is rethrown after teardown exactly like a pre-commit abort.
+ * Prime only the local lifecycle after the SDK accepted the upstream request.
+ * A tool's complete arguments are not a prerequisite for publishing headers.
+ * Once this stream is handed off, subsequent failures cannot replay generation.
  */
-async function prefetchFirstSemanticEvent(
+async function prefetchStreamStart(
   prepared: PreparedCanonicalStream,
   signal: AbortSignal,
   idleTimeoutMs: number,
@@ -1296,7 +1327,10 @@ async function prefetchFirstSemanticEvent(
     }
     telemetry.observeCanonicalEvent(next.value);
     prefetched.push(next.value);
-    if (isSemanticOutputEvent(next.value)) return { kind: "semantic" };
+    if (next.value.type === "started") return { kind: "accepted" };
+    return fail(
+      new SdkStreamProtocolError("Canonical stream omitted its start", "upstream_protocol_error"),
+    );
   }
 }
 
@@ -1334,17 +1368,18 @@ function recordEmptyCompletionRetry(
 }
 
 /**
- * Stream attempt: open the canonical stream, prefetch to the first semantic
- * event, and only then hand the stream (with its buffer) to the response.
+ * Stream attempt: upstream acceptance commits the streaming boundary.
  */
 async function runStreamAttempt(
   context: AttemptStreamContext,
   releaseAccount: () => void,
 ): Promise<AttemptOutcome> {
-  const { options, signal, state, account, conversationId, sdkResponse, captureOptions } = context;
+  const { options, signal, account, conversationId, sdkResponse, captureOptions } = context;
   const streamResult = {
     kind: "stream" as const,
     sdkResponse,
+    maxToolArgumentsBytes: options.config.max_request_body_bytes,
+    validateToolArguments: options.validateToolArguments,
     model: options.model,
     conversationId,
     telemetryContext: {
@@ -1352,13 +1387,14 @@ async function runStreamAttempt(
       attempt: context.sdkAttempt,
       effort: context.effort,
       accountHash: context.accountHash,
+      diagnostics: options.diagnostics,
     },
     ...captureOptions,
     releaseAccount,
     abortUpstream: context.abortUpstream,
   };
   const prepared = prepareCanonicalStream(streamResult, signal);
-  const prefetch = await prefetchFirstSemanticEvent(
+  const prefetch = await prefetchStreamStart(
     prepared,
     signal,
     options.config.stream_idle_timeout_ms,
@@ -1372,14 +1408,6 @@ async function runStreamAttempt(
       failure: classifyStreamFailure(prefetch.error),
     };
   }
-  if (shouldRetryEmptyCompletion(options, state, prepared.telemetry)) {
-    // The prefetched stream completed normally (its terminal is reported as
-    // such); it is discarded unpublished in favour of the replacement.
-    auditLog("info", "sdk_stream_completed", prepared.telemetry.auditFields());
-    prepared.telemetry.emitTerminal("normal_complete");
-    abandonPreparedStream(prepared, undefined, undefined);
-    return recordEmptyCompletionRetry(context, prepared.telemetry);
-  }
   return { kind: "result", leaseTransferred: true, result: { ...streamResult, prepared } };
 }
 
@@ -1392,6 +1420,7 @@ async function runStreamAttempt(
 async function runCollectAttempt(context: AttemptStreamContext): Promise<AttemptOutcome> {
   const { options, signal, state, account, conversationId, sdkResponse, captureOptions } = context;
   const telemetry = createStreamTelemetry(options.model, conversationId, "non-stream", {
+    diagnostics: options.diagnostics,
     requestId: options.requestId,
     attempt: context.sdkAttempt,
     effort: context.effort,
@@ -1401,6 +1430,9 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
   try {
     completion = await collectSdkResponse(sdkResponse, options.model, conversationId, signal, {
       ...captureOptions,
+      maxToolArgumentsBytes: options.config.max_request_body_bytes,
+      validateToolArguments: options.validateToolArguments,
+      diagnostics: options.diagnostics,
       onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
       onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
       onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
@@ -1411,14 +1443,16 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     if (!aborted) {
       auditLog("warn", "sdk_stream_upstream_error", {
         ...telemetry.auditFields(),
-        ...streamErrorAuditFields(collectError),
-        error_name: collectError instanceof Error ? collectError.name : typeof collectError,
+        ...streamErrorAuditFields(collectError, options.diagnostics),
+        error_name: options.diagnostics?.identifier(
+          collectError instanceof Error ? collectError.name : typeof collectError,
+        ),
       });
     }
     telemetry.emitTerminal(aborted ? "external_abort" : "upstream_error");
     context.abortUpstream(collectError);
     if (aborted) throw abortReason(signal);
-    if (!telemetry.semanticSeen) {
+    if (!telemetry.collectorSemanticSeen) {
       return {
         kind: "stream-failed",
         account,
@@ -1465,6 +1499,7 @@ async function applyStreamFailure(
 ): Promise<LoopDirective> {
   const { account, caught, failure } = outcome;
   if (signal.aborted) throw abortReason(signal);
+  options.diagnostics?.failure(caught, "upstream_stream");
   state.lastStreamFailure = failure;
   const terminal = returning(streamFailureResult(caught, failure));
   if (failure.disposition === "fatal") return terminal;
@@ -1498,6 +1533,7 @@ async function applyStreamFailure(
     account_hash: auditHash(account.id),
     mode: options.stream ? "stream" : "non-stream",
   });
+  options.diagnostics?.phase("retry_backoff");
   await abortableSleep(
     streamRetryDelayMs(options.config.rate_limit_retry_delay_ms, state.streamAttempts),
     signal,
@@ -1544,6 +1580,7 @@ async function applyClassification(
         error_code: streamFailure.code,
         retry_count: state.retryCount,
       });
+      options.diagnostics?.phase("retry_backoff");
       await abortableSleep(
         options.config.rate_limit_retry_delay_ms * 2 ** (state.retryCount - 1),
         signal,
@@ -1581,6 +1618,7 @@ async function applyClassification(
       // into a switch or terminal failure, so this path runs once per account.
       state.forcedRefreshAccountIds.add(classification.forcedRefreshAccountId);
       try {
+        options.diagnostics?.phase("token_refresh");
         await abortable(options.tokenRefresher.forceRefresh(account, signal), signal);
       } catch (refreshError) {
         if (signal.aborted) throw abortReason(signal);
@@ -1591,6 +1629,7 @@ async function applyClassification(
       return CONTINUE;
     case "retry":
       state.retryCount += 1;
+      options.diagnostics?.phase("retry_backoff");
       await abortableSleep(classification.retryAfterMs ?? 0, signal);
       return CONTINUE;
     case "switch":
@@ -1674,6 +1713,7 @@ async function executeLoop(
     const { selection } = selectionOutcome;
     if (bindAttemptAffinity(options, state, selection.selected) === "reselect") continue;
 
+    options.diagnostics?.phase("account_queue");
     const releaseAccount = await acquireAccountQueue(selection.selected.id, signal);
     let accountLeaseOwned = true;
     try {
@@ -1708,8 +1748,9 @@ async function executeLoop(
  */
 export async function runChatCompletion(options: RunChatCompletionOptions): Promise<Response> {
   const requestId = options.requestId ?? newRequestId();
-  const tracedOptions: RunChatCompletionOptions =
-    options.requestId === requestId ? options : { ...options, requestId };
+  const diagnostics =
+    options.diagnostics ?? new RequestDiagnostics(requestId, options.config.api_keys);
+  const tracedOptions: RunChatCompletionOptions = { ...options, requestId, diagnostics };
   const deadline = createPipelineDeadline(
     tracedOptions.deadlineSignal,
     tracedOptions.config.request_timeout_ms,
@@ -1719,15 +1760,27 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
   let streamOwnsResources = false;
   try {
     if (tracedOptions.affinity) {
+      diagnostics.phase("session_queue");
       releaseSession = await acquireSessionQueue(tracedOptions.affinity.keyHash, deadline.signal);
     } else if (tracedOptions.lineage?.lookupKeyHash !== undefined) {
+      diagnostics.phase("session_queue");
       releaseSession = await acquireSessionQueue(
         tracedOptions.lineage.lookupKeyHash,
         deadline.signal,
       );
     }
-    const result = await executeLoop(tracedOptions, deadline.signal);
-    if (result.kind === "response") return result.response;
+    diagnostics.phase("request_validation");
+    const validateToolArguments = toolOutputValidator(
+      options.body.tools.map((tool) => ({
+        name: tool.wireName,
+        schema: tool.inputSchema,
+        path: tool.path,
+        publicType: tool.publicType,
+      })),
+      options.body.toolChoice !== "none",
+    );
+    const result = await executeLoop({ ...tracedOptions, validateToolArguments }, deadline.signal);
+    if (result.kind === "response") return await diagnostics.response(result.response);
 
     releaseAccount = result.releaseAccount;
     const streamAccountRelease = releaseAccount;
@@ -1742,6 +1795,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
           streamAccountRelease();
           streamSessionRelease?.();
           deadline.dispose();
+          diagnostics.cleanup();
         },
       );
     } catch (constructionError) {
@@ -1753,7 +1807,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     releaseAccount = undefined;
     releaseSession = undefined;
     streamOwnsResources = true;
-    return response;
+    return await diagnostics.response(response);
   } catch (error) {
     if (error instanceof RequestTransformError) {
       auditLog("warn", "request_transform_rejected", {
@@ -1776,19 +1830,42 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       );
     }
     if (deadline.signal.aborted) {
-      return openAiError(504, "Request deadline exceeded", "timeout_error", "request_timeout");
+      diagnostics.cancel(
+        deadline.signal.reason instanceof Error && deadline.signal.reason.name === "TimeoutError"
+          ? "request_deadline"
+          : "external_abort",
+      );
+      const clientAbort = ["client_disconnect", "consumer_cancel"].includes(
+        diagnostics.snapshot().cancel_source ?? "",
+      );
+      return await diagnostics.response(
+        openAiError(
+          clientAbort ? 499 : 504,
+          clientAbort ? "Client closed request" : "Request deadline exceeded",
+          clientAbort ? "request_aborted" : "timeout_error",
+          clientAbort ? "client_disconnected" : "request_timeout",
+        ),
+      );
     }
     const normalized = normalizeSdkError(error);
     if (normalized.status !== undefined) {
       // A status-bearing upstream error that escaped the loop keeps its envelope.
-      return openAiError(500, normalized.message, "internal_error", normalized.code);
+      diagnostics.failure(error);
+      return await diagnostics.response(
+        openAiError(
+          normalized.status >= 400 ? normalized.status : 502,
+          normalized.message,
+          "upstream_error",
+          normalized.code,
+        ),
+      );
     }
     // B16: never echo arbitrary exception text (paths, ids, SQL) to the client.
     // The correlation id ties the fixed response to the hashed audit record.
     auditLog("error", "pipeline_internal_error", {
       request_id: requestId,
-      error_type: error instanceof Error ? error.name : typeof error,
-      error_code: normalized.code,
+      error_type: diagnostics.identifier(error instanceof Error ? error.name : typeof error),
+      error_code: diagnostics.identifier(normalized.code),
       error_message_hash: auditHash(normalized.message),
     });
     return openAiInternalError(requestId);
@@ -1797,6 +1874,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       releaseAccount?.();
       releaseSession?.();
       deadline.dispose();
+      diagnostics.cleanup();
     }
   }
 }

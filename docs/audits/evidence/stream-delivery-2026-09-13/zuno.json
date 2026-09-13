@@ -1,0 +1,303 @@
+{
+  "source_sha256": "90042b7e469b46585a80642abda6b5b80ada9afb56aeaeeaa4f0426da81618d0",
+  "data": {
+    "tools_executed": 0,
+    "automatic_follow_on": false,
+    "results": [
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "gpt-5.6-sol",
+        "repetition": 1,
+        "exit_code": 0,
+        "elapsed_s": 61.4,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "gpt-5.6-sol-1",
+            "event": "request",
+            "model": "gpt-5.6-sol",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "gpt-5.6-sol-1",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-067",
+            "transport": "stateless",
+            "headers_ms": 3679,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 13,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 6861,
+            "first_delta_ms": 3682,
+            "elapsed_ms": 61186
+          }
+        ]
+      },
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "gpt-5.6-sol",
+        "repetition": 2,
+        "exit_code": 0,
+        "elapsed_s": 13.14,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "gpt-5.6-sol-2",
+            "event": "request",
+            "model": "gpt-5.6-sol",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "gpt-5.6-sol-2",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-068",
+            "transport": "stateless",
+            "headers_ms": 2321,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 13,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 6861,
+            "first_delta_ms": 2322,
+            "elapsed_ms": 12969
+          }
+        ]
+      },
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "gpt-5.6-sol",
+        "repetition": 3,
+        "exit_code": 0,
+        "elapsed_s": 4.92,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "gpt-5.6-sol-3",
+            "event": "request",
+            "model": "gpt-5.6-sol",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "gpt-5.6-sol-3",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-069",
+            "transport": "stateless",
+            "headers_ms": 2615,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 13,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 6861,
+            "first_delta_ms": 2615,
+            "elapsed_ms": 4755
+          }
+        ]
+      },
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "claude-opus-5",
+        "repetition": 1,
+        "exit_code": 0,
+        "elapsed_s": 7.08,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "claude-opus-5-1",
+            "event": "request",
+            "model": "claude-opus-5",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "claude-opus-5-1",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-070",
+            "transport": "stateless",
+            "headers_ms": 4682,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 3,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 4887,
+            "first_delta_ms": 4683,
+            "elapsed_ms": 6908
+          }
+        ]
+      },
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "claude-opus-5",
+        "repetition": 2,
+        "exit_code": 0,
+        "elapsed_s": 5.48,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "claude-opus-5-2",
+            "event": "request",
+            "model": "claude-opus-5",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "claude-opus-5-2",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-071",
+            "transport": "stateless",
+            "headers_ms": 3056,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 3,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 4887,
+            "first_delta_ms": 3056,
+            "elapsed_ms": 5331
+          }
+        ]
+      },
+      {
+        "client": "zuno",
+        "version": "0.10.37",
+        "model": "claude-opus-5",
+        "repetition": 3,
+        "exit_code": 0,
+        "elapsed_s": 5.18,
+        "passed": true,
+        "final_marker": true,
+        "tool_events": 0,
+        "wire": [
+          {
+            "case": "claude-opus-5-3",
+            "event": "request",
+            "model": "claude-opus-5",
+            "reasoning": {
+              "effort": "max"
+            },
+            "stream": true,
+            "tools": 0,
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 7
+          },
+          {
+            "case": "claude-opus-5-3",
+            "event": "response",
+            "status": 200,
+            "request_id": "probe-request-072",
+            "transport": "stateless",
+            "headers_ms": 2776,
+            "events": {
+              "response.created": 1,
+              "response.in_progress": 1,
+              "response.output_item.added": 1,
+              "response.content_part.added": 1,
+              "response.output_text.delta": 3,
+              "response.output_text.done": 1,
+              "response.content_part.done": 1,
+              "response.output_item.done": 1,
+              "response.completed": 1
+            },
+            "bytes": 4887,
+            "first_delta_ms": 2777,
+            "elapsed_ms": 5008
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "source_sha256": "e4829382604be3e0cc3ab1eb844e17ef3ae4676dd5077b0d9c7a6923f34c18d6",
+  "data": [
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "headers_ms": 1749,
+      "status": 200,
+      "request_id": "probe-request-063",
+      "text": "CHAT_STREAM_CONTROL_OK",
+      "role_chunks": 1,
+      "finish_chunks": 1,
+      "passed": true,
+      "elapsed_ms": 1760
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "default",
+      "headers_ms": 1549,
+      "status": 200,
+      "request_id": "probe-request-064",
+      "text": "CHAT_STREAM_CONTROL_OK",
+      "role_chunks": 1,
+      "finish_chunks": 1,
+      "passed": true,
+      "elapsed_ms": 1563
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "max",
+      "headers_ms": 3248,
+      "status": 200,
+      "request_id": "probe-request-065",
+      "text": "CHAT_STREAM_CONTROL_OK",
+      "role_chunks": 1,
+      "finish_chunks": 1,
+      "passed": true,
+      "elapsed_ms": 3429
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "default",
+      "headers_ms": 2321,
+      "status": 200,
+      "request_id": "probe-request-066",
+      "text": "CHAT_STREAM_CONTROL_OK",
+      "role_chunks": 1,
+      "finish_chunks": 1,
+      "passed": true,
+      "elapsed_ms": 2505
+    },
+    {
+      "case": "gpt-cap-stays-rejected",
+      "status": 400,
+      "code": "unsupported_output_token_limit",
+      "passed": true
+    }
+  ]
+}

@@ -498,7 +498,12 @@ export async function handleResponses(
   config: Config,
   dependencies: ResponsesDependencies,
 ): Promise<Response> {
-  const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
+  const ingress = createIngress(
+    request,
+    config,
+    dependencies.createRequestIdleTimeoutLease,
+    dependencies.diagnostics,
+  );
   let plan: ResponsesExecutionPlan | undefined;
   try {
     const response = await handleResponsesCore(request, config, dependencies, ingress, (value) => {
@@ -772,6 +777,7 @@ async function handleResponsesCore(
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
       ...buildPipelineOptions({
         requestId: ingress.requestId,
+        diagnostics: ingress.diagnostics,
         body: adapted.body,
         model: adapted.body.model,
         stream,

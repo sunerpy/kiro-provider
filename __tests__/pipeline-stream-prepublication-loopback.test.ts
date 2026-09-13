@@ -9,7 +9,6 @@ import {
 } from "../src/core/pipeline.js";
 import { clearSdkClientCache } from "../src/core/sdk-client.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
-import { parseCanonicalOutputEventLine } from "../src/protocol/output.js";
 import { captureAuditEvents } from "./audit-test-helpers.js";
 import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
@@ -175,7 +174,7 @@ afterEach(async () => {
 });
 
 describe("pre-publication retry through the real SDK transport", () => {
-  test("a stream whose first upstream response ends without events is retried transparently", async () => {
+  test("an accepted stream ending without events fails without a replacement generation", async () => {
     const upstream = startUpstream();
     const manager = new FakeAccountManager();
     audit = captureAuditEvents();
@@ -188,23 +187,10 @@ describe("pre-publication retry through the real SDK transport", () => {
         accountManager: manager,
         tokenRefresher: refresher,
       });
-      const text = await response.text();
-      const events = text
-        .trim()
-        .split("\n")
-        .map((line) => parseCanonicalOutputEventLine(line));
-
       expect(response.status).toBe(200);
-      expect(events.map((event) => event?.type)).toEqual(["started", "text_delta", "completed"]);
-      expect(events[1]).toMatchObject({ type: "text_delta", text: "mock response" });
-      expect(upstream.state.requests).toBe(2);
-      expect(audit.events("sdk_stream_attempt_retry")).toEqual([
-        expect.objectContaining({
-          attempt: 1,
-          same_account: true,
-          error_code: "upstream_stream_incomplete",
-        }),
-      ]);
+      await expect(response.text()).rejects.toMatchObject({ code: "upstream_stream_incomplete" });
+      expect(upstream.state.requests).toBe(1);
+      expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
       expect(manager.rateLimited).toEqual([]);
     } finally {
       upstream.stop();

@@ -229,7 +229,9 @@ function postPipelineAbortRequest(request: Request, ingressController: AbortCont
   Object.defineProperty(request, "signal", {
     get(): AbortSignal {
       signalReads += 1;
-      return signalReads <= 2 ? ingressController.signal : abortedController.signal;
+      // Ingress captures the original signal once; the route must re-read it
+      // after the pipeline hands over the queue-owning stream.
+      return signalReads <= 1 ? ingressController.signal : abortedController.signal;
     },
   });
   return request;

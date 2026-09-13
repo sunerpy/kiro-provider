@@ -27,7 +27,7 @@ function error(overrides: Partial<NormalizedSdkError> = {}): NormalizedSdkError 
 
 describe("classifyError gateway statuses", () => {
   test.each([502, 503, 504])(
-    "treats %i like 500: bounded same-account retry, then switch",
+    "treats %i like 500: bounded same-account retry, then the actual HTTP failure",
     (status) => {
       expect(classifyError(error({ status }), context({ serverErrorCount: 1 }))).toEqual({
         action: "retry",
@@ -40,8 +40,9 @@ describe("classifyError gateway statuses", () => {
         retryAfterMs: 8_000,
       });
       expect(classifyError(error({ status }), context({ serverErrorCount: 5 }))).toEqual({
-        action: "switch",
+        action: "fail",
         status,
+        terminalStatus: status,
       });
     },
   );

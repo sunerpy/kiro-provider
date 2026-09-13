@@ -28,6 +28,7 @@ fact, so where records overlap the newer one supersedes the older conclusion.
 | [kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md](kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md) | Kiro CLI GenerateAssistantResponse、KAS CreateResponse 与 Provider V3 原生/fallback 通道的脱敏结构差异及可移植性决策。 |
 | [kiro-provider-responses-fidelity-2026-09-10.zh.md](kiro-provider-responses-fidelity-2026-09-10.zh.md) | V3 保真修复、官方 SDK 前后对比、真实 Codex/Zuno 工具与 reasoning 回放、能力启用门禁与存储迁移。 |
 | [kiro-provider-responses-before-after-2026-09-10.zh.md](kiro-provider-responses-before-after-2026-09-10.zh.md) | 请求和响应前后示例、SDK 38 项与客户端 12 项验收、Sol opaque 续接修复、GPT effort 和未启用能力。 |
+| [stream-delivery-recovery-2026-09-13.zh.md](stream-delivery-recovery-2026-09-13.zh.md) / [English](stream-delivery-recovery-2026-09-13.md) | 响应头与工具增量交付、503 因果链、RPC 首帧解码、SDK/Chat/Zuno 真实验收及 native 权限限制。 |
 
 Older v0.4 evidence lives outside this directory in
 [`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and

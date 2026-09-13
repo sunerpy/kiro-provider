@@ -123,11 +123,16 @@ describe("structured invalid-signature detection", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
+    expect(await response.json()).toMatchObject({
       error: {
         message: "Improperly formed request.",
         type: "invalid_request_error",
         code: "invalid_reasoning_signature",
+        request_id: response.headers.get("X-Request-ID"),
+        details: {
+          response_committed: false,
+          last_failure: { upstream_status: 400, upstream_code: "THINKING_SIGNATURE_INVALID" },
+        },
       },
     });
     expect(sends).toBe(1);

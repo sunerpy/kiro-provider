@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
-import { auditHash } from "../src/core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineClientFactory,
@@ -168,7 +167,7 @@ afterEach(() => {
 });
 
 describe("empty completion retry (stream)", () => {
-  test("replaces an empty completion with the same-account retry's output", async () => {
+  test("keeps a witnessed empty completion after accepting the stream without a replacement", async () => {
     const manager = new PreferredAccountManager([account("account-a"), account("account-b")]);
     const scripted = scriptedClient([EMPTY, TEXT]);
 
@@ -183,24 +182,16 @@ describe("empty completion retry (stream)", () => {
     });
     const received = await eventTypes(response);
 
-    expect(received.types).toEqual(["started", "text_delta", "completed"]);
-    expect(received.text).toBe("second try");
-    expect(scripted.sends).toEqual(["account-a", "account-a"]);
-    expect(audit.events("sdk_stream_empty_completion_retry")).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        attempt: 1,
-        max_attempts: 3,
-        account_hash: auditHash("account-a"),
-        mode: "stream",
-      }),
-    ]);
+    expect(received.types).toEqual(["started", "completed"]);
+    expect(received.text).toBe("");
+    expect(scripted.sends).toEqual(["account-a"]);
+    expect(audit.events("sdk_stream_empty_completion_retry")).toEqual([]);
     expect(manager.rateLimited).toEqual([]);
     expect(manager.unhealthy).toEqual([]);
   });
 
-  test("returns the second empty completion without a third attempt", async () => {
-    const scripted = scriptedClient([EMPTY, EMPTY_METERED, TEXT]);
+  test("keeps a metered empty completion without retrying it", async () => {
+    const scripted = scriptedClient([EMPTY_METERED, TEXT]);
 
     const response = await runChatCompletion({
       body: BODY,
@@ -214,8 +205,8 @@ describe("empty completion retry (stream)", () => {
     const received = await eventTypes(response);
 
     expect(received.types).toEqual(["started", "completed"]);
-    expect(scripted.sends).toEqual(["account-a", "account-a"]);
-    expect(audit.events("sdk_stream_empty_completion_retry")).toHaveLength(1);
+    expect(scripted.sends).toEqual(["account-a"]);
+    expect(audit.events("sdk_stream_empty_completion_retry")).toHaveLength(0);
   });
 
   test("does nothing when retry_empty_completion is off", async () => {

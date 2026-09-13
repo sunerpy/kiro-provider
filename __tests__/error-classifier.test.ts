@@ -46,6 +46,7 @@ describe("normalizeSdkError", () => {
       code: "ThrottlingException",
       reason: "RATE_LIMITED",
       headers: { "retry-after": "7", "x-request-id": "request-1" },
+      requestId: "request-1",
     });
   });
 
@@ -196,17 +197,17 @@ describe("classifyError HTTP decisions", () => {
     expect(classifyError(error({ status: 429 }), context())).toEqual({
       action: "retry",
       status: 429,
-      retryAfterMs: 60_000,
+      retryAfterMs: 500,
     });
     expect(
       classifyError(error({ status: 429 }), context({ retryCount: 2, maxRetries: 3 })),
-    ).toEqual({ action: "retry", status: 429, retryAfterMs: 60_000 });
+    ).toEqual({ action: "retry", status: 429, retryAfterMs: 500 });
     expect(
       classifyError(error({ status: 429 }), context({ retryCount: 3, maxRetries: 3 })),
     ).toEqual({ action: "fail", status: 429, terminalStatus: 429 });
   });
 
-  test("backs off 500 responses four times then switches on the fifth", () => {
+  test("bounds 5xx retries by both the shared retry budget and server-error ceiling", () => {
     expect(classifyError(error({ status: 500 }), context({ serverErrorCount: 1 }))).toEqual({
       action: "retry",
       status: 500,
@@ -218,8 +219,9 @@ describe("classifyError HTTP decisions", () => {
       retryAfterMs: 8_000,
     });
     expect(classifyError(error({ status: 500 }), context({ serverErrorCount: 5 }))).toEqual({
-      action: "switch",
+      action: "fail",
       status: 500,
+      terminalStatus: 500,
     });
   });
 
@@ -307,19 +309,19 @@ describe("classifyError HTTP decisions", () => {
     });
   });
 
-  test("switches a non-bearer 403 when another account exists", () => {
+  test("keeps a permanent non-bearer 403 without switching accounts", () => {
     expect(
       classifyError(error({ status: 403, message: "access denied" }), context({ accountCount: 2 })),
-    ).toEqual({ action: "switch", status: 403 });
+    ).toEqual({ action: "fail", status: 403, terminalStatus: 403 });
   });
 
-  test("backs off a non-bearer 403 until the retry cap", () => {
+  test("does not retry a permanent non-bearer 403", () => {
     expect(
       classifyError(
         error({ status: 403, message: "access denied" }),
         context({ retryCount: 2, retryDelayMs: 250 }),
       ),
-    ).toEqual({ action: "retry", status: 403, retryAfterMs: 1_000 });
+    ).toEqual({ action: "fail", status: 403, terminalStatus: 403 });
     expect(
       classifyError(error({ status: 403, message: "access denied" }), context({ retryCount: 3 })),
     ).toEqual({ action: "fail", status: 403, terminalStatus: 403 });

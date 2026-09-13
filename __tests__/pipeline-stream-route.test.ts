@@ -616,7 +616,8 @@ describe("pipeline stream route framing", () => {
       done: false,
       value: completedCanonicalStream(),
     });
-    const resolvedFirstFrame = await observeWithin(resolvedFirstRead);
+    const resolvedFirstRole = await observeWithin(resolvedFirstRead);
+    const resolvedFirstFrame = await observeWithin(resolvedFirstReader.read());
     const resolvedFirstDone = await observeWithin(resolvedFirstReader.read());
     const resolvedFirstEnd = await observeWithin(resolvedFirstReader.read());
     resolvedFirstDeadline.abort(new DOMException("too late", "TimeoutError"));
@@ -644,6 +645,10 @@ describe("pipeline stream route framing", () => {
     await observeWithin(abortedFirstReader.cancel("test cleanup"));
 
     expect(resolvedFirstStarted.status).toBe("fulfilled");
+    expect(resolvedFirstRole.status).toBe("fulfilled");
+    if (resolvedFirstRole.status === "fulfilled") {
+      expect(decodedRead(resolvedFirstRole.value)).toContain('"role":"assistant"');
+    }
     expect(resolvedFirstFrame.status).toBe("fulfilled");
     if (resolvedFirstFrame.status === "fulfilled") {
       expect(decodedRead(resolvedFirstFrame.value)).toContain('"finish_reason":"stop"');

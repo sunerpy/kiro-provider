@@ -1,0 +1,49 @@
+{
+  "source_sha256": "8f45c601dfbffb7a600f0072649e9027c032951045b7c93dc8c9c79fbf9e051b",
+  "data": [
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "max",
+      "headers_ms": 1563,
+      "status": 200,
+      "request_id": "probe-request-059",
+      "passed": false,
+      "error": "Error: Upstream stream error",
+      "code": "upstream_stream_error",
+      "elapsed_ms": 1567
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "effort": "default",
+      "headers_ms": 2908,
+      "status": 200,
+      "request_id": "probe-request-060",
+      "passed": false,
+      "error": "Error: Upstream stream error",
+      "code": "upstream_stream_error",
+      "elapsed_ms": 2908
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "max",
+      "headers_ms": 3983,
+      "status": 200,
+      "request_id": "probe-request-061",
+      "passed": false,
+      "error": "Error: Upstream stream error",
+      "code": "upstream_stream_error",
+      "elapsed_ms": 3984
+    },
+    {
+      "model": "claude-opus-5",
+      "effort": "default",
+      "headers_ms": 2250,
+      "status": 200,
+      "request_id": "probe-request-062",
+      "passed": false,
+      "error": "Error: Upstream stream error",
+      "code": "upstream_stream_error",
+      "elapsed_ms": 2250
+    }
+  ]
+}

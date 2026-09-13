@@ -294,6 +294,11 @@ export class ResponsesToolBridge {
     return [...this.#identityByWireName].map(([wireName, identity]) => ({ wireName, identity }));
   }
 
+  /** Resolve public identity without parsing an unfinished argument string. */
+  identityFor(wireName: string): PublicToolIdentity | undefined {
+    return this.#identityByWireName.get(wireName);
+  }
+
   constructor(input: {
     readonly internalTools: readonly InternalTool[];
     readonly declarations: readonly BridgedToolDeclaration[];

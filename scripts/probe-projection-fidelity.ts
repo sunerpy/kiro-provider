@@ -434,6 +434,7 @@ async function send(
     proxyUrl,
     account.id,
     false,
+    systemPrompt !== undefined ? "kiro-runtime" : "codewhisperer",
   );
   const started = Date.now();
   let text = "";

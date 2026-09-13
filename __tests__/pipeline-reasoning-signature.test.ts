@@ -239,10 +239,15 @@ describe("anthropic-direct signed thinking replay (B25)", () => {
 
     // Then
     expect(response.status).toBe(400);
-    expect(await errorBody(response)).toEqual({
+    expect(await errorBody(response)).toMatchObject({
       message: "messages.1.content.0: Invalid `signature` in `thinking` block",
       type: "invalid_request_error",
       code: "invalid_reasoning_signature",
+      request_id: response.headers.get("X-Request-ID"),
+      details: {
+        response_committed: false,
+        last_failure: { upstream_status: 400, upstream_code: "ValidationException" },
+      },
     });
     expect(sends).toBe(1);
     expect(manager.rateLimited).toEqual([]);

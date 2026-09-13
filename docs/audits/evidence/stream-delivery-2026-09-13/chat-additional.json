@@ -1,0 +1,98 @@
+{
+  "source_sha256": "891d37d96e8a6922b7e9a1bf6d5e6a2dd612e087019c7f1ee9aaec02d8ef207d",
+  "data": {
+    "schema_version": 1,
+    "sdk_version": "7.13.0",
+    "tools_executed": 0,
+    "automatic_follow_on": false,
+    "results": [
+      {
+        "model": "claude-sonnet-5",
+        "case": "chat-tool-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_1_86ebacd7",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_1_86ebacd7:41",
+        "traces": [
+          {
+            "request_id": "probe-request-053",
+            "headers_ms": 2580,
+            "first_tool_delta_ms": 2936,
+            "elapsed_ms": 3457,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-054",
+            "headers_ms": 2426,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 2559,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "case": "chat-tool-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_1_36fdf7cb",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_1_36fdf7cb:41",
+        "traces": [
+          {
+            "request_id": "probe-request-055",
+            "headers_ms": 2341,
+            "first_tool_delta_ms": 2341,
+            "elapsed_ms": 2524,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-056",
+            "headers_ms": 1882,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 1934,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "case": "chat-tool-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_1_a46da429",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_1_a46da429:41",
+        "traces": [
+          {
+            "request_id": "probe-request-057",
+            "headers_ms": 2035,
+            "first_tool_delta_ms": 2125,
+            "elapsed_ms": 2309,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-058",
+            "headers_ms": 1662,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 1677,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      }
+    ]
+  }
+}

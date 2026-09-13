@@ -12,7 +12,7 @@ import type {
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import { parseCanonicalCompletion } from "../src/protocol/output.js";
-import { canonicalRequest, message } from "./canonical-test-helpers.js";
+import { canonicalRequest, functionTool, message } from "./canonical-test-helpers.js";
 
 /**
  * B4: on the non-stream path nothing has reached the client yet, so stream
@@ -26,7 +26,10 @@ import { canonicalRequest, message } from "./canonical-test-helpers.js";
  * `rate_limit_max_retries` bound.
  */
 
-const BODY = canonicalRequest([message("user", "hello")], { model: "auto" });
+const BODY = canonicalRequest([message("user", "hello")], {
+  model: "auto",
+  tools: [functionTool("lookup")],
+});
 const COMPLETION: SdkStreamEvent = {
   metadataEvent: { tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
 };

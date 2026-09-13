@@ -18,6 +18,7 @@ import type {
 } from "../core/pipeline.js";
 import { resolveProxyUrl } from "../core/proxy.js";
 import { QuotaRechecker } from "../core/quota-rechecker.js";
+import { RequestDiagnostics } from "../core/request-diagnostics.js";
 import {
   boundedCleanup,
   CLEANUP_GRACE_MS,
@@ -260,122 +261,132 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
   return async (request: Request, server?: Bun.Server<undefined>): Promise<Response> => {
     const url = new URL(request.url);
     const pathname = normalizeRoutePath(url.pathname);
-    const staticRoute = ROUTES.get(pathname);
-    const storedRoute = staticRoute === undefined ? storedResponseRoute(pathname) : undefined;
-    const route = staticRoute ?? storedRoute?.route;
-    const anthropicRoute = route?.protocol === "anthropic";
-    if (route && !route.methods.includes(request.method)) {
-      return methodNotAllowed(route, request.method);
-    }
-    if (route?.name === "health") {
-      return request.method === "HEAD" ? healthHead() : handleHealth();
-    }
-    const auth = anthropicRoute
-      ? checkApiKey(request, config.api_keys, (status, message) =>
-          anthropicError(status, message, "authentication_error"),
-        )
-      : checkApiKey(request, config.api_keys);
-    if (!auth.ok) return auth.response;
-
-    const maker: RequestIdleTimeoutLeaseMaker =
-      dependencies.createRequestIdleTimeoutLease ?? createRequestIdleTimeoutLease;
-    const leaseFactory: (() => RequestIdleTimeoutLease | undefined) | undefined = server
-      ? () => maker(request, server)
-      : undefined;
-    const routeDependencies: RouteDependencies = {
-      accountManager: dependencies.accountManager,
-      tokenRefresher: dependencies.tokenRefresher,
-      ...(dependencies.quotaRechecker ? { quotaRechecker: dependencies.quotaRechecker } : {}),
-      tenantId: auth.tenantId,
-      ...(dependencies.affinityStore ? { affinityStore: dependencies.affinityStore } : {}),
-      ...(dependencies.reasoningReplayStore
-        ? { reasoningReplayStore: dependencies.reasoningReplayStore }
-        : {}),
-      ...(dependencies.modelCapabilities
-        ? { modelCapabilities: dependencies.modelCapabilities }
-        : {}),
-      ...(dependencies.nativeContextCapabilities
-        ? { nativeContextCapabilities: dependencies.nativeContextCapabilities }
-        : {}),
-      ...(dependencies.responseStore ? { responseStore: dependencies.responseStore } : {}),
-      ...(dependencies.nativeResponsesFetch
-        ? { nativeResponsesFetch: dependencies.nativeResponsesFetch }
-        : {}),
-      ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
-      ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
-    };
-    try {
-      switch (route?.name) {
-        case "chat":
-          if (!config.enable_legacy_chat_completions) {
-            return openAiError(
-              404,
-              "Legacy Chat Completions is disabled; set enable_legacy_chat_completions to true",
-              "invalid_request_error",
-              "legacy_chat_completions_disabled",
-            );
-          }
-          return await handleChatCompletions(request, config, routeDependencies);
-        case "responses":
-          return await handleResponses(request, config, routeDependencies);
-        case "responses_compact":
-          return openAiError(
-            501,
-            "KiroRuntime does not expose an OpenAI-compatible Responses compaction operation",
-            "invalid_request_error",
-            "unsupported_endpoint",
-          );
-        case "responses_input_tokens":
-          return openAiError(
-            501,
-            "KiroRuntime does not expose an OpenAI-compatible Responses input-token counting operation",
-            "invalid_request_error",
-            "unsupported_endpoint",
-          );
-        case "stored_response":
-          if (!storedRoute) {
-            return openAiError(404, "Route not found", "invalid_request_error", "not_found");
-          }
-          return handleStoredResponse(
-            request,
-            routeDependencies,
-            storedRoute.responseId,
-            storedRoute.action(request.method),
-          );
-        case "messages":
-          return await handleMessages(request, config, routeDependencies);
-        case "count_tokens":
-          return await handleMessageTokenCount(request, config);
-        case "models":
-          return await handleModels(
-            dependencies.modelCapabilities,
-            dependencies.accountManager,
-            dependencies.tokenRefresher,
-            request.signal,
-            dependencies.quotaRechecker,
-          );
-        case "ready":
-          return handleReadiness(
-            dependencies.accountManager,
-            dependencies.reasoningReplayStore,
-            dependencies.modelCapabilities,
-          );
-        default:
-          return openAiError(404, "Route not found", "invalid_request_error", "not_found");
+    const diagnostics =
+      request.method === "POST" &&
+      ["responses", "chat", "messages"].includes(ROUTES.get(pathname)?.name ?? "")
+        ? new RequestDiagnostics(newRequestId(), config.api_keys)
+        : undefined;
+    const dispatch = async (): Promise<Response> => {
+      const staticRoute = ROUTES.get(pathname);
+      const storedRoute = staticRoute === undefined ? storedResponseRoute(pathname) : undefined;
+      const route = staticRoute ?? storedRoute?.route;
+      const anthropicRoute = route?.protocol === "anthropic";
+      if (route && !route.methods.includes(request.method)) {
+        return methodNotAllowed(route, request.method);
       }
-    } catch (error) {
-      // Fixed text plus a correlation id: exception prose can carry storage
-      // paths, account ids, or upstream payloads and stays in the audit log.
-      const requestId = newRequestId();
-      auditLog("error", "request_handler_failed", {
-        request_id: requestId,
-        route: pathname,
-        method: request.method,
-        error_type: error instanceof Error ? error.name : typeof error,
-        detail_hash: auditHash(error instanceof Error ? error.message : String(error)),
-      });
-      return anthropicRoute ? anthropicInternalError(requestId) : openAiInternalError(requestId);
-    }
+      if (route?.name === "health") {
+        return request.method === "HEAD" ? healthHead() : handleHealth();
+      }
+      const auth = anthropicRoute
+        ? checkApiKey(request, config.api_keys, (status, message) =>
+            anthropicError(status, message, "authentication_error"),
+          )
+        : checkApiKey(request, config.api_keys);
+      if (!auth.ok) return auth.response;
+
+      const maker: RequestIdleTimeoutLeaseMaker =
+        dependencies.createRequestIdleTimeoutLease ?? createRequestIdleTimeoutLease;
+      const leaseFactory: (() => RequestIdleTimeoutLease | undefined) | undefined = server
+        ? () => maker(request, server)
+        : undefined;
+      const routeDependencies: RouteDependencies = {
+        diagnostics,
+        accountManager: dependencies.accountManager,
+        tokenRefresher: dependencies.tokenRefresher,
+        ...(dependencies.quotaRechecker ? { quotaRechecker: dependencies.quotaRechecker } : {}),
+        tenantId: auth.tenantId,
+        ...(dependencies.affinityStore ? { affinityStore: dependencies.affinityStore } : {}),
+        ...(dependencies.reasoningReplayStore
+          ? { reasoningReplayStore: dependencies.reasoningReplayStore }
+          : {}),
+        ...(dependencies.modelCapabilities
+          ? { modelCapabilities: dependencies.modelCapabilities }
+          : {}),
+        ...(dependencies.nativeContextCapabilities
+          ? { nativeContextCapabilities: dependencies.nativeContextCapabilities }
+          : {}),
+        ...(dependencies.responseStore ? { responseStore: dependencies.responseStore } : {}),
+        ...(dependencies.nativeResponsesFetch
+          ? { nativeResponsesFetch: dependencies.nativeResponsesFetch }
+          : {}),
+        ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
+        ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
+      };
+      try {
+        switch (route?.name) {
+          case "chat":
+            if (!config.enable_legacy_chat_completions) {
+              return openAiError(
+                404,
+                "Legacy Chat Completions is disabled; set enable_legacy_chat_completions to true",
+                "invalid_request_error",
+                "legacy_chat_completions_disabled",
+              );
+            }
+            return await handleChatCompletions(request, config, routeDependencies);
+          case "responses":
+            return await handleResponses(request, config, routeDependencies);
+          case "responses_compact":
+            return openAiError(
+              501,
+              "KiroRuntime does not expose an OpenAI-compatible Responses compaction operation",
+              "invalid_request_error",
+              "unsupported_endpoint",
+            );
+          case "responses_input_tokens":
+            return openAiError(
+              501,
+              "KiroRuntime does not expose an OpenAI-compatible Responses input-token counting operation",
+              "invalid_request_error",
+              "unsupported_endpoint",
+            );
+          case "stored_response":
+            if (!storedRoute) {
+              return openAiError(404, "Route not found", "invalid_request_error", "not_found");
+            }
+            return handleStoredResponse(
+              request,
+              routeDependencies,
+              storedRoute.responseId,
+              storedRoute.action(request.method),
+            );
+          case "messages":
+            return await handleMessages(request, config, routeDependencies);
+          case "count_tokens":
+            return await handleMessageTokenCount(request, config);
+          case "models":
+            return await handleModels(
+              dependencies.modelCapabilities,
+              dependencies.accountManager,
+              dependencies.tokenRefresher,
+              request.signal,
+              dependencies.quotaRechecker,
+            );
+          case "ready":
+            return handleReadiness(
+              dependencies.accountManager,
+              dependencies.reasoningReplayStore,
+              dependencies.modelCapabilities,
+            );
+          default:
+            return openAiError(404, "Route not found", "invalid_request_error", "not_found");
+        }
+      } catch (error) {
+        // Fixed text plus a correlation id: exception prose can carry storage
+        // paths, account ids, or upstream payloads and stays in the audit log.
+        const requestId = diagnostics?.requestId ?? newRequestId();
+        auditLog("error", "request_handler_failed", {
+          request_id: requestId,
+          route: pathname,
+          method: request.method,
+          error_type: error instanceof Error ? error.name : typeof error,
+          detail_hash: auditHash(error instanceof Error ? error.message : String(error)),
+        });
+        return anthropicRoute ? anthropicInternalError(requestId) : openAiInternalError(requestId);
+      }
+    };
+    const response = await dispatch();
+    return diagnostics ? diagnostics.publicResponse(response) : response;
   };
 }
 

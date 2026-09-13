@@ -112,6 +112,7 @@ async function runCase(
     proxyUrl,
     account.id,
     false,
+    "kiro-runtime",
   );
   const conversationId = crypto.randomUUID();
   const input: GenerateAssistantResponseCommandInput = {

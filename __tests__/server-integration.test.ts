@@ -232,6 +232,10 @@ function validBody(overrides: Record<string, unknown> = {}): Record<string, unkn
   return {
     model: "auto",
     messages: [{ role: "user", content: "hello" }],
+    tools: ["first_tool", "second_tool"].map((name) => ({
+      type: "function",
+      function: { name, description: `Test ${name}`, parameters: { type: "object" } },
+    })),
     ...overrides,
   };
 }
@@ -366,12 +370,19 @@ describe("POST /v1/chat/completions", () => {
       .filter((frame) => frame.error !== undefined);
 
     // Then
-    expect(errorFrames).toEqual([
+    expect(errorFrames).toHaveLength(1);
+    expect(errorFrames).toMatchObject([
       {
         error: {
           code: "upstream_stream_error",
           message: "Upstream stream error",
           type: "upstream_error",
+          request_id: response.headers.get("X-Request-ID"),
+          details: {
+            response_committed: true,
+            completion_witnessed: false,
+            attempt: 1,
+          },
         },
       },
     ]);

@@ -90,7 +90,12 @@ export async function handleMessages(
   config: Config,
   dependencies: MessagesDependencies,
 ): Promise<Response> {
-  const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
+  const ingress = createIngress(
+    request,
+    config,
+    dependencies.createRequestIdleTimeoutLease,
+    dependencies.diagnostics,
+  );
   const bodyResult = await readJsonBody(request, config, ingress.signals, anthropicIngressErrors);
   if (!bodyResult.ok) {
     ingress.finalize();
@@ -127,6 +132,7 @@ export async function handleMessages(
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
       buildPipelineOptions({
         requestId: ingress.requestId,
+        diagnostics: ingress.diagnostics,
         body: adapted.value.body,
         model: adapted.value.body.model,
         stream: adapted.value.source.stream,

@@ -28,7 +28,12 @@ export async function handleChatCompletions(
   config: Config,
   dependencies: ChatCompletionDependencies,
 ): Promise<Response> {
-  const ingress = createIngress(request, config, dependencies.createRequestIdleTimeoutLease);
+  const ingress = createIngress(
+    request,
+    config,
+    dependencies.createRequestIdleTimeoutLease,
+    dependencies.diagnostics,
+  );
   const bodyResult = await readJsonBody(request, config, ingress.signals, openAiIngressErrors);
   if (!bodyResult.ok) {
     ingress.finalize();
@@ -72,6 +77,7 @@ export async function handleChatCompletions(
     const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
       buildPipelineOptions({
         requestId: ingress.requestId,
+        diagnostics: ingress.diagnostics,
         body: canonical.value,
         model: parsed.value.model,
         stream: parsed.value.stream,

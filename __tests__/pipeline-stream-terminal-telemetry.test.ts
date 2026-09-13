@@ -362,7 +362,7 @@ describe("sdk_stream_terminal through the pipeline", () => {
     ]);
   });
 
-  test("each attempt-stream of a retried request gets its own terminal event", async () => {
+  test("each attempt-stream of a retried non-stream request gets its own terminal event", async () => {
     let sends = 0;
     const client: PipelineSdkClient = {
       send: async () => {
@@ -377,7 +377,7 @@ describe("sdk_stream_terminal through the pipeline", () => {
       requestId: "req-retried-stream",
       body: canonicalRequest([message("user", "hello")], { model: "auto" }),
       model: "auto",
-      stream: true,
+      stream: false,
       config: config(),
       accountManager: new FakeAccountManager(),
       tokenRefresher: refresher,

@@ -80,7 +80,7 @@ function pipelineResponse(lines: readonly string[]): Response {
 function parseEvents(body: string): ParsedEvent[] {
   return body
     .split("\n\n")
-    .filter((frame) => frame.length > 0)
+    .filter((frame) => frame.length > 0 && !frame.startsWith(":"))
     .map((frame) => {
       const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
       if (!dataLine) throw new TypeError("invalid SSE frame");

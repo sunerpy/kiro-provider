@@ -9,6 +9,9 @@ import type { CanonicalRequest } from "../protocol/canonical.js";
 import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
+import type { RequestDiagnostics } from "./request-diagnostics.js";
+import type { ValidateToolArguments } from "./tool-output-validation.js";
+import type { SdkSendOptions } from "./upstream-acceptance.js";
 
 export type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
 export type { PipelineNativeContextCapabilities } from "../kiro/native-context-capabilities.js";
@@ -52,7 +55,7 @@ export interface PipelineTokenRefresher {
 export interface PipelineSdkClient {
   send(
     command: GenerateAssistantResponseCommand,
-    options: { readonly abortSignal: AbortSignal },
+    options: SdkSendOptions,
   ): Promise<SdkStreamResponse>;
 }
 
@@ -64,6 +67,7 @@ export type PipelineClientFactory = (
   proxyUrl?: string,
   accountId?: string,
   httpKeepAlive?: boolean,
+  runtimeProtocol?: "codewhisperer" | "kiro-runtime",
 ) => PipelineSdkClient;
 
 export interface PipelineAffinityBinding {
@@ -121,6 +125,8 @@ export type PipelineReasoningReplayStore = Pick<
 >;
 
 export interface RunChatCompletionOptions {
+  readonly diagnostics?: RequestDiagnostics;
+  readonly validateToolArguments?: ValidateToolArguments;
   readonly onProjection?: (
     diagnostics: import("../kiro/types.js").RequestTransformDiagnostics,
   ) => void;

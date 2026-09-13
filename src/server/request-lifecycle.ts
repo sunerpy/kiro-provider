@@ -1,4 +1,7 @@
+import type { RequestDiagnostics } from "../core/request-diagnostics.js";
+
 export type IngressSignals = {
+  readonly diagnostics?: RequestDiagnostics;
   readonly combined: AbortSignal;
   readonly deadline: AbortSignal;
   readonly client: AbortSignal;

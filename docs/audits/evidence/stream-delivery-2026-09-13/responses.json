@@ -1,0 +1,1313 @@
+{
+  "source_sha256": "bbacd0c6cd8a07104e64e925ec39b27a9de6ed1902fe0b4a917463a048bb3ab5",
+  "data": {
+    "schema_version": 1,
+    "sdk_version": "7.13.0",
+    "tools_executed": 0,
+    "automatic_follow_on": false,
+    "results": [
+      {
+        "model": "gpt-5.6-sol",
+        "case": "function-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_d37ac1bb",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_d37ac1bb:41",
+        "traces": [
+          {
+            "request_id": "probe-request-001",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2278,
+            "first_delta_ms": 2281,
+            "first_tool_delta_ms": 2281,
+            "tool_done_ms": 3088,
+            "elapsed_ms": 3088,
+            "events": 33,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5662,
+              "output_tokens": 0,
+              "total_tokens": 5662,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 0,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-002",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1905,
+            "first_delta_ms": 1907,
+            "elapsed_ms": 2015,
+            "events": 20,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5758,
+              "output_tokens": 6,
+              "total_tokens": 5764,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "function-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_2_77793081",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_2_77793081:41",
+        "traces": [
+          {
+            "request_id": "probe-request-003",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2466,
+            "first_delta_ms": 2657,
+            "first_tool_delta_ms": 2657,
+            "tool_done_ms": 2816,
+            "elapsed_ms": 2817,
+            "events": 32,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5684,
+              "output_tokens": 0,
+              "total_tokens": 5684,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 0,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-004",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1801,
+            "first_delta_ms": 1802,
+            "elapsed_ms": 1821,
+            "events": 19,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5777,
+              "output_tokens": 6,
+              "total_tokens": 5783,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "function-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_3_0fc60447",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_3_0fc60447:41",
+        "traces": [
+          {
+            "request_id": "probe-request-005",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 3343,
+            "first_delta_ms": 3537,
+            "first_tool_delta_ms": 3537,
+            "tool_done_ms": 3710,
+            "elapsed_ms": 3710,
+            "events": 33,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5630,
+              "output_tokens": 0,
+              "total_tokens": 5630,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 0,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-006",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1632,
+            "first_delta_ms": 1632,
+            "elapsed_ms": 1645,
+            "events": 20,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5726,
+              "output_tokens": 6,
+              "total_tokens": 5732,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "native-control",
+        "passed": false,
+        "status": 403,
+        "request_id": "probe-request-007",
+        "error": "403 User is not authorized to make this call."
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "function-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_32a3984c",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_32a3984c:41",
+        "traces": [
+          {
+            "request_id": "probe-request-008",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2552,
+            "first_delta_ms": 2552,
+            "first_tool_delta_ms": 3476,
+            "tool_done_ms": 3797,
+            "elapsed_ms": 3797,
+            "events": 32,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7406,
+              "output_tokens": 14,
+              "total_tokens": 7420,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message",
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-009",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2199,
+            "first_delta_ms": 2200,
+            "elapsed_ms": 2370,
+            "events": 11,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7445,
+              "output_tokens": 6,
+              "total_tokens": 7451,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "function-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_2_4b076565",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_2_4b076565:41",
+        "traces": [
+          {
+            "request_id": "probe-request-010",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2305,
+            "first_delta_ms": 2798,
+            "first_tool_delta_ms": 2798,
+            "tool_done_ms": 2966,
+            "elapsed_ms": 2966,
+            "events": 18,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7397,
+              "output_tokens": 0,
+              "total_tokens": 7397,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-011",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2222,
+            "first_delta_ms": 2223,
+            "elapsed_ms": 2369,
+            "events": 10,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7421,
+              "output_tokens": 6,
+              "total_tokens": 7427,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "function-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_3_cae49a09",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_3_cae49a09:41",
+        "traces": [
+          {
+            "request_id": "probe-request-012",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 4290,
+            "first_delta_ms": 4728,
+            "first_tool_delta_ms": 4728,
+            "tool_done_ms": 4887,
+            "elapsed_ms": 4887,
+            "events": 18,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7401,
+              "output_tokens": 0,
+              "total_tokens": 7401,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-013",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2447,
+            "first_delta_ms": 2448,
+            "elapsed_ms": 2624,
+            "events": 11,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7426,
+              "output_tokens": 6,
+              "total_tokens": 7432,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "native-control",
+        "passed": false,
+        "status": 403,
+        "request_id": "probe-request-014",
+        "error": "403 User is not authorized to make this call."
+      },
+      {
+        "model": "claude-sonnet-5",
+        "case": "function-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_de150b80",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_de150b80:41",
+        "traces": [
+          {
+            "request_id": "probe-request-015",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2441,
+            "first_delta_ms": 3204,
+            "first_tool_delta_ms": 3204,
+            "tool_done_ms": 3371,
+            "elapsed_ms": 3371,
+            "events": 19,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7216,
+              "output_tokens": 0,
+              "total_tokens": 7216,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-016",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 3510,
+            "first_delta_ms": 3511,
+            "elapsed_ms": 3555,
+            "events": 11,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7206,
+              "output_tokens": 6,
+              "total_tokens": 7212,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-sonnet-5",
+        "case": "function-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_2_666afad4",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_2_666afad4:41",
+        "traces": [
+          {
+            "request_id": "probe-request-017",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 4220,
+            "first_delta_ms": 4979,
+            "first_tool_delta_ms": 4979,
+            "tool_done_ms": 5139,
+            "elapsed_ms": 5139,
+            "events": 20,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7199,
+              "output_tokens": 0,
+              "total_tokens": 7199,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-018",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2636,
+            "first_delta_ms": 2636,
+            "elapsed_ms": 2724,
+            "events": 11,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7206,
+              "output_tokens": 6,
+              "total_tokens": 7212,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-sonnet-5",
+        "case": "function-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_3_36f1b564",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_3_36f1b564:41",
+        "traces": [
+          {
+            "request_id": "probe-request-019",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 3980,
+            "first_delta_ms": 4744,
+            "first_tool_delta_ms": 4744,
+            "tool_done_ms": 4908,
+            "elapsed_ms": 4908,
+            "events": 18,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 7200,
+              "output_tokens": 0,
+              "total_tokens": 7200,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call"
+            ],
+            "reasoning": []
+          },
+          {
+            "request_id": "probe-request-020",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2526,
+            "first_delta_ms": 2527,
+            "elapsed_ms": 2608,
+            "events": 11,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 7211,
+              "output_tokens": 6,
+              "total_tokens": 7217,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "claude-sonnet-5",
+        "case": "native-control",
+        "passed": false,
+        "status": 403,
+        "request_id": "probe-request-021",
+        "error": "403 User is not authorized to make this call."
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "case": "function-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_1fb27858",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_1fb27858:41",
+        "traces": [
+          {
+            "request_id": "probe-request-022",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2810,
+            "first_delta_ms": 2926,
+            "first_tool_delta_ms": 2926,
+            "tool_done_ms": 4158,
+            "elapsed_ms": 4158,
+            "events": 37,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5825,
+              "output_tokens": 0,
+              "total_tokens": 5825,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-023",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1903,
+            "first_delta_ms": 1903,
+            "elapsed_ms": 1952,
+            "events": 20,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5922,
+              "output_tokens": 6,
+              "total_tokens": 5928,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "case": "function-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_2_1ba8add9",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_2_1ba8add9:41",
+        "traces": [
+          {
+            "request_id": "probe-request-024",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2423,
+            "first_delta_ms": 2424,
+            "first_tool_delta_ms": 2424,
+            "tool_done_ms": 2588,
+            "elapsed_ms": 2588,
+            "events": 38,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5642,
+              "output_tokens": 0,
+              "total_tokens": 5642,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-025",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1769,
+            "first_delta_ms": 1769,
+            "elapsed_ms": 1784,
+            "events": 21,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5742,
+              "output_tokens": 6,
+              "total_tokens": 5748,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "case": "function-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_3_e684c482",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_3_e684c482:41",
+        "traces": [
+          {
+            "request_id": "probe-request-026",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2722,
+            "first_delta_ms": 2723,
+            "first_tool_delta_ms": 2723,
+            "tool_done_ms": 2891,
+            "elapsed_ms": 2891,
+            "events": 36,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5713,
+              "output_tokens": 0,
+              "total_tokens": 5713,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-027",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1964,
+            "first_delta_ms": 1965,
+            "elapsed_ms": 2028,
+            "events": 19,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5806,
+              "output_tokens": 6,
+              "total_tokens": 5812,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "case": "native-control",
+        "passed": false,
+        "status": 403,
+        "request_id": "probe-request-028",
+        "error": "403 User is not authorized to make this call."
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "case": "function-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_f943e480",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_f943e480:41",
+        "traces": [
+          {
+            "request_id": "probe-request-029",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2342,
+            "first_delta_ms": 2395,
+            "first_tool_delta_ms": 2395,
+            "tool_done_ms": 2520,
+            "elapsed_ms": 2520,
+            "events": 36,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5668,
+              "output_tokens": 0,
+              "total_tokens": 5668,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-030",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1876,
+            "first_delta_ms": 1877,
+            "elapsed_ms": 1926,
+            "events": 25,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5803,
+              "output_tokens": 6,
+              "total_tokens": 5809,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "case": "function-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_2_271dc7b0",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_2_271dc7b0:41",
+        "traces": [
+          {
+            "request_id": "probe-request-031",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2847,
+            "first_delta_ms": 2966,
+            "first_tool_delta_ms": 2966,
+            "tool_done_ms": 3149,
+            "elapsed_ms": 3150,
+            "events": 38,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 6030,
+              "output_tokens": 0,
+              "total_tokens": 6030,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-032",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1851,
+            "first_delta_ms": 1852,
+            "elapsed_ms": 1916,
+            "events": 27,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 6178,
+              "output_tokens": 6,
+              "total_tokens": 6184,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "case": "function-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_3_112f1afb",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_3_112f1afb:41",
+        "traces": [
+          {
+            "request_id": "probe-request-033",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 3538,
+            "first_delta_ms": 3539,
+            "first_tool_delta_ms": 3539,
+            "tool_done_ms": 3627,
+            "elapsed_ms": 3627,
+            "events": 37,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5623,
+              "output_tokens": 0,
+              "total_tokens": 5623,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-034",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1800,
+            "first_delta_ms": 1801,
+            "elapsed_ms": 1865,
+            "events": 26,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5797,
+              "output_tokens": 6,
+              "total_tokens": 5803,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 3,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "case": "native-control",
+        "passed": false,
+        "status": 403,
+        "request_id": "probe-request-035",
+        "error": "403 User is not authorized to make this call."
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "namespace-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": {
+          "marker": "STREAM_1_38e3f918",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:STREAM_1_38e3f918:41",
+        "traces": [
+          {
+            "request_id": "probe-request-036",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2719,
+            "first_delta_ms": 2720,
+            "first_tool_delta_ms": 2720,
+            "tool_done_ms": 2889,
+            "elapsed_ms": 2890,
+            "events": 34,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5835,
+              "output_tokens": 0,
+              "total_tokens": 5835,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "function_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 0,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-037",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1532,
+            "first_delta_ms": 1532,
+            "elapsed_ms": 1544,
+            "events": 21,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5947,
+              "output_tokens": 6,
+              "total_tokens": 5953,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "custom-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "requested_effort": "max",
+        "headers_before_tool_done": true,
+        "arguments": "STREAM_1_5ef1e435\n中文 \"quote\" \\backslash\nsecond line",
+        "reply": "ACK:STREAM_1_5ef1e435:41",
+        "traces": [
+          {
+            "request_id": "probe-request-038",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 2737,
+            "first_delta_ms": 3083,
+            "first_tool_delta_ms": 3083,
+            "tool_done_ms": 3083,
+            "elapsed_ms": 3083,
+            "events": 9,
+            "tool_done_count": 1,
+            "usage": {
+              "input_tokens": 5764,
+              "output_tokens": 0,
+              "total_tokens": 5764,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "custom_tool_call",
+              "reasoning"
+            ],
+            "reasoning": [
+              {
+                "summary_chars": 0,
+                "replay_prefix": "kr1_"
+              }
+            ]
+          },
+          {
+            "request_id": "probe-request-039",
+            "transport": "stateless",
+            "compatibility": null,
+            "status": 200,
+            "headers_ms": 1801,
+            "first_delta_ms": 1802,
+            "elapsed_ms": 1814,
+            "events": 21,
+            "tool_done_count": 0,
+            "usage": {
+              "input_tokens": 5877,
+              "output_tokens": 6,
+              "total_tokens": 5883,
+              "input_tokens_details": {
+                "cached_tokens": 0
+              },
+              "output_tokens_details": {
+                "reasoning_tokens": 0
+              }
+            },
+            "output_types": [
+              "message"
+            ],
+            "reasoning": []
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "cancel-after-headers",
+        "passed": true,
+        "events": 1,
+        "request_id": "probe-request-040"
+      }
+    ]
+  }
+}
