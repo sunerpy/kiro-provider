@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/sunerpy/kiro-provider/compare/v3.1.0...v3.1.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **stream:** 修复响应头与工具增量交付及 KiroRuntime 解码 ([#39](https://github.com/sunerpy/kiro-provider/issues/39)) ([da1b0e4](https://github.com/sunerpy/kiro-provider/commit/da1b0e46c229b2274ac1b39d21a6f046207abb6a))
+
 ## [3.1.0](https://github.com/sunerpy/kiro-provider/compare/v3.0.1...v3.1.0) (2026-09-11)
 
 
