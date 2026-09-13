@@ -64,15 +64,17 @@ function parseSse(text: string): Array<Readonly<Record<string, unknown>>> {
 describe("zero-argument Kiro tool calls (B20 evidence)", () => {
   test("the stream transformer projects a stop without any input fragment as {}", async () => {
     const events = await collectSdkEvents([...ZERO_ARGUMENT_CALL, COMPLETION], MODEL, CONVERSATION);
-    const toolDelta = events.find((event) => event.type === "tool_call_delta");
+    const toolDeltas = events.filter((event) => event.type === "tool_call_delta");
+    const toolDelta = toolDeltas[0];
 
     expect(toolDelta).toMatchObject({
       type: "tool_call_delta",
       index: 0,
       id: "tool-zero",
       name: "ping",
-      arguments: "{}",
+      arguments: "",
     });
+    expect(toolDeltas.map((event) => event.arguments).join("")).toBe("{}");
     expect(events.at(-1)).toMatchObject({ type: "completed", finishReason: "tool_calls" });
   });
 

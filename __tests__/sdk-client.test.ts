@@ -174,7 +174,16 @@ describe("createSdkClient", () => {
 
   test("injects systemPrompt after serialization and before Content-Length", async () => {
     clearSdkClientCache();
-    const client = createSdkClient(makeAuth(), "us-east-1", "high");
+    const client = createSdkClient(
+      makeAuth(),
+      "us-east-1",
+      "high",
+      undefined,
+      undefined,
+      undefined,
+      false,
+      "kiro-runtime",
+    );
     const systemPrompt = "System instruction bytes\r\n{";
 
     const request = await captureBuiltRequest(
@@ -209,7 +218,16 @@ describe("createSdkClient", () => {
 
   test("retargets an ordinary command to KiroRuntime without inventing systemPrompt", async () => {
     clearSdkClientCache();
-    const client = createSdkClient(makeAuth(), "us-east-1");
+    const client = createSdkClient(
+      makeAuth(),
+      "us-east-1",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      "kiro-runtime",
+    );
     const request = await captureBuiltRequest(client, "gpt-5.6-sol", undefined, undefined, true);
     const body = parseRequestBody(request);
 
@@ -220,6 +238,56 @@ describe("createSdkClient", () => {
     expect(body.conversationState).toMatchObject({
       conversationId: "sdk-client-test",
       rootConversationId: "sdk-client-test",
+    });
+    clearSdkClientCache();
+  });
+
+  test("does not reuse RPC response decoders for REST requests on the same account", async () => {
+    clearSdkClientCache();
+    const auth = makeAuth();
+    const rest = createSdkClient(
+      auth,
+      "us-east-1",
+      undefined,
+      undefined,
+      undefined,
+      "protocol-account",
+    );
+    const rpc = createSdkClient(
+      auth,
+      "us-east-1",
+      undefined,
+      undefined,
+      undefined,
+      "protocol-account",
+      false,
+      "kiro-runtime",
+    );
+    expect(rpc).not.toBe(rest);
+    expect(
+      createSdkClient(auth, "us-east-1", undefined, undefined, undefined, "protocol-account"),
+    ).toBe(rest);
+    expect(
+      createSdkClient(
+        auth,
+        "us-east-1",
+        undefined,
+        undefined,
+        undefined,
+        "protocol-account",
+        false,
+        "kiro-runtime",
+      ),
+    ).toBe(rpc);
+    const restRequest = await captureBuiltRequest(rest, "gpt-5.6-sol");
+    const rpcRequest = await captureBuiltRequest(rpc, "gpt-5.6-sol", undefined, undefined, true);
+    expect(restRequest.path).toContain("/generateAssistantResponse");
+    expect(rpcRequest.path).toBe("/");
+    expect(parseRequestBody(restRequest).conversationState).toMatchObject({
+      currentMessage: { userInputMessage: { content: "hello", modelId: "gpt-5.6-sol" } },
+    });
+    expect(parseRequestBody(rpcRequest).conversationState).toMatchObject({
+      currentMessage: { userInputMessage: { content: "hello", modelId: "gpt-5.6-sol" } },
     });
     clearSdkClientCache();
   });

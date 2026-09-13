@@ -22,6 +22,7 @@ import {
   SemanticStreamTruncationError,
   sdkEventTypes,
   type ToolCallState,
+  ToolCallViolation,
   type UsageState,
   updateUsageState,
   validateCompletedToolCalls,
@@ -36,6 +37,9 @@ export interface ToolCallProgress {
 }
 
 export interface TransformSdkOutputOptions {
+  readonly diagnostics?: import("../../../core/request-diagnostics.js").RequestDiagnostics;
+  readonly validateToolArguments?: import("../../../core/tool-output-validation.js").ValidateToolArguments;
+  readonly maxToolArgumentsBytes?: number;
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
@@ -82,6 +86,8 @@ export async function* transformSdkOutputStream(
   if (!eventStream) throw new MissingSdkOutputStreamError();
 
   const toolCalls = new Map<string, ToolCallState>();
+  const toolIndexes = new Map<string, number>();
+  const pendingToolSurrogates = new Map<string, string>();
   const usage: UsageState = {};
   const reasoning = createReasoningCaptureState();
   const iterator = eventStream[Symbol.asyncIterator]();
@@ -93,6 +99,7 @@ export async function* transformSdkOutputStream(
   let iteratorFinished = false;
   let iteratorClosed = false;
   let completionWitness: "token-usage-metadata" | "metering-clean-eof" | undefined;
+  let toolArgumentBytes = 0;
 
   try {
     yield {
@@ -117,14 +124,14 @@ export async function* transformSdkOutputStream(
           model,
           conversation_hash: auditHash(conversationId),
           witness_kind: completionWitness,
-          ...streamErrorAuditFields(transportError),
+          ...streamErrorAuditFields(transportError, options.diagnostics),
         });
         iteratorClosed = true;
         closeIteratorWithoutBlocking(iterator);
         break;
       }
       if (next.kind === "aborted") {
-        if (iterator.return) await iterator.return();
+        closeIteratorWithoutBlocking(iterator);
         iteratorClosed = true;
         return;
       }
@@ -225,13 +232,66 @@ export async function* transformSdkOutputStream(
       }
 
       if (event.toolUseEvent) {
+        const fragment = event.toolUseEvent;
+        const previous = fragment.toolUseId ? toolCalls.get(fragment.toolUseId) : undefined;
+        toolArgumentBytes += Buffer.byteLength(fragment.input ?? "", "utf8");
+        const pending = pendingToolSurrogates.get(fragment.toolUseId ?? "") ?? "";
+        const firstCode = fragment.input?.charCodeAt(0);
+        if (pending && firstCode !== undefined && firstCode >= 0xdc00 && firstCode <= 0xdfff)
+          toolArgumentBytes -= 2;
+        if (!previous)
+          toolArgumentBytes +=
+            Buffer.byteLength(fragment.name ?? "", "utf8") +
+            Buffer.byteLength(fragment.toolUseId ?? "", "utf8");
+        if (
+          options.maxToolArgumentsBytes !== undefined &&
+          toolArgumentBytes > options.maxToolArgumentsBytes
+        ) {
+          throw new ToolCallViolation(
+            "Upstream tool arguments exceeded the configured request-body budget",
+            "upstream_tool_arguments_too_large",
+            "arguments_too_large",
+            {
+              toolUseId: fragment.toolUseId,
+              toolName: fragment.name,
+              argumentsText: (previous?.input ?? "") + (fragment.input ?? ""),
+              fragmentCount: (previous?.fragmentCount ?? 0) + 1,
+            },
+          );
+        }
         appendToolFragment(toolCalls, event.toolUseEvent);
         options.onToolCallProgress?.(toolCallProgress(toolCalls));
+        options.validateToolArguments?.assertName(event.toolUseEvent.name as string);
+        const id = event.toolUseEvent.toolUseId as string;
+        const first = !toolIndexes.has(id);
+        if (first) toolIndexes.set(id, toolIndexes.size);
+        const candidate = pending + (fragment.input ?? "");
+        const lastCode = candidate.charCodeAt(candidate.length - 1);
+        const holdLast = lastCode >= 0xd800 && lastCode <= 0xdbff;
+        const delta = holdLast ? candidate.slice(0, -1) : candidate;
+        pendingToolSurrogates.set(id, holdLast ? candidate.slice(-1) : "");
+        for (const character of delta) {
+          const code = character.codePointAt(0) as number;
+          if (code >= 0xd800 && code <= 0xdfff)
+            throw new SdkStreamProtocolError(
+              "Upstream tool arguments contain an invalid Unicode scalar",
+              "malformed_upstream_tool_arguments",
+            );
+        }
+        if (first || delta.length > 0) {
+          yield {
+            canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+            type: "tool_call_delta",
+            index: toolIndexes.get(id) as number,
+            ...(first ? { id, name: event.toolUseEvent.name } : {}),
+            arguments: delta,
+          };
+        }
       }
     }
   } finally {
     if (!iteratorFinished && !iteratorClosed && iterator.return) {
-      await iterator.return();
+      closeIteratorWithoutBlocking(iterator);
     }
   }
 
@@ -239,7 +299,7 @@ export async function* transformSdkOutputStream(
   if (completionWitness === "metering-clean-eof") {
     options.onCompletionWitness?.(completionWitness);
   }
-  validateCompletedToolCalls(toolCalls);
+  validateCompletedToolCalls(toolCalls, options.validateToolArguments);
 
   const captured = resolveReasoningCapture(reasoning);
   if (options.emitAnthropicReasoningMetadata) {
@@ -259,17 +319,17 @@ export async function* transformSdkOutputStream(
     }
   }
 
-  let ordinal = 0;
   for (const toolCall of toolCalls.values()) {
-    yield {
-      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
-      type: "tool_call_delta",
-      index: ordinal,
-      id: toolCall.toolUseId,
-      name: toolCall.name,
-      arguments: toolCall.input,
-    };
-    ordinal += 1;
+    // Only the established no-input + stop + completion shape receives "{}".
+    // It is not a repair for partial, blank, malformed, or cancelled arguments.
+    if (!toolCall.inputReceived) {
+      yield {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "tool_call_delta",
+        index: toolIndexes.get(toolCall.toolUseId) as number,
+        arguments: toolCall.input,
+      };
+    }
   }
 
   const output = {

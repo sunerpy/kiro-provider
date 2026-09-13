@@ -54,7 +54,7 @@ function malformedStreamResponse(): SdkStreamResponse {
 }
 
 describe("streamed tool-call violations", () => {
-  test("keeps an 18-fragment malformed call atomic and emits safe diagnostics", async () => {
+  test("streams 18 argument fragments but never completes a malformed call", async () => {
     const emitted: CanonicalOutputEvent[] = [];
     let failure: unknown;
 
@@ -77,7 +77,7 @@ describe("streamed tool-call violations", () => {
       fragmentCount: 18,
     });
     expect(emitted.some((event) => event.type === "text_delta")).toBe(true);
-    expect(emitted.some((event) => event.type === "tool_call_delta")).toBe(false);
+    expect(emitted.filter((event) => event.type === "tool_call_delta")).toHaveLength(18);
     expect(emitted.some((event) => event.type === "completed")).toBe(false);
 
     const fields = streamErrorAuditFields(failure);
@@ -98,7 +98,7 @@ describe("streamed tool-call violations", () => {
     expect(serialized).not.toContain('{"secret":"');
   });
 
-  test("surfaces partial text but no tool part through the Responses pipeline", async () => {
+  test("surfaces progress but no completed tool through the Responses pipeline", async () => {
     let pipelineFinalized = 0;
     let adapterFinalized = 0;
     const pipeline = createPipelineStreamResponse(
@@ -136,8 +136,15 @@ describe("streamed tool-call violations", () => {
     expect(text).toContain('"code":"malformed_upstream_tool_arguments"');
     expect(text).toContain('"type":"response.failed"');
     expect(text).not.toContain('"type":"response.completed"');
-    expect(text).not.toContain('"type":"function_call"');
-    expect(text).not.toContain('"type":"custom_tool_call"');
+    expect(text).toContain('"type":"function_call"');
+    expect(text).not.toContain('"type":"response.output_item.done"');
+    expect(text).not.toContain('"type":"response.function_call_arguments.done"');
+    const failureFrame = text
+      .split("\n\n")
+      .find((frame) => frame.includes("event: response.failed"));
+    expect(failureFrame).toBeDefined();
+    expect(failureFrame).not.toContain("secret_tool_id");
+    expect(failureFrame).not.toContain("secret_tool_name");
     expect(pipelineFinalized).toBe(1);
     expect(adapterFinalized).toBe(1);
   });

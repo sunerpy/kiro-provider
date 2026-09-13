@@ -3,6 +3,7 @@ import {
   ValidationExceptionReason,
 } from "@aws/codewhisperer-streaming-client";
 import { isAccessTokenError } from "../kiro/health.js";
+import { retryAfterMs as parseRetryAfterMs } from "./retry-after.js";
 
 export interface NormalizedSdkError {
   readonly status?: number;
@@ -10,6 +11,7 @@ export interface NormalizedSdkError {
   readonly code?: string;
   readonly reason?: string;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly requestId?: string;
 }
 
 export interface ErrorClassificationContext {
@@ -153,7 +155,7 @@ function causeChain(record: Record<string, unknown>): Record<string, unknown>[] 
   while (isRecord(current) && !seen.has(current) && chain.length < MAX_CAUSE_DEPTH) {
     seen.add(current);
     chain.push(current);
-    current = current.cause;
+    current = current.cause ?? current.error;
   }
   return chain;
 }
@@ -161,9 +163,13 @@ function causeChain(record: Record<string, unknown>): Record<string, unknown>[] 
 function readStatus(chain: readonly Record<string, unknown>[]): number | undefined {
   for (const record of chain) {
     const metadata = record.$metadata;
-    if (!isRecord(metadata)) continue;
-    const status = metadata.httpStatusCode;
-    if (typeof status === "number") return status;
+    const response = record.$response;
+    const status =
+      (isRecord(metadata) ? metadata.httpStatusCode : undefined) ??
+      (isRecord(response) ? response.statusCode : undefined) ??
+      record.status;
+    if (typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599)
+      return status;
   }
   return undefined;
 }
@@ -220,22 +226,34 @@ export function normalizeSdkError(error: unknown): NormalizedSdkError {
   const message = readString(error, "message") ?? String(error);
   const code = readCode(chain);
   const reason = readReason(chain);
-  const headers = readHeaders(error);
+  const headers = chain.map(readHeaders).find((value) => value !== undefined);
+  const requestId =
+    chain.flatMap((record) => {
+      const metadata = isRecord(record.$metadata) ? record.$metadata : undefined;
+      const value = metadata?.requestId ?? record.request_id ?? record.requestId;
+      return typeof value === "string" ? [value] : [];
+    })[0] ??
+    Object.entries(headers ?? {}).find(([name]) =>
+      ["x-amzn-requestid", "x-amzn-request-id", "x-request-id"].includes(name.toLowerCase()),
+    )?.[1];
   return {
     message,
     ...(status !== undefined ? { status } : {}),
     ...(code !== undefined ? { code } : {}),
     ...(reason !== undefined ? { reason } : {}),
     ...(headers !== undefined ? { headers } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
   };
 }
 
-function retryAfterMs(headers: Readonly<Record<string, string>> | undefined): number {
+function retryAfterMs(
+  headers: Readonly<Record<string, string>> | undefined,
+  fallbackMs: number,
+): number {
   const entry = Object.entries(headers ?? {}).find(
     ([name]) => name.toLowerCase() === "retry-after",
   );
-  const seconds = Number.parseInt(entry?.[1] ?? "60", 10);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1_000 : 60_000;
+  return parseRetryAfterMs(entry?.[1]) ?? fallbackMs;
 }
 
 export function isKiroContextOverflowBody(message: string): boolean {
@@ -423,16 +441,9 @@ export function classifyError(
       if (isAccessTokenError(error.message)) {
         return classifyRejectedCredentials(403, context);
       }
-      if (context.accountCount > 1) return { action: "switch", status: 403 };
-      return context.retryCount < context.maxRetries
-        ? {
-            action: "retry",
-            status: 403,
-            retryAfterMs: context.retryDelayMs * 2 ** context.retryCount,
-          }
-        : { action: "fail", status: 403, terminalStatus: 403 };
+      return { action: "fail", status: 403, terminalStatus: 403 };
     case 429: {
-      const waitMs = retryAfterMs(error.headers);
+      const waitMs = retryAfterMs(error.headers, context.retryDelayMs);
       if (context.accountCount > 1) {
         return { action: "switch", status: 429, retryAfterMs: waitMs };
       }
@@ -446,13 +457,16 @@ export function classifyError(
     case 502:
     case 503:
     case 504:
-      return context.serverErrorCount < 5
+      return context.serverErrorCount < 5 && context.retryCount < context.maxRetries
         ? {
             action: "retry",
             status: error.status,
-            retryAfterMs: 1_000 * 2 ** Math.max(0, context.serverErrorCount - 1),
+            retryAfterMs: Math.max(
+              1_000 * 2 ** Math.max(0, context.serverErrorCount - 1),
+              retryAfterMs(error.headers, 0),
+            ),
           }
-        : { action: "switch", status: error.status };
+        : { action: "fail", status: error.status, terminalStatus: error.status };
     case undefined:
       if (isNetworkError(error)) {
         return context.retryCount < context.maxRetries

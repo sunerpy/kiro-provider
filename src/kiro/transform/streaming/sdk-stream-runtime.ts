@@ -84,8 +84,9 @@ export class SdkStreamProtocolError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
 }
 
@@ -94,11 +95,13 @@ export type ToolCallViolationKind =
   | "name_changed"
   | "arguments_after_stop"
   | "missing_stop"
+  | "arguments_too_large"
   | "malformed_arguments";
 
 export type ToolCallViolationCode =
   | "invalid_upstream_tool_call"
   | "incomplete_upstream_tool_call"
+  | "upstream_tool_arguments_too_large"
   | "malformed_upstream_tool_arguments";
 
 export interface ToolCallViolationDetails {
@@ -169,12 +172,14 @@ export function assertSupportedSdkEvent(event: SdkStreamEvent): void {
     throw new SdkStreamProtocolError(
       "Kiro returned an embedded stream error",
       "upstream_stream_error",
+      { cause: event.error },
     );
   }
   if (event.invalidStateEvent !== undefined) {
     throw new SdkStreamProtocolError(
       "Kiro returned an invalid stream state",
       "upstream_invalid_state",
+      { cause: event.invalidStateEvent },
     );
   }
   if (event.$unknown !== undefined || eventTypes.includes("unknown")) {
@@ -366,7 +371,10 @@ export function appendToolFragment(
   });
 }
 
-export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCallState>): void {
+export function validateCompletedToolCalls(
+  toolCalls: ReadonlyMap<string, ToolCallState>,
+  validateArguments?: import("../../../core/tool-output-validation.js").ValidateToolArguments,
+): void {
   for (const toolCall of toolCalls.values()) {
     if (!toolCall.stopped) {
       throw new ToolCallViolation(
@@ -387,10 +395,10 @@ export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCa
     // including an empty or whitespace-only string, must still parse as JSON.
     if (!toolCall.inputReceived) {
       toolCall.input = "{}";
-      continue;
     }
+    let parsed: unknown;
     try {
-      JSON.parse(toolCall.input);
+      parsed = JSON.parse(toolCall.input);
     } catch {
       throw new ToolCallViolation(
         "Kiro returned malformed JSON arguments for a completed tool call",
@@ -404,6 +412,7 @@ export function validateCompletedToolCalls(toolCalls: ReadonlyMap<string, ToolCa
         },
       );
     }
+    validateArguments?.(toolCall.name, parsed);
   }
 }
 

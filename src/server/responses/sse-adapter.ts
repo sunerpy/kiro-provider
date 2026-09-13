@@ -95,6 +95,9 @@ type ToolCallAccumulator = {
   id: string;
   name: string;
   arguments: string;
+  outputIndex?: number;
+  custom?: boolean;
+  emittedArguments: number;
 };
 
 type ReasoningRun = {
@@ -136,6 +139,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   let canonicalCompleted = false;
 
   const emit = (create: (sequence: number) => ResponsesEvent): void => {
+    signals.diagnostics?.projectedFrame();
     let event = create(sequenceNumber);
     if (!options.includeEncryptedReasoning) {
       if ("response" in event)
@@ -253,7 +257,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             responseFailed({
               responseId,
               model: options.model,
-              error: details,
+              error: signals.diagnostics?.streamError(details.code, details.message) ?? details,
               sequenceNumber: sequence,
               createdAt,
               configuration: options.configuration,
@@ -272,9 +276,16 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     message: string,
     code: StreamFailureCode = "upstream_protocol_error",
   ): void => {
+    signals.diagnostics?.failure(Object.assign(new Error(message), { code }), "projection");
     beginTerminal("upstream-protocol-error", undefined, { code, message });
   };
   const failToolRestore = (failure: BridgeFailure): void => {
+    signals.diagnostics?.failure(
+      Object.assign(new Error("Upstream tool identity could not be restored"), {
+        code: failure.code,
+      }),
+      "projection",
+    );
     beginTerminal("upstream-protocol-error", undefined, reportToolRestoreFailure(failure));
   };
   const failIncomplete = (): void => {
@@ -514,16 +525,79 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       }
       case "tool_call_delta": {
         closeReasoningBeforeOutput();
-        const existing = tools.get(event.index) ?? {
+        const existing: ToolCallAccumulator = tools.get(event.index) ?? {
           itemId: `fc_${randomUUID()}`,
           id: "",
           name: "",
           arguments: "",
+          emittedArguments: 0,
         };
+        if (
+          (event.id !== undefined && existing.id && event.id !== existing.id) ||
+          (event.name !== undefined && existing.name && event.name !== existing.name)
+        ) {
+          failProtocol("Upstream changed a tool call identity");
+          return;
+        }
         if (existing.id.length === 0 && event.id !== undefined) existing.id = event.id;
         if (existing.name.length === 0 && event.name !== undefined) existing.name = event.name;
         existing.arguments += event.arguments;
         tools.set(event.index, existing);
+        if (!existing.id || !existing.name) return;
+        if (existing.outputIndex === undefined) {
+          const identity = options.bridge
+            ? options.bridge.identityFor(existing.name)
+            : { kind: "function" as const, name: existing.name };
+          if (!identity) {
+            failToolRestore({
+              ok: false,
+              code: "unknown_tool_alias",
+              message: "Upstream returned an undeclared tool call",
+              toolName: existing.name,
+            });
+            return;
+          }
+          const outputIndex = nextOutputIndex++;
+          existing.outputIndex = outputIndex;
+          existing.custom =
+            identity.kind === "custom" ||
+            (identity.kind === "namespace" && identity.toolType === "custom");
+          const common = {
+            id: existing.itemId,
+            call_id: existing.id,
+            name: identity.name,
+            ...(identity.kind === "namespace" ? { namespace: identity.namespace } : {}),
+            status: "in_progress" as const,
+          };
+          emit((sequence) =>
+            outputItemAdded({
+              item: existing.custom
+                ? { ...common, type: "custom_tool_call", input: "" }
+                : { ...common, type: "function_call", arguments: "" },
+              outputIndex,
+              sequenceNumber: sequence,
+            }),
+          );
+        }
+        if (existing.custom) {
+          // Wrapped custom strings require complete JSON validation. Activity is
+          // a comment, not a decoded argument, a semantic token, or completion.
+          if (event.arguments.length > 0)
+            pendingFrames.push(encoder.encode(": upstream custom input fragment\n\n"));
+        } else {
+          const delta = existing.arguments.slice(existing.emittedArguments);
+          existing.emittedArguments = existing.arguments.length;
+          if (delta.length > 0) {
+            emit((sequence) =>
+              functionCallArgumentsDelta({
+                itemId: existing.itemId,
+                outputIndex: existing.outputIndex as number,
+                delta,
+                sequenceNumber: sequence,
+              }),
+            );
+          }
+        }
         return;
       }
     }
@@ -622,24 +696,13 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       completedOutput.set(outputIndex, item);
     }
     for (const item of restored.items) {
-      const outputIndex = nextOutputIndex;
-      nextOutputIndex += 1;
-      const addedItem =
-        item.type === "function_call"
-          ? { ...item, arguments: "", status: "in_progress" as const }
-          : { ...item, input: "", status: "in_progress" as const };
-      emit((sequence) =>
-        outputItemAdded({ item: addedItem, outputIndex, sequenceNumber: sequence }),
-      );
+      const accumulated = [...tools.values()].find((tool) => tool.itemId === item.id);
+      const outputIndex = accumulated?.outputIndex;
+      if (outputIndex === undefined) {
+        failProtocol("Upstream completed an unannounced tool call");
+        return;
+      }
       if (item.type === "function_call") {
-        emit((sequence) =>
-          functionCallArgumentsDelta({
-            itemId: item.id,
-            outputIndex,
-            delta: item.arguments,
-            sequenceNumber: sequence,
-          }),
-        );
         emit((sequence) =>
           functionCallArgumentsDone({
             itemId: item.id,
@@ -683,6 +746,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     new ReadableStream<Uint8Array>({
       start(controller) {
         streamController = controller;
+        signals.diagnostics?.published();
         emit((sequence) =>
           responseCreated({
             responseId,

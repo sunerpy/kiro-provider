@@ -11,6 +11,7 @@ import type {
   PipelineTokenRefresher,
   RunChatCompletionOptions,
 } from "../core/pipeline.js";
+import { RequestDiagnostics } from "../core/request-diagnostics.js";
 import { boundedCleanup, runCleanupSteps } from "../core/stream-cleanup.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
 import { anthropicError } from "./anthropic/errors.js";
@@ -30,6 +31,7 @@ import type { PipelineResponseStore } from "./responses/store.js";
  * this once per request from `AppDependencies` plus the authenticated tenant.
  */
 export type RouteDependencies = {
+  readonly diagnostics?: RequestDiagnostics;
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
   readonly quotaRechecker?: PipelineQuotaRechecker;
@@ -95,6 +97,7 @@ export const anthropicIngressErrors: IngressErrorEnvelope = {
 };
 
 export interface Ingress {
+  readonly diagnostics: RequestDiagnostics;
   readonly requestId: string;
   readonly signals: IngressSignals;
   /**
@@ -111,8 +114,11 @@ export function createIngress(
   request: Request,
   config: Pick<Config, "request_timeout_ms">,
   createLease?: () => RequestIdleTimeoutLease | undefined,
+  suppliedDiagnostics?: RequestDiagnostics,
 ): Ingress {
-  const requestId = newRequestId();
+  const diagnostics = suppliedDiagnostics ?? new RequestDiagnostics(newRequestId());
+  const requestId = diagnostics.requestId;
+  const clientSignal = request.signal;
   const deadlineAt = Date.now() + config.request_timeout_ms;
   const deadlineController = new AbortController();
   const deadlineTimer = setTimeout(
@@ -122,14 +128,21 @@ export function createIngress(
   let lease: RequestIdleTimeoutLease | undefined;
   let leaseRequested = false;
   let finalized = false;
+  const onClientAbort = (): void => diagnostics.cancel("client_disconnect");
+  const onDeadline = (): void => diagnostics.cancel("request_deadline");
+  clientSignal.addEventListener("abort", onClientAbort, { once: true });
+  deadlineController.signal.addEventListener("abort", onDeadline, { once: true });
+  if (clientSignal.aborted) onClientAbort();
   return {
+    diagnostics,
     requestId,
     signals: {
-      combined: AbortSignal.any([deadlineController.signal, request.signal]),
+      combined: AbortSignal.any([deadlineController.signal, clientSignal]),
       deadline: deadlineController.signal,
-      client: request.signal,
+      client: clientSignal,
       requestId,
       deadlineAt,
+      diagnostics,
     },
     disableIdleTimeout(): void {
       if (leaseRequested) return;
@@ -143,6 +156,8 @@ export function createIngress(
       runCleanupSteps(
         () => clearTimeout(deadlineTimer),
         () => lease?.restore(),
+        () => clientSignal.removeEventListener("abort", onClientAbort),
+        () => deadlineController.signal.removeEventListener("abort", onDeadline),
       );
     },
   };
@@ -293,7 +308,9 @@ export async function readJsonBody(
   const body = await readRequestBody(request, config.max_request_body_bytes, signals, errors);
   if (!body.ok) return body;
   try {
-    return { ok: true, value: JSON.parse(body.text) };
+    const value: unknown = JSON.parse(body.text);
+    signals.diagnostics?.hidePayload(value);
+    return { ok: true, value };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     return { ok: false, response: errors.invalidJson() };
@@ -301,6 +318,7 @@ export async function readJsonBody(
 }
 
 export interface PipelineOptionsInput {
+  readonly diagnostics?: RequestDiagnostics;
   readonly requestId: string;
   readonly body: CanonicalRequest;
   readonly model: string;
@@ -324,6 +342,9 @@ export function buildPipelineOptions(input: PipelineOptionsInput): RunChatComple
   const { dependencies } = input;
   return {
     requestId: input.requestId,
+    ...((input.diagnostics ?? dependencies.diagnostics)
+      ? { diagnostics: input.diagnostics ?? dependencies.diagnostics }
+      : {}),
     body: input.body,
     model: input.model,
     stream: input.stream,

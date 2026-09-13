@@ -15,10 +15,13 @@ import {
 } from "../protocol/output.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import { abortReason } from "./pipeline-runtime.js";
+import type { RequestDiagnostics } from "./request-diagnostics.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 import { streamErrorAuditFields } from "./stream-error.js";
 
 export interface PipelineStreamResult {
+  readonly validateToolArguments?: import("./tool-output-validation.js").ValidateToolArguments;
+  readonly maxToolArgumentsBytes?: number;
   readonly sdkResponse: SdkStreamResponse;
   readonly model: string;
   readonly conversationId: string;
@@ -34,8 +37,8 @@ export interface PipelineStreamResult {
    */
   readonly abortUpstream?: (reason?: unknown) => void;
   /**
-   * Canonical stream the pipeline already opened and prefetched up to the
-   * first semantic event (pre-publication retry). When absent the response
+   * Canonical stream primed at its started event after upstream acceptance.
+   * When absent the response
    * opens the stream itself.
    */
   readonly prepared?: PreparedCanonicalStream;
@@ -64,6 +67,7 @@ export type CompletionWitnessKind = "token-usage-metadata" | "metering-clean-eof
 type AuditFields = Readonly<Record<string, string | number | boolean | undefined>>;
 
 export interface StreamTelemetryContext {
+  readonly diagnostics?: RequestDiagnostics;
   readonly requestId?: string;
   readonly attempt?: number;
   readonly effort?: Effort;
@@ -88,6 +92,22 @@ export function isSemanticOutputEvent(event: CanonicalOutputEvent): boolean {
  * response, and the non-stream collector. Counts only, never content.
  */
 export class StreamTelemetry {
+  readonly #activityListeners = new Set<() => void>();
+  readonly #toolIndexes = new Set<number>();
+
+  watchIdle(timeoutMs: number, onTimeout: () => void): () => void {
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(onTimeout, timeoutMs);
+    };
+    this.#activityListeners.add(reset);
+    reset();
+    return () => {
+      clearTimeout(timer);
+      this.#activityListeners.delete(reset);
+    };
+  }
   private readonly eventTypeCounts = new Map<string, number>();
   private rawEventCount = 0;
   private lastEventType: string | undefined;
@@ -99,6 +119,8 @@ export class StreamTelemetry {
   private reasoningSigned = false;
   private reasoningEncrypted = false;
   private openToolIntents = 0;
+  private stoppedToolIntents = 0;
+  private toolDeltaCount = 0;
   private witnessKind: CompletionWitnessKind | undefined;
   private completed: Extract<CanonicalOutputEvent, { readonly type: "completed" }> | undefined;
   private terminalEmitted = false;
@@ -118,6 +140,20 @@ export class StreamTelemetry {
 
   get completionWitnessed(): boolean {
     return this.witnessKind !== undefined;
+  }
+
+  get completedSeen(): boolean {
+    return this.completed !== undefined;
+  }
+
+  /** Tool fragments alone did not form an actionable result in the old collector. */
+  get collectorSemanticSeen(): boolean {
+    return (
+      this.reasoningChars > 0 ||
+      this.visibleChars > 0 ||
+      this.reasoningRedacted ||
+      this.completed !== undefined
+    );
   }
 
   observeCanonicalEvent(event: CanonicalOutputEvent): void {
@@ -140,9 +176,11 @@ export class StreamTelemetry {
         this.visibleChars += event.text.length;
         break;
       case "tool_call_delta":
-        this.toolCount += 1;
+        this.#toolIndexes.add(event.index);
+        this.toolDeltaCount += 1;
         break;
       case "completed":
+        this.toolCount = this.#toolIndexes.size;
         this.completed = event;
         break;
       case "started":
@@ -151,6 +189,8 @@ export class StreamTelemetry {
   }
 
   onRawEvent(eventTypes: readonly string[]): void {
+    this.context.diagnostics?.rawFrame();
+    for (const listener of this.#activityListeners) listener();
     this.rawEventCount += 1;
     this.lastEventType = eventTypes.join("+");
     for (const eventType of eventTypes) {
@@ -159,6 +199,7 @@ export class StreamTelemetry {
   }
 
   onCompletionWitness(kind: CompletionWitnessKind): void {
+    this.context.diagnostics?.witness();
     this.witnessKind = kind;
     auditLog("info", "sdk_stream_completion_witness", {
       request_id: this.context.requestId,
@@ -174,6 +215,7 @@ export class StreamTelemetry {
 
   onToolCallProgress(progress: ToolCallProgress): void {
     this.openToolIntents = progress.open;
+    this.stoppedToolIntents = progress.stopped;
   }
 
   /**
@@ -220,6 +262,10 @@ export class StreamTelemetry {
       reasoning_chars: this.reasoningChars,
       visible_chars: this.visibleChars,
       tool_count: this.toolCount,
+      tool_delta_count: this.toolDeltaCount,
+      tool_intent_count: this.openToolIntents + this.stoppedToolIntents,
+      tool_intent_open_count: this.openToolIntents,
+      tool_intent_stopped_count: this.stoppedToolIntents,
       tool_intent_open: this.openToolIntents > 0,
       reasoning_redacted: this.reasoningRedacted,
       finish_reason: this.completed?.finishReason,
@@ -284,6 +330,9 @@ export function prepareCanonicalStream(
       onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
       onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
       onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
+      maxToolArgumentsBytes: result.maxToolArgumentsBytes,
+      validateToolArguments: result.validateToolArguments,
+      diagnostics: result.telemetryContext?.diagnostics,
     },
   )[Symbol.asyncIterator]();
   return { iterator, streamAbort, composedSignal, telemetry, prefetched: [] };
@@ -341,12 +390,11 @@ export function createPipelineStreamResponse(
   const encode = (event: CanonicalOutputEvent): Uint8Array =>
     encoder.encode(`${JSON.stringify(event)}\n`);
   let terminalOutcome: PipelineOutcome | undefined;
-  let activeIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopIdleWatch: (() => void) | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const clearIdleTimer = (): void => {
-    if (activeIdleTimer === undefined) return;
-    clearTimeout(activeIdleTimer);
-    activeIdleTimer = undefined;
+    stopIdleWatch?.();
+    stopIdleWatch = undefined;
   };
   const claimTerminal = (outcome: PipelineOutcome): boolean => {
     if (terminalOutcome !== undefined) return false;
@@ -373,7 +421,7 @@ export function createPipelineStreamResponse(
       },
       finalize,
     );
-    if (outcome !== "normal-complete" && outcome !== "consumer-cancel") {
+    if (outcome !== "normal-complete") {
       runCleanupSteps(() => {
         if (!streamAbort.signal.aborted) streamAbort.abort(reason);
       });
@@ -381,6 +429,11 @@ export function createPipelineStreamResponse(
     void boundedCleanup(() => iterator.return?.(undefined));
   };
   const onExternalAbort = (): void => {
+    result.telemetryContext?.diagnostics?.cancel(
+      composedSignal.reason instanceof Error && composedSignal.reason.name === "TimeoutError"
+        ? "request_deadline"
+        : "external_abort",
+    );
     beginTerminal("external-abort", abortReason(composedSignal));
   };
 
@@ -399,16 +452,16 @@ export function createPipelineStreamResponse(
       },
       async pull(controller) {
         if (terminalOutcome !== undefined) return;
-        activeIdleTimer = setTimeout(() => {
-          activeIdleTimer = undefined;
+        stopIdleWatch = telemetry.watchIdle(idleTimeoutMs, () => {
           const error = new StreamIdleTimeoutError(idleTimeoutMs);
+          result.telemetryContext?.diagnostics?.failure(error, "upstream_stream");
           auditLog("warn", "sdk_stream_idle_timeout", {
             ...telemetry.auditFields(),
-            ...streamErrorAuditFields(error),
+            ...streamErrorAuditFields(error, result.telemetryContext?.diagnostics),
             idle_timeout_ms: idleTimeoutMs,
           });
           beginTerminal("idle-timeout", error);
-        }, idleTimeoutMs);
+        });
         try {
           const nextPromise = initialNext ?? iterator.next();
           initialNext = undefined;
@@ -432,12 +485,19 @@ export function createPipelineStreamResponse(
                 });
           auditLog("warn", "sdk_stream_upstream_error", {
             ...telemetry.auditFields(),
-            ...streamErrorAuditFields(streamError),
+            ...streamErrorAuditFields(streamError, result.telemetryContext?.diagnostics),
           });
+          result.telemetryContext?.diagnostics?.failure(streamError, "upstream_stream");
           beginTerminal("upstream-error", streamError);
         }
       },
       cancel(reason) {
+        if (telemetry.completedSeen) {
+          beginTerminal("normal-complete");
+          return;
+        }
+        if (!telemetry.completionWitnessed)
+          result.telemetryContext?.diagnostics?.cancel("consumer_cancel");
         beginTerminal("consumer-cancel", reason);
       },
     }),

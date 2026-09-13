@@ -250,6 +250,9 @@ export function canonicalOutputToChatSse(
                 type:
                   failure.disposition === "fatal" ? "upstream_protocol_error" : "upstream_error",
                 code: failure.code,
+                ...(signals.diagnostics
+                  ? signals.diagnostics.streamError(failure.code, failure.message)
+                  : {}),
               },
             }),
           );
@@ -293,6 +296,8 @@ export function canonicalOutputToChatSse(
         model: event.model,
         created: event.createdAt,
       };
+      signals.diagnostics?.published();
+      enqueueFrame(JSON.stringify(chatChunk(identity, { role: "assistant" }, null)));
       return true;
     }
     if (!identity || completed) return false;
@@ -328,6 +333,7 @@ export function canonicalOutputToChatSse(
       }
     }
     for (const frame of eventFrames(event, identity, includeUsage)) {
+      signals.diagnostics?.projectedFrame();
       enqueueFrame(frame);
     }
     if (event.type === "completed") completed = true;

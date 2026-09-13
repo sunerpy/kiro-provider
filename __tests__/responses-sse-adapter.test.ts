@@ -120,6 +120,9 @@ function parseEvents(text: string): ParsedEvent[] {
   return text
     .split("\n\n")
     .filter((frame) => frame.length > 0)
+    .filter(
+      (frame) => !frame.split("\n").every((line) => line.length === 0 || line.startsWith(":")),
+    )
     .map((frame) => {
       const lines = frame.split("\n");
       const eventLine = lines.find((line) => line.startsWith("event: "));
@@ -648,7 +651,7 @@ describe("responsesSseAdapter", () => {
     expect(harness.state.finalizeCount).toBe(1);
   });
 
-  test("aggregates split function calls into a standard added, arguments, done lifecycle", async () => {
+  test("streams split function calls through added, argument deltas, and done lifecycle", async () => {
     const lines = [
       chunk({
         tool_calls: [
@@ -666,6 +669,7 @@ describe("responsesSseAdapter", () => {
       "response.created",
       "response.output_item.added",
       "response.function_call_arguments.delta",
+      "response.function_call_arguments.delta",
       "response.output_item.done",
       "response.completed",
     ]);
@@ -678,9 +682,10 @@ describe("responsesSseAdapter", () => {
       },
     });
     expect(events[2]?.body).toMatchObject({
-      delta: '{"command":"ls"}',
+      delta: '{"command":',
     });
-    expect(events[3]?.body).toMatchObject({
+    expect(events[3]?.body).toMatchObject({ delta: '"ls"}' });
+    expect(events[4]?.body).toMatchObject({
       item: {
         type: "function_call",
         call_id: "call_1",
@@ -830,7 +835,7 @@ describe("responsesSseAdapter", () => {
     });
   });
 
-  test("keeps tool-call id and name from the first fragment that provides them", async () => {
+  test("fails rather than stitching changed tool-call identity into the first call", async () => {
     const lines = [
       chunk({
         tool_calls: [
@@ -857,8 +862,10 @@ describe("responsesSseAdapter", () => {
 
     const events = await adapt(makeHarness([encoder.encode(`${lines}\n`)], "stall"));
 
-    expect(events.find((event) => event.type === "response.output_item.done")?.body).toMatchObject({
-      item: { type: "function_call", call_id: "call_first", name: "first", arguments: "{}" },
+    expect(events.some((event) => event.type === "response.output_item.done")).toBe(false);
+    expect(terminalTypes(events)).toEqual(["response.failed"]);
+    expect(events.at(-1)?.body).toMatchObject({
+      response: { error: { code: "upstream_protocol_error" } },
     });
   });
 
@@ -1154,23 +1161,34 @@ describe("responsesSseAdapter", () => {
       "response.output_item.added",
       "response.output_text.delta",
       "response.output_text.delta",
-      "response.output_item.done",
       "response.output_item.added",
       "response.function_call_arguments.delta",
-      "response.output_item.done",
       "response.output_item.added",
       "response.function_call_arguments.delta",
+      "response.function_call_arguments.delta",
+      "response.function_call_arguments.delta",
+      "response.output_item.done",
+      "response.output_item.done",
       "response.output_item.done",
       "response.completed",
     ]);
-    expect(events[5]?.body).toMatchObject({ item: { type: "reasoning" } });
-    expect(events[9]?.body).toMatchObject({ item: { type: "message" } });
-    expect(events[12]?.body).toMatchObject({
-      item: { type: "function_call", call_id: "call_a", name: "alpha", arguments: "{}" },
-    });
-    expect(events[15]?.body).toMatchObject({
-      item: { type: "function_call", call_id: "call_b", name: "beta", arguments: "[]" },
-    });
+    const completedItems = events.filter((event) => event.type === "response.output_item.done");
+    expect(completedItems.map((event) => event.body.item)).toEqual([
+      expect.objectContaining({ type: "reasoning" }),
+      expect.objectContaining({ type: "message" }),
+      expect.objectContaining({
+        type: "function_call",
+        call_id: "call_a",
+        name: "alpha",
+        arguments: "{}",
+      }),
+      expect.objectContaining({
+        type: "function_call",
+        call_id: "call_b",
+        name: "beta",
+        arguments: "[]",
+      }),
+    ]);
     expect(events.map((event) => event.sequenceNumber)).toEqual(
       events.map((_event, index) => index),
     );

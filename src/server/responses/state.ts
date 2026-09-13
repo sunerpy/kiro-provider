@@ -108,6 +108,8 @@ function normalizedOutputItem(item: ResponseOutputItem): ResponseOutputItem {
 export type ResponseError = {
   readonly code: string;
   readonly message: string;
+  readonly request_id?: string;
+  readonly details?: import("../../core/request-diagnostics.js").FailureDiagnostics;
 };
 
 export type ResponseStatus =
@@ -203,7 +205,7 @@ export interface ResponseStateObject {
   readonly completed_at: number | null;
   readonly status: ResponseStatus;
   readonly background: false;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: ResponseError | null;
   readonly incomplete_details: { readonly reason: string } | null;
   readonly instructions: string | null;
   readonly max_output_tokens: number | null;

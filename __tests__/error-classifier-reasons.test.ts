@@ -131,7 +131,7 @@ describe("ValidationException reasons", () => {
         },
         context({ accountCount: 2 }),
       ),
-    ).toEqual({ action: "switch", status: 429, retryAfterMs: 60_000 });
+    ).toEqual({ action: "switch", status: 429, retryAfterMs: 500 });
   });
 
   test("INVALID_MODEL_ID and TEMPORARILY_SUSPENDED keep their historical results", () => {

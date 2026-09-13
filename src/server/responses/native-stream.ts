@@ -1,16 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { abortable } from "../../core/pipeline-runtime.js";
 import { boundedCleanup, runCleanupSteps } from "../../core/stream-cleanup.js";
+import type { ValidateToolArguments } from "../../core/tool-output-validation.js";
+import { SdkStreamProtocolError } from "../../kiro/transform/streaming/sdk-stream-runtime.js";
 import { isRecord } from "../../protocol/adapter-utils.js";
 import type { IngressSignals } from "../request-lifecycle.js";
+import { NativeToolValidation } from "./native-tool-validation.js";
 import { type ResponseStateObject, responseState } from "./state.js";
 
 export class NativeStreamError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "NativeStreamError";
   }
 }
@@ -18,6 +22,8 @@ export class NativeStreamError extends Error {
 type NativeEvent = Record<string, unknown>;
 
 interface NativeStreamOptions {
+  readonly maxToolArgumentsBytes?: number;
+  readonly validateToolArguments?: ValidateToolArguments;
   readonly upstream: Response;
   readonly headers: Headers;
   readonly model: string;
@@ -42,31 +48,6 @@ const TERMINAL_STATUS: Readonly<Record<string, string>> = {
   "response.cancelled": "cancelled",
 };
 
-function hasSemanticContent(event: NativeEvent): boolean {
-  if (["response.created", "response.in_progress", "response.queued"].includes(String(event.type)))
-    return false;
-  if (event.type === "response.output_item.added" && isRecord(event.item)) {
-    const item = event.item;
-    if (item.type === "message" && Array.isArray(item.content) && !item.content.length)
-      return false;
-    if (
-      item.type === "reasoning" &&
-      (!Array.isArray(item.summary) || !item.summary.length) &&
-      (!Array.isArray(item.content) || !item.content.length) &&
-      !item.encrypted_content
-    )
-      return false;
-  }
-  if (
-    (event.type === "response.content_part.added" ||
-      event.type === "response.reasoning_summary_part.added") &&
-    isRecord(event.part) &&
-    (event.part.text === "" || event.part.refusal === "")
-  )
-    return false;
-  return event.delta !== "";
-}
-
 /** Incremental SSE reader. A transport EOF is never a completion witness. */
 export async function createNativeStream(options: NativeStreamOptions): Promise<Response> {
   const body = options.upstream.body;
@@ -79,6 +60,10 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const pending: string[] = [];
+  const toolValidation = new NativeToolValidation(
+    options.maxToolArgumentsBytes ?? Number.POSITIVE_INFINITY,
+    options.validateToolArguments,
+  );
   let buffer = "";
   let eof = false;
   let done = false;
@@ -106,13 +91,16 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       runCleanupSteps(options.abortUpstream, options.finish);
       void boundedCleanup(() => reader.cancel());
     }
+    options.signals.diagnostics?.cleanup();
   };
   const failure = (error: unknown): NativeStreamError =>
     error instanceof NativeStreamError
       ? error
-      : options.signals.deadline.aborted
-        ? new NativeStreamError("request_deadline_exceeded", "Request deadline exceeded")
-        : new NativeStreamError("upstream_stream_error", "Upstream stream error");
+      : error instanceof SdkStreamProtocolError
+        ? new NativeStreamError(error.code, error.message)
+        : options.signals.deadline.aborted
+          ? new NativeStreamError("request_deadline_exceeded", "Request deadline exceeded")
+          : new NativeStreamError("upstream_stream_error", "Upstream stream error");
   const failedEvent = (error: NativeStreamError): NativeEvent => ({
     type: "response.failed",
     sequence_number: ++sequence,
@@ -126,7 +114,10 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       status: "failed",
       completed_at: null,
       incomplete_details: null,
-      error: { code: error.code, message: error.message },
+      error: options.signals.diagnostics?.streamError(error.code, error.message) ?? {
+        code: error.code,
+        message: error.message,
+      },
     },
   });
   const format = (event: NativeEvent, prefix = ""): string =>
@@ -142,6 +133,7 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       );
     }
     witnessed = true;
+    if (terminalCandidate.response.status === "completed") options.signals.diagnostics?.witness();
     done = true;
     pending.push(format(terminalCandidate.event, terminalCandidate.prefix));
     options.terminal(
@@ -160,6 +152,23 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       options.terminal("client_abort");
     } else {
       const reason = failure(error);
+      options.signals.diagnostics?.failure(error, "upstream_stream");
+      if (!createdSeen) {
+        responseId ??= `resp_${randomUUID()}`;
+        lastResponse = responseState({
+          id: responseId,
+          model: options.model,
+          status: "in_progress",
+        });
+        pending.push(
+          format({
+            type: "response.created",
+            sequence_number: ++sequence,
+            response: lastResponse,
+          }),
+        );
+        createdSeen = true;
+      }
       pending.push(format(failedEvent(reason)));
       options.terminal(reason.code);
     }
@@ -208,7 +217,9 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       if (chunk.done) {
         eof = true;
         buffer += decoder.decode();
-      } else buffer += decoder.decode(chunk.value, { stream: true });
+      } else {
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
       if (buffer.length > 16 * 1024 * 1024) {
         throw new NativeStreamError(
           "upstream_protocol_error",
@@ -218,6 +229,7 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
     }
   };
   const accept = (frame: string): boolean => {
+    options.signals.diagnostics?.rawFrame();
     const lines = frame.split(/\r?\n/);
     const data = lines
       .filter((line) => line.startsWith("data:"))
@@ -281,7 +293,9 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       createdSeen = true;
     }
     if (value.type === "error") {
-      throw new NativeStreamError("upstream_stream_error", "Upstream returned an error event");
+      throw new NativeStreamError("upstream_stream_error", "Upstream returned an error event", {
+        cause: value,
+      });
     }
     if (isRecord(value.response)) {
       if (
@@ -322,9 +336,11 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       .filter((line) => line.startsWith("id:") || line.startsWith("retry:"))
       .map((line) => `${line}\n`)
       .join("");
+    toolValidation.accept(value);
     const events = options.normalize(value);
     for (const [index, source] of events.entries()) {
       const event = options.renumber ? { ...source, sequence_number: ++sequence } : source;
+      options.signals.diagnostics?.projectedFrame();
       if (!options.renumber && typeof event.sequence_number === "number")
         sequence = event.sequence_number;
       if (isRecord(event.response)) lastResponse = event.response as unknown as ResponseStateObject;
@@ -338,37 +354,17 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       }
       pending.push(format(event, index === 0 ? prefix : ""));
     }
-    return !terminalCandidate && events.some(hasSemanticContent);
+    return events.length > 0;
   };
-  // Hold lifecycle frames until a usable response exists, allowing typed HTTP failures
-  // and bounded retries without publishing an abandoned upstream response ID.
-  try {
-    while (!done) {
-      const frame = await nextFrame();
-      if (frame === undefined) {
-        if (terminalCandidate) {
-          commitTerminal();
-          break;
-        }
-        throw new NativeStreamError(
-          "upstream_stream_incomplete",
-          "Upstream stream ended before completion",
-        );
-      }
-      if (accept(frame)) break;
-    }
-  } catch (error) {
-    // The caller still owns the account lease and deadline until this function
-    // returns a stream. A pre-publication retry only cancels this attempt.
-    options.abortUpstream();
-    void boundedCleanup(() => reader.cancel());
-    throw failure(error);
-  }
-  if (done) finish();
+  // HTTP status and Content-Type were validated by the transport. This one
+  // comment flushes acceptance without inventing an upstream Response identity.
+  // All later protocol/stream errors belong to this published attempt.
+  pending.push(": upstream accepted\n\n");
   return new Response(
     new ReadableStream<Uint8Array>({
       start(target) {
         controller = target;
+        options.signals.diagnostics?.published();
         if (!done) {
           options.signals.combined.addEventListener("abort", onAbort, { once: true });
           if (options.signals.combined.aborted) onAbort();
@@ -405,6 +401,7 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
         }
       },
       cancel() {
+        if (!witnessed) options.signals.diagnostics?.cancel("consumer_cancel");
         if (!witnessed) options.terminal("consumer_cancel");
         done = true;
         pending.length = 0;

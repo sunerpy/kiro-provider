@@ -3,9 +3,18 @@ import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { abortable, abortableSleep, acquireAccountQueue } from "../../core/pipeline-runtime.js";
 import { resolveProxyUrl } from "../../core/proxy.js";
+import { retryAfterMs } from "../../core/retry-after.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
+import {
+  toolOutputValidator,
+  type ValidateToolArguments,
+} from "../../core/tool-output-validation.js";
+import { readUpstreamErrorBody } from "../../core/upstream-error-body.js";
 import { KIRO_CONSTANTS } from "../../kiro/constants.js";
+import { isAccessTokenError } from "../../kiro/health.js";
 import { resolveModelVariant } from "../../kiro/models.js";
+import { RequestTransformError } from "../../kiro/transform/errors.js";
+import { SdkStreamProtocolError } from "../../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { ManagedAccount } from "../../kiro/types.js";
 import { canonicalFingerprint } from "../../protocol/canonical.js";
 import { openAiError } from "../errors.js";
@@ -19,6 +28,7 @@ import { ResponseContextError } from "./continuation.js";
 import type { NativeResponsesAdaptation } from "./native-adaptation.js";
 import { nativeInputItems, nativeReplayHistory } from "./native-replay.js";
 import { createNativeStream, NativeStreamError } from "./native-stream.js";
+import { NativeToolValidation } from "./native-tool-validation.js";
 import { type NormalizedResponsesRequest, normalizeResponsesRequest } from "./request-policy.js";
 import type { ResponseStateObject } from "./state.js";
 import type { StoredResponse } from "./store.js";
@@ -423,7 +433,7 @@ function upstreamError(
         ? record.reason
         : "kiro_runtime_error";
   const response = openAiError(
-    upstream.status >= 400 && upstream.status < 500 ? upstream.status : 502,
+    upstream.status >= 400 ? upstream.status : 502,
     message,
     upstream.status >= 500 ? "upstream_error" : "invalid_request_error",
     reason,
@@ -504,12 +514,7 @@ function nativeContinuation(
 }
 
 export function nativeRetryDelay(upstream: Response, fallbackMs: number, now = Date.now()): number {
-  const value = upstream.headers.get("retry-after");
-  if (value === null || value.trim() === "") return fallbackMs;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 2_147_483_647);
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.min(Math.max(0, date - now), 2_147_483_647) : fallbackMs;
+  return retryAfterMs(upstream.headers.get("retry-after"), now) ?? fallbackMs;
 }
 
 export async function proxyNativeResponses(
@@ -518,6 +523,39 @@ export async function proxyNativeResponses(
   const prepared = prepareNativeRequest(options.rawBody, options.config, options.normalized);
   if (prepared instanceof Response) {
     return { response: prepared, streamOwnsResources: false };
+  }
+  let validateToolArguments: ValidateToolArguments;
+  try {
+    const declarations = options.adaptation?.bridge?.declarations;
+    validateToolArguments = toolOutputValidator(
+      declarations
+        ? declarations.map((tool) => ({
+            name: tool.wireName,
+            schema: tool.parameters,
+            path: tool.path,
+            publicType: tool.publicType,
+          }))
+        : (prepared.request.tools ?? []).flatMap((tool, index) =>
+            tool.type === "function" && typeof tool.name === "string"
+              ? [
+                  {
+                    name: tool.name,
+                    schema: isRecord(tool.parameters) ? tool.parameters : {},
+                    path: `tools[${index}].parameters`,
+                  },
+                ]
+              : [],
+          ),
+      prepared.request.tool_choice !== "none",
+    );
+  } catch (error) {
+    if (error instanceof RequestTransformError) {
+      return {
+        response: validationError(error.message, error.code, error.param),
+        streamOwnsResources: false,
+      };
+    }
+    throw error;
   }
   const tenantId = responseStoreTenant(options.dependencies.tenantId);
   const inputItems = options.adaptation
@@ -669,7 +707,9 @@ export async function proxyNativeResponses(
     });
   };
   try {
+    options.signals.diagnostics?.phase("account_queue");
     release = await acquireAccountQueue(account.id, options.signals.combined);
+    options.signals.diagnostics?.phase("token_refresh");
     const initialAuth = options.dependencies.accountManager.toAuthDetails(account);
     let refreshed = await options.dependencies.tokenRefresher.refreshIfNeeded(
       account,
@@ -677,6 +717,7 @@ export async function proxyNativeResponses(
       options.signals.combined,
     );
     let auth = options.dependencies.accountManager.toAuthDetails(refreshed);
+    options.signals.diagnostics?.phase("request_validation");
     if (
       owner &&
       (refreshed.id !== owner.accountId ||
@@ -821,6 +862,7 @@ export async function proxyNativeResponses(
       );
     };
     const fetcher = options.dependencies.nativeResponsesFetch ?? fetch;
+    const errorBodies = new WeakMap<Response, unknown>();
     let nativeAbort = new AbortController();
     const dispatch = (): Promise<Response> => {
       nativeAbort = new AbortController();
@@ -828,6 +870,15 @@ export async function proxyNativeResponses(
         options.config.test_upstream_endpoint ??
         KIRO_CONSTANTS.RUNTIME_ENDPOINT.replace("{{region}}", auth.region);
       attempt += 1;
+      options.signals.diagnostics?.addSecrets([
+        refreshed.id,
+        refreshed.email,
+        auth.access,
+        auth.refresh,
+        auth.clientSecret,
+        auth.profileArn,
+      ]);
+      options.signals.diagnostics?.dispatch(attempt);
       auditLog("info", "native_responses_dispatch_started", {
         request_id: options.requestId,
         attempt,
@@ -865,18 +916,60 @@ export async function proxyNativeResponses(
           result = await abortable(dispatch(), options.signals.combined);
         } catch (error) {
           nativeAbort.abort();
+          if (!options.signals.combined.aborted)
+            options.signals.diagnostics?.failure(error, "upstream_headers");
           if (
             options.signals.combined.aborted ||
             transportRetries >= options.config.rate_limit_max_retries
           )
             throw error;
           transportRetries += 1;
+          options.signals.diagnostics?.phase("retry_backoff");
           await abortableSleep(options.config.rate_limit_retry_delay_ms, options.signals.combined);
           continue;
         }
-        if ((result.status === 401 || result.status === 403) && !authenticationRefreshed) {
+        options.signals.diagnostics?.headers(result.status, Object.fromEntries(result.headers));
+        let errorRecord: Record<string, unknown> = {};
+        if (!result.ok) {
+          const metadata = {
+            status: result.status,
+            requestId:
+              result.headers.get("x-amzn-requestid") ??
+              result.headers.get("x-request-id") ??
+              undefined,
+          };
+          options.signals.diagnostics?.failure(
+            {
+              ...metadata,
+              message: `Kiro upstream returned HTTP ${result.status}`,
+            },
+            "upstream_headers",
+          );
+          const value = await readUpstreamErrorBody(result, options.signals.combined);
+          errorBodies.set(result, value);
+          errorRecord = upstreamErrorRecord(value);
+          options.signals.diagnostics?.failure(
+            {
+              ...errorRecord,
+              ...metadata,
+              message:
+                typeof errorRecord.message === "string"
+                  ? errorRecord.message
+                  : `Kiro upstream returned HTTP ${result.status}`,
+            },
+            "upstream_headers",
+          );
+        }
+        if (
+          (result.status === 401 ||
+            (result.status === 403 &&
+              typeof errorRecord.message === "string" &&
+              isAccessTokenError(errorRecord.message))) &&
+          !authenticationRefreshed
+        ) {
           authenticationRefreshed = true;
           await boundedCleanup(() => result.body?.cancel());
+          options.signals.diagnostics?.phase("token_refresh");
           refreshed = await options.dependencies.tokenRefresher.forceRefresh(
             refreshed,
             options.signals.combined,
@@ -902,6 +995,7 @@ export async function proxyNativeResponses(
           delay < (options.signals.deadlineAt ?? Number.POSITIVE_INFINITY) - Date.now()
         ) {
           transportRetries += 1;
+          options.signals.diagnostics?.phase("retry_backoff");
           await boundedCleanup(() => result.body?.cancel());
           await abortableSleep(delay, options.signals.combined);
           continue;
@@ -923,15 +1017,28 @@ export async function proxyNativeResponses(
         );
       }
       let terminalLogged = false;
+      options.signals.diagnostics?.accepted();
       return createNativeStream({
         upstream,
         headers: responseHeaders(upstream, "text/event-stream; charset=utf-8"),
         model: prepared.requestedModel,
         signals: options.signals,
         idleTimeoutMs: options.config.stream_idle_timeout_ms,
+        maxToolArgumentsBytes: options.config.max_request_body_bytes,
+        validateToolArguments,
         normalize: (event) => {
           validateNativeToolChoice(event.item, prepared);
-          const response = normalizeResponseObject(event.response, prepared);
+          let response = normalizeResponseObject(event.response, prepared);
+          if (response?.error && options.signals.diagnostics) {
+            options.signals.diagnostics.failure(response.error, "upstream_stream");
+            response = {
+              ...response,
+              error: options.signals.diagnostics.streamError(
+                response.error.code,
+                response.error.message,
+              ),
+            };
+          }
           if (
             response &&
             [
@@ -984,7 +1091,7 @@ export async function proxyNativeResponses(
     };
     while (true) {
       if (!upstream.ok) {
-        const value = await upstream.json().catch(() => undefined);
+        const value = errorBodies.get(upstream);
         logTerminal("warn", "upstream_error", {
           httpStatus: upstream.status,
           reasonHash: upstreamReasonHash(value),
@@ -1033,6 +1140,12 @@ export async function proxyNativeResponses(
     }
     const value = await upstream.json().catch(() => undefined);
     const rawNormalized = normalizeResponseObject(value, prepared);
+    if (rawNormalized?.status === "completed") {
+      new NativeToolValidation(
+        options.config.max_request_body_bytes,
+        validateToolArguments,
+      ).complete(rawNormalized.output);
+    }
     if (rawNormalized) rawOutput = rawNormalized.output as ResponsesInputItem[];
     const normalized = rawNormalized
       ? (options.adaptation?.restoreResponse(rawNormalized) ?? rawNormalized)
@@ -1117,7 +1230,8 @@ export async function proxyNativeResponses(
         streamOwnsResources: false,
       };
     }
-    if (error instanceof NativeStreamError) {
+    if (error instanceof NativeStreamError || error instanceof SdkStreamProtocolError) {
+      options.signals.diagnostics?.failure(error, "upstream_stream");
       logTerminal("warn", error.code);
       return {
         response: openAiError(502, error.message, "upstream_error", error.code),
@@ -1126,7 +1240,9 @@ export async function proxyNativeResponses(
     }
     auditLog("error", "native_responses_dispatch_failed", {
       request_id: options.requestId,
-      error_type: error instanceof Error ? error.name : typeof error,
+      error_type: options.signals.diagnostics?.identifier(
+        error instanceof Error ? error.name : typeof error,
+      ),
       error_hash: auditHash(error instanceof Error ? error.message : String(error)),
     });
     logTerminal("warn", "transport_error", {

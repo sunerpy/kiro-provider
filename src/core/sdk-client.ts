@@ -8,6 +8,7 @@ import {
   type GenerateAssistantResponseCommandInput,
   type GenerateAssistantResponseCommandOutput,
 } from "@aws/codewhisperer-streaming-client";
+import { AwsJson1_0Protocol } from "@aws-sdk/core/protocols";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { HttpRequest } from "@smithy/protocol-http";
 import type { BuildMiddleware } from "@smithy/types";
@@ -15,6 +16,7 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { KIRO_CONSTANTS } from "../kiro/constants.js";
 import type { Effort, KiroAuthDetails } from "../kiro/types.js";
 import { auditHash, auditLog } from "./audit-log.js";
+import type { SdkSendOptions } from "./upstream-acceptance.js";
 
 interface ClientCacheEntry {
   readonly client: CodeWhispererStreamingClient;
@@ -71,6 +73,8 @@ function requestBodyText(body: unknown): string {
  * CLI V3/KAS targets `KiroRuntimeService.GenerateAssistantResponse` on the
  * same host. Keeping the middleware command-scoped prevents prompt leakage
  * through cached clients.
+ * Use with a client created for runtimeProtocol="kiro-runtime", so its response
+ * decoder also uses the RPC protocol and retains initial-response metadata.
  */
 export interface KiroRuntimeRequestOptions {
   readonly agentMode?: string;
@@ -148,6 +152,7 @@ export function buildClientConfig(
   resolvedEndpoint: string,
   proxyUrl?: string,
   requestHandler: NodeHttpHandler = createRequestHandler(proxyUrl, false),
+  runtimeProtocol: "codewhisperer" | "kiro-runtime" = "codewhisperer",
 ): CodeWhispererStreamingClientConfig {
   return {
     region,
@@ -157,6 +162,10 @@ export function buildClientConfig(
     retryMode: "standard",
     customUserAgent: [[KIRO_CONSTANTS.USER_AGENT]],
     requestHandler,
+    // KiroRuntime is AWS JSON RPC, including its initial-response metadata.
+    // REST JSON has no initialResponseContainer and fails on that valid frame.
+    // Let Smithy's RPC codec retain metadata and validate the stream itself.
+    ...(runtimeProtocol === "kiro-runtime" ? { protocol: AwsJson1_0Protocol } : {}),
   };
 }
 
@@ -219,6 +228,11 @@ export class AbortableBodyHttpHandler extends NodeHttpHandler {
   ): ReturnType<NodeHttpHandler["handle"]> {
     const result = await super.handle(request, options);
     bindBodyAbort(result.response.body, options?.abortSignal);
+    const observer = (options as SdkSendOptions | undefined)?.onResponseHeaders;
+    observer?.({
+      status: result.response.statusCode,
+      headers: result.response.headers,
+    });
     return result;
   }
 }
@@ -275,6 +289,7 @@ export function createSdkClient(
   proxyUrl?: string,
   accountId?: string,
   httpKeepAlive = false,
+  runtimeProtocol: "codewhisperer" | "kiro-runtime" = "codewhisperer",
 ): CodeWhispererStreamingClient {
   const resolvedEndpoint = endpoint ?? `https://q.${region}.amazonaws.com`;
   const accountKey = accountId ?? fallbackAccountKey(auth);
@@ -284,6 +299,7 @@ export function createSdkClient(
     resolvedEndpoint,
     proxyUrl ?? null,
     httpKeepAlive,
+    runtimeProtocol,
   ]);
   let transport = transportCache.get(transportKey);
   const transportPoolHit = transport !== undefined;
@@ -312,7 +328,7 @@ export function createSdkClient(
   if (cached) return cached.client;
 
   const client = new CodeWhispererStreamingClient(
-    buildClientConfig(auth, region, resolvedEndpoint, proxyUrl, transport.handler),
+    buildClientConfig(auth, region, resolvedEndpoint, proxyUrl, transport.handler, runtimeProtocol),
   );
 
   client.middlewareStack.add(

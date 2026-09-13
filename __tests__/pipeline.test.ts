@@ -669,7 +669,7 @@ describe("runChatCompletion resource ownership", () => {
       }).toEqual({
         constructorCalls: 1,
         iteratorAcquisitions: 1,
-        prefetchedTypes: ["started", "text_delta"],
+        prefetchedTypes: ["started"],
         firstStatus: 500,
         secondStatus: 200,
         secondSendCalls: 1,
@@ -934,46 +934,28 @@ describe("runChatCompletion retry and switching", () => {
     expect(suspended.unhealthyReason).toContain("InvalidTokenException");
   });
 
-  test("excludes a sticky account at the 500 threshold before the next send", async () => {
-    // Given
+  test("bounds 5xx retries by the shared budget without marking a healthy account unavailable", async () => {
     const failing = account("account-a");
-    const replacement = account("account-b");
-    const manager = new FakeAccountManager([failing, replacement], "sticky");
+    const manager = new FakeAccountManager([failing, account("account-b")], "sticky");
     const sentAccounts: string[] = [];
-
-    // When
     const response = await runChatCompletion({
       body: REQUEST_BODY,
       model: "auto",
       stream: false,
-      config: config({
-        max_request_iterations: 10,
-        request_timeout_ms: 30_000,
-      }),
+      config: config({ rate_limit_max_retries: 1, request_timeout_ms: 5_000 }),
       accountManager: manager,
       tokenRefresher: new FakeTokenRefresher(),
       makeClient: (auth) =>
         clientWith(async () => {
           sentAccounts.push(auth.email ?? "missing");
-          if (auth.email === failing.email) {
-            throw sdkError(500, "server error");
-          }
-          return responseFrom([{ assistantResponseEvent: { content: "replacement" } }]);
+          throw sdkError(500, "server error");
         }),
     });
-
-    // Then
-    expect(response.status).toBe(200);
-    expect(sentAccounts).toEqual([
-      failing.email,
-      failing.email,
-      failing.email,
-      failing.email,
-      failing.email,
-      replacement.email,
-    ]);
-    expect(failing.rateLimitResetTime).toBeGreaterThan(Date.now());
-  }, 30_000);
+    expect(response.status).toBe(500);
+    expect(sentAccounts).toEqual([failing.email, failing.email]);
+    expect(failing.rateLimitResetTime).toBe(0);
+    expect(failing.isHealthy).toBe(true);
+  });
 
   test("returns an OpenAI error when every account is unhealthy", async () => {
     const unavailable = account("account-a");

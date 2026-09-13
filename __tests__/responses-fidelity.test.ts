@@ -470,7 +470,7 @@ describe("native Responses stream contract", () => {
           parallel_tool_calls: false,
           tools: [{ type: "function", name: "echo", parameters: { type: "object" } }],
         });
-        expect(response.status).toBe(502);
+        expect(response.status).toBe(stream ? 200 : 502);
         expect(await response.text()).toContain("upstream_tool_choice_violation");
         expect(f.requests).toHaveLength(1);
       } finally {
@@ -480,7 +480,7 @@ describe("native Responses stream contract", () => {
   );
 
   test.each([false, true])(
-    "idle timeout is explicit before/after publication: %s",
+    "idle timeout after HTTP acceptance is explicit with/without semantic output: %s",
     async (published) => {
       let cancelled = false;
       const f = fidelityFixture({
@@ -503,7 +503,7 @@ describe("native Responses stream contract", () => {
       });
       try {
         const response = await f.send({ ...basic, stream: true });
-        expect(response.status).toBe(published ? 200 : 502);
+        expect(response.status).toBe(200);
         expect(await response.text()).toContain("upstream_stream_idle_timeout");
         await Bun.sleep(1);
         expect(cancelled).toBe(true);
@@ -526,7 +526,21 @@ describe("native Responses stream contract", () => {
       });
       try {
         const abort = new AbortController();
-        const request = f.send({ ...basic, stream: true }, {}, abort.signal);
+        const request = f.send(
+          { ...basic, stream: true },
+          {
+            nativeResponsesFetch: async (_url, init) => {
+              const signal = init?.signal;
+              if (!signal) throw new Error("Missing request signal");
+              await new Promise<never>((_resolve, reject) => {
+                if (signal.aborted) reject(signal.reason);
+                else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              });
+              throw new Error("unreachable");
+            },
+          },
+          abort.signal,
+        );
         if (client) {
           await Bun.sleep(2);
           abort.abort();
@@ -582,13 +596,18 @@ describe("native Responses stream contract", () => {
   );
 
   test.each(["data: {broken}\n\n", "data: [DONE]\n\n", ""])(
-    "rejects unusable prepublication data %j",
+    "fails unusable data after HTTP acceptance without claiming success: %j",
     async (data) => {
       const f = fidelityFixture({
         native: () => new Response(data, { headers: { "Content-Type": "text/event-stream" } }),
       });
       try {
-        expect((await f.send({ ...basic, stream: true })).status).toBe(502);
+        const response = await f.send({ ...basic, stream: true });
+        expect(response.status).toBe(200);
+        const text = await response.text();
+        expect(text.match(/event: response.failed/g)).toHaveLength(1);
+        expect(text).not.toContain("response.completed");
+        expect(f.requests).toHaveLength(1);
       } finally {
         f.database.close();
       }
@@ -616,38 +635,27 @@ describe("native Responses stream contract", () => {
     }
   });
 
-  test("retries prepublication EOF while holding the lease and hides the abandoned response ID", async () => {
-    let leaseHeldDuringRetry = false;
+  test("an accepted incomplete stream keeps its identity and never opens a replacement", async () => {
     const f = fidelityFixture({
-      config: { stream_max_attempts: 2 },
-      native: async (_body, call) => {
-        if (call === 2) {
-          try {
-            const release = await acquireAccountQueue(f.primary.id, AbortSignal.timeout(5));
-            release();
-          } catch {
-            leaseHeldDuringRetry = true;
-          }
-        }
-        return new Response(
-          (call === 1 ? textEvents("resp_abandoned").slice(0, 3) : textEvents("resp_kept"))
+      config: { stream_max_attempts: 3 },
+      native: (_body, call) =>
+        new Response(
+          (call === 1 ? textEvents("resp_original").slice(0, 3) : textEvents("resp_forbidden"))
             .map(sse)
             .join(""),
           { headers: { "Content-Type": "text/event-stream" } },
-        );
-      },
+        ),
     });
     try {
       const response = await f.send({ ...basic, stream: true });
       const text = await response.text();
       expect(response.status).toBe(200);
-      expect(f.requests).toHaveLength(2);
-      expect(leaseHeldDuringRetry).toBe(true);
-      expect(text).toContain("resp_kept");
-      expect(text).not.toContain("resp_abandoned");
-      expect(text).not.toContain("response.failed");
-      expect(f.responseStore.get("fidelity-test", "resp_abandoned")).toBeUndefined();
-      expect(f.responseStore.get("fidelity-test", "resp_kept")).toBeDefined();
+      expect(f.requests).toHaveLength(1);
+      expect(text).toContain("resp_original");
+      expect(text).not.toContain("resp_forbidden");
+      expect(text.match(/event: response.failed/g)).toHaveLength(1);
+      expect(text).not.toContain("response.completed");
+      expect(f.responseStore.get("fidelity-test", "resp_original")).toBeUndefined();
       const release = await acquireAccountQueue(f.primary.id, AbortSignal.timeout(100));
       release();
     } finally {
@@ -655,20 +663,23 @@ describe("native Responses stream contract", () => {
     }
   });
 
-  test("exhausts the shared HTTP budget across prepublication stream retries", async () => {
+  test("HTTP retry does not grant a fresh replay budget after the replacement stream is accepted", async () => {
     const f = fidelityFixture({
       config: { rate_limit_max_retries: 1, stream_max_attempts: 3 },
       native: (_body, call) =>
         call === 2
-          ? new Response(textEvents("resp_abandoned").slice(0, 1).map(sse).join(""), {
+          ? new Response(textEvents("resp_original").slice(0, 1).map(sse).join(""), {
               headers: { "Content-Type": "text/event-stream" },
             })
           : Response.json({ error: { message: "unavailable" } }, { status: 503 }),
     });
     try {
       const response = await f.send({ ...basic, stream: true });
-      expect(response.status).toBe(502);
-      expect(f.requests).toHaveLength(3);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain("upstream_stream_incomplete");
+      expect(text.match(/event: response.failed/g)).toHaveLength(1);
+      expect(f.requests).toHaveLength(2);
     } finally {
       f.database.close();
     }

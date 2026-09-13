@@ -1,6 +1,23 @@
+import { ToolCallViolation } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import { auditHash } from "./audit-log.js";
 
 const STREAM_FAILURES = {
+  upstream_tool_choice_violation: {
+    disposition: "fatal",
+    message: "Upstream called a tool despite tool_choice=none",
+  },
+  upstream_tool_schema_violation: {
+    disposition: "fatal",
+    message: "Upstream tool arguments do not match the declared schema",
+  },
+  upstream_tool_arguments_too_large: {
+    disposition: "fatal",
+    message: "Upstream tool arguments exceeded the configured request-body budget",
+  },
+  invalid_upstream_response: {
+    disposition: "fatal",
+    message: "Upstream returned an invalid response",
+  },
   request_deadline_exceeded: {
     disposition: "retryable",
     message: "Request deadline exceeded",
@@ -118,15 +135,29 @@ export function normalizeStreamFailure(
   return streamFailure(code ?? fallbackCode);
 }
 
-export function streamErrorAuditFields(reason: unknown): Readonly<Record<string, string | number>> {
+export function streamErrorAuditFields(
+  reason: unknown,
+  diagnostics?: { identifier(value: string | undefined): string | undefined },
+): Readonly<Record<string, string | number>> {
+  const identifier = (value: string | undefined): string | undefined =>
+    value !== undefined && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value)
+      ? diagnostics
+        ? diagnostics.identifier(value)
+        : value
+      : undefined;
   const normalized = normalizeStreamFailure(reason);
   const message = stringProperty(reason, "message");
-  const sourceErrorCode = safeDiagnosticCode(reason);
+  const sourceErrorCode = identifier(safeDiagnosticCode(reason));
   const cause = property(reason, "cause");
-  const causeType = stringProperty(cause, "name");
-  const causeCode = safeDiagnosticCode(cause);
+  const causeType = identifier(stringProperty(cause, "name"));
+  const causeCode = identifier(safeDiagnosticCode(cause));
   const causeMessage = stringProperty(cause, "message");
-  const violationSource = stringProperty(reason, "violationKind") !== undefined ? reason : cause;
+  const violationSource =
+    reason instanceof ToolCallViolation
+      ? reason
+      : cause instanceof ToolCallViolation
+        ? cause
+        : undefined;
   const violationKind = stringProperty(violationSource, "violationKind");
   const toolIdHash = stringProperty(violationSource, "toolIdHash");
   const toolNameHash = stringProperty(violationSource, "toolNameHash");
@@ -134,7 +165,9 @@ export function streamErrorAuditFields(reason: unknown): Readonly<Record<string,
   const argumentHash = stringProperty(violationSource, "argumentHash");
   const fragmentCount = numberProperty(violationSource, "fragmentCount");
   return {
-    error_type: stringProperty(reason, "name") ?? typeof reason,
+    error_type:
+      identifier(stringProperty(reason, "name")) ??
+      (reason instanceof Error ? "Error" : typeof reason),
     error_code: normalized.code,
     error_disposition: normalized.disposition,
     ...(message !== undefined ? { error_message_hash: auditHash(message) } : {}),

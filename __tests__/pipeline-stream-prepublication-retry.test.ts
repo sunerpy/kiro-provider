@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
-import { auditHash } from "../src/core/audit-log.js";
 import {
   type PipelineAccountManager,
   type PipelineClientFactory,
@@ -12,19 +11,12 @@ import type {
   SdkStreamResponse,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
-import {
-  type CanonicalOutputEvent,
-  parseCanonicalOutputEventLine,
-} from "../src/protocol/output.js";
 import { captureAuditEvents } from "./audit-test-helpers.js";
 import { canonicalRequest, message } from "./canonical-test-helpers.js";
 
 /**
- * Pre-publication stream retry: an upstream failure before the first semantic
- * event (reasoning, text, validated tool call, or completion) never reaches
- * the client. The pipeline retries the same account once, then switches when
- * another selectable account exists, bounded by `stream_max_attempts`.
- * Anything after a semantic event keeps today's terminal behavior.
+ * Once upstream accepts a stream, failures must terminate that generation.
+ * Non-stream collection retains its separate pre-publication retry budget.
  */
 
 const BODY = canonicalRequest([message("user", "hello")], { model: "auto" });
@@ -207,25 +199,6 @@ function scriptedClient(scripts: readonly (() => SdkStreamResponse)[]): {
   return { makeClient, sends, sendSignals };
 }
 
-async function ndjsonEvents(response: Response): Promise<CanonicalOutputEvent[]> {
-  const text = await response.text();
-  return text
-    .trim()
-    .split("\n")
-    .map((line) => {
-      const event = parseCanonicalOutputEventLine(line);
-      if (!event) throw new TypeError(`invalid canonical line: ${line}`);
-      return event;
-    });
-}
-
-/** `started` carries the per-request Kiro conversation id and a timestamp; both vary per run. */
-function normalizeStarted(events: readonly CanonicalOutputEvent[]): unknown[] {
-  return events.map((event) =>
-    event.type === "started" ? { ...event, conversationId: "", createdAt: 0 } : event,
-  );
-}
-
 async function errorBody(response: Response): Promise<Record<string, unknown>> {
   const body = (await response.json()) as { error: Record<string, unknown> };
   return body.error;
@@ -241,153 +214,49 @@ afterEach(() => {
   audit.restore();
 });
 
-describe("pre-publication stream retry (stream)", () => {
-  test("retries a failure at event 0 on the same account and the client sees an identical stream", async () => {
-    // Given: a baseline run with no failure, and a run whose first attempt rejects immediately
-    const manager = new PreferredAccountManager([account("account-a")]);
-    const baseline = scriptedClient([() => okResponse()]);
-    const baselineEvents = await ndjsonEvents(
-      await runChatCompletion({
+describe("accepted stream failures never replay generation", () => {
+  for (const maxAttempts of [1, 3]) {
+    test(`EOF after acceptance does not retry with stream_max_attempts=${maxAttempts}`, async () => {
+      const scripted = scriptedClient([() => eofResponse(), () => okResponse("must not appear")]);
+      const manager = new PreferredAccountManager([account("account-a"), account("account-b")]);
+      const response = await runChatCompletion({
         body: BODY,
         model: "auto",
         stream: true,
-        config: config(),
+        config: config({ stream_max_attempts: maxAttempts }),
         accountManager: manager,
         tokenRefresher: refresher,
-        makeClient: baseline.makeClient,
-      }),
-    );
-    audit.restore();
-    audit = captureAuditEvents();
-    const scripted = scriptedClient([() => rejectingResponse(), () => okResponse()]);
+        makeClient: scripted.makeClient,
+      });
+      expect(response.status).toBe(200);
+      await expect(response.text()).rejects.toMatchObject({ code: "upstream_stream_incomplete" });
+      expect(scripted.sends).toEqual(["account-a"]);
+      expect(scripted.sendSignals[0]?.aborted).toBe(true);
+      expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
+      expect(manager.rateLimited).toEqual([]);
+      expect(manager.unhealthy).toEqual([]);
+    });
+  }
 
-    // When
+  test("a decoder error after HTTP acceptance remains an observable stream failure", async () => {
+    const scripted = scriptedClient([() => rejectingResponse(), () => okResponse()]);
     const response = await runChatCompletion({
       body: BODY,
       model: "auto",
       stream: true,
       config: config(),
-      accountManager: manager,
-      tokenRefresher: refresher,
-      makeClient: scripted.makeClient,
-    });
-    const events = await ndjsonEvents(response);
-
-    // Then
-    expect(response.status).toBe(200);
-    expect(normalizeStarted(events)).toEqual(normalizeStarted(baselineEvents));
-    expect(events.map((event) => event.type)).toEqual(["started", "text_delta", "completed"]);
-    expect(scripted.sends).toEqual(["account-a", "account-a"]);
-    expect(scripted.sendSignals[0]?.aborted).toBe(true);
-    expect(scripted.sendSignals[1]?.aborted).toBe(false);
-    expect(audit.events("sdk_stream_attempt_retry")).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        attempt: 1,
-        max_attempts: 3,
-        error_code: "upstream_stream_error",
-        same_account: true,
-        account_hash: auditHash("account-a"),
-        mode: "stream",
-      }),
-    ]);
-    expect(audit.events("sdk_stream_attempts_exhausted")).toEqual([]);
-    expect(manager.rateLimited).toEqual([]);
-    expect(manager.unhealthy).toEqual([]);
-  });
-
-  test("switches accounts after the same account fails twice", async () => {
-    const manager = new PreferredAccountManager([account("account-a"), account("account-b")]);
-    const scripted = scriptedClient([
-      () => eofResponse(),
-      () => eofResponse(),
-      () => okResponse("from b"),
-    ]);
-
-    const response = await runChatCompletion({
-      body: BODY,
-      model: "auto",
-      stream: true,
-      config: config(),
-      accountManager: manager,
-      tokenRefresher: refresher,
-      makeClient: scripted.makeClient,
-    });
-    const events = await ndjsonEvents(response);
-
-    expect(response.status).toBe(200);
-    expect(events.find((event) => event.type === "text_delta")).toMatchObject({ text: "from b" });
-    expect(scripted.sends).toEqual(["account-a", "account-a", "account-b"]);
-    expect(
-      audit
-        .events("sdk_stream_attempt_retry")
-        .map((record) => [record.attempt, record.same_account]),
-    ).toEqual([
-      [1, true],
-      [2, false],
-    ]);
-    // A stream failure is not an account health signal.
-    expect(manager.rateLimited).toEqual([]);
-    expect(manager.unhealthy).toEqual([]);
-  });
-
-  test("keeps retrying the only account until stream_max_attempts is exhausted, then returns the failure code", async () => {
-    const manager = new PreferredAccountManager([account("account-a")]);
-    const scripted = scriptedClient([() => eofResponse()]);
-
-    const response = await runChatCompletion({
-      body: BODY,
-      model: "auto",
-      stream: true,
-      config: config({ stream_max_attempts: 3 }),
-      accountManager: manager,
-      tokenRefresher: refresher,
-      makeClient: scripted.makeClient,
-    });
-
-    expect(response.status).toBe(502);
-    expect(await errorBody(response)).toMatchObject({
-      type: "upstream_error",
-      code: "upstream_stream_incomplete",
-    });
-    expect(scripted.sends).toEqual(["account-a", "account-a", "account-a"]);
-    expect(audit.events("sdk_stream_attempt_retry").map((record) => record.same_account)).toEqual([
-      true,
-      true,
-    ]);
-    expect(audit.events("sdk_stream_attempts_exhausted")).toEqual([
-      expect.objectContaining({
-        level: "warn",
-        attempt: 3,
-        max_attempts: 3,
-        error_code: "upstream_stream_incomplete",
-        account_hash: auditHash("account-a"),
-      }),
-    ]);
-  });
-
-  test("stream_max_attempts: 1 disables the retry entirely", async () => {
-    const scripted = scriptedClient([() => rejectingResponse(), () => okResponse()]);
-
-    const response = await runChatCompletion({
-      body: BODY,
-      model: "auto",
-      stream: true,
-      config: config({ stream_max_attempts: 1 }),
       accountManager: new PreferredAccountManager([account("account-a")]),
       tokenRefresher: refresher,
       makeClient: scripted.makeClient,
     });
-
-    expect(response.status).toBe(502);
-    expect(await errorBody(response)).toMatchObject({ code: "upstream_stream_error" });
-    expect(scripted.sends).toHaveLength(1);
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toMatchObject({ message: "socket hang up" });
+    expect(scripted.sends).toEqual(["account-a"]);
     expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
   });
 
-  test("never retries once a text delta has been produced", async () => {
+  test("partial text is never concatenated with a replacement generation", async () => {
     const scripted = scriptedClient([() => failAfterTextResponse(), () => okResponse()]);
-
     const response = await runChatCompletion({
       body: BODY,
       model: "auto",
@@ -399,50 +268,36 @@ describe("pre-publication stream retry (stream)", () => {
     });
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("streaming response must have a body");
-    const started = await reader.read();
-    const delta = await reader.read();
-
-    expect(response.status).toBe(200);
-    expect(new TextDecoder().decode(started.value)).toContain('"type":"started"');
-    expect(new TextDecoder().decode(delta.value)).toContain("partial");
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain('"type":"started"');
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial");
     await expect(reader.read()).rejects.toMatchObject({ message: "socket hang up" });
     expect(scripted.sends).toEqual(["account-a"]);
-    expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
   });
 
-  test("does not retry a fatal disposition before the first semantic event", async () => {
+  test("a fatal embedded event keeps its code without retrying", async () => {
     const scripted = scriptedClient([
       () => eventsResponse([{ invalidStateEvent: { reason: "x" } }, COMPLETION]),
       () => okResponse(),
     ]);
-    const manager = new PreferredAccountManager([account("account-a"), account("account-b")]);
-
     const response = await runChatCompletion({
       body: BODY,
       model: "auto",
       stream: true,
       config: config(),
-      accountManager: manager,
+      accountManager: new PreferredAccountManager([account("account-a")]),
       tokenRefresher: refresher,
       makeClient: scripted.makeClient,
     });
-
-    expect(response.status).toBe(502);
-    expect(await errorBody(response)).toMatchObject({
-      type: "upstream_error",
-      code: "upstream_invalid_state",
-    });
+    expect(response.status).toBe(200);
+    await expect(response.text()).rejects.toMatchObject({ code: "upstream_invalid_state" });
     expect(scripted.sends).toEqual(["account-a"]);
-    expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
-    expect(manager.rateLimited).toEqual([]);
   });
 
-  test("a deadline abort during prefetch is a 504, not a retry", async () => {
+  test("a deadline after acceptance terminates and cleans the stream without retrying", async () => {
     const stalled = stalledResponse();
     const scripted = scriptedClient([() => stalled.response, () => okResponse()]);
     const deadline = new AbortController();
-
-    const pending = runChatCompletion({
+    const response = await runChatCompletion({
       body: BODY,
       model: "auto",
       stream: true,
@@ -452,25 +307,20 @@ describe("pre-publication stream retry (stream)", () => {
       deadlineSignal: deadline.signal,
       makeClient: scripted.makeClient,
     });
-    await Bun.sleep(20);
+    const reading = response.text();
     deadline.abort(new DOMException("Request deadline exceeded", "TimeoutError"));
-    const response = await pending;
-
-    expect(response.status).toBe(504);
-    expect(await errorBody(response)).toMatchObject({ type: "timeout_error" });
+    expect(response.status).toBe(200);
+    await expect(reading).rejects.toMatchObject({ name: "TimeoutError" });
+    await Bun.sleep(1);
     expect(scripted.sends).toEqual(["account-a"]);
     expect(scripted.sendSignals[0]?.aborted).toBe(true);
     expect(stalled.state.returns).toBe(1);
     expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
-    expect(audit.events("sdk_stream_terminal")).toEqual([
-      expect.objectContaining({ terminal_provenance: "external_abort", mode: "stream" }),
-    ]);
   });
 
-  test("an idle timeout before the first semantic event is retried", async () => {
+  test("transport idle after acceptance is explicit and never retries", async () => {
     const stalled = stalledResponse();
-    const scripted = scriptedClient([() => stalled.response, () => okResponse("after idle")]);
-
+    const scripted = scriptedClient([() => stalled.response, () => okResponse()]);
     const response = await runChatCompletion({
       body: BODY,
       model: "auto",
@@ -480,18 +330,13 @@ describe("pre-publication stream retry (stream)", () => {
       tokenRefresher: refresher,
       makeClient: scripted.makeClient,
     });
-    const events = await ndjsonEvents(response);
-
-    expect(events.find((event) => event.type === "text_delta")).toMatchObject({
-      text: "after idle",
-    });
-    expect(scripted.sends).toEqual(["account-a", "account-a"]);
+    await expect(response.text()).rejects.toMatchObject({ code: "upstream_stream_idle_timeout" });
+    await Bun.sleep(1);
+    expect(scripted.sends).toEqual(["account-a"]);
     expect(stalled.state.returns).toBe(1);
-    expect(audit.events("sdk_stream_attempt_retry")).toEqual([
-      expect.objectContaining({ error_code: "upstream_stream_idle_timeout", same_account: true }),
-    ]);
+    expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
     expect(audit.events("sdk_stream_idle_timeout")).toEqual([
-      expect.objectContaining({ phase: "prefetch", idle_timeout_ms: 20 }),
+      expect.objectContaining({ idle_timeout_ms: 20 }),
     ]);
   });
 });
