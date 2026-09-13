@@ -45,7 +45,7 @@ probe IDs and source-file checksums. Credentials, original user payloads and
 private reasoning are excluded. The PR and release records bind final CI and
 public assets to their exact commits.
 
-Final local checks: **1,691 tests pass**, zero failures, **93.83%** line coverage against the unchanged 93% gate. Typecheck, formatting/lint, shell syntax, coverage parity, seven security checks, smoke security and JS/npm/binary builds pass.
+Final local checks: **1,695 tests pass**, zero failures, **93.84%** line coverage against the unchanged 93% gate. Typecheck, formatting/lint, shell syntax, coverage parity, seven security checks, smoke security and JS/npm/binary builds pass.
 
 No database DDL or timeout/model/reasoning defaults change. Accepted empty streams
 are no longer replaced; non-stream recovery retains its existing bounded policy.

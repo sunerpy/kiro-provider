@@ -13,6 +13,87 @@ let audit: ReturnType<typeof captureAuditEvents> | undefined;
 afterEach(() => audit?.restore());
 
 describe("failure diagnostics and redaction", () => {
+  test("native incomplete tool output preserves the authentic terminal reason", async () => {
+    const initial = responseState({
+      id: "resp-incomplete-tool",
+      model: "gpt-5.6-sol",
+      status: "in_progress",
+    });
+    const tool = {
+      type: "function_call",
+      id: "fc-partial",
+      call_id: "call-partial",
+      name: "lookup",
+      arguments: '{"query":',
+      status: "incomplete",
+    };
+    const events = [
+      { type: "response.created", sequence_number: 0, response: initial },
+      {
+        type: "response.output_item.added",
+        sequence_number: 1,
+        output_index: 0,
+        item: { ...tool, arguments: "", status: "in_progress" },
+      },
+      {
+        type: "response.function_call_arguments.delta",
+        sequence_number: 2,
+        output_index: 0,
+        item_id: tool.id,
+        delta: tool.arguments,
+      },
+      {
+        type: "response.function_call_arguments.done",
+        sequence_number: 3,
+        output_index: 0,
+        item_id: tool.id,
+        arguments: tool.arguments,
+      },
+      { type: "response.output_item.done", sequence_number: 4, output_index: 0, item: tool },
+      {
+        type: "response.incomplete",
+        sequence_number: 5,
+        response: {
+          ...initial,
+          status: "incomplete",
+          output: [tool],
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+      },
+    ];
+    const controller = new AbortController();
+    const response = await createNativeStream({
+      upstream: new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")),
+      headers: new Headers({ "Content-Type": "text/event-stream" }),
+      model: "gpt-5.6-sol",
+      signals: {
+        combined: controller.signal,
+        deadline: controller.signal,
+        client: controller.signal,
+      },
+      idleTimeoutMs: 1_000,
+      normalize: (event) => [event],
+      commit() {},
+      terminal() {},
+      finish() {},
+      abortUpstream() {},
+    });
+    const text = await response.text();
+    expect(text.match(/event: response.incomplete\n/g)).toHaveLength(1);
+    expect(text).toContain('"reason":"max_output_tokens"');
+    expect(text).not.toContain("event: response.failed");
+    expect(text).not.toContain("event: response.completed");
+  });
+
+  test("masks adversarial unclosed JSON without a backtracking expression", () => {
+    const trace = new RequestDiagnostics("req-braces");
+    expect(trace.sanitize(`upstream ${"{".repeat(100_000)}`)).toBe("upstream [redacted payload]");
+    expect(trace.sanitize('before {"tool":"private"} after')).toBe(
+      "before [redacted payload] after",
+    );
+    expect(trace.sanitize('{"partial":"private')).toBe("[redacted payload]");
+  });
+
   test("native stream errors keep source evidence through the terminal wrapper", async () => {
     const trace = new RequestDiagnostics("req-native-source");
     trace.dispatch(1);

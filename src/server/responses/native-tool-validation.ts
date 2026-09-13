@@ -11,6 +11,7 @@ type Tool = {
   arguments: string;
   deltas: boolean;
   done: boolean;
+  incomplete: boolean;
   argumentsDone: boolean;
 };
 
@@ -68,6 +69,7 @@ export class NativeToolValidation {
         arguments: (args as string | undefined) ?? "",
         deltas: false,
         done: false,
+        incomplete: false,
         argumentsDone: false,
       });
       return;
@@ -110,7 +112,10 @@ export class NativeToolValidation {
       ) {
         invalid("Native upstream completed an unannounced tool");
       }
-      this.finishArguments(tool, args as string);
+      // A truncated response can close its argument stream before reporting
+      // item.status=incomplete. Syntax/schema gate a completed item, not this
+      // parameter boundary; identity and size must already be consistent.
+      this.finishArguments(tool, args as string, false);
       tool.argumentsDone = true;
       return;
     }
@@ -119,7 +124,7 @@ export class NativeToolValidation {
       isRecord(event.item) &&
       (event.item.type === "function_call" || event.item.type === "custom_tool_call")
     ) {
-      this.finishItem(event.item, event.output_index);
+      this.finishItem(event.item, event.output_index, true);
       return;
     }
     if (
@@ -153,7 +158,12 @@ export class NativeToolValidation {
     }
   }
 
-  private finishItem(item: Record<string, unknown>, index?: unknown): void {
+  private finishItem(
+    item: Record<string, unknown>,
+    index?: unknown,
+    allowIncomplete = false,
+  ): void {
+    const incomplete = allowIncomplete && item.status === "incomplete";
     if (
       typeof item.id !== "string" ||
       typeof item.call_id !== "string" ||
@@ -161,8 +171,7 @@ export class NativeToolValidation {
       !item.id ||
       !item.call_id ||
       !item.name ||
-      item.status === "in_progress" ||
-      item.status === "incomplete"
+      (item.status !== undefined && item.status !== "completed" && !incomplete)
     ) {
       invalid("Native upstream returned an incomplete tool", "incomplete_upstream_tool_call");
     }
@@ -171,6 +180,11 @@ export class NativeToolValidation {
     const args = item.type === "function_call" ? item.arguments : item.input;
     if (typeof args !== "string") invalid("Native tool arguments must be a string");
     if (tool) {
+      if (tool.incomplete)
+        invalid(
+          "Native completed response contains an incomplete tool",
+          "incomplete_upstream_tool_call",
+        );
       if (tool.done && index !== undefined) invalid("Native upstream repeated a tool completion");
       if (
         tool.callId !== item.call_id ||
@@ -179,8 +193,9 @@ export class NativeToolValidation {
         (index !== undefined && index !== tool.index)
       )
         invalid("Native upstream changed a tool identity");
-      this.finishArguments(tool, args as string);
+      this.finishArguments(tool, args as string, !incomplete);
       tool.done = true;
+      tool.incomplete = incomplete;
     } else {
       this.addBytes(
         Buffer.byteLength(args as string, "utf8") +
@@ -190,11 +205,11 @@ export class NativeToolValidation {
     }
   }
 
-  private finishArguments(tool: Tool, args: string): void {
+  private finishArguments(tool: Tool, args: string, validate = true): void {
     if ((tool.deltas || tool.arguments.length > 0) && args !== tool.arguments)
       invalid("Native completed arguments disagree with their deltas");
     if (!tool.deltas && !tool.arguments.length) this.addBytes(Buffer.byteLength(args, "utf8"));
-    this.validate(tool.type, tool.name, args);
+    if (validate) this.validate(tool.type, tool.name, args);
     tool.arguments = args;
   }
 

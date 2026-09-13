@@ -1008,7 +1008,8 @@ export async function proxyNativeResponses(
     const openStream = async (): Promise<Response> => {
       streamAttempt += 1;
       if (
-        !(upstream.headers.get("content-type") ?? "").toLowerCase().includes("text/event-stream")
+        upstream.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !==
+        "text/event-stream"
       ) {
         await boundedCleanup(() => upstream.body?.cancel());
         throw new NativeStreamError(

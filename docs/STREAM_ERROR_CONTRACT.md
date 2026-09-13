@@ -194,7 +194,10 @@ still releases the request's resources.
 Native Responses still validates IDs, increasing sequence numbers and terminal
 consistency, including a final EOF check before committing stored state. A bare
 `[DONE]` is not a completion witness. Its genuine `response.incomplete` reason is
-preserved. Stateless SDK completion keeps the established token-usage/metering
+preserved, including an incomplete tool item with partial arguments. A native
+arguments-done boundary alone is not an executable call: syntax/schema validation
+gates completed items, and clients must still wait for the response terminal state.
+Stateless SDK completion keeps the established token-usage/metering
 witness policy; transport cleanup cannot erase already validated completion.
 
 No Zuno configuration migration, timeout increase, model switch or reasoning change

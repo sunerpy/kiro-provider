@@ -87,6 +87,8 @@ Native CreateResponse 与 KiroRuntime Generate 是不同操作。RPC 解码修�
 
 这是测试字段节选。发布前返回 JSON 504，发布后使用流失败；HTTP 状态不能在 SSE 中途改变。Native error event 的来源也贯穿终止包装器，首末错误不会被本地包装码覆盖。日志只保存脱敏计数、代码、身份关联和消息哈希。
 
+CI 的 CodeQL 检出了脱敏正则在连续未闭合 `{` 上的回溯风险；现改成线性索引截取，并覆盖十万字符对抗输入。Native Content-Type 也改为精确 MIME 校验，真实 `incomplete` 工具终态保留上游原因，不能升级为成功。
+
 `Retry-After` 缺省、数值、小数秒、HTTP 日期分别测试；真实权限 403 不再触发无意义的强制刷新。5xx 遵守已有共享重试预算，最终保留实际状态。
 
 ### 4. 验收期间发现的 RPC 首帧问题
@@ -121,7 +123,7 @@ Zuno 使用原 `kiro-local` 定义和 profile 副本，所有可写路径均落�
 
 证据目录：[stream-delivery-2026-09-13](evidence/stream-delivery-2026-09-13/README.md)。原始请求身份替换为稳定的 probe 编号；不提交账号库、令牌、私有 reasoning、原始用户请求和实际业务会话。源证据文件保留 SHA-256。
 
-最终本地结果为 **1,691 pass / 0 fail**，覆盖率 **19,890 / 21,197 = 93.83%**，未降低 93% 门槛。typecheck、lint/格式、脚本语法、覆盖率口径校验、安全 7 项、Codex smoke 安全自测、Bun JS/npm/二进制构建均通过。最终精确提交的 CI 和发布产物身份在 PR/发布记录中，避免把中间构建冒充正式包。
+最终本地结果为 **1,695 pass / 0 fail**，覆盖率 **19,906 / 21,213 = 93.84%**，未降低 93% 门槛。typecheck、lint/格式、脚本语法、覆盖率口径校验、安全 7 项、Codex smoke 安全自测、Bun JS/npm/二进制构建均通过。最终精确提交的 CI 和发布产物身份在 PR/发布记录中，避免把中间构建冒充正式包。
 
 可重跑的真实 SDK 探针：
 

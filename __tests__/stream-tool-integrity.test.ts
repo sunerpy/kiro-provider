@@ -243,11 +243,29 @@ describe("native tool stream integrity", () => {
       label: "missing final tool",
       events: [added, { type: "response.completed", response: { output: [] } }],
     },
-    { label: "malformed JSON", events: [added, { ...done, arguments: "{" }] },
-    { label: "schema mismatch", events: [added, { ...done, arguments: '{"query":4}' }] },
     {
-      label: "incomplete tool status",
-      events: [added, { ...itemDone, item: { ...item, status: "incomplete" } }],
+      label: "malformed JSON",
+      events: [
+        added,
+        { ...done, arguments: "{" },
+        { ...itemDone, item: { ...item, arguments: "{" } },
+      ],
+    },
+    {
+      label: "schema mismatch",
+      events: [
+        added,
+        { ...done, arguments: '{"query":4}' },
+        { ...itemDone, item: { ...item, arguments: '{"query":4}' } },
+      ],
+    },
+    {
+      label: "incomplete tool in a completed response",
+      events: [
+        added,
+        { ...itemDone, item: { ...item, status: "incomplete" } },
+        { type: "response.completed", response: { output: [item] } },
+      ],
     },
   ])("rejects $label", ({ events }) => {
     const validator = native();
@@ -266,6 +284,8 @@ describe("native tool stream integrity", () => {
 
   test("validates JSON response tools even without stream lifecycle events", () => {
     native().complete([item]);
+    native().complete([{ ...item, status: undefined }]);
+    expect(() => native().complete([{ ...item, status: "failed" }])).toThrow("incomplete tool");
     expect(() => native().complete([item, item])).toThrow("repeated");
     expect(() => native().complete([item, { ...item, id: "fc-2" }])).toThrow(
       "repeated a tool call",

@@ -576,24 +576,26 @@ describe("native Responses stream contract", () => {
     }
   });
 
-  test.each(["application/json", "text/plain"])(
-    "rejects success with content type %s",
-    async (contentType) => {
-      const f = fidelityFixture({
-        native: () =>
-          new Response('{"message":"not SSE"}', { headers: { "Content-Type": contentType } }),
-      });
-      try {
-        const response = await f.send({ ...basic, stream: true });
-        expect(response.status).toBe(502);
-        expect(((await response.json()) as TestResponse).error.code).toBe(
-          "invalid_upstream_response",
-        );
-      } finally {
-        f.database.close();
-      }
-    },
-  );
+  test.each([
+    "application/json",
+    "text/plain",
+    "application/json; note=text/event-stream",
+    "text/event-stream-suffix",
+  ])("rejects success with content type %s", async (contentType) => {
+    const f = fidelityFixture({
+      native: () =>
+        new Response('{"message":"not SSE"}', { headers: { "Content-Type": contentType } }),
+    });
+    try {
+      const response = await f.send({ ...basic, stream: true });
+      expect(response.status).toBe(502);
+      expect(((await response.json()) as TestResponse).error.code).toBe(
+        "invalid_upstream_response",
+      );
+    } finally {
+      f.database.close();
+    }
+  });
 
   test.each(["data: {broken}\n\n", "data: [DONE]\n\n", ""])(
     "fails unusable data after HTTP acceptance without claiming success: %j",

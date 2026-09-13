@@ -117,8 +117,14 @@ export class RequestDiagnostics {
     let text = value;
     for (const secret of this.#secrets) text = text.replaceAll(secret, "[redacted]");
     for (const payload of this.#payloadText) text = text.replaceAll(payload, "[redacted payload]");
+    // Scan once rather than backtracking across every opening brace. Partial
+    // JSON is also payload: mask the remainder when no closing brace exists.
+    const firstBrace = text.indexOf("{");
+    if (firstBrace >= 0) {
+      const lastBrace = text.lastIndexOf("}");
+      text = `${text.slice(0, firstBrace)}[redacted payload]${lastBrace >= firstBrace ? text.slice(lastBrace + 1) : ""}`;
+    }
     text = text
-      .replace(/\{[\s\S]*\}/g, "[redacted payload]")
       .replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted URL]")
       .replace(/\barn:[^\s"'<>]+/gi, "[redacted ARN]")
       .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted email]")
