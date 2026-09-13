@@ -1,6 +1,6 @@
 {
   "name": "@sunerpy/kiro-provider",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "OpenAI Responses-compatible AWS KiroRuntime provider with native and stateless fallback transports",
   "homepage": "https://github.com/sunerpy/kiro-provider#readme",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
