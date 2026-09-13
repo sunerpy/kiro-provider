@@ -162,7 +162,7 @@ and apply the same `grep`/`jq` filters to it.
 
 ## Streams
 
-### `502 upstream_stream_incomplete` / `upstream_stream_error`, and the pre-publication retry events
+### `502 upstream_stream_incomplete` / `upstream_stream_error`, and accepted streams
 
 - **Look at:** Non-stream requests return HTTP `502` with `error.type`
   `upstream_error` and the code; streams end with the same code in the
@@ -175,24 +175,23 @@ and apply the same `grep`/`jq` filters to it.
 
   | Event | Level | Fields | Meaning |
   | --- | --- | --- | --- |
-  | `sdk_stream_attempt_retry` | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | An attempt failed before the first semantic event reached the client; the pipeline is retrying (same account first, then another). Nothing was published, so the client sees no error. |
-  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash` | `stream_max_attempts` was spent; the last failure becomes the client-visible `502` or in-stream error. |
-  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`, `max_attempts`, `account_hash` | Kiro completed with no reasoning, text, or tool output; `retry_empty_completion` spends one more attempt on the same account. |
+  | `sdk_stream_attempt_retry` | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | A non-stream collector failed before an actionable result; nothing was published, so a bounded replacement is allowed. |
+  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash` | Non-stream collection exhausted its attempt budget; the last failure becomes HTTP `502`. |
+  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`, `max_attempts`, `account_hash` | Non-stream collection obtained an empty witnessed completion; one same-account replacement is allowed within the budget. |
   | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`, `account_hash`, `completion_witnessed` | The transport failed *after* an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
 
 - **Cause:** `upstream_stream_error` is a reader, decoder, transport, or
   embedded upstream failure; `upstream_stream_incomplete` is a clean EOF
-  without a completion witness. Both are transient by contract. If you see
-  the `502` and no `sdk_stream_attempt_retry` before it, the failure happened
-  after the first semantic event was already published, where the provider
-  never retries (it could duplicate text or repeat a tool side effect).
+  without a completion witness. Check `X-Request-ID`, `attempt_id`, phase and
+  the first/last failure evidence. Since v3.1.1 an accepted stream is not
+  replayed, even if it produced only lifecycle or partial argument events.
+  Absence of a retry event does not establish which upstream component failed.
 - **Remedy:** Downstream retries as a replacement attempt with the same
-  session key (see the contract). Operator-side, a burst of
-  `sdk_stream_attempts_exhausted` on one `account_hash` points at that
-  account or region; across all accounts it points at the network or proxy.
-  Raising `stream_max_attempts` (max `10`) buys more pre-publication retries
-  at the cost of latency; `stream_idle_timeout_ms` controls when a silent
-  stream is declared idle.
+  session key (see the contract), within its existing total budget and with
+  no replay of side effects. Correlate actual upstream status/request IDs
+  before attributing an account, region or network outage. Raw activity
+  refreshes idle but never the total deadline. Raising `stream_max_attempts`
+  does not change the accepted-stream boundary.
 
 ### Reading `sdk_stream_terminal`: "the assistant announced a next step and stopped"
 

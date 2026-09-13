@@ -717,7 +717,7 @@ an explicit estimate. See
 
 The current account-management and live-usage validation record is in
 [`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
-The v0.5.0 typed stream-error contract and downstream Zuno handoff are in
+The current typed stream-error contract and downstream Zuno handoff are in
 [`docs/STREAM_ERROR_CONTRACT.md`](docs/STREAM_ERROR_CONTRACT.md) and
 [`docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md`](docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md).
 The preceding local-auth lifecycle record is retained in
@@ -727,6 +727,9 @@ The preceding protocol/client matrix is retained in
 The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
 is retained as historical v0.4 evidence only.
 
+The v3.1.1 stream delivery, RPC decoding and real SDK/Zuno before/after report is in
+[`docs/audits/stream-delivery-recovery-2026-09-13.md`](docs/audits/stream-delivery-recovery-2026-09-13.md).
+
 ## Troubleshooting
 
 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) is the symptom-first
@@ -735,7 +738,7 @@ runbook: for each symptom it names the audit event, the
 `error.code` to look at, then the cause and the remedy. It covers
 `needs-relogin` and token-refresh failures, `quota-exhausted` versus
 `overage-blocked` (`stop_on_overage`), `503 no_healthy_accounts`, the
-`502 upstream_stream_*` codes with the pre-publication retry events, how to
+`502 upstream_stream_*` codes, accepted-stream failures and non-stream retry events, how to
 read `sdk_stream_terminal` when "the assistant announced a next step and
 stopped", reasoning-replay `400`s, the single-instance lock, configuration
 warnings, `413` variants, and proxy failures. It also lists `journalctl` grep

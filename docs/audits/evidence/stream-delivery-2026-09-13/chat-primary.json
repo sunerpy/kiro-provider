@@ -1,0 +1,185 @@
+{
+  "source_sha256": "bc1bdde8dbc81793ee416ff32fba968576c42ff355e116dedd986963370bebe4",
+  "data": {
+    "schema_version": 1,
+    "sdk_version": "7.13.0",
+    "tools_executed": 0,
+    "automatic_follow_on": false,
+    "results": [
+      {
+        "model": "gpt-5.6-sol",
+        "case": "chat-tool-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_1_b683fd34",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_1_b683fd34:41",
+        "traces": [
+          {
+            "request_id": "probe-request-041",
+            "headers_ms": 2979,
+            "first_tool_delta_ms": 2982,
+            "elapsed_ms": 3190,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-042",
+            "headers_ms": 1834,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 1848,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "chat-tool-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_2_ae45c039",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_2_ae45c039:41",
+        "traces": [
+          {
+            "request_id": "probe-request-043",
+            "headers_ms": 2348,
+            "first_tool_delta_ms": 2348,
+            "elapsed_ms": 2513,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-044",
+            "headers_ms": 1572,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 1582,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "case": "chat-tool-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_3_311b406e",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_3_311b406e:41",
+        "traces": [
+          {
+            "request_id": "probe-request-045",
+            "headers_ms": 2643,
+            "first_tool_delta_ms": 2644,
+            "elapsed_ms": 2863,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-046",
+            "headers_ms": 1810,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 1826,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "chat-tool-round-trip",
+        "iteration": 1,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_1_710f435c",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_1_710f435c:41",
+        "traces": [
+          {
+            "request_id": "probe-request-047",
+            "headers_ms": 2387,
+            "first_tool_delta_ms": 2387,
+            "elapsed_ms": 2982,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-048",
+            "headers_ms": 2219,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 2368,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "chat-tool-round-trip",
+        "iteration": 2,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_2_52433224",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_2_52433224:41",
+        "traces": [
+          {
+            "request_id": "probe-request-049",
+            "headers_ms": 2486,
+            "first_tool_delta_ms": 2487,
+            "elapsed_ms": 3154,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-050",
+            "headers_ms": 1993,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 2127,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      },
+      {
+        "model": "claude-opus-5",
+        "case": "chat-tool-round-trip",
+        "iteration": 3,
+        "passed": true,
+        "arguments": {
+          "marker": "CHAT_3_09951302",
+          "payload": "中文 \"quote\" \\backslash\nsecond line"
+        },
+        "reply": "ACK:CHAT_3_09951302:41",
+        "traces": [
+          {
+            "request_id": "probe-request-051",
+            "headers_ms": 2780,
+            "first_tool_delta_ms": 2780,
+            "elapsed_ms": 3626,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          },
+          {
+            "request_id": "probe-request-052",
+            "headers_ms": 2302,
+            "first_tool_delta_ms": null,
+            "elapsed_ms": 2383,
+            "role_chunks": 1,
+            "finish_chunks": 1
+          }
+        ]
+      }
+    ]
+  }
+}

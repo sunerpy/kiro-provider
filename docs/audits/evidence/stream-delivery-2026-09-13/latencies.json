@@ -1,0 +1,37 @@
+[
+  {
+    "model": "gpt-5.6-sol",
+    "samples": 3,
+    "headers_median_ms": 2466,
+    "first_tool_delta_median_ms": 2657,
+    "tool_done_median_ms": 3088
+  },
+  {
+    "model": "claude-opus-5",
+    "samples": 3,
+    "headers_median_ms": 2552,
+    "first_tool_delta_median_ms": 3476,
+    "tool_done_median_ms": 3797
+  },
+  {
+    "model": "claude-sonnet-5",
+    "samples": 3,
+    "headers_median_ms": 3980,
+    "first_tool_delta_median_ms": 4744,
+    "tool_done_median_ms": 4908
+  },
+  {
+    "model": "gpt-5.6-terra",
+    "samples": 3,
+    "headers_median_ms": 2722,
+    "first_tool_delta_median_ms": 2723,
+    "tool_done_median_ms": 2891
+  },
+  {
+    "model": "gpt-5.6-luna",
+    "samples": 3,
+    "headers_median_ms": 2847,
+    "first_tool_delta_median_ms": 2966,
+    "tool_done_median_ms": 3149
+  }
+]

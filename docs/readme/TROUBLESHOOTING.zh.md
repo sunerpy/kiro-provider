@@ -158,21 +158,20 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 
   | 事件 | 级别 | 字段 | 含义 |
   | --- | --- | --- | --- |
-  | `sdk_stream_attempt_retry` | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 某次尝试在第一个语义事件送达客户端之前失败；流水线正在重试（先同一账号，再换账号）。尚未发布任何内容，客户端看不到错误。 |
-  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash` | `stream_max_attempts` 已用尽；最后一次失败成为客户端可见的 `502` 或流内错误。 |
-  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`、`max_attempts`、`account_hash` | Kiro 完成了流但没有任何推理、文本或工具输出；`retry_empty_completion` 在同一账号上多花一次尝试。 |
+  | `sdk_stream_attempt_retry` | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 非流式收集在形成可用结果前失败；尚未发布，允许有界替代。 |
+  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash` | 非流式收集预算已用尽，最后失败成为 HTTP `502`。 |
+  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`、`max_attempts`、`account_hash` | 非流式收集得到有凭证的空完成，预算内允许同账户替代一次。 |
   | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`、`account_hash`、`completion_witnessed` | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
 
 - **原因：** `upstream_stream_error` 是读取器、解码器、传输或内嵌上游错误；
   `upstream_stream_incomplete` 是没有完成见证的干净 EOF。按契约两者都是
-  临时性错误。如果看到 `502` 但之前没有 `sdk_stream_attempt_retry`，说明
-  失败发生在第一个语义事件已经发布之后，此时 Provider 永不重试（可能重复
-  文本或重复工具副作用）。
+  临时性错误。v3.1.1 起，已接纳流即使只有生命周期或部分工具参数也不重放。
+  应结合 `X-Request-ID`、`attempt_id`、阶段和首末错误定位；
+  没有重试日志并不能确定哪个上游组件失败。
 - **处置：** 下游以相同会话键发起替换尝试重试（见契约）。运维侧，同一个
-  `account_hash` 上集中出现 `sdk_stream_attempts_exhausted` 指向该账号或
-  区域；所有账号都出现则指向网络或代理。提高 `stream_max_attempts`
-  （最大 `10`）可换来更多发布前重试，代价是延迟；`stream_idle_timeout_ms`
-  决定多久没有事件视为空闲。
+  请求上应先核对真实上游状态和 request ID，再判断账号、区域或网络原因。
+  原始活动只刷新空闲计时，不重置总预算；提高 `stream_max_attempts`
+  不能改变已接纳流的重试边界。替代请求仍须遵守预算与副作用去重要求。
 
 ### 解读 `sdk_stream_terminal`："助手宣布了下一步然后就停了"
 

@@ -1,12 +1,12 @@
 # Streaming error contract
 
-This contract is part of `v0.5.0` and later provider builds. It separates
-transient stream failures from structural protocol failures so downstream
-clients can retry only the former.
+This contract describes the v3.1.1 delivery boundary. It separates upstream
+acceptance, incremental progress and validated completion. Error codes introduced
+in v0.5.x remain available; accepted streams no longer wait for a complete tool
+call before publishing.
 
-The Zuno-specific Chinese handoff, including the current source location,
-minimal Rust change, persistence requirements, and acceptance cases, is in
-[ZUNO_STREAM_ERROR_HANDOFF.zh.md](ZUNO_STREAM_ERROR_HANDOFF.zh.md).
+The Chinese client handoff is in
+[ZUNO_STREAM_ERROR_HANDOFF.zh.md](ZUNO_STREAM_ERROR_HANDOFF.zh.md). This release changes only the Provider.
 
 ## Why an in-stream error has no HTTP status
 
@@ -20,10 +20,18 @@ The provider does not retry after it has emitted response bytes. Retrying inside
 the same SSE response could duplicate text or repeat a tool side effect.
 Attempt-level retry after that point belongs in the downstream orchestrator.
 
-Before that point the provider owns the retry: an upstream failure that happens
-before the first semantic event exists is replaced by a new upstream attempt
-without the client ever seeing a `started` event or a terminal error. See
-[Provider-side pre-publication retry](#provider-side-pre-publication-retry).
+Request validation, authentication and preparation still finish before publication.
+For streaming requests, a successful HTTP response with the expected upstream
+content type is the acceptance boundary. The SDK HTTP handler observes headers
+even when its EventStream decoder is still waiting for the first frame. KiroRuntime
+Generate uses the SDK RPC codec to preserve its initial-response metadata; its
+client cache is separate from REST CodeWhisperer clients. Responses
+then emits its lifecycle, Chat emits its assistant-role chunk, and native Responses
+flushes one SSE comment before forwarding the upstream lifecycle unchanged.
+
+A comment is transport activity, never model output, token usage or a completion
+witness. No timer-generated heartbeat or model-visible placeholder is added.
+See [Provider retry boundaries](#provider-retry-boundaries).
 
 ## Error codes
 
@@ -35,7 +43,7 @@ without the client ever seeing a `started` event or a terminal error. See
 | `upstream_stream_incomplete` | The stream ended without an authoritative completion witness, or the canonical stream reached EOF before `completed`. | Retry with bounded exponential backoff. |
 | `upstream_stream_idle_timeout` | No upstream event arrived before the configured stream idle timeout. | Retry if the request deadline still has budget. |
 | `request_deadline_exceeded` | The provider-side request deadline won the terminal race. | Retry only under the caller's overall deadline and attempt budget. |
-| `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. No tool-call delta is exposed before this validation succeeds. A call that stopped without ever carrying an `input` key (the probe-confirmed zero-parameter shape) is projected as `{}` and is not malformed; an empty or whitespace-only fragment that was actually received still is. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
+| `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. Partial argument deltas may already be visible, but no validated tool completion is emitted. A call that stopped without ever carrying an `input` key (the probe-confirmed zero-parameter shape) is projected as `{}` and is not malformed; an empty or whitespace-only fragment that was actually received still is. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
 
 The 2026-08-29 18:05 incident was logged as a top-level SDK `TypeError`, not a
 clean EOF. With this contract it maps to `upstream_stream_error`.
@@ -52,11 +60,15 @@ completion witness.
 | `invalid_upstream_reasoning` | Reasoning signatures or visible/redacted reasoning metadata contradicted each other, or (Anthropic Messages) a thinking block completed without any signature, or a signature arrived without a thinking block. This matches the non-stream HTTP 502 for the same upstream output. |
 | `invalid_upstream_tool_call` | A tool call omitted its identity, changed its name while streaming, or appended arguments after its stop marker. |
 | `incomplete_upstream_tool_call` | A completion witness arrived but a tool call never reached its structural stop marker. |
+| `upstream_tool_arguments_too_large` | Aggregate tool arguments and identities exceed `max_request_body_bytes`; no completed call is emitted. |
+| `upstream_tool_schema_violation` | Final JSON arguments violate the declared tool schema. |
+| `upstream_tool_choice_violation` | Upstream called a tool despite `tool_choice: none`. |
+| `invalid_upstream_response` | A successful upstream response has the wrong streaming Content-Type. |
 | `missing_upstream_stream` | The SDK response contained no event stream. |
-| `unknown_upstream_tool` | Kiro completed a tool call whose wire name matches no declared tool or bridge alias (typically a hallucinated tool name). Responses only; the bridge code is `unknown_tool_alias`. |
+| `unknown_upstream_tool` | The upstream tool identity matches no declared tool or bridge alias. Validation happens before forwarding that identity. The bridge code is `unknown_tool_alias`. |
 | `invalid_custom_tool_input` | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`. |
 
-Both codes are shared by the Responses SSE path (`response.failed`) and the
+Tool restoration codes are shared by the Responses SSE path (`response.failed`) and the
 non-stream Responses path, which returns HTTP 502 with
 `error.type=upstream_error` and the same `error.code`.
 
@@ -91,8 +103,10 @@ The provider emits the standard terminal event:
 }
 ```
 
-No private `retryable` field is added. Consumers classify the structured
-`error.code`.
+Consumers classify the structured `error.code`. The optional `request_id` and
+`details` fields retain diagnostic evidence, not retry authorization. Existing
+SDK consumers may continue using standard fields. A failed stream never adds a
+contradictory `response.completed` event or Chat `[DONE]` sentinel.
 
 ### Chat Completions
 
@@ -135,108 +149,57 @@ type and must not parse the prose message.
    guarantee.
 6. Keep fatal protocol codes out of the retry set.
 
-`malformed_upstream_tool_arguments` is safe to classify separately because the
-provider buffers every tool fragment and validates every completed tool call
-before emitting any canonical `tool_call_delta`. Partial assistant text may
-already have been streamed, so the retry must still replace the failed
-attempt's output rather than append to it. The legacy
-`invalid_upstream_tool_call` remains fatal during migration because older
-provider versions used it for both malformed JSON and structural violations.
+Incremental tool arguments are provisional. Wait for a successful response
+terminal state and validated call completion before executing them. A failure
+must discard provisional arguments; never close a JSON fragment, substitute `{}`,
+or join output from replacement generations. The existing zero-argument exception
+requires **no input field**, an explicit tool stop, and a completion witness.
 
-Provider rollout should precede downstream classification rollout. The legacy
-generic `upstream_error` code mixed transient and protocol failures and should
-not be globally declared retryable during migration.
+Function names, item IDs, call IDs and ordering remain stable. Function argument
+deltas are forwarded as they arrive; split Unicode scalars are held until complete.
+Custom-tool wrappers are buffered per call until the complete string is safely
+restored. Comments emitted for actual custom fragments indicate activity only.
+Final validation checks JSON, the aggregate byte budget, and the declared schema.
+Schema validation never coerces values or inserts defaults. Unsupported external
+references and asynchronous schemas fail before dispatch with `invalid_tool_schema`.
+This local validation does not claim that upstream strict generation is supported.
 
-## Provider-side pre-publication retry
+## Provider retry boundaries
 
-The streaming response is not published until the first **semantic** canonical
-event exists: `reasoning_delta`, `reasoning_redacted`, `text_delta`,
-`tool_call_delta`, or `completed`. Until then the pipeline drives the canonical
-stream into a small prefetch buffer. Once a semantic event is buffered the
-buffer and the live iterator are handed to the response as one stream, so a
-retried request produces exactly the same NDJSON/SSE sequence (`started` first)
-as an unretried one. The non-stream path publishes nothing until the end and
-therefore applies the same rule to failures that happen before its first
-semantic event.
+- Before upstream acceptance, typed HTTP/transport retry policy applies within
+  the existing `rate_limit_max_retries` budget and request deadline. SDK retries
+  remain disabled. Generic permission 403 does not force credential refresh;
+  actual credential rejection retains the existing one-refresh allowance.
+- Numeric and HTTP-date `Retry-After` values are honored. Missing or invalid values
+  use the configured fallback, not an invented zero or fixed 60-second wait.
+  Remaining valid backoff is returned in error response headers where applicable.
+- Once a stream is accepted, EOF, idle, malformed arguments and SDK errors finish
+  that stream. Even a witnessed empty completion is returned without replacement.
+  No stream replay or account switch can splice a second generation into it.
+- Non-stream collection keeps its bounded replacement behavior because nothing
+  has been published. `stream_max_attempts` bounds pre-semantic collection failures;
+  `retry_empty_completion` permits one empty-result replacement inside that budget.
+  Later collection failures retain the existing general retry budget.
+- Cancellation and the request deadline stop dispatch, pending queue acquisition,
+  token refresh, backoff and body consumption. Cleanup cannot replace the first
+  cancellation source or previous upstream failure.
 
-What is retried (only before the first semantic event):
+The request deadline uses a single timer and monotonic elapsed diagnostics. Raw
+upstream activity refreshes transport idle, including frames with no projectable
+content. Projected-frame counters are separate. Neither timer-driven heartbeats
+nor raw activity reset the total deadline. Backpressure does not create an idle
+failure while the Provider deliberately waits for the consumer; the total deadline
+still releases the request's resources.
 
-- any failure whose contract disposition is **retryable**
-  (`upstream_stream_error`, `upstream_stream_incomplete`,
-  `upstream_stream_idle_timeout`, `malformed_upstream_tool_arguments`), including
-  a stream idle timeout while waiting for the first event;
-- a **fully empty completion**: `completed` reached with a valid witness but
-  zero reasoning characters, zero visible text characters, zero tool calls, and
-  no signed/redacted/encrypted reasoning envelope. When
-  `retry_empty_completion` is `true` exactly one same-account replacement
-  attempt is spent; if it is empty as well, that result is returned.
+Native Responses still validates IDs, increasing sequence numbers and terminal
+consistency, including a final EOF check before committing stored state. A bare
+`[DONE]` is not a completion witness. Its genuine `response.incomplete` reason is
+preserved. Stateless SDK completion keeps the established token-usage/metering
+witness policy; transport cleanup cannot erase already validated completion.
 
-What is never retried by the provider:
-
-- anything after a semantic event has been produced, even if it only sits in
-  the prefetch buffer (the client-visible contract above applies unchanged);
-- **fatal** dispositions (`upstream_protocol_error`, `upstream_invalid_state`,
-  `unsupported_upstream_event`, `invalid_upstream_reasoning`,
-  `invalid_upstream_tool_call`, `incomplete_upstream_tool_call`,
-  `missing_upstream_stream`, `unknown_upstream_tool`,
-  `invalid_custom_tool_input`) — these return HTTP 502 with the code, as today;
-- a request deadline or client disconnect during the prefetch — the attempt is
-  torn down and the request ends with 504/499 exactly like a pre-commit abort.
-
-Bounds and account policy:
-
-- `stream_max_attempts` (default 3) is the total number of upstream streams
-  opened for one request, counting the initial attempt and the empty-completion
-  replacement. Exhausting it returns HTTP 502 with the last failure's code.
-- The first retry always reuses the same account. When the same account fails a
-  second time and another selectable account exists, the failing account is
-  excluded for this request and normal selection switches (its lease is
-  released before the next lease is taken). With no alternative, or under a
-  signed-reasoning replay lock, the same account is retried until the budget
-  is spent. Stream failures never change account health or rate-limit state.
-- Backoff is the rate-limit backoff: `rate_limit_retry_delay_ms` doubled per
-  failed attempt with up to 25% random jitter, bounded by the request deadline.
-- Each attempt owns its upstream abort; the failed attempt's socket is
-  destroyed before the replacement is sent.
-
-Transport errors after a completion witness: when a metering (or token-usage)
-witness has already been observed and the SDK reader then rejects with a
-transport error while draining the trailing bytes, the canonical stream
-completes normally and the fault is audited as
-`sdk_stream_transport_error_after_completion`. An embedded upstream `error` or
-`invalidStateEvent` after the witness still fails the stream as before.
-
-## Zuno classification change
-
-In `crates/zuno-provider-compatible/src/stream.rs::classify`, inspect the
-structured code before the generic fatal fallback:
-
-```rust
-if matches!(
-    error.code_str(),
-    Some(
-        "upstream_stream_error"
-            | "upstream_stream_incomplete"
-            | "upstream_stream_idle_timeout"
-            | "request_deadline_exceeded"
-            | "malformed_upstream_tool_arguments"
-    )
-) {
-    return ProviderError::Transient {
-        status: None,
-        source: Some(Box::new(ReportedWireError::new(provider, error))),
-    };
-}
-```
-
-Add regression cases proving that every code above becomes
-`ProviderError::Transient`, while `upstream_protocol_error`,
-`invalid_upstream_tool_call`, and `invalid_upstream_reasoning` remain
-`ProviderError::Fatal`.
-
-The retry scheduler must then create and persist a new attempt record. Merely
-changing `Fatal` to `Transient` is insufficient if the engine does not discard
-the failed attempt's partial output before replay.
+No Zuno configuration migration, timeout increase, model switch or reasoning change
+is required by this release. Clients should preserve structured failure and request
+IDs and apply their own bounded, side-effect-aware replacement policy.
 
 ## Provider observability
 
@@ -264,10 +227,10 @@ arguments, tool IDs, and tool names are never written to the audit log.
 
 `sdk_stream_completed`, `sdk_stream_upstream_error`, `sdk_stream_idle_timeout`,
 and `sdk_stream_completion_witness` now carry `mode` (`stream` / `non-stream`).
-A failure audited during the prefetch phase additionally carries
-`phase: "prefetch"`.
+A local failure while priming the accepted SDK lifecycle may carry
+`phase: "prefetch"`; it does not authorize replacing an accepted stream.
 
-### Pre-publication retry events
+### Non-stream collection retry events
 
 | Event | Level | Fields |
 | --- | --- | --- |
@@ -286,7 +249,8 @@ trace (`consumer_cancel`, `external_abort`):
   `consumer_cancel`, `external_abort`
 - `completion_witnessed` (boolean) and `witness_kind`
   (`token-usage-metadata` / `metering-clean-eof`)
-- `reasoning_chars`, `visible_chars`, `tool_count`, `reasoning_redacted`
+- `reasoning_chars`, `visible_chars`, `tool_count`, `tool_delta_count`, `reasoning_redacted`;
+  `tool_count` stays zero until successful completion
 - `tool_intent_open` — a tool call started but never reached its stop marker
 - `finish_reason` and `finish_reason_synthesized` — present only when a
   `completed` event exists; the latter is always `true` because Kiro exposes
@@ -296,3 +260,29 @@ trace (`consumer_cancel`, `external_abort`):
 
 Counts only; no reasoning, text, or tool content is ever logged.
 `sdk_stream_completed` is retained unchanged for backward compatibility.
+
+### Request and attempt diagnostics
+
+`X-Request-ID` identifies the logical gateway request. Each dispatch has a separate
+`attempt_id`. Error details contain phase, attempt, elapsed milliseconds,
+`response_committed`, `completion_witnessed`, `cancel_source`, `first_failure` and
+`last_failure`. Evidence retains actual upstream HTTP status/code/request ID when
+observed; unknown values stay null. A local deadline after a 503 retains both causes.
+
+Audit events record request receipt, dispatch, upstream headers/acceptance,
+downstream handoff, first/last upstream frame, first projected frame, cleanup and
+body closure. Handoff timestamps describe the server boundary; client receipt
+latency is measured separately by real HTTP tests. `downstream_bytes` counts bytes
+handed to the HTTP body consumer, not a remote acknowledgement. Closing a local
+socket is recorded without claiming the remote model has stopped computing.
+
+Error messages are bounded to 1,024 characters and redact known credentials,
+request text, JSON payloads, URLs, emails and authorization fields. Audit logs use
+message hashes instead of raw exception prose. Invalid request IDs are omitted;
+IDs are not metric labels, prompts, account selectors or idempotency credentials.
+
+The reproducible isolated probe is `scripts/probe-stream-delivery.ts` (pinned
+OpenAI SDK 7.13.0). It executes no tools, checks incremental arguments byte for byte,
+manually supplies a fixed tool result to validate full-output replay, and checks
+cancellation. Authentication failures remain explicit limitations, never evidence
+of native streaming success.

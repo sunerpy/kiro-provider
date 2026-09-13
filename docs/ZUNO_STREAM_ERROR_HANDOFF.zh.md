@@ -1,174 +1,92 @@
-# Zuno 接入 kiro-provider 流错误恢复说明
+# Zuno 接入 Kiro Provider 流交付与失败恢复说明
 
-本文是提供给 Zuno 的正式接入说明。适用 Provider 版本为
-`kiro-provider v0.5.0` 及以后版本；其中
-`malformed_upstream_tool_arguments` 从 `v0.5.1` 开始提供。
+本文对应 Provider v3.1.1。此次修改仅在 Kiro Provider，不要求修改 Zuno 的模型、reasoning、超时或 `responses_*` 配置，也不操作 Zuno 的真实会话库、Goal 和已接纳输入。
 
-## 1. 问题与修复边界
+## 1. 响应头与工具参数的交付边界
 
-SSE 响应开始后，HTTP 状态和响应头已经发送。后续上游流故障只能通过终止事件
-表达，因此 Zuno 看到 `status=None` 是正常现象，不能单独据此判定为不可恢复。
+旧实现等待首个 canonical 语义事件，工具参数又在完整调用结束后才投影。上游持续发送 `toolUseEvent` 时，客户端仍可能一直等待响应头。
 
-Provider v0.5.0 不再把所有流故障压缩成通用
-`code="upstream_error"`，而是保留可恢复流故障与不可恢复协议故障的结构化
-错误码。Provider 不会在已经输出 SSE 字节后自行重试，以避免重复文本或重复
-执行工具；attempt 级重试属于 Zuno。
+现在按以下顺序处理：
 
-2026-08-29 18:05 的现场异常是 SDK 顶层 `TypeError`，对应
-`upstream_stream_error`。只有流干净 EOF、但缺少 token usage 或有效
-`meteringEvent` 完成凭证时，才对应 `upstream_stream_incomplete`。
+```text
+请求校验、鉴权和有界准备
+  → 上游真实 HTTP 接纳
+  → 下游响应头与生命周期
+  → 文本、推理、工具参数增量
+  → 完整性校验与终态，或明确失败
+```
 
-2026-08-30 的工具异常已经收到 `metering-clean-eof`，但 18 个
-`toolUseEvent` 累计出的最终参数不是合法 JSON。`v0.5.1` 将它从旧的
-`invalid_upstream_tool_call` 中拆出为
-`malformed_upstream_tool_arguments`。Provider 在完整参数校验通过前不会
-发送任何 `tool_call_delta`，因此该错误发生时可以存在部分 assistant 文本，
-但不会存在已暴露或已执行的工具调用。
+SDK HTTP handler 在 EventStream 解码器等候首帧时也能报告上游响应头。成功响应必须具有正确 Content-Type；JSON 错误不会冒充成功 SSE。Responses 发出规范生命周期，Chat 先发 assistant-role chunk；native Responses 用一条 SSE 注释交付已接纳连接，然后保持上游事件序号。
 
-## 2. Responses 终止事件
+Function 参数逐段传递，调用身份和输出索引保持稳定。跨片段的 Unicode 字符不会被替换或丢失。Custom wrapper 在单个调用完成后才安全解包；实际收到 wrapper 片段时可以发送活性注释，但注释不表示模型语义、token usage 或完成。
 
-可恢复流截断示例：
+## 2. 参数增量不代表可执行调用
+
+只有身份、工具停止、整体完成凭证、JSON、累计大小和声明 schema 均通过校验，调用才可以完成。客户端不能在部分参数到达时执行工具。
+
+截断、畸形 JSON、schema 不匹配或超限时，Provider 会终结为失败，不补造 `{}`、不强行闭合参数，也不把另一次生成拼接进来。历史零参数特例只接受“从未出现 input 字段 + 明确 stop + 完成凭证”，不是对空字符串或残缺 JSON 的修复。
+
+`max_request_body_bytes` 同时约束工具参数和身份累计字节数，复用现有默认 10 MiB。Schema 校验不改写类型、不注入默认值、不移除字段，也不代表上游 strict 生成约束已经得到验证。无法本地验证的外部引用或异步 schema 在派发前返回 `invalid_tool_schema`。
+
+## 3. 失败与请求关联
+
+SSE 已发布后 HTTP 状态不能再改成 503/504。Responses 使用 `response.failed`，Chat 使用带结构化 code 的错误帧；不能随后追加成功终态或 `[DONE]`。
+
+客户端读取 `response.failed.response.error.code`，并可保存新增诊断字段：
 
 ```json
 {
-  "type": "response.failed",
-  "response": {
-    "status": "failed",
-    "error": {
-      "code": "upstream_stream_incomplete",
-      "message": "Upstream stream ended before completion"
+  "code": "request_deadline_exceeded",
+  "message": "Request deadline exceeded; earlier upstream failure HTTP 503",
+  "request_id": "req_fixture",
+  "details": {
+    "phase": "retry_backoff",
+    "response_committed": false,
+    "completion_witnessed": false,
+    "cancel_source": "request_deadline",
+    "first_failure": {
+      "upstream_status": 503,
+      "upstream_code": "ServiceUnavailableException",
+      "upstream_request_id": "upstream_fixture"
     }
   }
 }
 ```
 
-Zuno 必须读取 `response.failed.response.error.code`，不要解析英文错误文本。
+这是字段示例，省略了 attempt、耗时和最后失败等字段；不是某个真实会话的日志。实际 HTTP 层预算失败在发布前返回 JSON 504，发布后才使用流内错误。
 
-## 3. 错误分类
+`X-Request-ID` 关联逻辑请求，`attempt_id` 关联每次派发。未知上游状态和 ID 保持 null，不把本地超时或账户选择失败编造成上游 503。先 503、后本地 deadline 时，两种原因均保留；清理失败不会覆盖取消首因。
 
-### 可恢复
-
-| code | 含义 |
+| code | 客户端处理 |
 | --- | --- |
-| `upstream_stream_error` | SDK reader、decoder、transport 或上游嵌入错误终止流 |
-| `upstream_stream_incomplete` | 流结束但没有权威完成凭证 |
-| `upstream_stream_idle_timeout` | 上游事件空闲超时 |
-| `request_deadline_exceeded` | Provider 请求截止时间先到 |
-| `malformed_upstream_tool_arguments` | 工具调用已停止，但完整累计参数不是合法 JSON；Provider 尚未暴露工具调用 |
+| `upstream_stream_error`、`upstream_stream_incomplete` | 在自身总预算内决定是否替代重试；保留失败记录 |
+| `upstream_stream_idle_timeout` | 核对空闲阶段和剩余总预算 |
+| `request_deadline_exceeded` | Provider 总预算到期；不能重新无限计时 |
+| `malformed_upstream_tool_arguments` | 丢弃部分调用；无副作用时才考虑替代重试 |
+| `invalid_upstream_tool_call`、`incomplete_upstream_tool_call` | 身份或停止契约异常，不机械重试 |
+| `upstream_tool_arguments_too_large`、`upstream_tool_schema_violation` | 参数大小或 schema 不合法，不执行工具 |
+| `unknown_upstream_tool`、`invalid_custom_tool_input`、`upstream_tool_choice_violation` | 工具声明、包装或选择控制不匹配 |
+| `invalid_upstream_response`、`upstream_protocol_error`、`unsupported_upstream_event`、`upstream_invalid_state`、`invalid_upstream_reasoning`、`missing_upstream_stream` | 协议错误，应调查而不是反复生成 |
 
-### 不可机械重试
+错误正文统一脱敏并限长。日志保存摘要哈希、计数和身份关联，不记录原始提示词、工具参数、Authorization、Cookie 或私有 reasoning。
 
-- `upstream_protocol_error`
-- `upstream_invalid_state`
-- `unsupported_upstream_event`
-- `invalid_upstream_reasoning`
-- `invalid_upstream_tool_call`
-- `incomplete_upstream_tool_call`
-- `missing_upstream_stream`
+## 4. 重试、时钟和取消
 
-`invalid_upstream_tool_call` 现在只表示缺少工具身份、流中改名、停止后继续追加
-参数等结构违规。旧 Provider 曾用它同时表示 JSON 解析失败，因此迁移期间仍
-必须保持 fatal。
+- 上游接纳前，继续采用类型化 HTTP/传输重试策略及现有共享预算。普通权限 403 不强制刷新令牌；真正凭据失效仍保留原有一次刷新机会。
+- 已接纳的流不透明重试，包括仅收到生命周期、部分工具参数、EOF 或空完成。客户端需要另建替代请求，不能拼接部分结果或重放已经产生的副作用。
+- 非流式收集保留原有有界替代行为。`stream_max_attempts` 和 `retry_empty_completion` 不再用于替换已接纳的流。
+- 真实原始帧刷新传输空闲计时，投影事件单独统计；总 deadline 不因任一种活动重置。没有新增无限心跳或放大默认超时。
+- 客户端断连、body consumer 取消和 Provider deadline 分别记录来源，贯穿队列、SDK 请求、迭代器和清理。关闭本地 socket 不等于能够证明远端模型已经停止计算。
+- 有效的数值或 HTTP 日期 `Retry-After` 会参与退避，错误响应尽可能返回剩余等待信息。缺失值使用现有配置，不再误读为零或固定一分钟。
 
-旧版本通用 `upstream_error` 曾混合上述两类故障，迁移期间不得把它全局声明为
-可重试。
+## 5. Zuno 配置与隔离验收
 
-## 4. Zuno 最小代码改动
+正常 Zuno 仍使用现有 `kiro-local` Responses provider。`responses_fidelity_mode`、`responses_instruction_lift`、`responses_native_tool_bridge` 是 Provider 开关，不应添加到 Zuno 请求参数中。
 
-当前分类入口：
+验收使用当前安装版本、独立 XDG/配置/数据库目录和原 `kiro-local` profile 的副本。副本仅更改测试 endpoint、禁用工具执行和学习后台任务，并限制每个测试只有一次 Provider 请求。真实 profile 和会话状态保持不变。
 
-```text
-crates/zuno-provider-compatible/src/stream.rs::classify
-```
+官方 OpenAI SDK 7.13.0 验证：响应头先于完成、工具参数逐字节一致、调用只完成一次、完整 `response.output` 回放和显式合成结果续接。探针不执行工具。GPT 未返回可见推理不被判为缺陷；请求和派发的 effort 分别核对，不以可见 reasoning 数量推断 effort。
 
-在现有 generic fatal fallback 之前，优先按结构化 code 分类：
+原生权限、输出上限等约束失败须单独记录。`unsupported_output_token_limit` 仍保持明确拒绝；不能静默删除预算或换模型后宣称原路径已修复。
 
-```rust
-if matches!(
-    error.code_str(),
-    Some(
-        "upstream_stream_error"
-            | "upstream_stream_incomplete"
-            | "upstream_stream_idle_timeout"
-            | "request_deadline_exceeded"
-            | "malformed_upstream_tool_arguments"
-    )
-) {
-    return ProviderError::Transient {
-        status: None,
-        source: Some(Box::new(ReportedWireError::new(provider, error))),
-    };
-}
-```
-
-这样 `ProviderError::recovery()` 会返回 `Recovery::Retry { after: None }`。
-协议错误不加入该集合，继续进入 `ProviderError::Fatal`。
-
-## 5. attempt 与持久化要求
-
-只修改 `Fatal`/`Transient` 分类仍不完整。Zuno 的重试调度还必须满足：
-
-1. 先持久化失败 attempt、结构化错误码和已收到部分输出的事实；
-2. 重试创建新的 attempt 记录；
-3. 新 attempt 的输出替换失败 attempt 的部分输出，不能拼接；
-4. 重发原始 turn，并复用原 session-affinity key；
-5. 不把失败流中的部分 assistant 文本加入下一次 conversation history；
-6. 默认最多三次总尝试，可采用约 `0.5s`、`1.5s` 的指数退避并加入 jitter；
-7. 所有重试受 turn 的整体 deadline 约束；
-8. 工具副作用已经发出时，除非存在 idempotency key 或等价去重保证，否则
-   不自动重试。
-
-## 6. 必须增加的测试
-
-在 `crates/zuno-provider-compatible/src/stream.rs` 的现有结构化错误测试附近增加：
-
-- 原有四个可恢复 code 分别得到 `Recovery::Retry { after: None }`；
-- `malformed_upstream_tool_arguments` 得到
-  `Recovery::Retry { after: None }`；
-- `upstream_protocol_error`、`invalid_upstream_tool_call`、
-  `invalid_upstream_reasoning` 分别得到 `Recovery::Fail`；
-- `code="upstream_error"` 不被新规则误判为可恢复。
-
-引擎集成测试还应注入一次“先输出部分文本、再
-`upstream_stream_incomplete`、第二 attempt 成功”的场景，并验证：
-
-- 数据库存在两个 attempt；
-- 第一个 attempt 标记失败且保留错误码；
-- 最终用户可见输出只来自第二个 attempt；
-- 账号和 Kiro conversation 亲和键保持不变；
-- 不发生重复工具副作用。
-
-另注入一个 `invalid_upstream_tool_call`，确认不创建重试 attempt。
-
-针对本次工具参数故障，建议使用 18-fragment fixture：第一次返回部分文本后以
-`malformed_upstream_tool_arguments` 失败，第二次成功。除既有 attempt 和
-replacement 断言外，还必须确认两次尝试期间工具 dispatcher 调用次数为零。
-
-## 7. 发布顺序与验收
-
-1. 先部署 `kiro-provider v0.5.1`；
-2. 再发布 Zuno 的结构化错误分类与 attempt 重试改动；
-3. 分别注入一个可恢复流错误和一个致命协议错误；
-4. 核对退避、attempt 记录、部分输出替换、会话亲和和工具幂等；
-5. 保留 Zuno 现有 `legacy-user-prefix`、`maxTokens: null` 与旧 Chat 关闭策略。
-
-Provider 的完整跨协议定义见
-[STREAM_ERROR_CONTRACT.md](STREAM_ERROR_CONTRACT.md)。本次 Provider 正式版
-不修改 Zuno 仓库、配置或数据库。
-
-## 8. Provider v0.5.0 发布门禁
-
-stream 实现合并到主工作区后执行的源码门禁：
-
-- `make ci`：`891 pass / 0 fail`；
-- `make coverage-gate`：`13775/14720 = 93.58%`，高于 `93%` 门槛；
-- `make fmt-check`：通过；
-- `make coverage-parity`：通过；
-- `make security`：`7/7` 通过；
-- `make codex-smoke-security`：通过；
-- `bun run build`、`bun run build:binary`、`bun run build:npm`：全部通过；
-- CodeGraph：`173` files、`2677` nodes、`10847` edges，无待同步文件。
-
-受限沙箱内的 Bun 临时端口测试会统一返回 `EADDRINUSE`；同一主工作区、同一
-提交在正常本机网络命名空间原样重跑后为上述 `891/891` 全部通过。该现象是
-测试执行环境限制，不是 Provider 端口竞争或产品回归。
+跨协议完整定义见 [STREAM_ERROR_CONTRACT.md](STREAM_ERROR_CONTRACT.md)。修复前后证据见本批流交付审查报告；旧 v0.5.x 的 Zuno 分类补丁和发布数字仅为历史记录，不是此次需要执行的 Zuno 变更。
