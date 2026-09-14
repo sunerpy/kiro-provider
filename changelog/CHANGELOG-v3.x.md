@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.1](https://github.com/sunerpy/kiro-provider/compare/v3.2.0...v3.2.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **anthropic:** 修复流式背压与增量交付 ([61513ea](https://github.com/sunerpy/kiro-provider/commit/61513ea7314e808ccc220470b1f5d0ed139412f5))
+
 ## [3.2.0](https://github.com/sunerpy/kiro-provider/compare/v3.1.4...v3.2.0) (2026-09-14)
 
 
