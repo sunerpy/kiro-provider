@@ -802,6 +802,145 @@ describe("Anthropic request adapter", () => {
       param: "thinking.display",
     });
   });
+
+  test("covers strict Claude compatibility rejection and replay boundaries", () => {
+    const failures: ReadonlyArray<{
+      readonly request: unknown;
+      readonly options?: Parameters<typeof adaptAnthropicMessagesRequest>[1];
+      readonly projection?: Parameters<typeof adaptAnthropicMessagesRequest>[2];
+      readonly code?: string;
+      readonly param: string;
+    }> = [
+      {
+        request: validRequest({ cache_control: "ephemeral" }),
+        code: "unsupported_cache_control",
+        param: "cache_control",
+      },
+      {
+        request: validRequest({ cache_control: { type: "ephemeral", ttl: "2h" } }),
+        code: "unsupported_cache_control",
+        param: "cache_control.ttl",
+      },
+      {
+        request: validRequest({ context_management: { edits: [], future: true } }),
+        code: "unsupported_context_edit",
+        param: "context_management.future",
+      },
+      {
+        request: validRequest({
+          model: "claude-opus-5",
+          messages: [
+            { role: "user", content: "first" },
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "must be empty", signature: "kr1_token" }],
+            },
+            { role: "user", content: "again" },
+          ],
+        }),
+        code: "invalid_reasoning_replay",
+        param: "messages.1.content.0.thinking",
+      },
+      {
+        request: validRequest({
+          messages: [
+            { role: "user", content: "first" },
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "", signature: "native-signature" }],
+            },
+            { role: "user", content: "again" },
+          ],
+        }),
+        code: "invalid_reasoning_replay",
+        param: "messages.1.content.0.thinking",
+      },
+      {
+        request: validRequest({
+          messages: [
+            { role: "system", content: [{ type: "image", source: { type: "base64" } }] },
+            { role: "user", content: "hello" },
+          ],
+        }),
+        code: "unsupported_instruction_projection",
+        param: "messages.0.content.0",
+      },
+      {
+        request: validRequest({
+          tools: [
+            {
+              name: "read",
+              description: "Read a file",
+              input_schema: { type: "object" },
+              future: true,
+            },
+          ],
+        }),
+        code: "unsupported_tool_field",
+        param: "tools.0.future",
+      },
+      {
+        request: validRequest({ thinking: { type: "disabled", display: "omitted" } }),
+        code: "unsupported_parameter",
+        param: "thinking.display",
+      },
+      {
+        request: validRequest({
+          messages: [
+            { role: "system", content: "Today is fixed." },
+            { role: "user", content: "hello" },
+          ],
+        }),
+        code: "unsupported_instruction_projection",
+        param: "messages",
+        projection: "safe",
+      },
+    ];
+
+    for (const testCase of failures) {
+      expect(
+        adaptAnthropicMessagesRequest(
+          testCase.request,
+          testCase.options ?? {},
+          testCase.projection ?? "v3-auto",
+        ),
+      ).toMatchObject({
+        ok: false,
+        ...(testCase.code !== undefined ? { code: testCase.code } : {}),
+        param: testCase.param,
+      });
+    }
+
+    const redacted = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [{ type: "redacted_thinking", data: "YWJj" }],
+          },
+          { role: "user", content: "again" },
+        ],
+      }),
+      {},
+      "v3-auto",
+    );
+    expect(redacted).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          reasoningReplays: [
+            {
+              lookup: {
+                kind: "anthropic-direct",
+                content: { kind: "redacted_content" },
+              },
+            },
+          ],
+        },
+      },
+    });
+  });
 });
 
 describe("POST /v1/messages", () => {
