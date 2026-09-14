@@ -1,0 +1,52 @@
+{
+  "$comment": "OpenAI openapi 4bb21ba8e9213c3d955b69dc3f76dd7537439828; MIT; https://raw.githubusercontent.com/openai/openai-openapi/4bb21ba8e9213c3d955b69dc3f76dd7537439828/openapi.json",
+  "type": "object",
+  "description": "Represents token usage details including input tokens, output tokens,\na breakdown of output tokens, and the total tokens used.\n",
+  "properties": {
+    "input_tokens": {
+      "type": "integer",
+      "description": "The number of input tokens."
+    },
+    "input_tokens_details": {
+      "type": "object",
+      "description": "A detailed breakdown of the input tokens.",
+      "properties": {
+        "cached_tokens": {
+          "type": "integer",
+          "description": "The number of tokens that were retrieved from the cache.\n[More on prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).\n"
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "description": "The number of input tokens that were written to the cache."
+        }
+      },
+      "required": ["cached_tokens", "cache_write_tokens"]
+    },
+    "output_tokens": {
+      "type": "integer",
+      "description": "The number of output tokens."
+    },
+    "output_tokens_details": {
+      "type": "object",
+      "description": "A detailed breakdown of the output tokens.",
+      "properties": {
+        "reasoning_tokens": {
+          "type": "integer",
+          "description": "The number of reasoning tokens."
+        }
+      },
+      "required": ["reasoning_tokens"]
+    },
+    "total_tokens": {
+      "type": "integer",
+      "description": "The total number of tokens used."
+    }
+  },
+  "required": [
+    "input_tokens",
+    "input_tokens_details",
+    "output_tokens",
+    "output_tokens_details",
+    "total_tokens"
+  ]
+}

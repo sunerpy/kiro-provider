@@ -101,25 +101,33 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
         : options.signals.deadline.aborted
           ? new NativeStreamError("request_deadline_exceeded", "Request deadline exceeded")
           : new NativeStreamError("upstream_stream_error", "Upstream stream error");
-  const failedEvent = (error: NativeStreamError): NativeEvent => ({
-    type: "response.failed",
-    sequence_number: ++sequence,
-    response: {
-      ...(lastResponse ??
-        responseState({
-          id: responseId ?? `resp_${randomUUID()}`,
-          model: options.model,
-          status: "in_progress",
-        })),
-      status: "failed",
-      completed_at: null,
-      incomplete_details: null,
-      error: options.signals.diagnostics?.streamError(error.code, error.message) ?? {
-        code: error.code,
-        message: error.message,
+  const failedEvent = (error: NativeStreamError): NativeEvent => {
+    // A gateway failure cannot promote an earlier progress snapshot into final usage.
+    const {
+      usage: _partialUsage,
+      usage_metadata: _partialMetadata,
+      ...snapshot
+    } = lastResponse ??
+    responseState({
+      id: responseId ?? `resp_${randomUUID()}`,
+      model: options.model,
+      status: "in_progress",
+    });
+    return {
+      type: "response.failed",
+      sequence_number: ++sequence,
+      response: {
+        ...snapshot,
+        status: "failed",
+        completed_at: null,
+        incomplete_details: null,
+        error: options.signals.diagnostics?.streamError(error.code, error.message) ?? {
+          code: error.code,
+          message: error.message,
+        },
       },
-    },
-  });
+    };
+  };
   const format = (event: NativeEvent, prefix = ""): string =>
     `${prefix}event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`;
   const commitTerminal = (): void => {

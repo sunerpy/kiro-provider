@@ -37,6 +37,8 @@ export interface ToolCallProgress {
 }
 
 export interface TransformSdkOutputOptions {
+  readonly inputTokenEstimate?: number | (() => number);
+  readonly contextUsageWindow?: number;
   readonly diagnostics?: import("../../../core/request-diagnostics.js").RequestDiagnostics;
   readonly validateToolArguments?: import("../../../core/tool-output-validation.js").ValidateToolArguments;
   readonly maxToolArgumentsBytes?: number;
@@ -351,15 +353,38 @@ export async function* transformSdkOutputStream(
     };
   }
 
-  const tokenUsage = resolveUsage(usage, textOnlyContent, model);
+  const tokenUsage = resolveUsage(usage, textOnlyContent, model, {
+    inputTokenEstimate: options.inputTokenEstimate,
+    contextUsageWindow: options.contextUsageWindow,
+    toolCalls: output.toolCalls,
+    reasoning: {
+      ...(captured.signature !== undefined
+        ? { reasoningText: { text: captured.text, signature: captured.signature } }
+        : {}),
+      ...(captured.redactedContent !== undefined
+        ? { redactedContent: captured.redactedContent }
+        : {}),
+    },
+  });
+  auditLog("info", "sdk_usage_resolved", {
+    request_id: options.diagnostics?.requestId,
+    model,
+    input_source: tokenUsage.accounting?.input,
+    output_source: tokenUsage.accounting?.output,
+    context_source: tokenUsage.accounting?.context,
+    input_tokens: tokenUsage.inputTokens,
+    output_tokens: tokenUsage.outputTokens,
+    context_tokens: tokenUsage.totalTokens,
+    context_usage_percentage: tokenUsage.accounting?.contextUsagePercentage,
+    context_usage_window: tokenUsage.accounting?.contextUsageWindow,
+    percentage_saturated: tokenUsage.accounting?.percentageSaturated,
+    metering_value: tokenUsage.accounting?.metering?.value,
+    metering_unit: tokenUsage.accounting?.metering?.unit,
+  });
   yield {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     type: "completed",
     finishReason: toolCalls.size > 0 ? "tool_calls" : "stop",
-    usage: {
-      inputTokens: tokenUsage.inputTokens,
-      outputTokens: tokenUsage.outputTokens,
-      totalTokens: tokenUsage.inputTokens + tokenUsage.outputTokens,
-    },
+    usage: tokenUsage,
   };
 }

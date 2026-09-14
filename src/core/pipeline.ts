@@ -29,6 +29,7 @@ import {
 } from "../kiro/health.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import { transformToSdkRequest } from "../kiro/transform/request-sdk.js";
+import { estimateSdkInputTokens } from "../kiro/transform/usage-estimator.js";
 import { RequestTransformError } from "../kiro/transform/errors.js";
 import { collectSdkResponse } from "../kiro/transform/sdk-collector.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
@@ -1186,6 +1187,11 @@ async function runAttempt(
       sdkAttempt: plannedAttempt,
       effort: prepared.effort,
       accountHash,
+      inputTokenEstimate: () => estimateSdkInputTokens(prepared),
+      contextUsageWindow: options.modelCapabilities?.contextUsageWindow?.(
+        account.id,
+        options.model,
+      ),
     };
     state.streamAttempts += 1;
     return options.stream
@@ -1198,6 +1204,8 @@ async function runAttempt(
 }
 
 interface AttemptStreamContext {
+  readonly inputTokenEstimate: () => number;
+  readonly contextUsageWindow: number | undefined;
   readonly options: RunChatCompletionOptions;
   readonly signal: AbortSignal;
   readonly state: LoopState;
@@ -1382,6 +1390,8 @@ async function runStreamAttempt(
     validateToolArguments: options.validateToolArguments,
     model: options.model,
     conversationId,
+    inputTokenEstimate: context.inputTokenEstimate,
+    contextUsageWindow: context.contextUsageWindow,
     telemetryContext: {
       requestId: options.requestId,
       attempt: context.sdkAttempt,
@@ -1430,6 +1440,8 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
   try {
     completion = await collectSdkResponse(sdkResponse, options.model, conversationId, signal, {
       ...captureOptions,
+      inputTokenEstimate: context.inputTokenEstimate,
+      contextUsageWindow: context.contextUsageWindow,
       maxToolArgumentsBytes: options.config.max_request_body_bytes,
       validateToolArguments: options.validateToolArguments,
       diagnostics: options.diagnostics,

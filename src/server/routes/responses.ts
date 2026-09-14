@@ -9,7 +9,6 @@ import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
   type CanonicalCompletion,
-  type CanonicalOutputUsage,
   parseCanonicalCompletion,
 } from "../../protocol/output.js";
 import { openAiError } from "../errors.js";
@@ -34,7 +33,6 @@ import type {
   ReasoningOutputItem,
   ResponseOutputItem,
   ResponseToolCallItem,
-  ResponseUsage,
 } from "../responses/events.js";
 import { prepareNativeAdaptation } from "../responses/native-adaptation.js";
 import { proxyNativeResponses } from "../responses/native-transport.js";
@@ -59,6 +57,7 @@ import {
   type ResponseStateObject,
   responseConfigurationFromCanonical,
   responseState,
+  responseUsage,
 } from "../responses/state.js";
 import {
   canonicalCompletionFromResponse,
@@ -228,20 +227,7 @@ function previousResponsePresent(body: unknown): boolean {
   );
 }
 
-/**
- * Responses `usage` from a canonical completion. Kiro reports no cache or
- * reasoning token split, so the detail objects the Responses API always
- * carries are present with zero counts rather than omitted.
- */
-export function responsesUsage(usage: CanonicalOutputUsage): ResponseUsage {
-  return {
-    input_tokens: usage.inputTokens,
-    output_tokens: usage.outputTokens,
-    total_tokens: usage.totalTokens,
-    input_tokens_details: { cached_tokens: 0 },
-    output_tokens_details: { reasoning_tokens: 0 },
-  };
-}
+export const responsesUsage = responseUsage;
 
 /** A completed `output_text` part with the always-present empty `logprobs`. */
 export function outputTextContent(
@@ -268,6 +254,7 @@ function completedResponse(
   configuration: ResponseRequestConfiguration,
   responseId: string,
   createdAt: number,
+  usageMode: "compatible" | "strict",
 ): CompletedResponseProjection {
   const restored = bridge.restoreCalls(
     payload.toolCalls.map((call) => ({
@@ -319,7 +306,7 @@ function completedResponse(
       status: "completed",
       model,
       output,
-      usage: responsesUsage(payload.usage),
+      usage: responsesUsage(payload.usage, usageMode),
       configuration,
       createdAt,
     }),
@@ -822,6 +809,7 @@ async function handleResponsesCore(
         );
       }
       const streaming = responsesSseAdapter(pipelineResponse, {
+        usageMode: config.responses_fidelity_mode,
         responseId,
         createdAt,
         model: adapted.body.model,
@@ -854,6 +842,7 @@ async function handleResponsesCore(
           responseConfiguration,
           responseId,
           createdAt,
+          config.responses_fidelity_mode,
         );
         if (!projected.ok) return projected.response;
         const publicState = publicResponseState(
@@ -877,7 +866,15 @@ async function handleResponsesCore(
             "response_state_store_failed",
           );
         }
-        return Response.json(publicState);
+        return Response.json(publicState, {
+          headers: {
+            "X-Kiro-Usage-Policy":
+              config.responses_fidelity_mode === "strict"
+                ? "measured-only"
+                : "compatible-estimates",
+            "X-Reasoning-Included": "true",
+          },
+        });
       }
       return openAiError(
         500,

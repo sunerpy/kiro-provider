@@ -1,4 +1,10 @@
 import { isRecord } from "./adapter-utils.js";
+import {
+  parseReportedUsage,
+  parseUsageAccounting,
+  type ReportedTokenUsage,
+  type UsageAccounting,
+} from "./usage.js";
 
 export const CANONICAL_OUTPUT_VERSION = 1 as const;
 export const CANONICAL_OUTPUT_JSON_MEDIA_TYPE = "application/x-kiro-provider-output+json";
@@ -10,6 +16,8 @@ export interface CanonicalOutputUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
+  readonly reported?: ReportedTokenUsage;
+  readonly accounting?: UsageAccounting;
 }
 
 export interface CanonicalOutputToolCall {
@@ -99,7 +107,10 @@ function isNonNegativeInteger(value: unknown): value is number {
 function parseUsage(value: unknown): CanonicalOutputUsage | undefined {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, new Set(["inputTokens", "outputTokens", "totalTokens"])) ||
+    !hasOnlyKeys(
+      value,
+      new Set(["inputTokens", "outputTokens", "totalTokens", "reported", "accounting"]),
+    ) ||
     !isNonNegativeInteger(value.inputTokens) ||
     !isNonNegativeInteger(value.outputTokens) ||
     !isNonNegativeInteger(value.totalTokens) ||
@@ -107,10 +118,20 @@ function parseUsage(value: unknown): CanonicalOutputUsage | undefined {
   ) {
     return undefined;
   }
+  const reported = value.reported === undefined ? undefined : parseReportedUsage(value.reported);
+  const accounting =
+    value.accounting === undefined ? undefined : parseUsageAccounting(value.accounting);
+  if (value.reported !== undefined && reported === undefined) return undefined;
+  if (value.accounting !== undefined && accounting === undefined) return undefined;
+  for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+    if (reported?.[key] !== undefined && reported[key] !== value[key]) return undefined;
+  }
   return {
     inputTokens: value.inputTokens,
     outputTokens: value.outputTokens,
     totalTokens: value.totalTokens,
+    ...(reported !== undefined ? { reported } : {}),
+    ...(accounting !== undefined ? { accounting } : {}),
   };
 }
 

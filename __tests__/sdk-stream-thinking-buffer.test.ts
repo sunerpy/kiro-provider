@@ -166,6 +166,8 @@ describe("SDK stream usage and finalization", () => {
       inputTokens: 12,
       outputTokens: 3,
       totalTokens: 15,
+      reported: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+      accounting: { input: "upstream", output: "upstream", context: "upstream" },
     });
   });
 

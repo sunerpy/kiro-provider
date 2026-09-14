@@ -52,6 +52,10 @@ const STREAM_FAILURES = {
     disposition: "fatal",
     message: "Upstream returned invalid reasoning metadata",
   },
+  invalid_upstream_usage: {
+    disposition: "fatal",
+    message: "Upstream returned invalid token usage",
+  },
   invalid_upstream_tool_call: {
     disposition: "fatal",
     message: "Upstream returned an invalid tool call",

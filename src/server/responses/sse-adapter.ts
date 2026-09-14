@@ -56,6 +56,7 @@ import {
 } from "./tool-bridge.js";
 
 type AdapterOptions = {
+  readonly usageMode?: "compatible" | "strict";
   readonly responseId?: string;
   readonly createdAt?: number;
   readonly model: string;
@@ -78,7 +79,7 @@ type AdapterOutcome =
 
 type TerminalCompletion = {
   readonly output: readonly ResponseOutputItem[];
-  readonly usage: ResponseUsage;
+  readonly usage: ResponseUsage | undefined;
 };
 
 type TerminalFailure = {
@@ -232,11 +233,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               responseId,
               model: options.model,
               output: terminalCompletion?.output ?? [],
-              usage: terminalCompletion?.usage ?? {
-                input_tokens: 0,
-                output_tokens: 0,
-                total_tokens: 0,
-              },
+              usage: terminalCompletion?.usage,
               sequenceNumber: sequence,
               createdAt,
               completedAt: Math.floor(Date.now() / 1000),
@@ -746,7 +743,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     const output = [...completedOutput.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
-    terminalCompletion = { output, usage: responseUsage(usage) };
+    terminalCompletion = { output, usage: responseUsage(usage, options.usageMode) };
     beginTerminal("normal-complete");
   };
 
@@ -868,6 +865,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       headers: {
         "Cache-Control": "no-cache",
         "Content-Type": "text/event-stream; charset=utf-8",
+        "X-Kiro-Usage-Policy":
+          options.usageMode === "strict" ? "measured-only" : "compatible-estimates",
+        "X-Reasoning-Included": "true",
       },
     },
   );

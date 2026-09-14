@@ -155,13 +155,14 @@ describe("non-stream Responses output shape", () => {
       arguments: '{"path":"a"}',
       status: "completed",
     });
-    expect(body.usage).toEqual({
+    expect(body.usage).toMatchObject({
       input_tokens: 11,
       output_tokens: 7,
       total_tokens: 18,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens_details: { reasoning_tokens: 0 },
+      metadata: { kiro: { source: "estimated" } },
     });
+    expect(body.usage).not.toHaveProperty("input_tokens_details.cached_tokens");
+    expect(body.usage).not.toHaveProperty("output_tokens_details.reasoning_tokens");
   });
 
   test("exposes the shared helpers used to build the completed output", () => {
@@ -171,12 +172,11 @@ describe("non-stream Responses output shape", () => {
       annotations: [],
       logprobs: [],
     });
-    expect(responsesUsage({ inputTokens: 1, outputTokens: 2, totalTokens: 3 })).toEqual({
+    expect(responsesUsage({ inputTokens: 1, outputTokens: 2, totalTokens: 3 })).toMatchObject({
       input_tokens: 1,
       output_tokens: 2,
       total_tokens: 3,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens_details: { reasoning_tokens: 0 },
+      metadata: { kiro: { source: "estimated" } },
     });
     expect(
       completedToolCallItems([
