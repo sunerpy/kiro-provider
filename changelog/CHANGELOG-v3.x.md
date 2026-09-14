@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.3](https://github.com/sunerpy/kiro-provider/compare/v3.1.2...v3.1.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **responses:** 修复工具回放与中断续接并恢复 Ultra ([112a4ec](https://github.com/sunerpy/kiro-provider/commit/112a4ec78f08ea90be2b8edf5116b9893998b5ac))
+
 ## [3.1.2](https://github.com/sunerpy/kiro-provider/compare/v3.1.1...v3.1.2) (2026-09-13)
 
 
