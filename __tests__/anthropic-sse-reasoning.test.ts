@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { transformSdkOutputStream } from "../src/kiro/transform/streaming/sdk-output-transformer.js";
 import {
   CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
   CANONICAL_OUTPUT_VERSION,
@@ -9,6 +10,7 @@ import {
   anthropicMessageResponse,
   anthropicSseAdapter,
 } from "../src/server/anthropic/response-adapter.js";
+import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 
 const MODEL = "claude-sonnet-5";
 const encoder = new TextEncoder();
@@ -319,6 +321,65 @@ describe("Anthropic omitted thinking replay", () => {
     });
     expect(frames.some((frame) => frame.type === "message_stop")).toBe(false);
   });
+
+  test("non-stream responses reject missing placeholder and omitted replay signatures", async () => {
+    const base: Omit<CanonicalCompletion, "model" | "reasoning"> = {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      conversationId: "conversation-anthropic",
+      createdAt: 1_700_000_000,
+      text: "answer",
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 41, outputTokens: 9, totalTokens: 50 },
+    };
+    const placeholder = anthropicMessageResponse(
+      {
+        ...base,
+        model: "gpt-5.6-sol",
+        reasoning: { text: "..." },
+      },
+      "gpt-5.6-sol",
+    );
+    expect(placeholder.status).toBe(502);
+    expect(await placeholder.json()).toMatchObject({
+      error: { message: "Upstream placeholder thinking is missing its native signature" },
+    });
+
+    const omitted = anthropicMessageResponse(
+      {
+        ...base,
+        model: MODEL,
+        reasoning: { text: "private", signature: "native-signature" },
+      },
+      MODEL,
+      { thinkingDisplay: "omitted" },
+    );
+    expect(omitted.status).toBe(502);
+    expect(await omitted.json()).toMatchObject({
+      error: { message: "Upstream omitted thinking cannot be replayed without a provider token" },
+    });
+  });
+
+  test("rejects an invalid provider replay token without leaking deferred text", async () => {
+    const frames = parseFrames(
+      await adapter(
+        [
+          reasoning("private reasoning"),
+          signature("native-signature"),
+          text("must-not-leak"),
+          encrypted("invalid-token"),
+          completed(),
+        ],
+        () => undefined,
+        { thinkingDisplay: "omitted" },
+      ).text(),
+    );
+    expect(JSON.stringify(frames)).not.toContain("must-not-leak");
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      error: { message: "Upstream returned an invalid provider replay token" },
+    });
+  });
 });
 
 describe("GPT opaque reasoning placeholders", () => {
@@ -391,7 +452,234 @@ describe("GPT opaque reasoning placeholders", () => {
     ).toMatchObject({ delta: { signature: "opaque-gpt-signature" } });
   });
 
-  test("reorders text-first GPT output after hidden thinking without overlapping blocks", async () => {
+  test("fails closed when placeholder thinking reaches text without a signature", async () => {
+    const frames = parseFrames(
+      await anthropicSseAdapter(
+        pipelineResponse([reasoning("..."), text("must-not-leak"), completed()], "gpt-5.6-sol"),
+        {
+          model: "gpt-5.6-sol",
+          inputTokens: 3,
+          signals: signals(),
+          finalize: () => undefined,
+        },
+      ).text(),
+    );
+    expect(JSON.stringify(frames)).not.toContain("must-not-leak");
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      error: { message: "Upstream placeholder thinking is missing its native signature" },
+    });
+  });
+
+  test("omits real and partial GPT thinking through the replay token path", async () => {
+    for (const reasoningText of ["private reasoning", "."]) {
+      const response = anthropicSseAdapter(
+        pipelineResponse(
+          [
+            reasoning(reasoningText),
+            signature("native-signature"),
+            text("answer"),
+            encrypted("kr1_gpt-replay"),
+            completed(),
+          ],
+          "gpt-5.6-luna",
+        ),
+        {
+          model: "gpt-5.6-luna",
+          inputTokens: 3,
+          signals: signals(),
+          finalize: () => undefined,
+          thinkingDisplay: "omitted",
+        },
+      );
+      const frames = parseFrames(await response.text());
+      expect(
+        frames.some(
+          (frame) =>
+            frame.type === "content_block_delta" &&
+            isRecord(frame.delta) &&
+            frame.delta.type === "thinking_delta",
+        ),
+      ).toBe(false);
+      expect(
+        frames.find(
+          (frame) =>
+            frame.type === "content_block_delta" &&
+            isRecord(frame.delta) &&
+            frame.delta.type === "signature_delta",
+        ),
+      ).toMatchObject({ delta: { signature: "kr1_gpt-replay" } });
+      expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+    }
+  });
+
+  test("ignores duplicate native signatures after publishing a placeholder signature", async () => {
+    const response = anthropicSseAdapter(
+      pipelineResponse(
+        [
+          reasoning("..."),
+          signature("first-signature"),
+          signature("duplicate-signature"),
+          text("answer"),
+          completed(),
+        ],
+        "gpt-5.6-terra",
+      ),
+      {
+        model: "gpt-5.6-terra",
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+      },
+    );
+    const wire = await response.text();
+    expect(wire).toContain("first-signature");
+    expect(wire).not.toContain("duplicate-signature");
+  });
+
+  test("keeps an incomplete placeholder prefix visible when its signature arrives", async () => {
+    const response = anthropicSseAdapter(
+      pipelineResponse(
+        [reasoning("."), signature("partial-signature"), text("answer"), completed()],
+        "gpt-5.6-sol",
+      ),
+      {
+        model: "gpt-5.6-sol",
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+      },
+    );
+    const frames = parseFrames(await response.text());
+    expect(
+      frames.find(
+        (frame) =>
+          frame.type === "content_block_delta" &&
+          isRecord(frame.delta) &&
+          frame.delta.type === "thinking_delta",
+      ),
+    ).toMatchObject({ delta: { thinking: "." } });
+    expect(JSON.stringify(frames)).toContain("partial-signature");
+  });
+
+  test("keeps placeholder thinking open until the SDK transformer emits its tool-turn signature", async () => {
+    const model = "gpt-5.6-sol";
+    const canonicalLines: string[] = [];
+    for await (const event of transformSdkOutputStream(
+      makeSdkResponse([
+        { reasoningContentEvent: { text: "...", signature: "tool-signature" } },
+        {
+          toolUseEvent: {
+            name: "read",
+            toolUseId: "tool-1",
+            input: '{"path":"a"}',
+            stop: true,
+          },
+        },
+      ]),
+      model,
+      "conversation-tool-placeholder",
+      undefined,
+      { emitAnthropicReasoningMetadata: true },
+    )) {
+      canonicalLines.push(JSON.stringify(event));
+    }
+    expect(canonicalLines.map((line) => JSON.parse(line).type)).toEqual([
+      "started",
+      "reasoning_delta",
+      "tool_call_delta",
+      "reasoning_signature",
+      "completed",
+    ]);
+
+    const response = anthropicSseAdapter(
+      new Response(`${canonicalLines.join("\n")}\n`, {
+        headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
+      }),
+      {
+        model,
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+        thinkingDisplay: "omitted",
+      },
+    );
+    const frames = parseFrames(await response.text());
+    expect(assertLegalBlockSequence(frames).map((block) => [block.type, block.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["tool_use", ["input_json_delta"]],
+    ]);
+    expect(JSON.stringify(frames)).not.toContain('"thinking":"..."');
+    expect(JSON.stringify(frames)).toContain("tool-signature");
+    expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+  });
+
+  test("streams GPT text before upstream completion once placeholder thinking is signed", async () => {
+    const model = "gpt-5.6-sol";
+    const streamStart = canonical({
+      type: "started",
+      conversationId: "conversation-gpt",
+      model,
+      createdAt: 1_700_000_000,
+    });
+    let releaseCompletion = (): void => undefined;
+    const completionGate = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const upstream = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `${[streamStart, reasoning("..."), signature("gpt-signature"), text("answer")].join("\n")}\n`,
+            ),
+          );
+          void completionGate.then(() => {
+            controller.enqueue(encoder.encode(`${completed()}\n`));
+            controller.close();
+          });
+        },
+      }),
+      { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+    );
+    const response = anthropicSseAdapter(upstream, {
+      model,
+      inputTokens: 3,
+      signals: signals(),
+      finalize: () => undefined,
+      thinkingDisplay: "omitted",
+      pingIntervalMs: 10_000,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new TypeError("adapter response has no body");
+
+    const textBeforeCompletion = Promise.race([
+      (async () => {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) return false;
+          const frames = parseFrames(new TextDecoder().decode(next.value));
+          if (
+            frames.some(
+              (frame) =>
+                frame.type === "content_block_delta" &&
+                isRecord(frame.delta) &&
+                frame.delta.type === "text_delta",
+            )
+          ) {
+            return true;
+          }
+        }
+      })(),
+      Bun.sleep(250).then(() => false),
+    ]);
+    const streamed = await textBeforeCompletion;
+    releaseCompletion();
+    expect(streamed).toBe(true);
+    await reader.cancel("done");
+  });
+
+  test("fails text-first GPT reasoning without opening an overlapping block", async () => {
     const frames = parseFrames(
       await anthropicSseAdapter(
         pipelineResponse(
@@ -407,13 +695,14 @@ describe("GPT opaque reasoning placeholders", () => {
         },
       ).text(),
     );
-    const blocks = assertLegalBlockSequence(frames);
-    expect(blocks.map((entry) => [entry.type, entry.deltas])).toEqual([
-      ["thinking", ["signature_delta"]],
-      ["text", ["text_delta"]],
+    expect(assertLegalBlockSequence(frames)).toEqual([
+      { index: 0, type: "text", deltas: ["text_delta"] },
     ]);
-    expect(JSON.stringify(frames)).not.toContain('"thinking":"..."');
-    expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+    expect(JSON.stringify(frames)).not.toContain("late-gpt-signature");
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      error: { message: "Upstream emitted GPT reasoning after assistant text" },
+    });
   });
 
   test("does not suppress real GPT reasoning or another model's literal ellipsis", async () => {
@@ -609,7 +898,7 @@ describe("Anthropic SSE backpressure (B17)", () => {
     await source.start?.(controller);
     expect(enqueued).toHaveLength(1);
 
-    desiredSize = 0;
+    desiredSize = -1;
     await source.pull?.(controller);
     expect(enqueued).toHaveLength(1);
 
@@ -678,6 +967,122 @@ describe("Anthropic SSE backpressure (B17)", () => {
     await reader.cancel("done");
     await Bun.sleep(15);
     expect(finalizeCount).toBe(1);
+  });
+
+  test("resumes periodic pings after a slow reader pauses for multiple intervals", async () => {
+    const silentUpstream = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => undefined);
+        },
+      }),
+      { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+    );
+    const response = anthropicSseAdapter(silentUpstream, {
+      model: MODEL,
+      inputTokens: 3,
+      signals: signals(),
+      finalize: () => undefined,
+      pingIntervalMs: 5,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new TypeError("adapter response has no body");
+    expect(parseFrames(new TextDecoder().decode((await reader.read()).value))[0]).toMatchObject({
+      type: "message_start",
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      const ping = await Promise.race([
+        reader.read(),
+        Bun.sleep(100).then(() => {
+          throw new TypeError("periodic ping stalled after a slow-reader pause");
+        }),
+      ]);
+      expect(parseFrames(new TextDecoder().decode(ping.value))[0]).toEqual({ type: "ping" });
+      await Bun.sleep(20);
+    }
+    await reader.cancel("done");
+  });
+
+  test("a ping cannot consume demand and let an in-flight pull drain the upstream", async () => {
+    const events = [
+      canonical({
+        type: "started",
+        conversationId: "conversation-backpressure",
+        model: MODEL,
+        createdAt: 1_700_000_000,
+      }),
+      ...Array.from({ length: 50 }, (_, index) =>
+        tool(0, "tool-1", "read", index === 0 ? '{"path":"' : "x"),
+      ),
+      tool(0, "tool-1", "read", '"}'),
+      completed("tool_calls"),
+    ];
+    let releaseFirstPull = (): void => undefined;
+    const firstPullGate = new Promise<void>((resolve) => {
+      releaseFirstPull = resolve;
+    });
+    let upstreamPulls = 0;
+    const upstream = new Response(
+      new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            const index = upstreamPulls;
+            upstreamPulls += 1;
+            if (index === 0) await firstPullGate;
+            const event = events[index];
+            if (event === undefined) controller.close();
+            else controller.enqueue(encoder.encode(`${event}\n`));
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+    );
+    const response = anthropicSseAdapter(upstream, {
+      model: MODEL,
+      inputTokens: 3,
+      signals: signals(),
+      finalize: () => undefined,
+      pingIntervalMs: 50,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new TypeError("adapter response has no body");
+
+    expect(parseFrames(new TextDecoder().decode((await reader.read()).value))[0]).toMatchObject({
+      type: "message_start",
+    });
+    const ping = await reader.read();
+    expect(parseFrames(new TextDecoder().decode(ping.value))[0]).toEqual({ type: "ping" });
+    releaseFirstPull();
+    await Bun.sleep(25);
+
+    // The ping directly satisfies the outstanding read while the first
+    // upstream read is pending, so desiredSize can stay positive. The adapter
+    // must still remember that this pull's demand was consumed and stop before
+    // draining frame-less tool fragments.
+    expect(upstreamPulls).toBe(1);
+
+    const remainingFrames: Frame[] = [];
+    for (let reads = 0; reads < 200; reads += 1) {
+      const next = await Promise.race([
+        reader.read(),
+        Bun.sleep(500).then(() => {
+          throw new TypeError("stream stalled after ping");
+        }),
+      ]);
+      if (next.done) break;
+      remainingFrames.push(...parseFrames(new TextDecoder().decode(next.value)));
+    }
+    expect(remainingFrames.some((frame) => frame.type === "message_stop")).toBe(true);
+    expect(
+      remainingFrames.some(
+        (frame) =>
+          frame.type === "content_block_start" &&
+          isRecord(frame.content_block) &&
+          frame.content_block.type === "tool_use",
+      ),
+    ).toBe(true);
   });
 
   test("a reader that pulls one chunk at a time still receives the full protocol order", async () => {

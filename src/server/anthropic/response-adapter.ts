@@ -101,6 +101,10 @@ function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>
   }
 }
 
+function zeroBufferedStream(source: Bun.UnderlyingSource<Uint8Array>): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>(source, { highWaterMark: 0 });
+}
+
 export function anthropicMessageResponse(
   completion: CanonicalCompletion,
   model: string,
@@ -206,6 +210,9 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       start: (controller) => controller.close(),
     });
   const reader = upstream.getReader();
+  type UpstreamReadOutcome =
+    | { readonly kind: "value"; readonly next: Awaited<ReturnType<typeof reader.read>> }
+    | { readonly kind: "error"; readonly error: unknown };
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const messageId = `msg_${randomUUID()}`;
@@ -241,6 +248,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let streamClosed = false;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
+  let pullInProgress = false;
+  let upstreamReadInProgress = false;
+  let upstreamReadOutcome: UpstreamReadOutcome | undefined;
+  let pendingPullWake: "upstream" | "ping" | undefined;
+  let wakePendingPull: (() => void) | undefined;
 
   const emit = (event: string, payload: unknown): void => {
     pendingFrames.push(encoder.encode(formatEvent(event, payload)));
@@ -257,12 +269,16 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     streamClosed = true;
     controller.close();
   };
-  // One frame per pull: the runtime only pulls while desiredSize > 0, so a slow
-  // reader never receives a burst and complete() cannot overfill the queue.
+  // One frame per pull. With a zero high-water mark, an active pull is the
+  // demand signal even though desiredSize is 0; a negative size is exhausted.
   const flushOne = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     if (streamClosed) return false;
     const desiredSize = controller.desiredSize;
-    if (pendingFrames.length > 0 && desiredSize !== null && desiredSize > 0) {
+    if (
+      pendingFrames.length > 0 &&
+      desiredSize !== null &&
+      (desiredSize > 0 || (pullInProgress && desiredSize === 0))
+    ) {
       const frame = pendingFrames.shift();
       if (!frame) return false;
       controller.enqueue(frame);
@@ -271,6 +287,29 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     }
     closeIfDrained(controller);
     return false;
+  };
+  const wakePull = (reason: "upstream" | "ping"): void => {
+    if (!pullInProgress || wakePendingPull === undefined) return;
+    pendingPullWake = reason;
+    const wake = wakePendingPull;
+    wakePendingPull = undefined;
+    wake();
+  };
+  const startUpstreamRead = (): void => {
+    if (upstreamReadInProgress || upstreamReadOutcome !== undefined) return;
+    upstreamReadInProgress = true;
+    void reader.read().then(
+      (next) => {
+        upstreamReadInProgress = false;
+        upstreamReadOutcome = { kind: "value", next };
+        wakePull("upstream");
+      },
+      (error: unknown) => {
+        upstreamReadInProgress = false;
+        upstreamReadOutcome = { kind: "error", error };
+        wakePull("upstream");
+      },
+    );
   };
   const claimTerminal = (outcome: AdapterOutcome): boolean => {
     if (terminalOutcome !== undefined) return false;
@@ -431,16 +470,17 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     });
     reasoningSigned = true;
   };
-  const flushPendingReasoning = (): void => {
-    if (pendingReasoningText.length === 0) return;
+  const flushPendingReasoning = (): boolean => {
+    if (pendingReasoningText.length === 0) return true;
     if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
-      opaquePlaceholderSeen = true;
       pendingReasoningText = "";
-      return;
+      failReasoning("Upstream placeholder thinking is missing its native signature");
+      return false;
     }
     const text = pendingReasoningText;
     pendingReasoningText = "";
     emitVisibleReasoning(text);
+    return true;
   };
   const emitHiddenReplayBlock = (token: string): void => {
     const index = nextContentIndex;
@@ -485,6 +525,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           failProtocol("Upstream mixed visible and redacted reasoning payloads");
           return;
         }
+        if (textStarted && isGpt56Model(options.model)) {
+          stopText();
+          failReasoning("Upstream emitted GPT reasoning after assistant text");
+          return;
+        }
         if (options.thinkingDisplay === "omitted" && isGpt56Model(options.model)) {
           pendingReasoningText += event.text;
           if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
@@ -503,7 +548,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         if (!reasoningStarted && isGpt56Model(options.model)) {
           pendingReasoningText += event.text;
           if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
-          flushPendingReasoning();
+          if (!flushPendingReasoning()) return;
           return;
         }
         emitVisibleReasoning(event.text);
@@ -524,7 +569,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
             omittedReasoningSeen = true;
             return;
           }
-          flushPendingReasoning();
+          if (!flushPendingReasoning()) return;
         }
         if (options.thinkingDisplay === "omitted") {
           omittedReasoningSeen = true;
@@ -563,9 +608,9 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         hiddenReplayToken = event.encryptedContent;
         return;
       case "text_delta": {
-        flushPendingReasoning();
+        if (!flushPendingReasoning()) return;
         stopReasoning();
-        if (isGpt56Model(options.model) || omittedReasoningSeen || opaquePlaceholderSeen) {
+        if (omittedReasoningSeen) {
           deferredText += event.text;
           return;
         }
@@ -573,8 +618,6 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         return;
       }
       case "tool_call_delta": {
-        flushPendingReasoning();
-        stopReasoning();
         const tool = tools.get(event.index) ?? {
           id: "",
           name: "",
@@ -630,7 +673,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       failProtocol("Malformed upstream tool call");
       return;
     }
-    flushPendingReasoning();
+    if (!flushPendingReasoning()) return;
     stopText();
     stopReasoning();
     const deferredSigned = flushDeferredReasoning();
@@ -697,7 +740,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   };
 
   return new Response(
-    new ReadableStream<Uint8Array>({
+    zeroBufferedStream({
       start(controller) {
         streamController = controller;
         emit("message_start", {
@@ -726,9 +769,19 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         });
         const pingIntervalMs = options.pingIntervalMs ?? 15_000;
         pingTimer = setInterval(() => {
-          if (terminalOutcome !== undefined || pendingFrames.length > 0) return;
+          if (
+            terminalOutcome !== undefined ||
+            pendingFrames.length > 0 ||
+            !pullInProgress ||
+            wakePendingPull === undefined
+          )
+            return;
           emit("ping", { type: "ping" });
-          if (streamController) flushOne(streamController);
+          if (streamController && flushOne(streamController)) {
+            wakePull("ping");
+          } else {
+            pendingFrames.pop();
+          }
         }, pingIntervalMs);
         pingTimer.unref?.();
         if (options.signals.deadline.aborted) onDeadlineAbort();
@@ -736,10 +789,13 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         flushOne(controller);
       },
       async pull(controller) {
-        if (flushOne(controller)) return;
-        if (terminalOutcome !== undefined) return;
+        pullInProgress = true;
         try {
+          if (flushOne(controller)) return;
+          if (terminalOutcome !== undefined) return;
           while (terminalOutcome === undefined) {
+            const desiredSize = controller.desiredSize;
+            if (desiredSize === null || desiredSize < 0) return;
             const newline = buffer.indexOf("\n");
             if (newline >= 0) {
               const line = buffer.slice(0, newline).trimEnd();
@@ -772,7 +828,23 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
               if (flushOne(controller)) return;
               continue;
             }
-            const next = await reader.read();
+            if (upstreamReadOutcome === undefined) {
+              startUpstreamRead();
+              await new Promise<void>((resolve) => {
+                wakePendingPull = resolve;
+              });
+              wakePendingPull = undefined;
+              if (pendingPullWake === "ping") {
+                pendingPullWake = undefined;
+                return;
+              }
+              pendingPullWake = undefined;
+            }
+            const outcome = upstreamReadOutcome;
+            upstreamReadOutcome = undefined;
+            if (outcome === undefined) continue;
+            if (outcome.kind === "error") throw outcome.error;
+            const next = outcome.next;
             if (terminalOutcome !== undefined) return;
             if (!next.done) {
               buffer += decoder.decode(next.value, { stream: true });
@@ -816,6 +888,10 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
             error,
             toAnthropicFailure(failure),
           );
+        } finally {
+          wakePendingPull = undefined;
+          pendingPullWake = undefined;
+          pullInProgress = false;
         }
       },
       cancel(reason) {
