@@ -47,6 +47,8 @@ export interface ModelCapabilitiesReadiness {
 }
 
 export interface PipelineModelCapabilities {
+  /** Raw upstream percentage basis, before public prompt-capacity corrections. */
+  contextUsageWindow?(accountId: string, model: string): number | undefined;
   ensureAccountModel(
     account: ManagedAccount,
     auth: KiroAuthDetails,
@@ -174,6 +176,15 @@ export class ModelCapabilityService implements PipelineModelCapabilities {
     if (models.size === 0) return MODEL_CATALOG;
     registerDynamicWireModels(models.keys());
     return modelCatalogFromAvailableModels([...models.values()]);
+  }
+
+  contextUsageWindow(accountId: string, model: string): number | undefined {
+    const snapshot = this.snapshots.get(accountId);
+    if (!snapshot || !this.isUsable(snapshot, this.now())) return undefined;
+    const wireModel = staticWireModel(model);
+    return wireModel === undefined
+      ? undefined
+      : snapshot.models.get(wireModel)?.tokenLimits.maxInputTokens;
   }
 
   readiness(): ModelCapabilitiesReadiness {

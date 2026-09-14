@@ -13,7 +13,7 @@ import {
   type ResponseContinuationContext,
   ResponseContinuationSchema,
 } from "./continuation.js";
-import type { ResponseStateObject } from "./state.js";
+import { canonicalUsageFromResponse, type ResponseStateObject } from "./state.js";
 
 const RESPONSE_STORE_TTL_MS = 30 * 24 * 60 * 60_000;
 const RESPONSE_STORE_MAX_ENTRIES = 10_000;
@@ -208,11 +208,7 @@ export function canonicalCompletionFromResponse(
     }
     return [];
   });
-  const usage = response.usage ?? {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_tokens: 0,
-  };
+  const usage = canonicalUsageFromResponse(response.usage);
   return {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     conversationId: response.id,
@@ -229,11 +225,7 @@ export function canonicalCompletionFromResponse(
       : {}),
     toolCalls,
     finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
-    usage: {
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      totalTokens: usage.total_tokens,
-    },
+    usage,
   };
 }
 

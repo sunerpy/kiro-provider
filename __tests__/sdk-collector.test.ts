@@ -127,6 +127,15 @@ describe("collectSdkResponse content and usage", () => {
       inputTokens: 15,
       outputTokens: 7,
       totalTokens: 22,
+      reported: {
+        inputTokens: 15,
+        outputTokens: 7,
+        totalTokens: 22,
+        uncachedInputTokens: 10,
+        cacheReadInputTokens: 3,
+        cacheWriteInputTokens: 2,
+      },
+      accounting: { input: "upstream", output: "upstream", context: "upstream" },
     });
   });
 });

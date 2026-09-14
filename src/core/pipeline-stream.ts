@@ -20,6 +20,8 @@ import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 import { streamErrorAuditFields } from "./stream-error.js";
 
 export interface PipelineStreamResult {
+  readonly inputTokenEstimate?: number | (() => number);
+  readonly contextUsageWindow?: number;
   readonly validateToolArguments?: import("./tool-output-validation.js").ValidateToolArguments;
   readonly maxToolArgumentsBytes?: number;
   readonly sdkResponse: SdkStreamResponse;
@@ -322,6 +324,8 @@ export function prepareCanonicalStream(
     result.conversationId,
     composedSignal,
     {
+      inputTokenEstimate: result.inputTokenEstimate,
+      contextUsageWindow: result.contextUsageWindow,
       ...(result.captureReasoning ? { captureReasoning: result.captureReasoning } : {}),
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,

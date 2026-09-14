@@ -418,7 +418,7 @@ export function responseCompleted(input: {
   readonly responseId: string;
   readonly model: string;
   readonly output: readonly ResponseOutputItem[];
-  readonly usage: ResponseUsage;
+  readonly usage?: ResponseUsage;
   readonly sequenceNumber: number;
   readonly createdAt?: number;
   readonly completedAt?: number;

@@ -37,12 +37,12 @@ See [Provider retry boundaries](#provider-retry-boundaries).
 
 ### Retryable stream failures
 
-| Code | Meaning | Recommended downstream action |
-| --- | --- | --- |
-| `upstream_stream_error` | The Kiro SDK reader, decoder, transport, or embedded upstream error terminated the stream. | Retry with bounded exponential backoff. |
-| `upstream_stream_incomplete` | The stream ended without an authoritative completion witness, or the canonical stream reached EOF before `completed`. | Retry with bounded exponential backoff. |
-| `upstream_stream_idle_timeout` | No upstream event arrived before the configured stream idle timeout. | Retry if the request deadline still has budget. |
-| `request_deadline_exceeded` | The provider-side request deadline won the terminal race. | Retry only under the caller's overall deadline and attempt budget. |
+| Code                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                          | Recommended downstream action                                                       |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `upstream_stream_error`             | The Kiro SDK reader, decoder, transport, or embedded upstream error terminated the stream.                                                                                                                                                                                                                                                                                                                       | Retry with bounded exponential backoff.                                             |
+| `upstream_stream_incomplete`        | The stream ended without an authoritative completion witness, or the canonical stream reached EOF before `completed`.                                                                                                                                                                                                                                                                                            | Retry with bounded exponential backoff.                                             |
+| `upstream_stream_idle_timeout`      | No upstream event arrived before the configured stream idle timeout.                                                                                                                                                                                                                                                                                                                                             | Retry if the request deadline still has budget.                                     |
+| `request_deadline_exceeded`         | The provider-side request deadline won the terminal race.                                                                                                                                                                                                                                                                                                                                                        | Retry only under the caller's overall deadline and attempt budget.                  |
 | `malformed_upstream_tool_arguments` | Kiro completed a tool call, but the fully accumulated argument payload was not valid JSON. Partial argument deltas may already be visible, but no validated tool completion is emitted. A call that stopped without ever carrying an `input` key (the probe-confirmed zero-parameter shape) is projected as `{}` and is not malformed; an empty or whitespace-only fragment that was actually received still is. | Retry as a replacement attempt if no external tool side effect has been dispatched. |
 
 The 2026-08-29 18:05 incident was logged as a top-level SDK `TypeError`, not a
@@ -52,21 +52,22 @@ completion witness.
 
 ### Fatal protocol failures
 
-| Code | Meaning |
-| --- | --- |
-| `upstream_protocol_error` | The canonical stream was malformed, out of order, or internally inconsistent. |
-| `upstream_invalid_state` | Kiro emitted an explicit invalid-state event. |
-| `unsupported_upstream_event` | Kiro emitted an unknown or unsupported event type. |
-| `invalid_upstream_reasoning` | Reasoning signatures or visible/redacted reasoning metadata contradicted each other, or (Anthropic Messages) a thinking block completed without any signature, or a signature arrived without a thinking block. This matches the non-stream HTTP 502 for the same upstream output. |
-| `invalid_upstream_tool_call` | A tool call omitted its identity, changed its name while streaming, or appended arguments after its stop marker. |
-| `incomplete_upstream_tool_call` | A completion witness arrived but a tool call never reached its structural stop marker. |
-| `upstream_tool_arguments_too_large` | Aggregate tool arguments and identities exceed `max_request_body_bytes`; no completed call is emitted. |
-| `upstream_tool_schema_violation` | Final JSON arguments violate the declared tool schema. |
-| `upstream_tool_choice_violation` | Upstream called a tool despite `tool_choice: none`. |
-| `invalid_upstream_response` | A successful upstream response has the wrong streaming Content-Type. |
-| `missing_upstream_stream` | The SDK response contained no event stream. |
-| `unknown_upstream_tool` | The upstream tool identity matches no declared tool or bridge alias. Validation happens before forwarding that identity. The bridge code is `unknown_tool_alias`. |
-| `invalid_custom_tool_input` | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`. |
+| Code                                | Meaning                                                                                                                                                                                                                                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upstream_protocol_error`           | The canonical stream was malformed, out of order, or internally inconsistent.                                                                                                                                                                                                      |
+| `upstream_invalid_state`            | Kiro emitted an explicit invalid-state event.                                                                                                                                                                                                                                      |
+| `unsupported_upstream_event`        | Kiro emitted an unknown or unsupported event type.                                                                                                                                                                                                                                 |
+| `invalid_upstream_reasoning`        | Reasoning signatures or visible/redacted reasoning metadata contradicted each other, or (Anthropic Messages) a thinking block completed without any signature, or a signature arrived without a thinking block. This matches the non-stream HTTP 502 for the same upstream output. |
+| `invalid_upstream_usage`            | Reported token counts are negative, fractional, unsafe, or contradict their totals or cache/reasoning sub-buckets. Do not retry generation to repair accounting data.                                                                                                              |
+| `invalid_upstream_tool_call`        | A tool call omitted its identity, changed its name while streaming, or appended arguments after its stop marker.                                                                                                                                                                   |
+| `incomplete_upstream_tool_call`     | A completion witness arrived but a tool call never reached its structural stop marker.                                                                                                                                                                                             |
+| `upstream_tool_arguments_too_large` | Aggregate tool arguments and identities exceed `max_request_body_bytes`; no completed call is emitted.                                                                                                                                                                             |
+| `upstream_tool_schema_violation`    | Final JSON arguments violate the declared tool schema.                                                                                                                                                                                                                             |
+| `upstream_tool_choice_violation`    | Upstream called a tool despite `tool_choice: none`.                                                                                                                                                                                                                                |
+| `invalid_upstream_response`         | A successful upstream response has the wrong streaming Content-Type.                                                                                                                                                                                                               |
+| `missing_upstream_stream`           | The SDK response contained no event stream.                                                                                                                                                                                                                                        |
+| `unknown_upstream_tool`             | The upstream tool identity matches no declared tool or bridge alias. Validation happens before forwarding that identity. The bridge code is `unknown_tool_alias`.                                                                                                                  |
+| `invalid_custom_tool_input`         | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`.                                                                                                                                                                                  |
 
 Tool restoration codes are shared by the Responses SSE path (`response.failed`) and the
 non-stream Responses path, which returns HTTP 502 with
@@ -235,12 +236,12 @@ A local failure while priming the accepted SDK lifecycle may carry
 
 ### Non-stream collection retry events
 
-| Event | Level | Fields |
-| --- | --- | --- |
-| `sdk_stream_attempt_retry` | warn | `attempt` (the failed attempt, 1-based), `max_attempts`, `error_code`, `same_account` (boolean), `account_hash`, `mode` |
-| `sdk_stream_attempts_exhausted` | warn | `attempt`, `max_attempts`, `error_code`, `account_hash`, `mode` |
-| `sdk_stream_empty_completion_retry` | warn | `attempt`, `max_attempts`, `account_hash`, `model`, `conversation_hash`, `mode`, raw event counts |
-| `sdk_stream_transport_error_after_completion` | warn | `model`, `conversation_hash`, `witness_kind`, `error_type`, `error_code`, `error_disposition`, `error_message_hash`, safe cause fields |
+| Event                                         | Level | Fields                                                                                                                                 |
+| --------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `sdk_stream_attempt_retry`                    | warn  | `attempt` (the failed attempt, 1-based), `max_attempts`, `error_code`, `same_account` (boolean), `account_hash`, `mode`                |
+| `sdk_stream_attempts_exhausted`               | warn  | `attempt`, `max_attempts`, `error_code`, `account_hash`, `mode`                                                                        |
+| `sdk_stream_empty_completion_retry`           | warn  | `attempt`, `max_attempts`, `account_hash`, `model`, `conversation_hash`, `mode`, raw event counts                                      |
+| `sdk_stream_transport_error_after_completion` | warn  | `model`, `conversation_hash`, `witness_kind`, `error_type`, `error_code`, `error_disposition`, `error_message_hash`, safe cause fields |
 
 ### Stream terminal telemetry
 

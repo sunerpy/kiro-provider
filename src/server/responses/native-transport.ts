@@ -17,6 +17,7 @@ import { RequestTransformError } from "../../kiro/transform/errors.js";
 import { SdkStreamProtocolError } from "../../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { ManagedAccount } from "../../kiro/types.js";
 import { canonicalFingerprint } from "../../protocol/canonical.js";
+import { InvalidTokenUsageError } from "../../protocol/usage.js";
 import { openAiError } from "../errors.js";
 import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
@@ -30,7 +31,7 @@ import { nativeInputItems, nativeReplayHistory } from "./native-replay.js";
 import { createNativeStream, NativeStreamError } from "./native-stream.js";
 import { NativeToolValidation } from "./native-tool-validation.js";
 import { type NormalizedResponsesRequest, normalizeResponsesRequest } from "./request-policy.js";
-import type { ResponseStateObject } from "./state.js";
+import { normalizeNativeUsage, type ResponseStateObject } from "./state.js";
 import type { StoredResponse } from "./store.js";
 import { responseInputItems, responseStoreTenant } from "./store.js";
 
@@ -349,7 +350,13 @@ function prepareNativeRequest(
 
 function responseHeaders(upstream: Response, contentType: string): Headers {
   const headers = new Headers({ "Content-Type": contentType });
-  for (const name of ["cache-control", "retry-after", "x-amzn-requestid", "x-request-id"]) {
+  for (const name of [
+    "cache-control",
+    "retry-after",
+    "x-amzn-requestid",
+    "x-request-id",
+    "x-reasoning-included",
+  ]) {
     const value = upstream.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
@@ -371,6 +378,7 @@ function validateNativeToolChoice(item: unknown, prepared: PreparedNativeRequest
 function normalizeResponseObject(
   value: unknown,
   prepared: PreparedNativeRequest,
+  usageMode: "compatible" | "strict",
 ): ResponseStateObject | undefined {
   if (
     !isRecord(value) ||
@@ -382,6 +390,21 @@ function normalizeResponseObject(
   }
   for (const item of value.output) validateNativeToolChoice(item, prepared);
   const normalized: Record<string, unknown> = { ...value };
+  try {
+    const usage = normalizeNativeUsage(value.usage, usageMode);
+    if (usage === undefined) delete normalized.usage;
+    else {
+      normalized.usage = usage;
+      if (usage.metadata && normalized.usage_metadata === undefined) {
+        normalized.usage_metadata = { metadata: usage.metadata };
+      }
+    }
+  } catch (error) {
+    if (error instanceof InvalidTokenUsageError) {
+      throw new NativeStreamError(error.code, error.message, { cause: error });
+    }
+    throw error;
+  }
   delete normalized.billing;
   normalized.model = prepared.requestedModel;
   normalized.store = prepared.request.store !== false;
@@ -1029,7 +1052,11 @@ export async function proxyNativeResponses(
         validateToolArguments,
         normalize: (event) => {
           validateNativeToolChoice(event.item, prepared);
-          let response = normalizeResponseObject(event.response, prepared);
+          let response = normalizeResponseObject(
+            event.response,
+            prepared,
+            options.config.responses_fidelity_mode,
+          );
           if (response?.error && options.signals.diagnostics) {
             options.signals.diagnostics.failure(response.error, "upstream_stream");
             response = {
@@ -1140,7 +1167,11 @@ export async function proxyNativeResponses(
       }
     }
     const value = await upstream.json().catch(() => undefined);
-    const rawNormalized = normalizeResponseObject(value, prepared);
+    const rawNormalized = normalizeResponseObject(
+      value,
+      prepared,
+      options.config.responses_fidelity_mode,
+    );
     if (rawNormalized?.status === "completed") {
       new NativeToolValidation(
         options.config.max_request_body_bytes,

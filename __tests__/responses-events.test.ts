@@ -113,8 +113,8 @@ describe("Responses state events", () => {
       status: "in_progress",
       completed_at: null,
       output: [],
-      usage: null,
     });
+    expect(created.response).not.toHaveProperty("usage");
     expect(inProgress.response.status).toBe("in_progress");
     expect(completed.response).toMatchObject({
       status: "completed",

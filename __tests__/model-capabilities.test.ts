@@ -66,6 +66,56 @@ function service(
 afterEach(() => clearDynamicModelRegistry());
 
 describe("ModelCapabilityService", () => {
+  test("keeps account-specific percentage bases separate from public GPT prompt limits", async () => {
+    let now = 1_000;
+    let fetches = 0;
+    const capabilities = new ModelCapabilityService(
+      {
+        dynamic_model_catalog: true,
+        model_catalog_ttl_ms: 60_000,
+        model_catalog_stale_ttl_ms: 120_000,
+        model_catalog_request_timeout_ms: 10_000,
+        proxy_url: null,
+      },
+      async (details) => {
+        fetches += 1;
+        return {
+          models: [
+            model("gpt-5.6-sol", {
+              tokenLimits: {
+                maxInputTokens: details.access === "access-b" ? 400_000 : 272_000,
+                maxOutputTokens: 128_000,
+              },
+            }),
+          ],
+        };
+      },
+      () => now,
+    );
+    expect(capabilities.contextUsageWindow("a", "gpt-5.6-sol")).toBeUndefined();
+    for (const id of ["a", "b"]) {
+      const selected = account(id);
+      await capabilities.ensureAccountModel(selected, auth(selected), "gpt-5.6-sol");
+      if (id === "a") {
+        expect(
+          capabilities.catalog().find((entry) => entry.id === "gpt-5.6-sol")?.contextLimit,
+        ).toBe(872_000);
+      }
+    }
+    expect(capabilities.contextUsageWindow("a", "gpt-5.6-sol-max")).toBe(272_000);
+    expect(capabilities.contextUsageWindow("b", "gpt-5.6-sol")).toBe(400_000);
+    expect(capabilities.contextUsageWindow("a", "claude-opus-5")).toBeUndefined();
+    expect(capabilities.contextUsageWindow("a", "unpublished-guess")).toBeUndefined();
+    expect(capabilities.catalog().find((entry) => entry.id === "gpt-5.6-sol")?.contextLimit).toBe(
+      400_000,
+    );
+    now += 60_001;
+    expect(capabilities.contextUsageWindow("a", "gpt-5.6-sol")).toBe(272_000);
+    now += 120_000;
+    expect(capabilities.contextUsageWindow("a", "gpt-5.6-sol")).toBeUndefined();
+    expect(fetches).toBe(2);
+  });
+
   test("discovers a new exact wire model and exposes live limits", async () => {
     const capabilities = service(async () => ({
       defaultModelId: "future-model-1",

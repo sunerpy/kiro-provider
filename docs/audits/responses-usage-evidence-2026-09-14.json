@@ -1,0 +1,1000 @@
+{
+  "date": "2026-09-14",
+  "baseline": "v3.1.3 / a703d3c68592461b5420c892251243a655519131",
+  "dependencies": {
+    "openai": "7.13.0",
+    "ai": "7.0.99",
+    "@ai-sdk/openai": "4.0.66",
+    "js-tiktoken": "1.0.21"
+  },
+  "candidate_sha256": "1ded2533925cfbace4a5230a887fcf9e996b7a5b9cec3ff45f3c845213ba4380",
+  "codex": [
+    {
+      "padding_tokens": 300000,
+      "exit_code": 0,
+      "seconds": 22.2,
+      "tool_calls": 1,
+      "tool_ok": true,
+      "final": "CODEX_CONTEXT_300000_OK",
+      "compactions": 0,
+      "requests": [
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "low",
+          "input_items": 5,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_871a0036-1d5f-45ad-aa03-ab90e3ee762b",
+          "usage": {
+            "input_tokens": 337684,
+            "output_tokens": 35,
+            "total_tokens": 337719,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 337719,
+                  "source": "tokenizer",
+                  "percentage": 100,
+                  "percentage_window": 272000,
+                  "percentage_saturated": true
+                },
+                "metering": {
+                  "value": 2.560057338109453,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "low",
+          "input_items": 7,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_e487bcb9-f92e-4cac-9892-5057720e80de",
+          "usage": {
+            "input_tokens": 423752,
+            "output_tokens": 7,
+            "total_tokens": 423759,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 423759,
+                  "source": "tokenizer",
+                  "percentage": 100,
+                  "percentage_window": 272000,
+                  "percentage_saturated": true
+                },
+                "metering": {
+                  "value": 3.1755499172139303,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "passed": true
+    },
+    {
+      "padding_tokens": 790000,
+      "exit_code": 0,
+      "seconds": 50.47,
+      "tool_calls": 1,
+      "tool_ok": true,
+      "final": "CODEX_CONTEXT_790000_OK",
+      "compactions": 1,
+      "requests": [
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "low",
+          "input_items": 5,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_98fbbbb5-d864-44b8-8e24-4e1e3dc591a2",
+          "usage": {
+            "input_tokens": 829563,
+            "output_tokens": 32,
+            "total_tokens": 829595,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 829595,
+                  "source": "tokenizer",
+                  "percentage": 100,
+                  "percentage_window": 272000,
+                  "percentage_saturated": true
+                },
+                "metering": {
+                  "value": 6.277370933731344,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "low",
+          "input_items": 8,
+          "compaction": true,
+          "status": 200,
+          "request_id": "req_6f69dbac-ae2a-4211-8690-300aad1ece97",
+          "usage": {
+            "input_tokens": 808355,
+            "output_tokens": 347,
+            "total_tokens": 808702,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 808702,
+                  "source": "tokenizer",
+                  "percentage": 100,
+                  "percentage_window": 272000,
+                  "percentage_saturated": true
+                },
+                "metering": {
+                  "value": 6.154237957014925,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "low",
+          "input_items": 6,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_854bf633-5001-4cd0-b395-3e74acb8f2d6",
+          "usage": {
+            "input_tokens": 199250,
+            "output_tokens": 7,
+            "total_tokens": 199257,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 199257,
+                  "source": "percentage",
+                  "percentage": 73.2562484741211,
+                  "percentage_window": 272000,
+                  "percentage_saturated": false
+                },
+                "metering": {
+                  "value": 1.5096526037810947,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "openai_sdk": {
+    "passed": true,
+    "records": [
+      {
+        "stream": false,
+        "firstId": "resp_6e89447c-19bd-4c29-a965-ca678a3f9d13",
+        "nextId": "resp_86f52b42-fc8d-4e6e-ae4c-761da9d6b709",
+        "firstUsage": {
+          "input_tokens": 1424,
+          "output_tokens": 295,
+          "total_tokens": 1719,
+          "metadata": {
+            "kiro": {
+              "source": "estimated",
+              "estimated_fields": [
+                "input_tokens",
+                "output_tokens",
+                "total_tokens"
+              ],
+              "unknown_fields": [
+                "input_tokens_details.cached_tokens",
+                "input_tokens_details.cache_write_tokens",
+                "output_tokens_details.reasoning_tokens"
+              ],
+              "context": {
+                "tokens": 1719,
+                "source": "percentage",
+                "percentage": 0.6319853067398071,
+                "percentage_window": 272000,
+                "percentage_saturated": false
+              },
+              "metering": {
+                "value": 0.030773171343283577,
+                "unit": "credit"
+              }
+            }
+          }
+        },
+        "nextUsage": {
+          "input_tokens": 1710,
+          "output_tokens": 3,
+          "total_tokens": 1713,
+          "metadata": {
+            "kiro": {
+              "source": "estimated",
+              "estimated_fields": [
+                "input_tokens",
+                "output_tokens",
+                "total_tokens"
+              ],
+              "unknown_fields": [
+                "input_tokens_details.cached_tokens",
+                "input_tokens_details.cache_write_tokens",
+                "output_tokens_details.reasoning_tokens"
+              ],
+              "context": {
+                "tokens": 1713,
+                "source": "percentage",
+                "percentage": 0.6297793984413147,
+                "percentage_window": 272000,
+                "percentage_saturated": false
+              },
+              "metering": {
+                "value": 0.01475716577114428,
+                "unit": "credit"
+              }
+            }
+          }
+        },
+        "publicToolRestored": true,
+        "storedContinuationWorked": true,
+        "passed": true
+      },
+      {
+        "stream": true,
+        "firstId": "resp_13043fc0-9cf1-4461-b981-4d633c5322fe",
+        "nextId": "resp_88d374a9-d75e-4ad9-8a42-7cc6fc31463f",
+        "firstUsage": {
+          "input_tokens": 1426,
+          "output_tokens": 294,
+          "total_tokens": 1720,
+          "metadata": {
+            "kiro": {
+              "source": "estimated",
+              "estimated_fields": [
+                "input_tokens",
+                "output_tokens",
+                "total_tokens"
+              ],
+              "unknown_fields": [
+                "input_tokens_details.cached_tokens",
+                "input_tokens_details.cache_write_tokens",
+                "output_tokens_details.reasoning_tokens"
+              ],
+              "context": {
+                "tokens": 1720,
+                "source": "percentage",
+                "percentage": 0.6323529481887817,
+                "percentage_window": 272000,
+                "percentage_saturated": false
+              },
+              "metering": {
+                "value": 0.031038324378109453,
+                "unit": "credit"
+              }
+            }
+          }
+        },
+        "nextUsage": {
+          "input_tokens": 1711,
+          "output_tokens": 3,
+          "total_tokens": 1714,
+          "metadata": {
+            "kiro": {
+              "source": "estimated",
+              "estimated_fields": [
+                "input_tokens",
+                "output_tokens",
+                "total_tokens"
+              ],
+              "unknown_fields": [
+                "input_tokens_details.cached_tokens",
+                "input_tokens_details.cache_write_tokens",
+                "output_tokens_details.reasoning_tokens"
+              ],
+              "context": {
+                "tokens": 1714,
+                "source": "percentage",
+                "percentage": 0.6301470398902893,
+                "percentage_window": 272000,
+                "percentage_saturated": false
+              },
+              "metering": {
+                "value": 0.014764727960199005,
+                "unit": "credit"
+              }
+            }
+          }
+        },
+        "publicToolRestored": true,
+        "storedContinuationWorked": true,
+        "passed": true
+      }
+    ]
+  },
+  "ai_sdk": {
+    "passed": true,
+    "records": [
+      {
+        "streaming": false,
+        "passed": true,
+        "text": "AI_SDK_USAGE_OK",
+        "calls": 1,
+        "steps": [
+          {
+            "usage": {
+              "inputTokens": 1636,
+              "inputTokenDetails": {
+                "noCacheTokens": 1636,
+                "cacheReadTokens": 0
+              },
+              "outputTokens": 10,
+              "outputTokenDetails": {
+                "textTokens": 10,
+                "reasoningTokens": 0
+              },
+              "totalTokens": 1646,
+              "raw": {
+                "input_tokens": 1636,
+                "output_tokens": 10,
+                "total_tokens": 1646,
+                "metadata": {
+                  "kiro": {
+                    "source": "estimated",
+                    "estimated_fields": [
+                      "input_tokens",
+                      "output_tokens",
+                      "total_tokens"
+                    ],
+                    "unknown_fields": [
+                      "input_tokens_details.cached_tokens",
+                      "input_tokens_details.cache_write_tokens",
+                      "output_tokens_details.reasoning_tokens"
+                    ],
+                    "context": {
+                      "tokens": 1646,
+                      "source": "percentage",
+                      "percentage": 0.6051470637321472,
+                      "percentage_window": 272000,
+                      "percentage_saturated": false
+                    },
+                    "metering": {
+                      "value": 0.01785677094527363,
+                      "unit": "credit"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "usage": {
+              "inputTokens": 1665,
+              "inputTokenDetails": {
+                "noCacheTokens": 1665,
+                "cacheReadTokens": 0
+              },
+              "outputTokens": 5,
+              "outputTokenDetails": {
+                "textTokens": 5,
+                "reasoningTokens": 0
+              },
+              "totalTokens": 1670,
+              "raw": {
+                "input_tokens": 1665,
+                "output_tokens": 5,
+                "total_tokens": 1670,
+                "metadata": {
+                  "kiro": {
+                    "source": "estimated",
+                    "estimated_fields": [
+                      "input_tokens",
+                      "output_tokens",
+                      "total_tokens"
+                    ],
+                    "unknown_fields": [
+                      "input_tokens_details.cached_tokens",
+                      "input_tokens_details.cache_write_tokens",
+                      "output_tokens_details.reasoning_tokens"
+                    ],
+                    "context": {
+                      "tokens": 1670,
+                      "source": "percentage",
+                      "percentage": 0.6139705777168274,
+                      "percentage_window": 272000,
+                      "percentage_saturated": false
+                    },
+                    "metering": {
+                      "value": 0.010358516616915423,
+                      "unit": "credit"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "currentContext": 1670,
+        "cumulativeUsage": {
+          "inputTokens": 3301,
+          "inputTokenDetails": {
+            "noCacheTokens": 3301,
+            "cacheReadTokens": 0
+          },
+          "outputTokens": 15,
+          "outputTokenDetails": {
+            "textTokens": 15,
+            "reasoningTokens": 0
+          },
+          "totalTokens": 3316
+        }
+      },
+      {
+        "streaming": true,
+        "passed": true,
+        "text": "AI_SDK_USAGE_OK",
+        "calls": 1,
+        "steps": [
+          {
+            "usage": {
+              "inputTokens": 1636,
+              "inputTokenDetails": {
+                "noCacheTokens": 1636,
+                "cacheReadTokens": 0
+              },
+              "outputTokens": 10,
+              "outputTokenDetails": {
+                "textTokens": 10,
+                "reasoningTokens": 0
+              },
+              "totalTokens": 1646,
+              "raw": {
+                "input_tokens": 1636,
+                "output_tokens": 10,
+                "total_tokens": 1646,
+                "metadata": {
+                  "kiro": {
+                    "source": "estimated",
+                    "estimated_fields": [
+                      "input_tokens",
+                      "output_tokens",
+                      "total_tokens"
+                    ],
+                    "unknown_fields": [
+                      "input_tokens_details.cached_tokens",
+                      "input_tokens_details.cache_write_tokens",
+                      "output_tokens_details.reasoning_tokens"
+                    ],
+                    "context": {
+                      "tokens": 1646,
+                      "source": "percentage",
+                      "percentage": 0.6051470637321472,
+                      "percentage_window": 272000,
+                      "percentage_saturated": false
+                    },
+                    "metering": {
+                      "value": 0.01785677094527363,
+                      "unit": "credit"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "usage": {
+              "inputTokens": 1665,
+              "inputTokenDetails": {
+                "noCacheTokens": 1665,
+                "cacheReadTokens": 0
+              },
+              "outputTokens": 5,
+              "outputTokenDetails": {
+                "textTokens": 5,
+                "reasoningTokens": 0
+              },
+              "totalTokens": 1670,
+              "raw": {
+                "input_tokens": 1665,
+                "output_tokens": 5,
+                "total_tokens": 1670,
+                "metadata": {
+                  "kiro": {
+                    "source": "estimated",
+                    "estimated_fields": [
+                      "input_tokens",
+                      "output_tokens",
+                      "total_tokens"
+                    ],
+                    "unknown_fields": [
+                      "input_tokens_details.cached_tokens",
+                      "input_tokens_details.cache_write_tokens",
+                      "output_tokens_details.reasoning_tokens"
+                    ],
+                    "context": {
+                      "tokens": 1670,
+                      "source": "percentage",
+                      "percentage": 0.6139705777168274,
+                      "percentage_window": 272000,
+                      "percentage_saturated": false
+                    },
+                    "metering": {
+                      "value": 0.010358516616915423,
+                      "unit": "credit"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "currentContext": 1670,
+        "cumulativeUsage": {
+          "inputTokens": 3301,
+          "inputTokenDetails": {
+            "noCacheTokens": 3301,
+            "cacheReadTokens": 0
+          },
+          "outputTokens": 15,
+          "outputTokenDetails": {
+            "textTokens": 15,
+            "reasoningTokens": 0
+          },
+          "totalTokens": 3316
+        }
+      }
+    ]
+  },
+  "strict": [
+    {
+      "stream": false,
+      "passed": true,
+      "id": "resp_f3259952-46e7-407b-9551-5a4a7c0df1ad",
+      "unknown_usage_omitted": true,
+      "retrieve_consistent": true
+    },
+    {
+      "stream": true,
+      "passed": true,
+      "id": "resp_a9480506-fbe3-4b70-87ad-c5e261c919e8",
+      "unknown_usage_omitted": true,
+      "retrieve_consistent": true
+    }
+  ],
+  "models": [
+    {
+      "model": "gpt-5.6-sol",
+      "passed": true,
+      "id": "resp_1818b6fb-8c64-488e-b3dd-6944fa831d71",
+      "usage": {
+        "input_tokens": 1577,
+        "output_tokens": 3,
+        "total_tokens": 1580,
+        "metadata": {
+          "kiro": {
+            "source": "estimated",
+            "estimated_fields": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens"
+            ],
+            "unknown_fields": [
+              "input_tokens_details.cached_tokens",
+              "input_tokens_details.cache_write_tokens",
+              "output_tokens_details.reasoning_tokens"
+            ],
+            "context": {
+              "tokens": 1580,
+              "source": "percentage",
+              "percentage": 0.5808823704719543,
+              "percentage_window": 272000,
+              "percentage_saturated": false
+            },
+            "metering": {
+              "value": 0.01375139462686567,
+              "unit": "credit"
+            }
+          }
+        }
+      },
+      "reasoningItems": 0
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "passed": true,
+      "id": "resp_1b69de20-d0c0-4d59-8b73-f8cf076dc062",
+      "usage": {
+        "input_tokens": 1577,
+        "output_tokens": 3,
+        "total_tokens": 1580,
+        "metadata": {
+          "kiro": {
+            "source": "estimated",
+            "estimated_fields": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens"
+            ],
+            "unknown_fields": [
+              "input_tokens_details.cached_tokens",
+              "input_tokens_details.cache_write_tokens",
+              "output_tokens_details.reasoning_tokens"
+            ],
+            "context": {
+              "tokens": 1580,
+              "source": "percentage",
+              "percentage": 0.5808823704719543,
+              "percentage_window": 272000,
+              "percentage_saturated": false
+            },
+            "metering": {
+              "value": 0.005729747761194029,
+              "unit": "credit"
+            }
+          }
+        }
+      },
+      "reasoningItems": 0
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "passed": true,
+      "id": "resp_b622b630-0a87-4e40-b438-1e4484433656",
+      "usage": {
+        "input_tokens": 1577,
+        "output_tokens": 3,
+        "total_tokens": 1580,
+        "metadata": {
+          "kiro": {
+            "source": "estimated",
+            "estimated_fields": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens"
+            ],
+            "unknown_fields": [
+              "input_tokens_details.cached_tokens",
+              "input_tokens_details.cache_write_tokens",
+              "output_tokens_details.reasoning_tokens"
+            ],
+            "context": {
+              "tokens": 1580,
+              "source": "percentage",
+              "percentage": 0.5808823704719543,
+              "percentage_window": 272000,
+              "percentage_saturated": false
+            },
+            "metering": {
+              "value": 0.000572974776119403,
+              "unit": "credit"
+            }
+          }
+        }
+      },
+      "reasoningItems": 0
+    },
+    {
+      "model": "claude-opus-5",
+      "passed": true,
+      "id": "resp_598dcdec-ec55-4ede-a1ff-fd06152a40c7",
+      "usage": {
+        "input_tokens": 6770,
+        "output_tokens": 3,
+        "total_tokens": 6773,
+        "metadata": {
+          "kiro": {
+            "source": "estimated",
+            "estimated_fields": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens"
+            ],
+            "unknown_fields": [
+              "input_tokens_details.cached_tokens",
+              "input_tokens_details.cache_write_tokens",
+              "output_tokens_details.reasoning_tokens"
+            ],
+            "context": {
+              "tokens": 6773,
+              "source": "percentage",
+              "percentage": 0.6773000359535217,
+              "percentage_window": 1000000,
+              "percentage_saturated": false
+            },
+            "metering": {
+              "value": 0.04907560540630184,
+              "unit": "credit"
+            }
+          }
+        }
+      },
+      "reasoningItems": 0
+    },
+    {
+      "model": "claude-sonnet-5",
+      "passed": true,
+      "id": "resp_9eda2978-ce0c-4c13-860c-ba0672d965dc",
+      "usage": {
+        "input_tokens": 6487,
+        "output_tokens": 3,
+        "total_tokens": 6490,
+        "metadata": {
+          "kiro": {
+            "source": "estimated",
+            "estimated_fields": [
+              "input_tokens",
+              "output_tokens",
+              "total_tokens"
+            ],
+            "unknown_fields": [
+              "input_tokens_details.cached_tokens",
+              "input_tokens_details.cache_write_tokens",
+              "output_tokens_details.reasoning_tokens"
+            ],
+            "context": {
+              "tokens": 6490,
+              "source": "percentage",
+              "percentage": 0.6489999890327454,
+              "percentage_window": 1000000,
+              "percentage_saturated": false
+            },
+            "metering": {
+              "value": 0.015555970961857384,
+              "unit": "credit"
+            }
+          }
+        }
+      },
+      "reasoningItems": 0
+    }
+  ],
+  "zuno": [
+    {
+      "turn": 1,
+      "text": "ZUNO_USAGE_REPLAY_OK",
+      "tool_calls": 1,
+      "current_context": 19109,
+      "cumulative": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 37294,
+        "output": 729,
+        "reasoning": 0,
+        "unclassified": 0
+      },
+      "exit_code": 0,
+      "wire": [
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "max",
+          "input_items": 13,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_958baf85-a137-4c11-b979-2881fbecbe6d",
+          "usage": {
+            "input_tokens": 18600,
+            "output_tokens": 314,
+            "total_tokens": 18914,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 18914,
+                  "source": "percentage",
+                  "percentage": 6.953676700592041,
+                  "percentage_window": 272000,
+                  "percentage_saturated": false
+                },
+                "metering": {
+                  "value": 0.16466887482587064,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "max",
+          "input_items": 15,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_7080821f-abd4-4801-a89f-38a9dee9242c",
+          "usage": {
+            "input_tokens": 18694,
+            "output_tokens": 415,
+            "total_tokens": 19109,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 19109,
+                  "source": "percentage",
+                  "percentage": 7.025367736816406,
+                  "percentage_window": 272000,
+                  "percentage_saturated": false
+                },
+                "metering": {
+                  "value": 0.19112981373134325,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "turn": 2,
+      "text": "ZUNO_USAGE_REPLAY_OK",
+      "tool_calls": 0,
+      "current_context": 18992,
+      "cumulative": {
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "input": 56033,
+        "output": 982,
+        "reasoning": 0,
+        "unclassified": 0
+      },
+      "exit_code": 0,
+      "wire": [
+        {
+          "model": "gpt-5.6-sol",
+          "effort": "max",
+          "input_items": 17,
+          "compaction": false,
+          "status": 200,
+          "request_id": "req_cbafe356-e4da-4dba-be31-4ab1cac9b0f6",
+          "usage": {
+            "input_tokens": 18739,
+            "output_tokens": 253,
+            "total_tokens": 18992,
+            "metadata": {
+              "kiro": {
+                "source": "estimated",
+                "estimated_fields": [
+                  "input_tokens",
+                  "output_tokens",
+                  "total_tokens"
+                ],
+                "unknown_fields": [
+                  "input_tokens_details.cached_tokens",
+                  "input_tokens_details.cache_write_tokens",
+                  "output_tokens_details.reasoning_tokens"
+                ],
+                "context": {
+                  "tokens": 18992,
+                  "source": "percentage",
+                  "percentage": 6.9823527336120605,
+                  "percentage_window": 272000,
+                  "percentage_saturated": false
+                },
+                "metering": {
+                  "value": 0.12185517293532339,
+                  "unit": "credit"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "check": "build",
+      "exit_code": 0,
+      "seconds": 0.25
+    },
+    {
+      "check": "static",
+      "exit_code": 0,
+      "seconds": 4.3
+    },
+    {
+      "check": "coverage",
+      "exit_code": 0,
+      "seconds": 18.05
+    },
+    {
+      "check": "security",
+      "exit_code": 0,
+      "seconds": 9.45
+    },
+    {
+      "check": "npm-build",
+      "exit_code": 0,
+      "seconds": 0.03
+    }
+  ],
+  "tests": {
+    "passed": 1757,
+    "failed": 0,
+    "assertions": 7437,
+    "line_coverage": 94.07,
+    "required_line_coverage": 93
+  }
+}

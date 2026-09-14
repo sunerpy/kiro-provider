@@ -1,7 +1,13 @@
 import { auditHash } from "../../../core/audit-log.js";
 import type { CanonicalAssistantOutput } from "../../../protocol/canonical.js";
-import { getContextWindowSize } from "../../models.js";
-import { estimateTokens } from "../response.js";
+import type { CanonicalOutputUsage } from "../../../protocol/output.js";
+import {
+  InvalidTokenUsageError,
+  normalizeReportedUsage,
+  REPORTED_USAGE_KEYS,
+  type ReportedTokenUsage,
+} from "../../../protocol/usage.js";
+import { estimateGeneratedTokens } from "../usage-estimator.js";
 
 /** Mutable accumulator for fragments belonging to one SDK tool call. */
 export interface ToolCallState {
@@ -22,6 +28,7 @@ export interface SdkTokenUsage {
   readonly cacheReadInputTokens?: number;
   readonly cacheWriteInputTokens?: number;
   readonly contextUsagePercentage?: number;
+  readonly reasoningTokens?: number;
 }
 
 export interface SdkStreamEvent {
@@ -277,9 +284,14 @@ export type NextSdkEvent =
 
 export interface UsageState {
   inputTokens?: number;
+  uncachedInputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningTokens?: number;
   contextUsagePercentage?: number;
+  metering?: { readonly value: number; readonly unit: string };
 }
 
 export async function nextSdkEvent(
@@ -419,45 +431,128 @@ export function validateCompletedToolCalls(
 export function updateUsageState(usage: UsageState, event: SdkStreamEvent): void {
   const tokenUsage = event.metadataEvent?.tokenUsage;
   if (tokenUsage) {
-    usage.outputTokens = tokenUsage.outputTokens ?? usage.outputTokens;
-    usage.totalTokens = tokenUsage.totalTokens ?? usage.totalTokens;
-    usage.inputTokens =
-      tokenUsage.inputTokens ??
-      (tokenUsage.uncachedInputTokens === undefined
-        ? usage.inputTokens
-        : tokenUsage.uncachedInputTokens +
-          (tokenUsage.cacheReadInputTokens ?? 0) +
-          (tokenUsage.cacheWriteInputTokens ?? 0));
+    // Metadata contains snapshots, not deltas. Preserve missing versus explicit zero.
+    for (const key of REPORTED_USAGE_KEYS) {
+      if (tokenUsage[key] === undefined) delete usage[key];
+      else usage[key] = tokenUsage[key];
+    }
   }
-
   usage.contextUsagePercentage =
     event.contextUsageEvent?.contextUsagePercentage ??
     event.metadataEvent?.contextUsagePercentage ??
     tokenUsage?.contextUsagePercentage ??
     usage.contextUsagePercentage;
+  if (isCompletionMeteringEvent(event)) {
+    usage.metering = {
+      value: event.meteringEvent?.usage as number,
+      unit: event.meteringEvent?.unit as string,
+    };
+  }
 }
 
 export function resolveUsage(
   usage: UsageState,
   textOnlyContent: string,
-  model: string,
-): { readonly inputTokens: number; readonly outputTokens: number } {
-  const outputTokens = usage.outputTokens ?? estimateTokens(textOnlyContent);
-  let inputTokens = usage.inputTokens;
-
-  if (inputTokens === undefined && usage.totalTokens !== undefined) {
-    inputTokens = Math.max(0, usage.totalTokens - outputTokens);
+  _model: string,
+  options: {
+    readonly inputTokenEstimate?: number | (() => number);
+    readonly contextUsageWindow?: number;
+    readonly toolCalls?: readonly { readonly name: string; readonly input: string }[];
+    readonly reasoning?: unknown;
+  } = {},
+): CanonicalOutputUsage {
+  let reported: ReportedTokenUsage;
+  try {
+    reported = normalizeReportedUsage(usage);
+  } catch (error) {
+    if (error instanceof InvalidTokenUsageError) {
+      throw new SdkStreamProtocolError(error.message, error.code, { cause: error });
+    }
+    throw error;
   }
-  if (
-    inputTokens === undefined &&
-    usage.contextUsagePercentage !== undefined &&
-    usage.contextUsagePercentage > 0
-  ) {
-    const totalTokens = Math.round(
-      (getContextWindowSize(model) * usage.contextUsagePercentage) / 100,
-    );
-    inputTokens = Math.max(0, totalTokens - outputTokens);
+  const generated =
+    reported.outputTokens === undefined
+      ? estimateGeneratedTokens(
+          textOnlyContent,
+          options.toolCalls,
+          reported.reasoningTokens === undefined ? options.reasoning : undefined,
+        )
+      : { outputTokens: reported.outputTokens };
+  let outputTokens =
+    reported.outputTokens ?? generated.outputTokens + (reported.reasoningTokens ?? 0);
+  const minimumInput =
+    (reported.uncachedInputTokens ?? 0) +
+    (reported.cacheReadInputTokens ?? 0) +
+    (reported.cacheWriteInputTokens ?? 0);
+  let inputTokens =
+    reported.inputTokens ??
+    (typeof options.inputTokenEstimate === "function"
+      ? options.inputTokenEstimate()
+      : options.inputTokenEstimate) ??
+    0;
+  inputTokens = Math.max(inputTokens, minimumInput);
+  const percentage = usage.contextUsagePercentage;
+  const window = options.contextUsageWindow;
+  const hasPercentage =
+    percentage !== undefined &&
+    Number.isFinite(percentage) &&
+    percentage >= 0 &&
+    percentage <= 100 &&
+    window !== undefined &&
+    Number.isSafeInteger(window) &&
+    window > 0;
+  const observed = hasPercentage ? Math.round((window * percentage) / 100) : undefined;
+  const saturated = hasPercentage && percentage === 100;
+  let context: "upstream" | "percentage" | "percentage_lower_bound" | "tokenizer" | "unavailable" =
+    reported.totalTokens !== undefined
+      ? "upstream"
+      : options.inputTokenEstimate !== undefined
+        ? "tokenizer"
+        : "unavailable";
+  if (reported.totalTokens === undefined && observed !== undefined) {
+    // Kiro's GPT percentage still uses the old raw 272k basis and clips at 100.
+    // It cannot be multiplied by the corrected 872k public prompt capacity.
+    // Once clipped it is only a lower bound; count the actual projected request.
+    const minimumOutput = reported.outputTokens ?? reported.reasoningTokens ?? 0;
+    const measuredFloor = (reported.inputTokens ?? minimumInput) + minimumOutput;
+    if (!saturated && observed > 0 && observed >= measuredFloor) {
+      // An available, calibrated observation outranks local rendering heuristics.
+      context = "percentage";
+      if (reported.inputTokens !== undefined) outputTokens = observed - inputTokens;
+      else {
+        outputTokens = Math.min(outputTokens, observed - minimumInput);
+        inputTokens = observed - outputTokens;
+      }
+    } else {
+      const total = Math.max(inputTokens + outputTokens, observed);
+      if (total === observed && saturated) context = "percentage_lower_bound";
+      if (reported.inputTokens !== undefined) outputTokens = total - inputTokens;
+      else inputTokens = total - outputTokens;
+    }
   }
-
-  return { inputTokens: inputTokens ?? 0, outputTokens };
+  if (reported.totalTokens !== undefined) {
+    // A measured total must never be enlarged by an estimate of one side.
+    if (reported.inputTokens === undefined) {
+      outputTokens = Math.min(outputTokens, reported.totalTokens - minimumInput);
+      inputTokens = reported.totalTokens - outputTokens;
+    } else {
+      outputTokens = reported.totalTokens - reported.inputTokens;
+    }
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    reported,
+    accounting: {
+      input: reported.inputTokens !== undefined ? "upstream" : "estimated",
+      output: reported.outputTokens !== undefined ? "upstream" : "estimated",
+      context,
+      ...(percentage !== undefined && Number.isFinite(percentage) && percentage >= 0
+        ? { contextUsagePercentage: percentage }
+        : {}),
+      ...(hasPercentage ? { contextUsageWindow: window, percentageSaturated: saturated } : {}),
+      ...(usage.metering ? { metering: usage.metering } : {}),
+    },
+  };
 }

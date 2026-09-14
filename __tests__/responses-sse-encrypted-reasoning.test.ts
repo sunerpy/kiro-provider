@@ -362,11 +362,13 @@ describe("Responses SSE OpenAI item shape (C13)", () => {
           input_tokens: 11,
           output_tokens: 7,
           total_tokens: 18,
-          input_tokens_details: { cached_tokens: 0 },
-          output_tokens_details: { reasoning_tokens: 0 },
+          metadata: { kiro: { source: "estimated" } },
         },
       },
     });
+    const final = events.at(-1)?.body.response;
+    expect(final).not.toHaveProperty("usage.input_tokens_details.cached_tokens");
+    expect(final).not.toHaveProperty("usage.output_tokens_details.reasoning_tokens");
   });
 });
 
