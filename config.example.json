@@ -1,9 +1,7 @@
 {
   "host": "127.0.0.1",
   "port": 8787,
-  "api_keys": [
-    "sk-REPLACE-ME"
-  ],
+  "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "v3-auto",
   "responses_fidelity_mode": "compatible",

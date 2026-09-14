@@ -940,8 +940,8 @@ TYPESCRIPT
 	sec_attacker_pid=$!
 	register_security_self_test_pid "$sec_attacker_pid"
 
-	local upstream_port="" attacker_port="" i
-	for i in $(seq 1 100); do
+	local upstream_port="" attacker_port=""
+	for _ in $(seq 1 100); do
 		[ -s "$upstream_ready" ] && [ -s "$attacker_ready" ] && break
 		sleep 0.1
 	done
@@ -961,7 +961,7 @@ TYPESCRIPT
 	sec_proxy_pid=$!
 	register_security_self_test_pid "$sec_proxy_pid"
 	local proxy_port=""
-	for i in $(seq 1 100); do
+	for _ in $(seq 1 100); do
 		[ -s "$proxy_ready" ] && break
 		sleep 0.1
 	done
@@ -1162,7 +1162,7 @@ TYPESCRIPT
 	SLOW_READY_PATH="$slow_ready" bun "$slow_sink" >"$sec_dir/slow.log" 2>&1 &
 	local slow_pid=$!
 	register_security_self_test_pid "$slow_pid"
-	for i in $(seq 1 100); do
+	for _ in $(seq 1 100); do
 		[ -s "$slow_ready" ] && break
 		sleep 0.1
 	done
@@ -1307,7 +1307,7 @@ if ! command -v timeout >/dev/null 2>&1; then
 	exit 1
 fi
 
-EXPECTED_CODEX_VERSION="${CODEX_SMOKE_EXPECTED_VERSION:-0.149.0}"
+EXPECTED_CODEX_VERSION="${CODEX_SMOKE_EXPECTED_VERSION:-0.154.0}"
 SMOKE_MODE="${KIRO_PROVIDER_SMOKE_MODE:-connectivity}"
 case "$SMOKE_MODE" in
 	connectivity | tools) ;;
@@ -1336,7 +1336,7 @@ CODEX_VERSION="$("$CODEX_EXECUTABLE" --version 2>&1)"
 RUNNING_CODEX_VERSION="$(printf '%s\n' "$CODEX_VERSION" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
 if [ "$RUNNING_CODEX_VERSION" != "$EXPECTED_CODEX_VERSION" ]; then
 	echo "codex-smoke: ERROR: expected exact codex version '$EXPECTED_CODEX_VERSION', got: $CODEX_VERSION" >&2
-	echo "codex-smoke: the current RC compatibility probe is pinned to codex-cli 0.149.0" >&2
+	echo "codex-smoke: this compatibility probe is pinned to codex-cli $EXPECTED_CODEX_VERSION" >&2
 	exit 1
 fi
 echo "codex-smoke: codex version accepted: $CODEX_VERSION"

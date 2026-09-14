@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import packageMetadata from "../../package.json" with { type: "json" };
 import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
 import { setAuditLogLevel } from "../core/audit-log.js";
@@ -21,6 +22,8 @@ import { runAccountRefresh } from "./refresh-accounts.js";
 
 export type { CliCommand } from "./arguments.js";
 export { CLI_USAGE, parseCliArgs } from "./arguments.js";
+
+export const CLI_VERSION = packageMetadata.version;
 
 type LoadOptions = NonNullable<Parameters<typeof loadConfig>[0]>;
 type AccountsStore = Pick<
@@ -80,6 +83,9 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
   switch (command.kind) {
     case "help":
       dependencies.stdout(CLI_USAGE);
+      return 0;
+    case "version":
+      dependencies.stdout(`kiro-provider ${CLI_VERSION}`);
       return 0;
     case "serve": {
       const overrides: Partial<Config> = {

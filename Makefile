@@ -1,29 +1,30 @@
-.PHONY: install fmt fmt-check typecheck lint scripts-syntax test coverage coverage-gate coverage-parity build build-binary clean ci security codex-smoke-security
+.PHONY: install fmt fmt-check typecheck lint docs-links scripts-syntax test coverage coverage-gate coverage-parity build build-binary clean security codex-smoke-security check pre-ci ci
 
 install:
-	bun install
+	bun install --frozen-lockfile
 
 fmt:
-	oxfmt --ignore-path .oxfmtignore --write '**/*.{yml,yaml,json,md}'
-	bunx --bun @biomejs/biome check --write ./src ./scripts ./__tests__
+	bun run fmt
 
 fmt-check:
-	oxfmt --ignore-path .oxfmtignore --check '**/*.{yml,yaml,json,md}'
-	bunx --bun @biomejs/biome check ./src ./scripts ./__tests__
+	bun run fmt:check
 
 typecheck:
 	bun run typecheck
 
 lint:
-	bunx --bun @biomejs/biome check ./src ./scripts ./__tests__
+	bun run lint
+
+docs-links:
+	bun run docs:links
 
 # Syntax-check every shell script; install.sh must additionally stay POSIX sh.
 scripts-syntax:
-	for script in scripts/*.sh; do bash -n "$$script" || exit 1; done
+	for script in scripts/*.sh .github/scripts/*.sh; do bash -n "$$script" || exit 1; done
 	sh -n scripts/install.sh
 
 test:
-	bun test
+	bun run test
 
 coverage:
 	bun test --coverage --coverage-reporter=lcov --coverage-reporter=text
@@ -50,5 +51,11 @@ codex-smoke-security:
 	bash -n scripts/codex-smoke.sh
 	KIRO_PROVIDER_SMOKE_SECURITY_SELF_TEST=1 bash scripts/codex-smoke.sh
 
-# Coverage runs separately via coverage-gate and in the GitHub Actions coverage job.
-ci: typecheck lint scripts-syntax test
+# Fast local/CI correctness gate. Coverage remains parallel in CI.
+check: fmt-check typecheck lint docs-links scripts-syntax test build security codex-smoke-security coverage-parity
+
+# High-fidelity release preflight, including the project-owned coverage floor.
+pre-ci: check coverage-gate
+
+# Compatibility alias retained for existing automation.
+ci: check

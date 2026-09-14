@@ -22,11 +22,11 @@
     "access": "public"
   },
   "scripts": {
-    "fmt": "bunx --bun @biomejs/biome check --write ./src ./scripts ./__tests__",
-    "lint": "bunx --bun @biomejs/biome check ./src ./scripts ./__tests__",
+    "fmt": "oxfmt --ignore-path .oxfmtignore --write '**/*.{yml,yaml,json,md}' && biome check --write ./src ./scripts ./__tests__",
+    "lint": "biome check ./src ./scripts ./__tests__",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "build": "bun build src/cli/bin.ts --outdir dist --target bun",
+    "build": "bun run build:npm",
     "build:binary": "bun build --compile --minify src/cli/bin.ts --outfile dist/kiro-provider",
     "build:npm": "bun build src/cli/bin.ts --outfile dist/cli.js --target=bun --minify && chmod +x dist/cli.js",
     "probe:projection-fidelity": "bun run scripts/probe-projection-fidelity.ts",
@@ -37,7 +37,10 @@
     "study:effort:responses": "bun run scripts/responses-effort-study.ts",
     "e2e:responses": "bun run scripts/responses-live-e2e.ts",
     "diff:kiro-cli-wire": "bun run scripts/kiro-cli-wire-diff.ts",
-    "prepublishOnly": "bun run build:npm"
+    "prepublishOnly": "bun run build:npm",
+    "docs:links": "bun run scripts/check-markdown-links.ts",
+    "fmt:check": "oxfmt --ignore-path .oxfmtignore --check '**/*.{yml,yaml,json,md}' && biome check ./src ./scripts ./__tests__",
+    "check": "bun run fmt:check && bun run typecheck && bun run lint && bun run docs:links && bun run test && bun run build"
   },
   "dependencies": {
     "@aws-sdk/core": "3.975.3",
@@ -57,9 +60,11 @@
     "@types/proper-lockfile": "^4.1.4",
     "ai": "7.0.99",
     "openai": "7.13.0",
+    "oxfmt": "0.64.0",
     "typescript": "^5.7.3"
   },
   "engines": {
     "bun": ">=1.3.14"
-  }
+  },
+  "packageManager": "bun@1.3.14"
 }
