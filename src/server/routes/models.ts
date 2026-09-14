@@ -18,7 +18,13 @@ import { MODEL_CATALOG, type ModelCatalogEntry } from "../../kiro/model-catalog.
 const CATALOG_CREATED_AT = 1_700_000_000;
 const REASONING_SUFFIX = /-(low|medium|high|xhigh|max)$/;
 
-type CodexReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max";
+type CodexReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+// Match Codex's Sol/Terra orchestration presets. Ultra is resolved by Codex
+// to max for inference and proactive multi-agent mode, not sent to Kiro.
+function codexSupportsUltra(wireId: string): boolean {
+  return wireId === "gpt-5.6-sol" || wireId === "gpt-5.6-terra";
+}
 
 function codexReasoningLevels(wireId: string): Array<{
   readonly effort: CodexReasoningLevel;
@@ -28,10 +34,17 @@ function codexReasoningLevels(wireId: string): Array<{
   const efforts: readonly CodexReasoningLevel[] = supportsXHighEffort(wireId)
     ? ["low", "medium", "high", "xhigh", "max"]
     : ["low", "medium", "high", "max"];
-  return efforts.map((effort) => ({
+  const levels = efforts.map((effort) => ({
     effort,
     description: `${effort} reasoning effort`,
   }));
+  if (codexSupportsUltra(wireId)) {
+    levels.push({
+      effort: "ultra",
+      description: "Maximum reasoning with automatic task delegation",
+    });
+  }
+  return levels;
 }
 
 function codexDefaultReasoningLevel(entry: ModelCatalogEntry): CodexReasoningLevel | null {
@@ -64,6 +77,9 @@ function codexModel(
     description: entry.description ?? null,
     default_reasoning_level: codexDefaultReasoningLevel(entry),
     supported_reasoning_levels: codexReasoningLevels(entry.wireId),
+    ...(codexSupportsUltra(entry.wireId)
+      ? { multi_agent_version: "v2", multi_agent_reasoning_effort: "max" }
+      : {}),
     shell_type: "unified_exec",
     visibility: "list",
     supported_in_api: true,

@@ -93,9 +93,38 @@ describe("GET /v1/models", () => {
           { effort: "high" },
           { effort: "xhigh" },
           { effort: "max" },
+          ...(family === "luna" ? [] : [{ effort: "ultra" }]),
         ],
       });
+      if (family !== "luna") {
+        expect(codex).toMatchObject({
+          multi_agent_version: "v2",
+          multi_agent_reasoning_effort: "max",
+        });
+      }
     }
+  });
+
+  test("advertises Codex Ultra only for Sol/Terra, including effort aliases", async () => {
+    const body = (await (await handleModels()).json()) as {
+      models: Array<{
+        slug: string;
+        supported_reasoning_levels: Array<{ effort: string }>;
+        multi_agent_version?: string;
+        multi_agent_reasoning_effort?: string;
+      }>;
+      data: Array<{ id: string }>;
+    };
+    for (const model of body.models) {
+      const supportsUltra = /^gpt-5\.6-(sol|terra)(-|$)/.test(model.slug);
+      expect(model.supported_reasoning_levels.some((level) => level.effort === "ultra")).toBe(
+        supportsUltra,
+      );
+      expect(model.multi_agent_reasoning_effort).toBe(supportsUltra ? "max" : undefined);
+      expect(model.multi_agent_version).toBe(supportsUltra ? "v2" : undefined);
+    }
+    // Ultra is a Codex orchestration choice, not a new Kiro model/wire effort.
+    expect(body.data.some((model) => model.id.endsWith("-ultra"))).toBe(false);
   });
 
   test("runs due quota recovery before excluding still-exhausted accounts from catalog refresh", async () => {
