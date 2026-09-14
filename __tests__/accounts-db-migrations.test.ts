@@ -84,10 +84,29 @@ function rawTables(path: string): string[] {
   }
 }
 
-afterEach(() => {
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String(error.code)
+    : undefined;
+}
+
+async function removeTemporaryDirectory(directory: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (process.platform !== "win32" || errorCode(error) !== "EBUSY" || attempt >= 20)
+        throw error;
+      await Bun.sleep(100);
+    }
+  }
+}
+
+afterEach(async () => {
   for (const database of openDatabases.splice(0)) database.close();
   for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    await removeTemporaryDirectory(directory);
   }
 });
 
