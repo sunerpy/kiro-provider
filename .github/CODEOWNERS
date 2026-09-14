@@ -1,0 +1,3 @@
+# Release automation changes require repository-owner review.
+/.github/workflows/ @sunerpy
+/.github/scripts/ @sunerpy

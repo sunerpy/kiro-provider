@@ -1,31 +1,23 @@
+<div align="center">
+
 # kiro-provider
 
-> An OpenAI Responses-compatible provider over AWS KiroRuntime, with native Responses and protocol-fidelity stateless fallback transports.
+### OpenAI Responses and Anthropic Messages over AWS KiroRuntime
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sunerpy/kiro-provider)](https://github.com/sunerpy/kiro-provider/releases)
+[![npm](https://img.shields.io/npm/v/%40sunerpy%2Fkiro-provider)](https://www.npmjs.com/package/@sunerpy/kiro-provider)
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Bun](https://img.shields.io/badge/runtime-bun-black)](https://bun.sh/)
 
-[简体中文](docs/readme/README.zh.md) · English
+[Install](#install) · [Quickstart](#quickstart) · [Protocol](#protocol-compatibility) · [Clients](#client-integrations) · [Docs](#documentation) · [Development](#development)
 
-## Table of Contents
+[**English**](./README.md) · [简体中文](./docs/readme/README.zh-CN.md)
 
-- [Features](#features)
-- [Protocol compatibility](#protocol-compatibility)
-- [Install](#install)
-- [Quickstart](#quickstart)
-- [Run as a background service](#run-as-a-background-service)
-- [Configuration](#configuration)
-- [Proxy](#proxy)
-- [Security](#security)
-- [Using with an LLM](#using-with-an-llm)
-- [Use with Zuno](#use-with-zuno)
-- [Use with Codex CLI](#use-with-codex-cli)
-- [Use with Claude Code](#use-with-claude-code)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [License](#license)
+</div>
+
+---
 
 ## Features
 
@@ -177,7 +169,7 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
    ```
 
    Replace `sk-your-private-key` with a private, random value (for example
-   `openssl rand -hex 24`). The fully annotated
+   `openssl rand -hex 24`). The complete
    [`config.example.json`](config.example.json) in the repository and
    [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) describe every field.
 
@@ -266,282 +258,35 @@ In the rest of this README, `./dist/kiro-provider` refers to any of the above; s
 
 ## Run as a background service
 
-For an agent host, run **one long-lived provider per OS user** and point
-compatible OpenAI/Anthropic clients, OpenCode, Zuno, and compatibility probes
-for Codex or Claude Code at that local endpoint.
-Do not start a new provider for every agent or conversation. Keeping one
-process alive lets requests with an explicit affinity key reuse their
-persisted account/Kiro-conversation binding, while all requests can reuse
-process-local, account-scoped SDK clients and transport objects. A request
-without an explicit key starts a fresh Kiro conversation on its first turn,
-then can recover the same binding from exact assistant-output history on later
-turns. Kiro model-call HTTP sockets are fresh by default
-(`sdk_http_keep_alive: false`); enabling it is a best-effort transport
-optimization, never a promise that one session owns one physical TCP
-connection. The default `enforce_single_instance: true` also prevents a second
-service process from splitting the in-memory queues and pools.
+For an agent host, run one long-lived provider per OS user. Use a pinned
+standalone binary, run authentication and the service as the same user, and
+require both unauthenticated `/health` and authenticated `/ready` before
+connecting clients. The default single-instance lock prevents a second process
+from splitting account queues and session state.
 
-Use a pinned standalone binary for a service rather than fetching through
-`bunx` on every start. The examples below assume the release installers'
-defaults:
-
-- binary: `~/.local/bin/kiro-provider` on Linux,
-  `%USERPROFILE%\.local\bin\kiro-provider.exe` on Windows;
-- config: `~/.config/kiro-provider/config.json` on Linux,
-  `%APPDATA%\kiro-provider\config.json` on Windows;
-- service/task name: `kiro-provider`.
-
-Run the one-time import and the service as the **same OS user** so the service
-owns the same `~/.config/kiro-provider/accounts.db`, config, keyring, and
-instance lock. Running as `root`, `LocalSystem`, or another user normally
-selects a different local store. Use absolute paths and keep the API key in
-the protected config file rather than service arguments. The OpenCode
-database is not read again after the import.
-
-### Linux: systemd user service
-
-Verify the installed binary and config first:
-
-```bash
-test -x "$HOME/.local/bin/kiro-provider"
-test -r "$HOME/.config/kiro-provider/config.json"
-chmod 600 "$HOME/.config/kiro-provider/config.json"
-```
-
-Install a [systemd user service](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html):
-
-```bash
-SERVICE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-install -d -m 700 "$SERVICE_DIR"
-cat > "$SERVICE_DIR/kiro-provider.service" <<'EOF'
-[Unit]
-Description=kiro-provider local Kiro gateway
-
-[Service]
-Type=exec
-ExecStart=%h/.local/bin/kiro-provider serve --config %h/.config/kiro-provider/config.json
-Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=30s
-UMask=0077
-
-[Install]
-WantedBy=default.target
-EOF
-chmod 600 "$SERVICE_DIR/kiro-provider.service"
-
-systemctl --user daemon-reload
-systemctl --user enable --now kiro-provider.service
-```
-
-If the binary or config is elsewhere, replace `ExecStart` with those absolute
-paths. For a custom `XDG_CONFIG_HOME`, also add an explicit
-`Environment=XDG_CONFIG_HOME=/absolute/path` line.
-
-Operate and inspect the service:
-
-```bash
-systemctl --user is-active kiro-provider.service
-systemctl --user restart kiro-provider.service
-journalctl --user -u kiro-provider.service -n 100 --no-pager
-```
-
-User services normally start with that user's service manager. If the
-provider must start at boot and remain after logout, an administrator may
-enable lingering with `loginctl enable-linger <user>` after reviewing the
-machine's security policy.
-
-To remove the unit:
-
-```bash
-systemctl --user disable --now kiro-provider.service
-rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/kiro-provider.service"
-systemctl --user daemon-reload
-```
-
-### Windows: per-user scheduled task
-
-`kiro-provider.exe` is a normal foreground executable, not a native Windows
-Service Control Manager executable. Do not register it directly with
-`sc.exe`. The built-in, dependency-free option is a
-[Scheduled Task](https://learn.microsoft.com/powershell/module/scheduledtasks/register-scheduledtask)
-that starts at sign-in, runs as the current user, and restarts after failure.
-
-Run the following in PowerShell as the same user that owns the provider's
-local authentication database and config. It creates a small launcher so
-stdout/stderr are retained under `%LOCALAPPDATA%\kiro-provider`:
-
-```powershell
-$Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
-$ServiceDir = Join-Path $env:APPDATA "kiro-provider"
-$LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
-$Launcher = Join-Path $ServiceDir "service.ps1"
-
-if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
-  throw "kiro-provider binary not found: $Binary"
-}
-if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) {
-  throw "kiro-provider config not found: $Config"
-}
-
-New-Item -ItemType Directory -Force -Path $ServiceDir, $LogDir | Out-Null
-@'
-$ErrorActionPreference = "Stop"
-$Binary = Join-Path $HOME ".local\bin\kiro-provider.exe"
-$Config = Join-Path $env:APPDATA "kiro-provider\config.json"
-$LogDir = Join-Path $env:LOCALAPPDATA "kiro-provider"
-$Log = Join-Path $LogDir "service.log"
-$PreviousLog = Join-Path $LogDir "service.previous.log"
-
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-if ((Test-Path -LiteralPath $Log) -and ((Get-Item -LiteralPath $Log).Length -gt 10MB)) {
-  Move-Item -Force -LiteralPath $Log -Destination $PreviousLog
-}
-
-& $Binary serve --config $Config *>> $Log
-exit $LASTEXITCODE
-'@ | Set-Content -LiteralPath $Launcher -Encoding UTF8
-
-$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$PowerShell = (Get-Command powershell.exe).Source
-$Action = New-ScheduledTaskAction `
-  -Execute $PowerShell `
-  -Argument ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $Launcher)
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
-$Principal = New-ScheduledTaskPrincipal `
-  -UserId $User `
-  -LogonType Interactive `
-  -RunLevel Limited
-$Settings = New-ScheduledTaskSettingsSet `
-  -RestartCount 999 `
-  -RestartInterval (New-TimeSpan -Minutes 1) `
-  -ExecutionTimeLimit ([TimeSpan]::Zero) `
-  -MultipleInstances IgnoreNew `
-  -AllowStartIfOnBatteries `
-  -DontStopIfGoingOnBatteries `
-  -StartWhenAvailable
-
-Stop-ScheduledTask -TaskName "kiro-provider" -ErrorAction SilentlyContinue
-Register-ScheduledTask `
-  -TaskName "kiro-provider" `
-  -Action $Action `
-  -Trigger $Trigger `
-  -Principal $Principal `
-  -Settings $Settings `
-  -Description "Local AWS Kiro gateway for AI agents" `
-  -Force | Out-Null
-Start-ScheduledTask -TaskName "kiro-provider"
-```
-
-Inspect, restart, and follow logs:
-
-```powershell
-Get-ScheduledTask -TaskName "kiro-provider" | Get-ScheduledTaskInfo
-Stop-ScheduledTask -TaskName "kiro-provider"
-Start-ScheduledTask -TaskName "kiro-provider"
-Get-Content "$env:LOCALAPPDATA\kiro-provider\service.log" -Tail 100 -Wait
-```
-
-To remove the task and launcher:
-
-```powershell
-Stop-ScheduledTask -TaskName "kiro-provider" -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName "kiro-provider" -Confirm:$false
-Remove-Item "$env:APPDATA\kiro-provider\service.ps1"
-```
-
-This task intentionally runs only in the current user's interactive session,
-so it can use that user's network access, provider database, and keyring
-without storing a Windows password. A true pre-login Windows service requires
-a service wrapper and a deliberately configured user account; do not run it
-as `LocalSystem` and expect the same provider-owned files.
-
-### Health checks and automation contract
-
-After either installation, verify both process liveness and authenticated
-readiness:
-
-```bash
-curl -fsS http://127.0.0.1:8787/health
-curl -fsS http://127.0.0.1:8787/ready \
-  -H 'Authorization: Bearer sk-your-private-key'
-```
-
-PowerShell equivalent:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8787/health"
-$Headers = @{ Authorization = "Bearer sk-your-private-key" }
-Invoke-RestMethod "http://127.0.0.1:8787/ready" -Headers $Headers
-```
-
-For an AI agent or installer, treat setup as successful only when:
-
-1. the binary and explicit config path exist;
-2. the service/task runs as the credential-owning user;
-3. `/health` succeeds;
-4. authenticated `/ready` succeeds, proving a readable auth source, at least
-   one active account, writable provider state, an available reasoning keyring,
-   and coverage for every key ID referenced by an unexpired replay record.
-
-Use the fixed service/task name above so repeated setup is idempotent. Restart
-it after changing the config or replacing the binary. Do not make the client
-responsible for starting a private provider process; configure clients only
-with the stable base URL and gateway API key.
+The [background-service guide](docs/SERVICE.md) contains complete systemd user
+service and Windows Scheduled Task examples, log locations, lifecycle commands,
+health gates, and removal steps.
 
 ## Configuration
 
-Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`; on Windows `%APPDATA%\kiro-provider\config.json`, with the legacy `~/.config` location still read as a fallback), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Unknown keys in the file are rejected with a suggestion, numeric fields are range-checked, and an empty environment variable counts as unset. Precedence is **CLI flag > environment variable > config file > schema default**.
+Configuration is loaded from the platform config directory, then overlaid by
+`KIRO_PROVIDER_*` environment variables and supported `serve` flags. Precedence
+is **CLI flag > environment variable > JSON file > schema default**. Unknown
+keys and invalid ranges fail at startup; an empty environment value is treated
+as unset.
 
-| Field                              | Default                                  | Env var                                          |
-| ---------------------------------- | ---------------------------------------- | ------------------------------------------------ |
-| `host`                             | `127.0.0.1`                              | `KIRO_PROVIDER_HOST`                             |
-| `port`                             | `8787`                                   | `KIRO_PROVIDER_PORT`                             |
-| `api_keys`                         | required, non-empty                      | `KIRO_PROVIDER_API_KEYS`                         |
-| `enable_legacy_chat_completions`   | `false`                                  | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS`   |
-| `protocol_projection_mode`         | `v3-auto`                                | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`         |
-| `session_affinity_mode`            | `explicit-only`                          | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`            |
-| `auth_source`                      | `local`                                  | `KIRO_PROVIDER_AUTH_SOURCE`                      |
-| `opencode_auth_db_path`            | `null` (deprecated since 0.7.0, ignored) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`            |
-| `proxy_url`                        | `null`                                   | `KIRO_PROVIDER_PROXY_URL`                        |
-| `default_region`                   | `us-east-1`                              | `KIRO_PROVIDER_DEFAULT_REGION`                   |
-| `sdk_http_keep_alive`              | `false`                                  | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`              |
-| `enforce_single_instance`          | `true`                                   | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`          |
-| `instance_lock_path`               | platform config directory                | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`               |
-| `runtime_endpoint_mode`            | `kiro-runtime`                           | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE`            |
-| `dynamic_model_catalog`            | `true`                                   | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG`            |
-| `model_catalog_ttl_ms`             | `900000`                                 | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS`             |
-| `model_catalog_stale_ttl_ms`       | `86400000`                               | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS`       |
-| `model_catalog_request_timeout_ms` | `10000`                                  | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
-| `account_selection_strategy`       | `lowest-usage`                           | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY`       |
-| `quota_recheck_interval_ms`        | `900000`                                 | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`        |
-| `quota_recheck_timeout_ms`         | `10000`                                  | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`         |
-| `quota_recheck_concurrency`        | `4`                                      | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`        |
-| `account_maintenance_enabled`      | `true`                                   | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED`      |
-| `account_maintenance_interval_ms`  | `60000`                                  | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS`  |
-| `account_maintenance_timeout_ms`   | `120000`                                 | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS`   |
-| `account_maintenance_concurrency`  | `4`                                      | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY`  |
-| `usage_refresh_interval_ms`        | `900000`                                 | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`        |
-| `session_affinity_ttl_ms`          | `86400000`                               | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS`          |
-| `session_affinity_max_entries`     | `10000`                                  | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES`     |
-| `reasoning_replay_key_path`        | auto-generated config path               | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`        |
-| `reasoning_replay_keys`            | `[]`                                     | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`            |
-| `reasoning_replay_ttl_ms`          | `86400000`                               | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`          |
-| `reasoning_replay_max_entries`     | `10000`                                  | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`     |
-| `log_level`                        | `info`                                   | `KIRO_PROVIDER_LOG_LEVEL`                        |
-
-The full field reference, including retry/timeout tuning and the test-only `test_upstream_endpoint`, lives in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
-
-## Proxy
-
-Some networks reach one model family directly while another needs a proxy (for example, GPT direct, Claude via an approved egress). Set `proxy_url` (config file, `KIRO_PROVIDER_PROXY_URL`, or `serve --proxy`) to route **all** upstream traffic — model calls, token refresh, quota probes, and device-code login — through a single HTTP(S) proxy. Leave it `null` for direct connections. See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md#proxy) for precedence details and examples.
+The checked-in [`config.example.json`](config.example.json) is an annotated
+starting point. The [configuration reference](docs/CONFIGURATION.md) is the
+source of truth for every field, default, environment variable, timeout, proxy,
+file location, and protocol switch. Do not copy provider-only fields such as
+`responses_fidelity_mode` into a downstream client's request options.
 
 ## Security
 
 - **Fail-closed authentication.** The server will not start without at least one non-empty `api_keys` entry. OpenAI routes require `Authorization: Bearer <key>`; Anthropic routes also accept `x-api-key: <key>`.
 - **Local bind by default.** `host` defaults to `127.0.0.1`; only bind `0.0.0.0` behind a firewall or authenticated reverse proxy.
-- **Single authentication authority.** The default local mode makes kiro-provider the sole owner after one-time import. Do not keep two independent processes rotating the same imported refresh token. The explicit shared compatibility mode validates OpenCode's schema and never migrates it.
+- **Single authentication authority.** The provider-owned local store is the sole authority after login or one-time import. Do not keep two independent processes rotating the same imported refresh token; the former live `opencode-shared` mode is no longer supported.
 - **Single service owner by default.** The compiled service acquires a platform-config lock before listening, so process-local account/session queues and SDK pools cannot be split accidentally.
 - **Locked-down provider state.** `accounts.db` (and its WAL/SHM files) are created with mode `0600`; in default local mode it contains credentials, usage, health, session affinity, and encrypted replay state.
 - **Authenticated reasoning replay.** The database stores token/fingerprint hashes and AES-256-GCM ciphertext, not raw `kr1_...` tokens. Missing active decryption keys fail startup.
@@ -549,184 +294,24 @@ Some networks reach one model family directly while another needs a proxy (for e
 
 > **Responsible use.** kiro-provider reuses AWS Kiro accounts you already control and consumes your own account quota. Supply your own accounts — this project is not a way to share or resell someone else's Kiro access, and it should not be used to circumvent per-account usage limits.
 
-## Using with an LLM
+## Client integrations
 
-Use `POST /v1/responses` for OpenAI Responses clients. Use
-`POST /v1/messages` for Anthropic Messages clients. Only point a
-Chat-Completions-only client (`@ai-sdk/openai-compatible`, older LangChain
-adapters, or an OpenCode custom provider using that package) at
-`POST /v1/chat/completions` after explicitly enabling the legacy endpoint.
+Use `POST /v1/responses` for OpenAI Responses clients and `POST /v1/messages`
+for Anthropic Messages clients. Enable `POST /v1/chat/completions` only for a
+client that cannot use either primary surface.
 
-The default `v3-auto` mode accepts standard instructions through KiroRuntime's
-native Responses field. Requests that need custom grammar, namespace tools,
-Codex collaboration items, encrypted reasoning replay, max effort, or
-`store:false` automatically use the stateless compatibility lane. Unsupported
-hosted capabilities fail with a field-level OpenAI error instead of being
-silently ignored.
+| Client | Endpoint | Guide |
+| --- | --- | --- |
+| Zuno | OpenAI Responses | [Configuration, session routing, and isolated validation](docs/ZUNO.md) |
+| Codex CLI | OpenAI Responses | [Isolated profile and supported request boundary](docs/CODEX.md) |
+| Claude Code | Anthropic Messages | [Isolated `kiroclaude` profile and compatibility boundary](docs/CLAUDE_CODE.md) |
+| Other SDKs | Responses, Messages, or explicitly enabled legacy Chat | [V3 protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md) |
 
-The default `session_affinity_mode: "explicit-only"` never hashes prompt text
-to guess a conversation. Responses checks, in order,
-`metadata.zuno_session_id`, `metadata.kiro_provider_session_id`, compatibility
-`client_metadata.thread_id|session_id|conversation_id`, and
-`prompt_cache_key`. Chat checks only `prompt_cache_key`; Anthropic Messages
-has no verified explicit affinity field. With no key, the request gets a
-fresh Kiro conversation on its first turn; a later full-history request can
-reuse the same account/conversation by matching the exact prior assistant
-output lineage. It can also reuse account-scoped SDK clients and transport
-objects. The Kiro SDK's direct/proxy agents use fresh sockets by default; set
-`sdk_http_keep_alive: true` only when the deployment has validated pooled
-socket behavior.
-The temporary `legacy-initial-input` mode restores only the old affinity
-heuristics and logs a startup warning; it does not alter request content.
-
-`previous_response_id` is supported for tenant-local mirrored responses.
-`conversation` objects remain unsupported. Retrieve, delete, input-items, and
-cancel use the local mirror; deleting it does not prove deletion of Kiro's
-upstream state.
-
-<details>
-<summary>Agent command reference</summary>
-
-- `kiro-provider serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]` — start the gateway.
-- `kiro-provider login [--config <path>] [--start-url <url>] [--region <region>]` — authenticate directly into the provider-owned local store.
-- `kiro-provider accounts list [--details | --json]` — show aligned account health/usage; details and JSON include the stable account ID but never credentials.
-- `kiro-provider accounts refresh (--all | <id|email>) [--config <path>] [--json]` — bypass the usage cache, refresh authoritative Kiro usage, and renew an access token only when needed or rejected upstream.
-- `kiro-provider accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]` — re-authenticate a selected account after Kiro identity verification while preserving its internal ID and session-affinity references.
-- `kiro-provider accounts import [--from <path>] [--force]` — copy authenticated OpenCode Kiro accounts once into the provider-owned local store; rows whose local copy is newer are skipped unless `--force` is given; no live database link remains.
-- `kiro-provider accounts remove <id|email> [--yes]` — remove one account and its affinity/lineage/reasoning state; interactive confirmation is required unless `--yes` is supplied.
-
-Contract: human-readable status lines go to stdout, errors to stderr, non-zero exit on failure. `GET /v1/models`, `GET /health`, and authenticated `GET /ready` return structured JSON.
-
-</details>
-
-## Use with Zuno
-
-Run one compiled kiro-provider service as the credential-owning OS user, then
-configure Zuno's native Rust OpenAI transport. No Node package, AI SDK, private
-header, or provider-spawn hook is required:
-
-```json
-{
-  "model": "kiro/auto",
-  "small_model": "kiro/auto",
-  "provider": {
-    "kiro": {
-      "name": "Local kiro-provider",
-      "transport": "openai",
-      "surface": "responses",
-      "env": ["KIRO_GATEWAY_API_KEY"],
-      "options": {
-        "baseURL": "http://127.0.0.1:8787/v1",
-        "maxTokens": null
-      },
-      "models": {
-        "auto": {
-          "name": "Kiro Auto",
-          "reasoning": true,
-          "tool_call": true
-        }
-      }
-    }
-  }
-}
-```
-
-Set `KIRO_GATEWAY_API_KEY` to one key from the provider's `api_keys`, then
-verify the native route:
-
-```bash
-export KIRO_GATEWAY_API_KEY='sk-your-private-key'
-zuno debug config
-zuno models kiro --verbose
-```
-
-The matching Zuno OpenAI Responses transport maps the durable Zuno session ID
-to standard `metadata.zuno_session_id` on every main turn and tool
-continuation. It does not add that ID to input, messages, instructions, tool
-descriptions, or any other model-visible field; internal title/summary calls
-do not join the main provider conversation. Therefore one Zuno session is
-serialized onto one persisted account/Kiro-conversation binding, while
-different sessions remain isolated even if their first prompt and upstream
-tool aliases are identical. Current declarations authorize new calls only.
-Private historical alias bindings can accompany stored Responses continuations;
-they never re-enable retired tools. See [historical tool scope](docs/HISTORICAL_TOOLS.md).
-
-Keep `surface: "responses"` for this integration. Selecting `chat` requires
-the separately enabled legacy endpoint and does not carry the Zuno Responses
-session metadata.
-
-Current Zuno sends agent instructions. Valid required-label
-`additionalContext` requests reached Kiro in live GPT and Claude probes, but
-the models did not receive the instruction content or preserve its priority.
-Consequently the verified functional path currently requires the provider's
-explicit `protocol_projection_mode: "legacy-user-prefix"`; `safe` correctly
-returns `unsupported_instruction_projection` and never rewrites the request.
-Set Zuno `options.maxTokens` to `null` as shown so its generic layer does not
-add the unsupported `max_output_tokens: 32000`. Neither setting uses a private
-Header or client-side prompt patch; the legacy mode is an explicit migration
-exception whose removal is gated on native instruction fidelity or completed
-client migration.
-
-## Use with Codex CLI
-
-Codex uses the correct Responses endpoint. The last compiled protocol gate
-with Codex
-0.150.0-alpha.9 and `claude-opus-5-max` now passes provider model validation,
-but its first request is rejected before Kiro at `reasoning.summary`, which
-has no proven native equivalent. The provider does not strip that field or
-simulate it with prompt text. The following isolated configuration reproduces
-the compatibility check without touching the real `~/.codex` state:
-
-```bash
-export CODEX_TEST_ROOT="$(mktemp -d)"
-export CODEX_HOME="$CODEX_TEST_ROOT/home"
-export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
-mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
-export LOCALGW_KEY="sk-...your gateway api key..."
-cat > "$CODEX_HOME/config.toml" <<'EOF'
-model = "claude-opus-5-max"
-model_provider = "localgw"
-model_reasoning_effort = "high"
-[model_providers.localgw]
-name = "Local Gateway"
-base_url = "http://127.0.0.1:8787/v1"
-env_key = "LOCALGW_KEY"
-wire_api = "responses"
-EOF
-codex exec --skip-git-repo-check "say hi"
-```
-
-For Codex 0.150.0-alpha.9 the expected result is a non-zero exit with
-`unsupported_reasoning_summary` at `reasoning.summary`. A future supported request shape must
-then pass a real shell/custom-tool loop, continuation, and restart reasoning
-replay before Codex is marked supported. Full details live in
-[`docs/CODEX.md`](docs/CODEX.md).
-
-## Use with Claude Code
-
-Claude Code 2.1.263 is supported through the existing Anthropic Messages
-surface. For an isolated Linux profile that cannot affect a normal
-Bedrock-backed `claude` command, run the checkout-local launcher:
-
-```bash
-PATH="$PWD/scripts:$PATH" kiroclaude
-```
-
-It uses a separate `CLAUDE_CONFIG_DIR`, `apiKeyHelper`, the gateway root
-`http://127.0.0.1:8787` (without `/v1`), and Kiro's Opus/Sonnet/Haiku plus
-GPT-5.6 Sol/Terra/Luna model IDs. GPT rows inherit Claude Code's effort picker
-behavior through a version-scoped `modelPicker` mapping. The default is Opus 5
-in Ultra mode, and away/recap summaries are disabled only in this profile.
-Ellipsis-only GPT reasoning is hidden behind a lossless replay token. A separate
-`kiroclaude --bedrock-fable` profile provides the existing native Bedrock Fable
-5.1 model without mixing providers in one conversation. Because Kiro exposes
-no native GPT output-token field, only the launcher explicitly opts into an
-audited advisory `max_tokens` mode; every other client remains fail-closed.
-Current text, tool/result, mid-system, adaptive/omitted thinking, safe
-context-management, cache-hint, and SSE ping behavior is covered. The scripts
-are not installed by the release installer in this revision. See
-[`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md) for configuration, compatibility
-boundaries, and isolated validation.
+The default `session_affinity_mode: "explicit-only"` never fingerprints prompt
+text. Clients should send a stable standard affinity field, or resend complete
+history / use `previous_response_id` as their API supports. Native and stateless
+transport selection remains a gateway concern; clients should not force an
+internal lane.
 
 ## Troubleshooting
 
@@ -742,10 +327,17 @@ stopped", reasoning-replay `400`s, the single-instance lock, configuration
 warnings, `413` variants, and proxy failures. It also lists `journalctl` grep
 recipes for the systemd service and the opt-in `request_shape` debug event.
 
+## Documentation
+
+[`docs/README.md`](docs/README.md) is the complete documentation map. It
+separates current operator/protocol guides from dated audit evidence and links
+the English and Simplified Chinese variants. Release history lives under
+[`changelog/`](changelog/README.md).
+
 ## Development
 
 ```bash
-bun install
+bun install --frozen-lockfile
 bun run lint
 bun run typecheck
 bun test
@@ -754,10 +346,11 @@ bun run build:binary
 bash scripts/security-check.sh   # security regression suite (Linux, needs openssl/curl/ss)
 ```
 
-`make ci` runs typecheck, lint, shell-script syntax checks, and the test suite.
-`make fmt-check` (and `make fmt`) additionally require the `oxfmt` formatter
-for YAML/JSON/Markdown; install the version CI uses with
-`bun install --global oxfmt@0.59.0`. `bun run scripts/smoke.ts --help` describes
+`make ci` runs the repository's fast correctness gate: formatting, typecheck,
+lint, shell-script syntax, tests, build, security self-tests, and coverage-config
+parity. `make pre-ci` adds the full coverage run and enforced coverage floor.
+`make fmt-check` uses the repository-pinned `oxfmt` version; install dependencies
+first with `bun install --frozen-lockfile`. `bun run scripts/smoke.ts --help` describes
 the live end-to-end checks against a running gateway.
 
 ## License

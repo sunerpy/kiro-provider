@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 
 export type PlatformPathOptions = {
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -10,6 +10,10 @@ export type PlatformPathOptions = {
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value.trim().length === 0 ? undefined : value;
+}
+
+export function joinPlatformPath(platform: NodeJS.Platform | string, ...parts: string[]): string {
+  return platform === "win32" ? win32.join(...parts) : posix.join(...parts);
 }
 
 /**
@@ -25,8 +29,8 @@ export function platformConfigRoot(options: PlatformPathOptions = {}): string {
   const platform = options.platform ?? process.platform;
   const homeDirectory = options.homeDirectory ?? homedir();
   return platform === "win32"
-    ? (nonEmpty(env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming"))
-    : (nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config"));
+    ? (nonEmpty(env.APPDATA) ?? joinPlatformPath(platform, homeDirectory, "AppData", "Roaming"))
+    : (nonEmpty(env.XDG_CONFIG_HOME) ?? joinPlatformPath(platform, homeDirectory, ".config"));
 }
 
 /**
@@ -36,8 +40,9 @@ export function platformConfigRoot(options: PlatformPathOptions = {}): string {
  */
 export function legacyConfigRoot(options: PlatformPathOptions = {}): string {
   const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
   const homeDirectory = options.homeDirectory ?? homedir();
-  return nonEmpty(env.XDG_CONFIG_HOME) ?? join(homeDirectory, ".config");
+  return nonEmpty(env.XDG_CONFIG_HOME) ?? joinPlatformPath(platform, homeDirectory, ".config");
 }
 
 export type DefaultConfigPathOptions = PlatformPathOptions & {
@@ -54,10 +59,20 @@ export type DefaultConfigPathOptions = PlatformPathOptions & {
  */
 export function defaultConfigPath(options: DefaultConfigPathOptions = {}): string {
   const exists = options.exists ?? existsSync;
-  const preferred = join(platformConfigRoot(options), "kiro-provider", "config.json");
   const platform = options.platform ?? process.platform;
+  const preferred = joinPlatformPath(
+    platform,
+    platformConfigRoot(options),
+    "kiro-provider",
+    "config.json",
+  );
   if (platform !== "win32") return preferred;
-  const legacy = join(legacyConfigRoot(options), "kiro-provider", "config.json");
+  const legacy = joinPlatformPath(
+    platform,
+    legacyConfigRoot(options),
+    "kiro-provider",
+    "config.json",
+  );
   if (legacy !== preferred && !exists(preferred) && exists(legacy)) return legacy;
   return preferred;
 }

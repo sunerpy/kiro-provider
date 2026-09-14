@@ -154,4 +154,4 @@ key migration is required. Keep a matching database/binary backup for rollback.
 - [Reasoning tokens](https://developers.openai.com/api/docs/guides/reasoning#how-reasoning-works)
 - [AI SDK 7 usage types](https://github.com/vercel/ai/blob/main/packages/ai/src/types/usage.ts)
 
-[中文说明](RESPONSES_USAGE.zh.md)
+[中文说明](readme/RESPONSES_USAGE.zh-CN.md)

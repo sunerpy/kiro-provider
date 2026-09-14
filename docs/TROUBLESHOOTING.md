@@ -1,6 +1,6 @@
 # Troubleshooting
 
-[简体中文](readme/TROUBLESHOOTING.zh.md) · English
+[简体中文](readme/TROUBLESHOOTING.zh-CN.md) · English
 
 A symptom-first runbook for operators. Every entry names the signal to look at
 (an audit event, an `accounts list --details` availability value, or an HTTP
@@ -400,7 +400,7 @@ counts, booleans, one hash, and two labels:
 | --- | --- |
 | `request_id` | Random per-public-request correlation id shared with projection, dispatch, and terminal events. |
 | `protocol` | `responses`, `anthropic-messages`, or `chat-completions`. |
-| `projection_mode` | `safe` or `legacy-user-prefix`. |
+| `projection_mode` | `v3-auto`, `safe`, `native-context-safe`, or `legacy-user-prefix`. |
 | `model` | The requested public model name. |
 | `message_count` | Canonical messages after adaptation. |
 | `user_message_count`, `assistant_message_count`, `tool_message_count`, `instruction_message_count` | Role counts (`instruction_message_count` is `system` plus `developer`). |

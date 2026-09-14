@@ -1,6 +1,6 @@
 # Architecture
 
-English only — a Chinese translation was left out to keep this contribution focused on the README/config docs; contributions to `docs/readme/ARCHITECTURE.zh.md` are welcome.
+English only — a Chinese translation was left out to keep this contribution focused on the README/config docs; contributions to `docs/readme/ARCHITECTURE.zh-CN.md` are welcome.
 
 ## Request flow
 

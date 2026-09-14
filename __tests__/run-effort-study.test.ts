@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { buildEffortStudyPlan } from "../scripts/effort-study.js";
 import { commandForCell, runId } from "../scripts/run-effort-study.js";
 
@@ -24,7 +25,7 @@ describe("effort study runner", () => {
 
     expect(runId(cell)).toBe("effort-study-r1-build-implementation-gpt-5.6-sol-max");
     expect(commandForCell(cell, options)).toContain(
-      "/tmp/configs/kiro-local-gpt-5.6-sol-max/zuno.json",
+      join("/tmp/configs", "kiro-local-gpt-5.6-sol-max", "zuno.json"),
     );
     expect(commandForCell(cell, options)).toContain("kiro-local/gpt-5.6-sol");
   });

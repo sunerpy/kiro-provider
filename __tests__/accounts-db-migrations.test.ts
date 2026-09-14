@@ -166,7 +166,7 @@ describe("AccountsDatabase schema versioning", () => {
 
 describe("AccountsDatabase account removal cascade", () => {
   test("removes output lineage and reasoning replay rows owned by the account only", () => {
-    const database = open(temporaryDatabasePath());
+    const database = open(":memory:");
     database.insertAccount(account({ id: "account-a" }));
     database.insertAccount(account({ id: "account-b", refreshToken: "refresh-token-2" }));
     database.claimSessionAffinity("session-a", "account-a", "conversation-a", 1_000, 100_000, 100);
@@ -206,7 +206,7 @@ describe("AccountsDatabase account removal cascade", () => {
   });
 });
 
-describe("AccountsDatabase file permissions", () => {
+describe.skipIf(process.platform === "win32")("AccountsDatabase file permissions", () => {
   test("creates the database 0600 before SQLite opens it so WAL sidecars inherit the mode", () => {
     const path = temporaryDatabasePath();
     const database = open(path);

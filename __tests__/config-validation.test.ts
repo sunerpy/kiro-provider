@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { CONFIG_ENV_VARIABLES, ConfigLoadError, loadConfig } from "../src/config/loader.js";
 import { defaultConfigPath, legacyConfigRoot, platformConfigRoot } from "../src/config/paths.js";
 import { ConfigSchema } from "../src/config/schema.js";
@@ -472,33 +472,38 @@ describe("loadConfig unknown keys", () => {
 });
 
 describe("loadConfig file permissions", () => {
-  test("warns once when the config file is group or world readable", () => {
-    const configPath = createConfigFile({ api_keys: ["sk-test"] }, 0o644);
-    const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      loadConfig({ configPath, env: {}, platform: "linux" });
+  test.skipIf(process.platform === "win32")(
+    "warns once when the config file is group or world readable",
+    () => {
+      const configPath = createConfigFile({ api_keys: ["sk-test"] }, 0o644);
+      const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        loadConfig({ configPath, env: {}, platform: "linux" });
 
-      const warnings = errorSpy.mock.calls
-        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-        .filter((entry) => entry.event === "config_file_permissions_loose");
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toMatchObject({
-        level: "warn",
-        path: configPath,
-        mode: "0644",
-        recommended_mode: "0600",
-      });
-    } finally {
-      errorSpy.mockRestore();
-    }
-  });
+        const warnings = errorSpy.mock.calls
+          .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+          .filter((entry) => entry.event === "config_file_permissions_loose");
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatchObject({
+          level: "warn",
+          path: configPath,
+          mode: "0644",
+          recommended_mode: "0600",
+        });
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
 
   test("does not warn for a 0600 file or on win32", () => {
     const strictPath = createConfigFile({ api_keys: ["sk-test"] }, 0o600);
     const loosePath = createConfigFile({ api_keys: ["sk-test"] }, 0o644);
     const errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      loadConfig({ configPath: strictPath, env: {}, platform: "linux" });
+      if (process.platform !== "win32") {
+        loadConfig({ configPath: strictPath, env: {}, platform: "linux" });
+      }
       loadConfig({ configPath: loosePath, env: {}, platform: "win32" });
 
       const warnings = errorSpy.mock.calls.filter(([line]) =>
@@ -541,9 +546,11 @@ describe("platform config paths", () => {
       }),
     ).toBe("C:\\Users\\u\\AppData\\Roaming");
     expect(platformConfigRoot({ platform: "win32", env: {}, homeDirectory: "/home/u" })).toBe(
-      join("/home/u", "AppData", "Roaming"),
+      win32.join("/home/u", "AppData", "Roaming"),
     );
-    expect(legacyConfigRoot({ env: {}, homeDirectory: "/home/u" })).toBe("/home/u/.config");
+    expect(legacyConfigRoot({ platform: "linux", env: {}, homeDirectory: "/home/u" })).toBe(
+      "/home/u/.config",
+    );
   });
 
   test("prefers the APPDATA config on win32 but falls back to the legacy ~/.config file", () => {
@@ -552,8 +559,8 @@ describe("platform config paths", () => {
       env: { APPDATA: "/appdata" },
       homeDirectory: "/home/u",
     };
-    const preferred = join("/appdata", "kiro-provider", "config.json");
-    const legacy = join("/home/u", ".config", "kiro-provider", "config.json");
+    const preferred = win32.join("/appdata", "kiro-provider", "config.json");
+    const legacy = win32.join("/home/u", ".config", "kiro-provider", "config.json");
 
     expect(defaultConfigPath({ ...options, exists: () => false })).toBe(preferred);
     expect(defaultConfigPath({ ...options, exists: (path) => path === legacy })).toBe(legacy);

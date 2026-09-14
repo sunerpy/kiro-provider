@@ -1,27 +1,17 @@
-# Dependencies and build output
+# Dependencies, generated output, and local tool state
 node_modules/
 dist/
-
-# Tool and agent state
+coverage/
+.codegraph/
 .omo/
 
-# Documentation (prose wrapping is hand-tuned)
+# Prose wrapping is reviewed by hand; release automation owns changelogs.
 README.md
 docs/
+changelog/
+CHANGELOG.md
 
-# Bun lockfile
+# Lock and release-tool-owned files
 bun.lock
-package.json
-
-# Release automation and example config
 .release-please-manifest.json
 release-please-config.json
-.github/workflows/release*.yml
-config.example.json
-
-# Tool-owned changelogs — release-please and git-cliff own these
-CHANGELOG*.md
-changelog/
-
-# Minified assets
-*.min.*

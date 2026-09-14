@@ -14,8 +14,8 @@ Codex 的真实自动压缩与 Zuno 的当前上下文、累计用量保持区�
 默认兼容模式返回标明来源的估算，严格模式省略不完整的 usage。这是有边界的兼容，
 不宣称恢复了上游没有公开的测量数据或账单。
 
-[脱敏验收记录](responses-usage-evidence-2026-09-14.json)包含具体响应 ID、usage、
-SDK 版本和验收二进制 SHA256；[字段契约](../RESPONSES_USAGE.zh.md)说明客户端用法。
+[脱敏验收记录](evidence/responses-usage-2026-09-14/validation.json)包含具体响应 ID、usage、
+SDK 版本和验收二进制 SHA256；[字段契约](../readme/RESPONSES_USAGE.zh-CN.md)说明客户端用法。
 
 ## 修复前后对照
 

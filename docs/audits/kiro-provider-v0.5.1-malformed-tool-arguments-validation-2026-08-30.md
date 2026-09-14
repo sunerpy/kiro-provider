@@ -117,4 +117,4 @@ preserved, and the tool dispatcher must remain untouched for the failed
 attempt. Existing `invalid_upstream_tool_call` handling must remain fatal.
 
 The complete downstream contract is in
-[`../ZUNO_STREAM_ERROR_HANDOFF.zh.md`](../ZUNO_STREAM_ERROR_HANDOFF.zh.md).
+[`../readme/ZUNO_STREAM_ERROR_HANDOFF.zh-CN.md`](../readme/ZUNO_STREAM_ERROR_HANDOFF.zh-CN.md).

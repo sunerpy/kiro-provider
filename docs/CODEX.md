@@ -1,19 +1,20 @@
 # Using kiro-provider V3 with Codex CLI
 
-> **Date**: 2026-09-05 · **Validated client**: Codex CLI 0.153.0
+> **Status**: current guide · **Latest checked-in validation**: Codex CLI 0.154.0 (2026-09-14)
 
 kiro-provider V3 exposes the OpenAI Responses wire API expected by a Codex
 custom `model_provider`.
 
 ## Supported V3 contract
 
-The compiled V3 candidate passed an isolated real-client gate covering:
+The checked-in isolated real-client evidence covers:
 
 - a normal `response.completed` turn;
 - custom command execution with the exact side effect;
 - a failed command followed by successful recovery;
 - namespace collaboration through `spawn_agent`, a child response, and
   `wait`;
+- compaction and Ultra reasoning paths on Codex CLI 0.154.0;
 - no leakage of the provider's private custom/namespace aliases.
 
 Codex request shapes that require custom grammar, namespace tools,
@@ -59,15 +60,15 @@ proxy, and a temporary workspace:
 
 ```bash
 CODEX_SMOKE_CODEX_BIN=/absolute/path/to/codex \
-CODEX_SMOKE_EXPECTED_VERSION=0.153.0 \
+CODEX_SMOKE_EXPECTED_VERSION=0.154.0 \
 KIRO_PROVIDER_SMOKE_MODE=tools \
 bash scripts/codex-smoke.sh
 ```
 
-The capture contains request bodies only in an owner-only temporary directory
-and is deleted by the exit trap. Failure diagnostics print only item types,
-roles, tool names, and presence flags—never credentials, raw reasoning
-envelopes, or prompt text.
+The capture writes only sanitized request-shape metadata (counts, item types,
+roles, hashes, and presence flags) to an owner-only temporary directory and is
+deleted by the exit trap. It never persists credentials, raw request bodies,
+reasoning envelopes, or prompt text.
 
 ## Remaining boundaries
 
@@ -81,5 +82,6 @@ envelopes, or prompt text.
 - `store: false` prevents local response mirroring; it is not an AWS Zero Data
   Retention guarantee.
 
-See [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md) and
-[V3 validation evidence](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md).
+See [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md), the
+[initial V3 validation](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md),
+and the later [replay/compaction validation](audits/responses-replay-delivery-2026-09-14.zh.md).

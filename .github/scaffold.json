@@ -1,0 +1,17 @@
+{
+  "profile": "node",
+  "addons": ["pr-title"],
+  "placeholders": {
+    "DEFAULT_BRANCH": "main",
+    "PACKAGE_MANAGER": "bun",
+    "BINARY": "kiro-provider",
+    "CURRENT_VERSION": "3.2.1"
+  },
+  "drift_allow": [
+    ".github/dependabot.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
+    ".oxfmtignore",
+    "release-please-config.json"
+  ]
+}

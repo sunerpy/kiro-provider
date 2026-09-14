@@ -966,7 +966,7 @@ export class AccountsDatabase {
    * already usable and the mode is best effort at this point.
    */
   private tightenPermissions(): void {
-    if (this.path === ":memory:") return;
+    if (this.path === ":memory:" || process.platform === "win32") return;
     for (const path of [this.path, `${this.path}-wal`, `${this.path}-shm`]) {
       if (!existsSync(path)) continue;
       try {

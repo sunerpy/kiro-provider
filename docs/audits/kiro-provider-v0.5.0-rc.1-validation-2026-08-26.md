@@ -5,7 +5,7 @@
 
 本报告覆盖协议保真修缮、Kiro 原生能力探针、自动化门禁，以及使用最终编译
 服务进行的真实客户端验收。历史文档
-[`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) 只代表
+[`kiro-provider-e2e-validation-2026-08-22.zh.md`](kiro-provider-e2e-validation-2026-08-22.zh.md) 只代表
 v0.4.0，不作为本次 RC 的通过证据。
 
 ## 1. 构建身份与边界

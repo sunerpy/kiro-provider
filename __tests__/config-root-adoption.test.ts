@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 import { defaultOpenCodeDatabasePath } from "../src/cli/import-accounts.js";
 import { platformConfigRoot } from "../src/config/paths.js";
 import { defaultInstanceLockPath } from "../src/server/single-instance.js";
@@ -61,14 +61,16 @@ describe("default store paths resolve through platformConfigRoot", () => {
         platform: "linux",
         homeDirectory: "/home/test",
       }),
-    ).toBe(join("/home/test", ".config", "kiro-provider", "service.instance"));
+    ).toBe(posix.join("/home/test", ".config", "kiro-provider", "service.instance"));
     expect(
       defaultInstanceLockPath({
         env: { APPDATA: "   " },
         platform: "win32",
         homeDirectory: "C:\\Users\\test",
       }),
-    ).toBe(join("C:\\Users\\test", "AppData", "Roaming", "kiro-provider", "service.instance"));
+    ).toBe(
+      win32.join("C:\\Users\\test", "AppData", "Roaming", "kiro-provider", "service.instance"),
+    );
   });
 
   test.skipIf(process.platform === "win32")(

@@ -6,7 +6,7 @@ in v0.5.x remain available; accepted streams no longer wait for a complete tool
 call before publishing.
 
 The Chinese client handoff is in
-[ZUNO_STREAM_ERROR_HANDOFF.zh.md](ZUNO_STREAM_ERROR_HANDOFF.zh.md). This release changes only the Provider.
+[Chinese downstream handoff](readme/ZUNO_STREAM_ERROR_HANDOFF.zh-CN.md). This release changes only the Provider.
 
 ## Why an in-stream error has no HTTP status
 

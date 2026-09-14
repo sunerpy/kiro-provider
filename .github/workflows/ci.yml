@@ -5,124 +5,108 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  ci:
-    runs-on: ubuntu-latest
+  quality:
+    name: Quality (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Supply-chain gate: bun.lock must resolve every tarball from the canonical
-      # npm registry (bunfig.toml pins it). Any mirror host fails the build.
-      - name: Verify bun.lock only references registry.npmjs.org
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Verify lockfile registry provenance
         shell: bash
         run: |
           set -euo pipefail
-          mirror_count=$(grep -c 'registry.npmmirror.com' bun.lock || true)
           foreign_hosts=$(grep -oE 'https?://[^/"]+' bun.lock | sort -u | grep -v '^https://registry.npmjs.org$' || true)
-          if [ "$mirror_count" != "0" ] || [ -n "$foreign_hosts" ]; then
-            echo "::error file=bun.lock::bun.lock references non-npmjs registry hosts (registry.npmmirror.com URLs: ${mirror_count}). Regenerate it with the registry pinned in bunfig.toml: rm bun.lock && bun install"
-            printf 'offending hosts:\n%s\n' "${foreign_hosts:-registry.npmmirror.com}" >&2
+          if [ -n "$foreign_hosts" ]; then
+            echo "::error file=bun.lock::bun.lock contains non-npmjs registry hosts"
+            printf 'offending hosts:\n%s\n' "$foreign_hosts" >&2
             exit 1
           fi
-          echo "bun.lock references only https://registry.npmjs.org (registry.npmmirror.com URLs: ${mirror_count})."
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.14"
-
-      - name: Cache Bun packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-1.3.x-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-1.3.x-
-
-      - name: Install dependencies
+      - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Install oxfmt
-        run: bun install --global oxfmt@0.59.0
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Lint
-        run: make lint
-
-      - name: Shell script syntax
-        run: make scripts-syntax
-
-      - name: Check formatting
-        run: make fmt-check
-
-      - name: Test
-        run: bun test
-
-      - name: Security regression suite
-        run: make security
-
-      - name: Codex smoke security self-test
-        run: make codex-smoke-security
+      - name: Run project gate
+        run: make check
 
   coverage:
-    runs-on: ubuntu-latest
+    name: Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.3.14"
+          bun-version-file: package.json
 
-      - name: Cache Bun packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-1.3.x-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-1.3.x-
-
-      - name: Install dependencies
+      - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Generate coverage report
-        run: bun test --coverage --coverage-reporter=lcov
-
-      - name: Enforce coverage gate
-        run: bun run scripts/coverage-gate.ts
+      - name: Enforce coverage and configuration parity
+        run: make coverage-gate coverage-parity
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           files: coverage/lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
-      - name: Check coverage configuration parity
-        run: bun run scripts/coverage-parity.ts
+  windows:
+    name: Windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
 
   ci-success:
     name: CI Success
-    needs: [ci, coverage]
+    needs: [quality, coverage, windows]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Confirm required jobs passed
+      - name: Require every CI job to succeed
         env:
-          CI_RESULT: ${{ needs.ci.result }}
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
-        run: |
-          test "$CI_RESULT" = "success"
-          test "$COVERAGE_RESULT" = "success"
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<<"$NEEDS_JSON"

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { runLogin } from "../src/cli/login.js";
-import { CLI_USAGE, type CliDependencies, main, parseCliArgs } from "../src/cli/main.js";
+import {
+  CLI_USAGE,
+  CLI_VERSION,
+  type CliDependencies,
+  main,
+  parseCliArgs,
+} from "../src/cli/main.js";
 import {
   ConfigLoadError,
   loadConfig,
@@ -174,6 +180,11 @@ function createHarness(
 }
 
 describe("parseCliArgs", () => {
+  test("parses long and short version flags", () => {
+    expect(parseCliArgs(["--version"])).toEqual({ kind: "version" });
+    expect(parseCliArgs(["-V"])).toEqual({ kind: "version" });
+  });
+
   test("parses serve overrides", () => {
     const command = parseCliArgs([
       "serve",
@@ -318,6 +329,17 @@ describe("parseCliArgs", () => {
 });
 
 describe("main", () => {
+  test("prints the package version without loading configuration", async () => {
+    const harness = createHarness();
+
+    const exitCode = await main(["--version"], harness.deps);
+
+    expect(exitCode).toBe(0);
+    expect(harness.stdout).toEqual([`kiro-provider ${CLI_VERSION}`]);
+    expect(harness.loaded).toHaveLength(0);
+    expect(harness.served).toHaveLength(0);
+  });
+
   test("prints usage for --help without dispatching", async () => {
     const harness = createHarness();
 

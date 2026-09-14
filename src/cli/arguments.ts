@@ -20,9 +20,11 @@ Commands:
       Remove an account from the provider-owned local store and write a tombstone.
 
 Options:
-  -h, --help  Show this help.`;
+  -h, --help     Show this help.
+  -V, --version  Show the installed version.`;
 
 type HelpCommand = { readonly kind: "help" };
+type VersionCommand = { readonly kind: "version" };
 type ServeCommand = {
   readonly kind: "serve";
   readonly configPath?: string;
@@ -66,6 +68,7 @@ type AccountsRemoveCommand = {
 
 export type CliCommand =
   | HelpCommand
+  | VersionCommand
   | ServeCommand
   | LoginCommand
   | AccountsListCommand
@@ -279,6 +282,9 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     case "--help":
     case "-h":
       return { kind: "help" };
+    case "--version":
+    case "-V":
+      return { kind: "version" };
     case "serve":
       return parseServe(argv.slice(1));
     case "login":

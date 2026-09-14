@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
-import { platformConfigRoot } from "../config/paths.js";
+import { joinPlatformPath, platformConfigRoot } from "../config/paths.js";
 import type { Config } from "../config/schema.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
 
@@ -62,7 +62,13 @@ function errorCode(error: unknown): string | undefined {
 }
 
 export function defaultInstanceLockPath(options: InstanceLockPathOptions = {}): string {
-  return join(platformConfigRoot(options), "kiro-provider", "service.instance");
+  const platform = options.platform ?? process.platform;
+  return joinPlatformPath(
+    platform,
+    platformConfigRoot(options),
+    "kiro-provider",
+    "service.instance",
+  );
 }
 
 function ensureLockTarget(path: string): void {

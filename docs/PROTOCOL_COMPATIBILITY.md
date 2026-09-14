@@ -1,6 +1,6 @@
 # V3 protocol compatibility
 
-> **Author**: kiro-provider maintainers · **Date**: 2026-09-05 · **Version**: v3.0
+> **Status**: current V3 contract
 > **Audience**: operators, client authors, and release reviewers
 
 ## TL;DR
@@ -24,6 +24,7 @@ not silently discarded.
 - [8. Error and telemetry contract](#8-error-and-telemetry-contract)
 - [9. Data-retention boundary](#9-data-retention-boundary)
 - [10. Validation evidence](#10-validation-evidence)
+- [11. Fidelity controls and verified boundaries](#11-fidelity-controls-and-verified-boundaries)
 
 ## 1. Public HTTP surface
 
@@ -259,22 +260,14 @@ preserved.
 
 ## 10. Validation evidence
 
-The V3 candidate passed:
+Validation counts and client versions live in dated, append-only records rather
+than this current contract. The relevant evidence chain is:
 
-- 1,531 repository tests;
-- TypeScript typecheck, lint, binary build, and `git diff --check`;
-- isolated SQLite `PRAGMA integrity_check=ok`;
-- native non-stream, standard SSE, function-tool, and
-  `previous_response_id` probes;
-- Codex CLI 0.153.0 connectivity, custom command execution, command-error
-  recovery, and namespace collaboration (`spawn_agent`, child result, and
-  `wait`) with no private alias leakage.
-
-Detailed implementation and live-probe evidence:
-
-- [V3 OpenAI Responses validation](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md)
-- [Request projection optimization](audits/kiro-provider-projection-optimization-2026-09-05.md)
-- [Audit index](audits/README.md)
+- [initial V3 OpenAI Responses validation (2026-09-05)](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md), including native/stateless routing and the original Codex client gate;
+- [request projection optimization (2026-09-05)](audits/kiro-provider-projection-optimization-2026-09-05.md);
+- [Responses fidelity validation (2026-09-10)](audits/kiro-provider-responses-fidelity-2026-09-10.zh.md), including storage migration and real SDK/Codex/Zuno matrices;
+- [replay and interrupted-delivery validation (2026-09-14)](audits/responses-replay-delivery-2026-09-14.zh.md), including Codex 0.154.0 compaction/Ultra and Zuno continuation;
+- the complete [audit index](audits/README.md), which states when newer evidence supersedes an earlier conclusion.
 
 Official OpenAI method references:
 
@@ -284,7 +277,7 @@ Official OpenAI method references:
 - [Cancel a response](https://developers.openai.com/api/reference/resources/responses/methods/cancel)
 - [List input items](https://developers.openai.com/api/reference/resources/responses/subresources/input_items/methods/list)
 
-## 8. Fidelity controls and verified boundaries
+## 11. Fidelity controls and verified boundaries
 
 `responses_fidelity_mode` defaults to `compatible`; `strict` rejects enumerated
 losses before model dispatch. `responses_instruction_lift` and
