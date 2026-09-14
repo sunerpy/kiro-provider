@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.4](https://github.com/sunerpy/kiro-provider/compare/v3.1.3...v3.1.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **responses:** 统一用量语义并修复上下文压缩统计 ([#45](https://github.com/sunerpy/kiro-provider/issues/45)) ([70d983e](https://github.com/sunerpy/kiro-provider/commit/70d983efaef09371ede25bd781f85c1259a07ea5))
+
 ## [3.1.3](https://github.com/sunerpy/kiro-provider/compare/v3.1.2...v3.1.3) (2026-09-14)
 
 
