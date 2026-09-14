@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.2.0](https://github.com/sunerpy/kiro-provider/compare/v3.1.4...v3.2.0) (2026-09-14)
+
+
+### Features
+
+* **claude:** 增加 Claude Code 独立兼容支持 ([17a33c0](https://github.com/sunerpy/kiro-provider/commit/17a33c00afc59e192ea8b99c00cbf00f7ea2e45d))
+* **claude:** 增加 Claude Code 独立兼容支持 ([65da471](https://github.com/sunerpy/kiro-provider/commit/65da471cf1c359e958cfc521d44e5c08ae05a516))
+
 ## [3.1.4](https://github.com/sunerpy/kiro-provider/compare/v3.1.3...v3.1.4) (2026-09-14)
 
 
