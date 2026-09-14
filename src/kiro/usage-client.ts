@@ -164,83 +164,93 @@ export async function fetchUsageLimits(
     readonly timeoutMs?: number;
   } = {},
 ): Promise<KiroUsageSnapshot> {
-  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(
+    () => timeoutController.abort(new DOMException("Kiro usage request timed out", "TimeoutError")),
+    options.timeoutMs ?? 10_000,
+  );
   const signal =
-    options.signal === undefined ? timeoutSignal : AbortSignal.any([options.signal, timeoutSignal]);
+    options.signal === undefined
+      ? timeoutController.signal
+      : AbortSignal.any([options.signal, timeoutController.signal]);
   let lastError: Error | undefined;
 
-  for (const [index, params] of USAGE_ATTEMPTS.entries()) {
-    if (signal.aborted) throw abortReason(signal);
-    const endpoint = new URL(buildUrl(KIRO_CONSTANTS.USAGE_LIMITS_URL, auth.region));
-    endpoint.searchParams.set("isEmailRequired", "true");
-    if (params.origin) endpoint.searchParams.set("origin", params.origin);
-    if (params.resourceType) {
-      endpoint.searchParams.set("resourceType", params.resourceType);
-    }
-    if (auth.profileArn) {
-      endpoint.searchParams.set("profileArn", auth.profileArn);
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(endpoint, {
-        method: "GET",
-        signal,
-        headers: {
-          Authorization: `Bearer ${auth.access}`,
-          "Content-Type": "application/json",
-          "x-amzn-kiro-agent-mode": "vibe",
-          "amz-sdk-request": "attempt=1; max=1",
-        },
-        ...fetchProxyOption(options.proxyUrl),
-      });
-    } catch (error) {
+  try {
+    for (const [index, params] of USAGE_ATTEMPTS.entries()) {
       if (signal.aborted) throw abortReason(signal);
-      lastError = error instanceof Error ? error : new KiroUsageError(String(error));
-      continue;
-    }
+      const endpoint = new URL(buildUrl(KIRO_CONSTANTS.USAGE_LIMITS_URL, auth.region));
+      endpoint.searchParams.set("isEmailRequired", "true");
+      if (params.origin) endpoint.searchParams.set("origin", params.origin);
+      if (params.resourceType) {
+        endpoint.searchParams.set("resourceType", params.resourceType);
+      }
+      if (auth.profileArn) {
+        endpoint.searchParams.set("profileArn", auth.profileArn);
+      }
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      const requestId = responseRequestId(response);
-      const upstreamCode = responseErrorType(response);
-      const detail =
-        body.length > 0
-          ? `${body.slice(0, 2_000)}${body.length > 2_000 ? "…" : ""}`
-          : `HTTP ${response.status}`;
-      const error = new KiroUsageError(
-        `Kiro usage service returned HTTP ${response.status}${
-          upstreamCode ? ` (${upstreamCode})` : ""
-        }${requestId ? ` [${requestId}]` : ""}: ${detail}`,
-        response.status,
-        upstreamCode,
-      );
-      if (body.includes("FEATURE_NOT_SUPPORTED") && index < USAGE_ATTEMPTS.length - 1) {
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+          method: "GET",
+          signal,
+          headers: {
+            Authorization: `Bearer ${auth.access}`,
+            "Content-Type": "application/json",
+            "x-amzn-kiro-agent-mode": "vibe",
+            "amz-sdk-request": "attempt=1; max=1",
+          },
+          ...fetchProxyOption(options.proxyUrl),
+        });
+      } catch (error) {
+        if (signal.aborted) throw abortReason(signal);
+        lastError = error instanceof Error ? error : new KiroUsageError(String(error));
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        const requestId = responseRequestId(response);
+        const upstreamCode = responseErrorType(response);
+        const detail =
+          body.length > 0
+            ? `${body.slice(0, 2_000)}${body.length > 2_000 ? "…" : ""}`
+            : `HTTP ${response.status}`;
+        const error = new KiroUsageError(
+          `Kiro usage service returned HTTP ${response.status}${
+            upstreamCode ? ` (${upstreamCode})` : ""
+          }${requestId ? ` [${requestId}]` : ""}: ${detail}`,
+          response.status,
+          upstreamCode,
+        );
+        if (body.includes("FEATURE_NOT_SUPPORTED") && index < USAGE_ATTEMPTS.length - 1) {
+          lastError = error;
+          continue;
+        }
+        // Credential failures and throttling apply to every parameter variant;
+        // cycling through the remaining ones would only hammer the endpoint.
+        if (response.status === 401 || response.status === 403 || response.status === 429) {
+          throw error;
+        }
         lastError = error;
         continue;
       }
-      // Credential failures and throttling apply to every parameter variant;
-      // cycling through the remaining ones would only hammer the endpoint.
-      if (response.status === 401 || response.status === 403 || response.status === 429) {
-        throw error;
+
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        throw new KiroUsageError(
+          "Kiro usage service returned invalid JSON",
+          response.status,
+          undefined,
+          { cause: error },
+        );
       }
-      lastError = error;
-      continue;
+      return parseUsagePayload(payload, Date.now());
     }
 
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch (error) {
-      throw new KiroUsageError(
-        "Kiro usage service returned invalid JSON",
-        response.status,
-        undefined,
-        { cause: error },
-      );
-    }
-    return parseUsagePayload(payload, Date.now());
+    throw lastError ?? new KiroUsageError("All Kiro usage service request variants failed");
+  } finally {
+    clearTimeout(timeout);
   }
-
-  throw lastError ?? new KiroUsageError("All Kiro usage service request variants failed");
 }
