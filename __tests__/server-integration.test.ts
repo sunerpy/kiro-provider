@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createConnection } from "node:net";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type {
   PipelineAccountManager,
@@ -535,30 +536,52 @@ describe("POST /v1/chat/completions", () => {
         makeClient,
       }),
     });
-    const clientController = new AbortController();
-    const pendingResponse = fetch(`http://127.0.0.1:${disconnectServer.port}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(validBody({ stream: true })),
-      signal: clientController.signal,
-    }).catch((error: unknown) => error);
-    await sendStarted.promise;
+    let socket: ReturnType<typeof createConnection> | undefined;
+    try {
+      const disconnectPort = disconnectServer.port;
+      if (disconnectPort === undefined) throw new Error("disconnect test server did not bind");
+      const requestBody = JSON.stringify(validBody({ stream: true }));
+      // Close a real peer socket instead of relying on Bun fetch AbortController timing,
+      // which differs between POSIX and Windows clients.
+      socket = createConnection({ host: "127.0.0.1", port: disconnectPort });
+      socket.on("error", () => undefined);
+      await new Promise<void>((resolve, reject) => {
+        socket?.once("connect", () => {
+          socket?.write(
+            [
+              "POST /v1/chat/completions HTTP/1.1",
+              `Host: 127.0.0.1:${disconnectPort}`,
+              `Authorization: Bearer ${API_KEY}`,
+              "Content-Type: application/json",
+              `Content-Length: ${encoder.encode(requestBody).byteLength}`,
+              "Connection: close",
+              "",
+              requestBody,
+            ].join("\r\n"),
+            (error) => {
+              if (error) reject(error);
+              else resolve();
+            },
+          );
+        });
+        socket?.once("error", reject);
+      });
+      await sendStarted.promise;
 
-    // When
-    clientController.abort();
+      // When
+      socket.destroy();
 
-    // Then
-    await expect(
-      Promise.race([
+      // Then
+      await Promise.race([
         upstreamAborted.promise,
-        Bun.sleep(3_000).then(() => Promise.reject(new Error("upstream was not aborted"))),
-      ]),
-    ).resolves.toBeUndefined();
-    expect(await pendingResponse).toBeInstanceOf(Error);
-    disconnectServer.stop(true);
+        Bun.sleep(3_000).then(() =>
+          Promise.reject(new Error("client disconnect did not abort the upstream request")),
+        ),
+      ]);
+    } finally {
+      socket?.destroy();
+      disconnectServer.stop(true);
+    }
   });
 });
 

@@ -84,29 +84,10 @@ function rawTables(path: string): string[] {
   }
 }
 
-function errorCode(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String(error.code)
-    : undefined;
-}
-
-async function removeTemporaryDirectory(directory: string): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      rmSync(directory, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      if (process.platform !== "win32" || errorCode(error) !== "EBUSY" || attempt >= 20)
-        throw error;
-      await Bun.sleep(100);
-    }
-  }
-}
-
-afterEach(async () => {
+afterEach(() => {
   for (const database of openDatabases.splice(0)) database.close();
   for (const directory of temporaryDirectories.splice(0)) {
-    await removeTemporaryDirectory(directory);
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -185,7 +166,7 @@ describe("AccountsDatabase schema versioning", () => {
 
 describe("AccountsDatabase account removal cascade", () => {
   test("removes output lineage and reasoning replay rows owned by the account only", () => {
-    const database = open(temporaryDatabasePath());
+    const database = open(":memory:");
     database.insertAccount(account({ id: "account-a" }));
     database.insertAccount(account({ id: "account-b", refreshToken: "refresh-token-2" }));
     database.claimSessionAffinity("session-a", "account-a", "conversation-a", 1_000, 100_000, 100);
