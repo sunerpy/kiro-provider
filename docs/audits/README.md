@@ -1,37 +1,58 @@
 # Audit and validation records
 
-Index of the probe, validation, and review documents that gate kiro-provider
-releases. Files are listed chronologically and are never rewritten after the
-fact, so where records overlap the newer one supersedes the older conclusion.
+This directory contains dated, append-only evidence for kiro-provider changes.
+Use the [current documentation index](../README.md) for the supported contract;
+use these records to answer what was tested, with which client/build, and where
+a later result superseded an earlier one.
 
-| Document | Summary |
-| --- | --- |
-| [kiro-protocol-projection-probe-2026-08-26.md](kiro-protocol-projection-probe-2026-08-26.md) | Live Kiro probes of instruction projection, reasoning, output-token limits, and same-role messages; the instruction-projection part is superseded by the 2026-08-27 re-probe. |
-| [kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md](kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md) | RC.1 acceptance: protocol-fidelity fixes, native-capability probes, automation gates, and real-client runs against the compiled service. |
-| [kiro-protocol-projection-reprobe-2026-08-27.md](kiro-protocol-projection-reprobe-2026-08-27.md) | Re-probe with valid `additionalContext` requests: Kiro accepts the shape but does not preserve instruction content or priority. |
-| [kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md](kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md) | RC.2 acceptance: canonical output refactor and Responses reasoning continuation compatibility, verified with the compiled binary. |
-| [kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md](kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md) | RC.3 acceptance: Claude Opus 5 catalog, effort and output limits, all three protocol entry points, an OpenCode tool loop, and the Codex / Claude Code field-level blockers. |
-| [kiro-provider-runtime-model-and-session-validation-2026-08-28.md](kiro-provider-runtime-model-and-session-validation-2026-08-28.md) | Runtime endpoint, live model catalog, and session-isolation acceptance against observed Kiro CLI/SDK behavior. |
-| [kiro-provider-auth-refresh-and-quota-validation-2026-08-29.md](kiro-provider-auth-refresh-and-quota-validation-2026-08-29.md) | First-phase access-token refresh and quota-exclusion evidence on the shared-auth path; superseded by the RC.4 local-auth record. |
-| [kiro-provider-stream-error-hardening-2026-08-29.md](kiro-provider-stream-error-hardening-2026-08-29.md) | Typed in-stream failure propagation for Responses, Chat Completions, and Anthropic Messages (branch `codex/typed-stream-errors`). |
-| [kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md](kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md) | RC.4 acceptance: the provider-owned local authentication store becomes the production default, with autonomous token, usage, and quota maintenance. |
-| [kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md](kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md) | RC.5 acceptance: `accounts list / refresh / relogin / remove` operations and live-usage validation of the local store. |
-| [kiro-provider-v0.5.1-malformed-tool-arguments-validation-2026-08-30.md](kiro-provider-v0.5.1-malformed-tool-arguments-validation-2026-08-30.md) | v0.5.1 validation: syntactically malformed completed tool arguments are classified as retryable, separately from structural tool-call violations. |
-| [kiro-provider-full-code-review-2026-09-02.zh.md](kiro-provider-full-code-review-2026-09-02.zh.md) | Full v0.5.1 code review (revision 2): prioritized findings, a phased remediation plan, and the test backlog. |
-| [kiro-protocol-evidence-probe-2026-09-02.zh.md](kiro-protocol-evidence-probe-2026-09-02.zh.md) | Live evidence probes for review items B12/B20/B21/B25: usage reset fields, zero-parameter tool events, split same-role tool history, and thinking-signature replay validation. |
-| [pending-probes.zh.md](pending-probes.zh.md) | Open probe backlog: whether replaying signature-only reasoning envelopes improves tool-loop continuity, and whether the `legacy-user-prefix` standalone-user-turn projection reproduces the plugin's turn-2 early-stop regression. Lists method and the decision each outcome drives. |
-| [kiro-ab-probes-2026-09-03.zh.md](kiro-ab-probes-2026-09-03.zh.md) | 真机 A/B：签名-only 推理回放与独立指令轮均无显著差异，两项待探针关闭 |
-| [kiro-provider-projection-optimization-2026-09-05.md](kiro-provider-projection-optimization-2026-09-05.md) | Request-boundary correction, payload-free request/attempt telemetry, and runnable native-context, effort, and Kiro CLI differential research tooling. |
-| [kiro-provider-projection-optimization-2026-09-05.zh.md](kiro-provider-projection-optimization-2026-09-05.zh.md) | 请求边界修复、无正文 request/attempt 遥测，以及 native-context、effort 与 Kiro CLI 差分研究工具。 |
-| [kiro-provider-v3-openai-responses-validation-2026-09-05.md](kiro-provider-v3-openai-responses-validation-2026-09-05.md) | V3 native Responses、stateless fallback、本地 Response 生命周期、KiroRuntime 扩展端点与 Codex 0.153.0 验证。 |
-| [kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md](kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md) | V3 原生 Responses、stateless fallback、本地 Response 生命周期、KiroRuntime 扩展端点与 Codex 0.153.0 验证。 |
-| [kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md](kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md) | Kiro CLI GenerateAssistantResponse、KAS CreateResponse 与 Provider V3 原生/fallback 通道的脱敏结构差异及可移植性决策。 |
-| [kiro-provider-responses-fidelity-2026-09-10.zh.md](kiro-provider-responses-fidelity-2026-09-10.zh.md) | V3 保真修复、官方 SDK 前后对比、真实 Codex/Zuno 工具与 reasoning 回放、能力启用门禁与存储迁移。 |
-| [kiro-provider-responses-before-after-2026-09-10.zh.md](kiro-provider-responses-before-after-2026-09-10.zh.md) | 请求和响应前后示例、SDK 38 项与客户端 12 项验收、Sol opaque 续接修复、GPT effort 和未启用能力。 |
-| [stream-delivery-recovery-2026-09-13.zh.md](stream-delivery-recovery-2026-09-13.zh.md) / [English](stream-delivery-recovery-2026-09-13.md) | 响应头与工具增量交付、503 因果链、RPC 首帧解码、SDK/Chat/Zuno 真实验收及 native 权限限制。 |
+Sanitized machine-readable artifacts live under [`evidence/`](evidence/). Audit
+records and artifacts must not contain credentials, raw prompts, private
+reasoning, account databases, or unsanitized wire captures.
 
-Latest joint replay validation: [historical tool scope](historical-tool-scope-2026-09-13.zh.md).
+## V3 Responses and current clients
 
-Older v0.4 evidence lives outside this directory in
-[`../E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md) and
-[`../KIRO_WEB_SEARCH_PROBE_2026-08-23.md`](../KIRO_WEB_SEARCH_PROBE_2026-08-23.md).
+| Date | Record | Scope |
+| --- | --- | --- |
+| 2026-09-14 | [Responses usage and context](responses-usage-2026-09-14.zh.md) | Usage normalization, current context versus cumulative consumption, Codex compaction, and Zuno context validation; [sanitized evidence](evidence/responses-usage-2026-09-14/validation.json). |
+| 2026-09-14 | [Responses replay and interrupted delivery](responses-replay-delivery-2026-09-14.zh.md) | Parent/child reasoning boundaries, tool completion ordering, Codex 0.154.0 compaction and Ultra, and Zuno continuation. |
+| 2026-09-13 | [Historical tool scope](historical-tool-scope-2026-09-13.zh.md) | Separates historical tool replay from current authorization, including stored namespace/custom aliases. |
+| 2026-09-13 | [Stream delivery and recovery](stream-delivery-recovery-2026-09-13.md) · [简体中文](stream-delivery-recovery-2026-09-13.zh.md) | Response-header delivery, tool argument deltas, causal diagnostics, and SDK/Chat/Zuno acceptance. |
+| 2026-09-10 | [Responses fidelity validation](kiro-provider-responses-fidelity-2026-09-10.zh.md) | Native/native-adapted/stateless gates, storage migration, strict mode, SDK matrix, and real Codex/Zuno validation. |
+| 2026-09-10 | [Responses before/after report](kiro-provider-responses-before-after-2026-09-10.zh.md) | Concrete request/output comparisons and the accepted/failed capability cells behind the fidelity change. |
+| 2026-09-06 | [GPT-5.6 Sol 1M context probe](kiro-gpt56-sol-1m-context-probe-2026-09-06.zh.md) | Probe-backed Sol prompt/output limits and the bounded catalog correction; Terra/Luna remain product-family inference. |
+| 2026-09-05 | [V3 OpenAI Responses validation](kiro-provider-v3-openai-responses-validation-2026-09-05.md) · [简体中文](kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md) | Initial native Responses, stateless fallback, local Response lifecycle, KiroRuntime endpoints, and Codex validation. |
+| 2026-09-05 | [Kiro CLI/provider wire diff](kiro-cli-provider-v3-wire-diff-2026-09-05.zh.md) | Sanitized differences among Kiro CLI, KiroRuntime CreateResponse, and provider transport lanes. |
+| 2026-09-05 | [Projection optimization](kiro-provider-projection-optimization-2026-09-05.md) · [简体中文](kiro-provider-projection-optimization-2026-09-05.zh.md) | Request-boundary correction, payload-free telemetry, and reproducible native-context/effort research tooling. |
+| 2026-09-05 | [Production provider design v0.8 snapshot](production-provider-design-v0.8-2026-09-05.zh.md) | Historical pre-V3 design baseline. Keep for decisions and provenance, not as the current protocol contract. |
+
+## Protocol and authentication foundations
+
+| Date | Record | Scope |
+| --- | --- | --- |
+| 2026-09-03 | [Kiro A/B probes](kiro-ab-probes-2026-09-03.zh.md) | Signature-only replay and standalone instruction-turn experiments; neither showed a significant improvement. |
+| 2026-09-03 | [Probe backlog and decision tables](pending-probes.zh.md) | Original P1/P2 methodology, now closed by the A/B record above. |
+| 2026-09-02 | [Protocol evidence probe](kiro-protocol-evidence-probe-2026-09-02.zh.md) | Usage reset fields, zero-parameter tool events, same-role tool history, and thinking-signature replay. |
+| 2026-09-02 | [Full code review](kiro-provider-full-code-review-2026-09-02.zh.md) | Prioritized v0.5.1 findings, remediation phases, and test backlog. Later implementation records supersede resolved conclusions. |
+| 2026-08-30 | [v0.5.1 malformed tool arguments](kiro-provider-v0.5.1-malformed-tool-arguments-validation-2026-08-30.md) | Retryable malformed completed arguments versus structural tool-call violations. |
+| 2026-08-29 | [RC.5 account management](kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md) | Provider-owned account list, refresh, relogin, remove, and live usage operations. |
+| 2026-08-29 | [RC.4 local authentication](kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md) | Provider-owned authentication store and autonomous token/usage/quota maintenance. |
+| 2026-08-29 | [Authentication refresh and quota](kiro-provider-auth-refresh-and-quota-validation-2026-08-29.md) | Early shared-auth evidence, superseded by the RC.4 provider-owned local-auth record. |
+| 2026-08-29 | [Stream error hardening](kiro-provider-stream-error-hardening-2026-08-29.md) | Initial typed in-stream failures across Responses, Chat Completions, and Anthropic Messages. |
+| 2026-08-28 | [Runtime model and session validation](kiro-provider-runtime-model-and-session-validation-2026-08-28.md) | Runtime endpoint, live model catalog, and session-isolation observations. |
+| 2026-08-27 | [RC.3 Opus 5 validation](kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md) | Opus catalog/effort/limits and then-current client blockers. |
+| 2026-08-27 | [RC.2 validation](kiro-provider-v0.5.0-rc.2-validation-2026-08-27.md) | Canonical output refactor and reasoning continuation compatibility. |
+| 2026-08-27 | [Instruction projection re-probe](kiro-protocol-projection-reprobe-2026-08-27.md) | Valid `additionalContext` was accepted but did not preserve instruction content or priority. |
+| 2026-08-26 | [RC.1 validation](kiro-provider-v0.5.0-rc.1-validation-2026-08-26.md) | Protocol-fidelity fixes, native capability probes, automation gates, and compiled-service client runs. |
+| 2026-08-26 | [Initial projection probe](kiro-protocol-projection-probe-2026-08-26.md) | Early instruction, reasoning, output-limit, and same-role tests; instruction conclusions are superseded by the 2026-08-27 re-probe. |
+| 2026-08-23 | [Kiro Web Search probe](kiro-web-search-probe-2026-08-23.zh.md) | Controlled evidence for rejecting unsupported upstream Web Search instead of fabricating tool events. |
+| 2026-08-22 | [Three-client E2E validation](kiro-provider-e2e-validation-2026-08-22.zh.md) | Historical OpenCode, Codex, Claude Code, legacy Chat, and shared-auth baseline before the current provider-owned/V3 architecture. |
+
+## Adding a record
+
+1. Name the Markdown file with a topic and ISO date.
+2. State the exact source revision, client/build versions, isolation boundary,
+   test result, and known limitations.
+3. Put sanitized JSON or manifests in `evidence/<record>/` and link them from the
+   report. Keep machine-generated artifacts separate from prose.
+4. Add one row to this index. If the result supersedes an older conclusion,
+   say so in both rows; do not rewrite the older record.

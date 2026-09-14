@@ -1,6 +1,6 @@
 # Configuration reference
 
-[简体中文](readme/CONFIGURATION.zh.md) · English
+[简体中文](readme/CONFIGURATION.zh-CN.md) · English
 
 kiro-provider loads configuration from a JSON file, layered with environment variables and (for `serve`) CLI flags. This document is the complete field reference; see the [README](../README.md#configuration) for a quick summary.
 

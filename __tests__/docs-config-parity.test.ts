@@ -13,8 +13,8 @@ const NON_SECRET_CONFIG_FIELDS = Object.keys(ConfigSchema.shape).filter(
 const CONFIGURATION_DOCS: Array<{ label: string; url: URL }> = [
   { label: "docs/CONFIGURATION.md", url: new URL("../docs/CONFIGURATION.md", import.meta.url) },
   {
-    label: "docs/readme/CONFIGURATION.zh.md",
-    url: new URL("../docs/readme/CONFIGURATION.zh.md", import.meta.url),
+    label: "docs/readme/CONFIGURATION.zh-CN.md",
+    url: new URL("../docs/readme/CONFIGURATION.zh-CN.md", import.meta.url),
   },
 ];
 

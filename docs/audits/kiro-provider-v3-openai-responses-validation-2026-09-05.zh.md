@@ -231,6 +231,6 @@ git diff --check
 
 相关记录：
 
-- [V3 协议兼容范围](../readme/PROTOCOL_COMPATIBILITY.zh.md)
+- [V3 协议兼容范围](../readme/PROTOCOL_COMPATIBILITY.zh-CN.md)
 - [请求投影优化](kiro-provider-projection-optimization-2026-09-05.zh.md)
 - [审计索引](README.md)

@@ -108,4 +108,4 @@ Developer 设置页与已加载前端 bundle 中也没有客户可操作的开�
 相关报告：
 
 - [V3 验证报告](kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md)
-- [V3 协议兼容范围](../readme/PROTOCOL_COMPATIBILITY.zh.md)
+- [V3 协议兼容范围](../readme/PROTOCOL_COMPATIBILITY.zh-CN.md)
