@@ -521,11 +521,17 @@ describe("POST /v1/chat/completions", () => {
     const refresher = new FakeTokenRefresher();
     const makeClient: PipelineClientFactory = () => ({
       async send(_command, options): Promise<SdkStreamResponse> {
-        options.abortSignal.addEventListener("abort", () => upstreamAborted.resolve(), {
-          once: true,
-        });
         sendStarted.resolve();
-        return new Promise<SdkStreamResponse>(() => undefined);
+        return new Promise<SdkStreamResponse>((_resolve, reject) => {
+          options.abortSignal.addEventListener(
+            "abort",
+            () => {
+              upstreamAborted.resolve();
+              reject(options.abortSignal.reason);
+            },
+            { once: true },
+          );
+        });
       },
     });
     const disconnectServer = Bun.serve({
@@ -544,6 +550,7 @@ describe("POST /v1/chat/completions", () => {
       // Close a real peer socket instead of relying on Bun fetch AbortController timing,
       // which differs between POSIX and Windows clients.
       socket = createConnection({ host: "127.0.0.1", port: disconnectPort });
+      const socketClosed = new Promise<void>((resolve) => socket?.once("close", () => resolve()));
       socket.on("error", () => undefined);
       await new Promise<void>((resolve, reject) => {
         socket?.once("connect", () => {
@@ -578,9 +585,15 @@ describe("POST /v1/chat/completions", () => {
           Promise.reject(new Error("client disconnect did not abort the upstream request")),
         ),
       ]);
+      await Promise.race([
+        socketClosed,
+        Bun.sleep(3_000).then(() =>
+          Promise.reject(new Error("client socket did not close after disconnect")),
+        ),
+      ]);
     } finally {
       socket?.destroy();
-      disconnectServer.stop(true);
+      await disconnectServer.stop(true);
     }
   });
 });
