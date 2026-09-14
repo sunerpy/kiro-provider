@@ -30,12 +30,25 @@ function stripFencedCode(markdown: string): string {
   return markdown.replace(/^\s*(```|~~~).*?^\s*\1\s*$/gms, "");
 }
 
+function stripInlineHtmlTags(text: string): string {
+  let plain = "";
+  let offset = 0;
+
+  while (offset < text.length) {
+    const open = text.indexOf("<", offset);
+    if (open === -1) return plain + text.slice(offset);
+
+    plain += text.slice(offset, open);
+    const close = text.indexOf(">", open + 1);
+    if (close === -1) return plain + text.slice(open + 1);
+    offset = close + 1;
+  }
+
+  return plain;
+}
+
 function githubSlug(text: string): string {
-  const plain = text
-    .replace(/<[^>]+>/g, "")
-    .replace(/[`*~]/g, "")
-    .trim()
-    .toLocaleLowerCase();
+  const plain = stripInlineHtmlTags(text).replace(/[`*~]/g, "").trim().toLocaleLowerCase();
   return Array.from(plain)
     .filter((character) => /[\p{L}\p{N}\s_-]/u.test(character))
     .join("")

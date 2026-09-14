@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
-import { join } from "node:path";
 import { z } from "zod";
-import { platformConfigRoot } from "../config/paths.js";
+import { joinPlatformPath, platformConfigRoot } from "../config/paths.js";
 import { RegionSchema } from "../kiro/regions.js";
 import type { ManagedAccount } from "../kiro/types.js";
 import type { AccountsDatabase } from "../storage/accounts-db.js";
@@ -58,7 +57,7 @@ export function defaultOpenCodeDatabasePath(
   env: Readonly<Record<string, string | undefined>> = process.env,
   platform: NodeJS.Platform | string = process.platform,
 ): string {
-  return join(platformConfigRoot({ env, platform }), "opencode", "kiro.db");
+  return joinPlatformPath(platform, platformConfigRoot({ env, platform }), "opencode", "kiro.db");
 }
 
 /**

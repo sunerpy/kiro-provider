@@ -79,7 +79,7 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
   } as Record<string, string>;
 }
 
-describe("kiroclaude Linux scripts", () => {
+describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => {
   test("uses an isolated profile, apiKeyHelper, current beta features, and exact arguments", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);

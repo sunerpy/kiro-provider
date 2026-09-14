@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { defaultOpenCodeDatabasePath, runImportAccounts } from "../src/cli/import-accounts.js";
 import type { ManagedAccount } from "../src/kiro/types.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
@@ -210,9 +210,9 @@ describe("defaultOpenCodeDatabasePath", () => {
   test("uses APPDATA on win32 and XDG_CONFIG_HOME elsewhere", () => {
     expect(
       defaultOpenCodeDatabasePath({ APPDATA: "/appdata", XDG_CONFIG_HOME: "/xdg" }, "win32"),
-    ).toBe(join("/appdata", "opencode", "kiro.db"));
+    ).toBe(win32.join("/appdata", "opencode", "kiro.db"));
     expect(
       defaultOpenCodeDatabasePath({ APPDATA: "/appdata", XDG_CONFIG_HOME: "/xdg" }, "linux"),
-    ).toBe(join("/xdg", "opencode", "kiro.db"));
+    ).toBe(posix.join("/xdg", "opencode", "kiro.db"));
   });
 });

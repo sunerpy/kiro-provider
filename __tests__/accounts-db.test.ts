@@ -304,13 +304,16 @@ describe("AccountsDatabase", () => {
     expect(database.resolveOutputLineage("lineage-key", 12_000)).toBeUndefined();
   });
 
-  test("restricts the database and existing WAL sidecars to mode 0600", () => {
-    const [database, , path] = createDatabasePair();
-    database.insertAccount(account());
+  test.skipIf(process.platform === "win32")(
+    "restricts the database and existing WAL sidecars to mode 0600",
+    () => {
+      const [database, , path] = createDatabasePair();
+      database.insertAccount(account());
 
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
-      if (existsSync(sidecar)) expect(statSync(sidecar).mode & 0o777).toBe(0o600);
-    }
-  });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
+        if (existsSync(sidecar)) expect(statSync(sidecar).mode & 0o777).toBe(0o600);
+      }
+    },
+  );
 });

@@ -84,10 +84,18 @@ afterEach(() => {
 
 describe("runImportAccounts", () => {
   test("resolves the default OpenCode database from XDG_CONFIG_HOME or the home directory", () => {
-    expect(defaultOpenCodeDatabasePath({ XDG_CONFIG_HOME: "/tmp/xdg" })).toBe(
+    expect(defaultOpenCodeDatabasePath({ XDG_CONFIG_HOME: "/tmp/xdg" }, "linux")).toBe(
       "/tmp/xdg/opencode/kiro.db",
     );
-    expect(defaultOpenCodeDatabasePath({})).toBe(join(homedir(), ".config", "opencode", "kiro.db"));
+    expect(defaultOpenCodeDatabasePath({}, process.platform)).toBe(
+      join(
+        process.platform === "win32"
+          ? join(homedir(), "AppData", "Roaming")
+          : join(homedir(), ".config"),
+        "opencode",
+        "kiro.db",
+      ),
+    );
   });
 
   test("imports usable rows, skips unusable rows, and remains idempotent", () => {

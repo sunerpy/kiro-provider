@@ -554,7 +554,7 @@ describe("POST /v1/chat/completions", () => {
     await expect(
       Promise.race([
         upstreamAborted.promise,
-        Bun.sleep(250).then(() => Promise.reject(new Error("upstream was not aborted"))),
+        Bun.sleep(1_000).then(() => Promise.reject(new Error("upstream was not aborted"))),
       ]),
     ).resolves.toBeUndefined();
     expect(await pendingResponse).toBeInstanceOf(Error);

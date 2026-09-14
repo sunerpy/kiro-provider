@@ -87,7 +87,7 @@ function rawTables(path: string): string[] {
 afterEach(() => {
   for (const database of openDatabases.splice(0)) database.close();
   for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -206,7 +206,7 @@ describe("AccountsDatabase account removal cascade", () => {
   });
 });
 
-describe("AccountsDatabase file permissions", () => {
+describe.skipIf(process.platform === "win32")("AccountsDatabase file permissions", () => {
   test("creates the database 0600 before SQLite opens it so WAL sidecars inherit the mode", () => {
     const path = temporaryDatabasePath();
     const database = open(path);

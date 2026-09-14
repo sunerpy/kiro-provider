@@ -16,6 +16,14 @@ describe("markdownAnchors", () => {
       new Set(["request-request_shape", "repeat", "repeat-1"]),
     );
   });
+
+  test("omits inline HTML tags without allowing tag fragments into anchors", () => {
+    expect(
+      markdownAnchors(
+        "# Intro <span>overview</span>\n# <script>alert</script> Safety\n# Unsafe <tag",
+      ),
+    ).toEqual(new Set(["intro-overview", "alert-safety", "unsafe-tag"]));
+  });
 });
 
 describe("checkMarkdownLinks", () => {

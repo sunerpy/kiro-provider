@@ -322,9 +322,11 @@ describe("loadConfig", () => {
     const configPath = join(directory, "config.json");
     writeFileSync(configPath, "{", "utf8");
 
+    const escapedConfigPath = configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     expect(() => loadConfig({ configPath, env: {} })).toThrow(
       new RegExp(
-        `Unable to read configuration file ${configPath.replaceAll("/", "\\/")}: .*JSON.*(?:error|Expected)`,
+        `Unable to read configuration file ${escapedConfigPath}: .*JSON.*(?:error|Expected)`,
         "i",
       ),
     );
