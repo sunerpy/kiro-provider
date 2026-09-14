@@ -194,8 +194,17 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
         event.body.item.type === "message",
     );
     expect(reasoningDoneIndex).toBeGreaterThan(messageAdded);
-    // ...but item-level done events still arrive in output order.
-    expect(reasoningDoneIndex).toBeLessThan(messageDoneIndex);
+    // The token covers all output. A client interrupted at reasoning.done must
+    // already have received the complete message and tool call it authenticates.
+    expect(reasoningDoneIndex).toBeGreaterThan(messageDoneIndex);
+    expect(reasoningDoneIndex).toBeGreaterThan(
+      events.findIndex(
+        (event) =>
+          event.type === "response.output_item.done" &&
+          isRecord(event.body.item) &&
+          event.body.item.type === "function_call",
+      ),
+    );
     expect(types.indexOf("response.reasoning_summary_text.done")).toBeLessThan(reasoningDoneIndex);
 
     const reasoningDone = itemDone(events, "reasoning");
@@ -214,10 +223,11 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
       "message",
       "function_call",
     ]);
-    // History assembled from output_item.done matches response.completed.output.
+    // Indexed output remains identical despite dependency-safe completion order.
     expect(
       events
         .filter((event) => event.type === "response.output_item.done")
+        .sort((a, b) => Number(a.body.output_index) - Number(b.body.output_index))
         .map((event) => event.body.item),
     ).toEqual(output);
     expectMonotonicSequence(events);

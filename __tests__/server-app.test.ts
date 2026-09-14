@@ -289,7 +289,7 @@ describe("createApp", () => {
     expect(body.models[0]).toMatchObject({
       supports_reasoning_summary_parameter: false,
       supports_search_tool: false,
-      web_search_tool_type: null,
+      web_search_tool_type: "text",
     });
   });
 

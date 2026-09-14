@@ -78,7 +78,9 @@ function codexModel(
     support_verbosity: false,
     default_verbosity: null,
     apply_patch_tool_type: null,
-    web_search_tool_type: null,
+    // Current Codex requires a format enum here even when search is disabled.
+    // supports_search_tool below remains the capability flag.
+    web_search_tool_type: "text",
     truncation_policy: { mode: "tokens", limit: entry.contextLimit },
     supports_image_detail_original: false,
     context_window: entry.contextLimit,
