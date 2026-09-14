@@ -81,6 +81,7 @@ export interface CanonicalToolDeclaration extends CanonicalSource {
 export interface CanonicalReasoningReplay extends CanonicalSource {
   readonly lookup:
     | { readonly kind: "responses-token"; readonly encryptedContent: string }
+    | { readonly kind: "anthropic-token"; readonly signature: string }
     | { readonly kind: "chat-hash"; readonly reasoningText: string }
     | { readonly kind: "anthropic-direct"; readonly content: KiroReasoningContent };
   readonly outputFingerprint: string;
@@ -119,7 +120,13 @@ export interface CanonicalRequest {
     | "high"
     | "xhigh"
     | "max";
-  readonly thinking?: { readonly enabled: boolean; readonly budgetTokens?: number };
+  readonly thinking?: {
+    readonly enabled: boolean;
+    readonly budgetTokens?: number;
+    /** Anthropic response visibility requested for signed thinking blocks. */
+    readonly display?: "omitted";
+  };
+  readonly temperature?: number;
   readonly outputTokenLimit?: number;
   readonly instructions?: CanonicalTextPart;
   readonly reasoningReplays: readonly CanonicalReasoningReplay[];

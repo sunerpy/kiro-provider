@@ -23,6 +23,14 @@ import { anthropicSessionAffinity, canonicalSessionLineage } from "../session-af
 
 export type MessagesDependencies = RouteDependencies;
 
+const OUTPUT_TOKEN_LIMIT_MODE_HEADER = "x-kiro-output-token-limit-mode";
+
+function unsupportedOutputTokenLimitMode(request: Request): "advisory" | undefined {
+  return request.headers.get(OUTPUT_TOKEN_LIMIT_MODE_HEADER)?.trim().toLowerCase() === "advisory"
+    ? "advisory"
+    : undefined;
+}
+
 function pipelineErrorType(status: number): AnthropicErrorType {
   if (status === 429) return "rate_limit_error";
   if (status === 503) return "overloaded_error";
@@ -84,6 +92,11 @@ function estimateInputTokens(value: unknown): number {
   return Math.max(1, estimateTokens(JSON.stringify(value)));
 }
 
+function claudeCodeSessionId(request: Request): string | undefined {
+  const value = request.headers.get("x-claude-code-session-id")?.trim();
+  return value && value.length <= 256 ? value : undefined;
+}
+
 // allow: SIZE_OK — owns one protocol boundary and its request-scoped resources.
 export async function handleMessages(
   request: Request,
@@ -105,6 +118,9 @@ export async function handleMessages(
     bodyResult.value,
     {
       requireMaxTokens: true,
+      ...(unsupportedOutputTokenLimitMode(request) !== undefined
+        ? { unsupportedOutputTokenLimitMode: "advisory" as const }
+        : {}),
     },
     config.protocol_projection_mode,
   );
@@ -123,7 +139,31 @@ export async function handleMessages(
     adapted.value.source,
     dependencies.tenantId,
     config.session_affinity_mode,
+    claudeCodeSessionId(request),
   );
+  const compatibility = {
+    ...(adapted.value.cacheControlCount > 0 ? { cacheControlObserved: true } : {}),
+    ...(adapted.value.contextManagementRequested ? { contextManagementRequested: true } : {}),
+    ...(adapted.value.thinkingDisplay !== undefined
+      ? { thinkingDisplay: adapted.value.thinkingDisplay }
+      : {}),
+    ...(adapted.value.outputTokenLimitMode !== undefined
+      ? { outputTokenLimitMode: adapted.value.outputTokenLimitMode }
+      : {}),
+  };
+  if (adapted.value.cacheControlCount > 0) {
+    auditLog("info", "anthropic_cache_control_ignored", {
+      request_id: ingress.requestId,
+      marker_count: adapted.value.cacheControlCount,
+    });
+  }
+  if (adapted.value.outputTokenLimitMode === "advisory") {
+    auditLog("info", "anthropic_output_token_limit_unenforced", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      requested_max_tokens: adapted.value.source.max_tokens,
+    });
+  }
   const lineage = canonicalSessionLineage(adapted.value.body, dependencies.tenantId);
 
   let streamOwnsRouteResources = false;
@@ -168,6 +208,7 @@ export async function handleMessages(
         inputTokens: estimateInputTokens(adapted.value.body),
         signals: ingress.signals,
         finalize: ingress.finalize,
+        ...compatibility,
       });
       streamOwnsRouteResources = true;
       return streaming;
@@ -175,7 +216,7 @@ export async function handleMessages(
     if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
       const completion = parseCanonicalCompletion(await pipelineResponse.json());
       if (completion && completion.model === adapted.value.body.model) {
-        return anthropicMessageResponse(completion, adapted.value.body.model);
+        return anthropicMessageResponse(completion, adapted.value.body.model, compatibility);
       }
       return anthropicError(
         502,
@@ -197,7 +238,9 @@ export async function handleMessageTokenCount(request: Request, config: Config):
     if (!bodyResult.ok) return bodyResult.response;
     const adapted = adaptAnthropicMessagesRequest(
       bodyResult.value,
-      {},
+      unsupportedOutputTokenLimitMode(request) === "advisory"
+        ? { unsupportedOutputTokenLimitMode: "advisory" }
+        : {},
       config.protocol_projection_mode,
     );
     if (!adapted.ok) {
@@ -206,7 +249,17 @@ export async function handleMessageTokenCount(request: Request, config: Config):
     const inputTokens = estimateInputTokens(adapted.value.body);
     return Response.json(
       { input_tokens: inputTokens },
-      { headers: { "x-kiro-token-count-mode": "estimate" } },
+      {
+        headers: {
+          "x-kiro-token-count-mode": "estimate",
+          ...(adapted.value.cacheControlCount > 0
+            ? { "x-kiro-prompt-cache-mode": "unsupported" }
+            : {}),
+          ...(adapted.value.outputTokenLimitMode === "advisory"
+            ? { "x-kiro-output-token-limit-mode": "advisory-unenforced" }
+            : {}),
+        },
+      },
     );
   } finally {
     ingress.finalize();

@@ -1,25 +1,29 @@
 import { z } from "zod";
-import { resolveOutputTokenLimit } from "../../kiro/output-token-limit.js";
+import {
+  resolveOutputTokenLimit,
+  supportsAdvisoryOutputTokenLimit,
+} from "../../kiro/output-token-limit.js";
 import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
   type CanonicalMessage,
+  type CanonicalReasoningReplay,
   type CanonicalRequest,
   type CanonicalTextPart,
   type CanonicalToolCall,
   type CanonicalToolDeclaration,
-  type KiroReasoningContent,
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
+import { isGpt56Model } from "../responses/reasoning.js";
 
 const ContentBlockSchema = z.object({ type: z.string().min(1) }).passthrough();
 
 const MessageSchema = z
   .object({
-    role: z.enum(["user", "assistant"]),
+    role: z.enum(["user", "assistant", "system"]),
     content: z.union([z.string(), z.array(ContentBlockSchema)]),
   })
   .passthrough();
@@ -47,6 +51,7 @@ const ThinkingSchema = z
   .object({
     type: z.enum(["enabled", "adaptive", "disabled"]),
     budget_tokens: z.number().int().positive().optional(),
+    display: z.enum(["summarized", "omitted", "updates"]).optional(),
   })
   .passthrough();
 
@@ -54,12 +59,20 @@ const AnthropicMessagesRequestSchema = z
   .object({
     model: z.string().min(1),
     max_tokens: z.number().int().positive().optional(),
+    temperature: z.number().min(0).max(1).optional(),
     messages: z.array(MessageSchema).min(1),
     system: z.union([z.string(), z.array(ContentBlockSchema)]).optional(),
     stream: z.boolean().default(false),
     tools: z.array(ToolSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
     thinking: ThinkingSchema.optional(),
+    cache_control: z.unknown().optional(),
+    context_management: z
+      .object({
+        edits: z.array(z.record(z.unknown())),
+      })
+      .passthrough()
+      .optional(),
     output_config: z
       .object({
         effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
@@ -78,6 +91,10 @@ export type AnthropicMessagesRequest = z.infer<typeof AnthropicMessagesRequestSc
 export type AdaptedAnthropicRequest = {
   readonly source: AnthropicMessagesRequest;
   readonly body: CanonicalRequest;
+  readonly cacheControlCount: number;
+  readonly contextManagementRequested: boolean;
+  readonly thinkingDisplay?: "omitted";
+  readonly outputTokenLimitMode?: "advisory";
 };
 
 export type AdaptAnthropicRequestResult =
@@ -94,12 +111,15 @@ type AnthropicFailure = Extract<AdaptAnthropicRequestResult, { ok: false }>;
 const REQUEST_KEYS = new Set([
   "model",
   "max_tokens",
+  "temperature",
   "messages",
   "system",
   "stream",
   "tools",
   "tool_choice",
   "thinking",
+  "cache_control",
+  "context_management",
   "output_config",
   "metadata",
 ]);
@@ -130,6 +150,107 @@ function isFailure(value: unknown): value is AnthropicFailure {
   return isRecord(value) && value.ok === false && typeof value.message === "string";
 }
 
+/**
+ * Prompt-cache controls do not change model-visible input. Kiro owns prompt
+ * caching automatically, so the Anthropic marker is accepted as a performance
+ * hint but never projected into synthetic prompt text. Keep validation narrow
+ * so unrelated beta payloads cannot disappear silently at this boundary.
+ */
+function validateCacheControl(value: unknown, path: string): AnthropicFailure | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    return failure(
+      `Invalid request: ${path} must be an ephemeral cache control`,
+      "unsupported_cache_control",
+      path,
+    );
+  }
+  const keys = validateAllowedKeys(value, path, new Set(["type", "ttl"]));
+  if (keys) return keys;
+  if (value.type !== "ephemeral") {
+    return failure(
+      `Invalid request: ${path}.type must be ephemeral`,
+      "unsupported_cache_control",
+      `${path}.type`,
+    );
+  }
+  if (value.ttl !== undefined && value.ttl !== "5m" && value.ttl !== "1h") {
+    return failure(
+      `Invalid request: ${path}.ttl must be 5m or 1h`,
+      "unsupported_cache_control",
+      `${path}.ttl`,
+    );
+  }
+  return undefined;
+}
+
+/**
+ * Claude Code requests the clear-thinking strategy with `keep: "all"`.
+ * Anthropic documents this exact variant as preserving every thinking block,
+ * so it is a semantic no-op and is safe to accept. Any edit that would really
+ * remove context remains fail-closed because Kiro has no equivalent control.
+ */
+function validateContextManagement(
+  value: AnthropicMessagesRequest["context_management"],
+): AnthropicFailure | undefined {
+  if (value === undefined) return undefined;
+  const keys = validateAllowedKeys(
+    value,
+    "context_management",
+    new Set(["edits"]),
+    "unsupported_context_edit",
+  );
+  if (keys) {
+    return {
+      ...keys,
+      message: `capability_rejected:context_management: ${keys.message}`,
+    };
+  }
+  for (const [index, edit] of value.edits.entries()) {
+    const path = `context_management.edits.${index}`;
+    const editKeys = validateAllowedKeys(
+      edit,
+      path,
+      new Set(["type", "keep"]),
+      "unsupported_context_edit",
+    );
+    if (editKeys) {
+      return {
+        ...editKeys,
+        message: `capability_rejected:context_management: ${editKeys.message}`,
+      };
+    }
+    if (edit.type !== "clear_thinking_20251015" || edit.keep !== "all") {
+      return failure(
+        `capability_rejected:context_management: ${path} would edit model-visible context and cannot be projected to Kiro`,
+        "unsupported_context_edit",
+        path,
+      );
+    }
+  }
+  return undefined;
+}
+
+function cacheControlCount(request: AnthropicMessagesRequest): number {
+  let count = request.cache_control === undefined ? 0 : 1;
+  if (Array.isArray(request.system)) {
+    count += request.system.filter((block) => block.cache_control !== undefined).length;
+  }
+  for (const message of request.messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block.cache_control !== undefined) count += 1;
+      if (block.type === "tool_result" && Array.isArray(block.content)) {
+        count += block.content.filter(
+          (part) => isRecord(part) && part.cache_control !== undefined,
+        ).length;
+      }
+    }
+  }
+  count += (request.tools ?? []).filter((tool) => tool.cache_control !== undefined).length;
+  return count;
+}
+
 function formatIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => {
@@ -147,8 +268,10 @@ function systemParts(
   const parts: CanonicalTextPart[] = [];
   for (const [index, block] of system.entries()) {
     const path = `system.${index}`;
-    const keys = validateAllowedKeys(block, path, new Set(["type", "text"]));
+    const keys = validateAllowedKeys(block, path, new Set(["type", "text", "cache_control"]));
     if (keys) return keys;
+    const cacheControl = validateCacheControl(block.cache_control, `${path}.cache_control`);
+    if (cacheControl) return cacheControl;
     if (block.type !== "text" || typeof block.text !== "string") {
       return failure(
         `Invalid request: system.${index} must be a text block`,
@@ -184,8 +307,11 @@ function toolResultContent(
         `${path}.${index}`,
       );
     }
-    const keys = validateAllowedKeys(block, `${path}.${index}`, new Set(["type", "text"]));
+    const blockPath = `${path}.${index}`;
+    const keys = validateAllowedKeys(block, blockPath, new Set(["type", "text", "cache_control"]));
     if (keys) return keys;
+    const cacheControl = validateCacheControl(block.cache_control, `${blockPath}.cache_control`);
+    if (cacheControl) return cacheControl;
     parts.push(textPart(block.text, `${path}.${index}.text`));
   }
   return parts;
@@ -194,7 +320,8 @@ function toolResultContent(
 function reasoningContent(
   block: Readonly<Record<string, unknown>>,
   path: string,
-): AnthropicFailure | KiroReasoningContent {
+  model: string,
+): AnthropicFailure | CanonicalReasoningReplay["lookup"] {
   if (block.type === "thinking") {
     const keys = validateAllowedKeys(
       block,
@@ -220,7 +347,30 @@ function reasoningContent(
         `${path}.signature`,
       );
     }
-    return { kind: "reasoning_text", text: block.thinking, signature: block.signature };
+    if (block.signature.startsWith("kr1_")) {
+      if (block.thinking.length > 0) {
+        return failure(
+          `Invalid request: ${path}.thinking must be empty when signature is a provider replay token`,
+          "invalid_reasoning_replay",
+          `${path}.thinking`,
+        );
+      }
+      return { kind: "anthropic-token", signature: block.signature };
+    }
+    if (block.thinking.length === 0) {
+      if (isGpt56Model(model)) {
+        return { kind: "chat-hash", reasoningText: "..." };
+      }
+      return failure(
+        `Invalid request: ${path}.thinking cannot be empty with a native signature`,
+        "invalid_reasoning_replay",
+        `${path}.thinking`,
+      );
+    }
+    return {
+      kind: "anthropic-direct",
+      content: { kind: "reasoning_text", text: block.thinking, signature: block.signature },
+    };
   }
   if (block.type === "redacted_thinking") {
     const keys = validateAllowedKeys(
@@ -245,8 +395,8 @@ function reasoningContent(
         throw new TypeError("invalid base64");
       }
       return {
-        kind: "redacted_content",
-        bytes: Uint8Array.from(bytes),
+        kind: "anthropic-direct",
+        content: { kind: "redacted_content", bytes: Uint8Array.from(bytes) },
       };
     } catch {
       return failure(
@@ -262,11 +412,12 @@ function reasoningContent(
 function mapMessage(
   message: AnthropicMessagesRequest["messages"][number],
   index: number,
+  model: string,
 ):
   | AnthropicFailure
   | {
       readonly message: CanonicalMessage;
-      readonly replay?: KiroReasoningContent;
+      readonly replay?: CanonicalReasoningReplay["lookup"];
     } {
   const path = `messages.${index}`;
   for (const key of Object.keys(message)) {
@@ -291,13 +442,29 @@ function mapMessage(
 
   const content: CanonicalContentPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
-  let replay: KiroReasoningContent | undefined;
+  let replay: CanonicalReasoningReplay["lookup"] | undefined;
   for (const [blockIndex, block] of message.content.entries()) {
     const blockPath = `${path}.content.${blockIndex}`;
+    if (message.role === "system" && block.type !== "text") {
+      return failure(
+        `Invalid request: ${blockPath} must be text in a system message`,
+        "unsupported_instruction_projection",
+        blockPath,
+      );
+    }
     switch (block.type) {
       case "text": {
-        const keys = validateAllowedKeys(block, blockPath, new Set(["type", "text"]));
+        const keys = validateAllowedKeys(
+          block,
+          blockPath,
+          new Set(["type", "text", "cache_control"]),
+        );
         if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
         if (typeof block.text !== "string") {
           return failure(
             `Invalid request: ${blockPath}.text must be a string`,
@@ -309,8 +476,17 @@ function mapMessage(
         break;
       }
       case "image": {
-        const keys = validateAllowedKeys(block, blockPath, new Set(["type", "source"]));
+        const keys = validateAllowedKeys(
+          block,
+          blockPath,
+          new Set(["type", "source", "cache_control"]),
+        );
         if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
         if (
           !isRecord(block.source) ||
           block.source.type !== "base64" ||
@@ -342,9 +518,14 @@ function mapMessage(
         const keys = validateAllowedKeys(
           block,
           blockPath,
-          new Set(["type", "id", "name", "input"]),
+          new Set(["type", "id", "name", "input", "cache_control"]),
         );
         if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
         if (typeof block.id !== "string" || typeof block.name !== "string") {
           return failure(
             `Invalid request: ${blockPath} requires id and name`,
@@ -364,9 +545,14 @@ function mapMessage(
         const keys = validateAllowedKeys(
           block,
           blockPath,
-          new Set(["type", "tool_use_id", "content", "is_error"]),
+          new Set(["type", "tool_use_id", "content", "is_error", "cache_control"]),
         );
         if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
         if (typeof block.tool_use_id !== "string") {
           return failure(
             `Invalid request: ${blockPath} requires tool_use_id`,
@@ -394,7 +580,7 @@ function mapMessage(
             blockPath,
           );
         }
-        const mapped = reasoningContent(block, blockPath);
+        const mapped = reasoningContent(block, blockPath, model);
         if ("ok" in mapped) return mapped;
         replay = mapped;
         break;
@@ -420,7 +606,12 @@ function mapTools(
   const names = new Set<string>();
   for (const [index, tool] of (tools ?? []).entries()) {
     for (const key of Object.keys(tool)) {
-      if (key !== "name" && key !== "description" && key !== "input_schema") {
+      if (
+        key !== "name" &&
+        key !== "description" &&
+        key !== "input_schema" &&
+        key !== "cache_control"
+      ) {
         return failure(
           `Invalid request: tools.${index}.${key} is not supported`,
           "unsupported_tool_field",
@@ -428,6 +619,8 @@ function mapTools(
         );
       }
     }
+    const cacheControl = validateCacheControl(tool.cache_control, `tools.${index}.cache_control`);
+    if (cacheControl) return cacheControl;
     if (names.has(tool.name)) {
       return failure(
         `Invalid request: duplicate tool name ${tool.name}`,
@@ -479,7 +672,10 @@ function validateToolHistory(
 
 export function adaptAnthropicMessagesRequest(
   raw: unknown,
-  options: { readonly requireMaxTokens?: boolean } = {},
+  options: {
+    readonly requireMaxTokens?: boolean;
+    readonly unsupportedOutputTokenLimitMode?: "advisory";
+  } = {},
   projectionMode: ProtocolProjectionMode = "safe",
 ): AdaptAnthropicRequestResult {
   const parsed = AnthropicMessagesRequestSchema.safeParse(raw);
@@ -504,14 +700,23 @@ export function adaptAnthropicMessagesRequest(
   if (options.requireMaxTokens === true && request.max_tokens === undefined) {
     return failure("Invalid request: max_tokens is required", undefined, "max_tokens");
   }
+  let outputTokenLimitMode: "advisory" | undefined;
   if (request.max_tokens !== undefined) {
     const outputLimit = resolveOutputTokenLimit(request.model, request.max_tokens);
     if (!outputLimit.ok) {
-      return failure(
-        `Invalid request: max_tokens: ${outputLimit.message}`,
-        outputLimit.code,
-        "max_tokens",
-      );
+      if (
+        outputLimit.code === "unsupported_output_token_limit" &&
+        options.unsupportedOutputTokenLimitMode === "advisory" &&
+        supportsAdvisoryOutputTokenLimit(request.model)
+      ) {
+        outputTokenLimitMode = "advisory";
+      } else {
+        return failure(
+          `Invalid request: max_tokens: ${outputLimit.message}`,
+          outputLimit.code,
+          "max_tokens",
+        );
+      }
     }
   }
   if (request.tool_choice?.type === "any" || request.tool_choice?.type === "tool") {
@@ -554,15 +759,33 @@ export function adaptAnthropicMessagesRequest(
       }
     }
   }
+  const cacheControl = validateCacheControl(request.cache_control, "cache_control");
+  if (cacheControl) return cacheControl;
+  const contextManagement = validateContextManagement(request.context_management);
+  if (contextManagement) return contextManagement;
   if (request.thinking) {
     for (const key of Object.keys(request.thinking)) {
-      if (key !== "type" && key !== "budget_tokens") {
+      if (key !== "type" && key !== "budget_tokens" && key !== "display") {
         return failure(
           `Invalid request: thinking.${key} is not supported`,
           "unsupported_parameter",
           `thinking.${key}`,
         );
       }
+    }
+    if (request.thinking.type === "disabled" && request.thinking.display !== undefined) {
+      return failure(
+        "Invalid request: thinking.display is only valid when thinking is enabled or adaptive",
+        "unsupported_parameter",
+        "thinking.display",
+      );
+    }
+    if (request.thinking.display !== undefined && request.thinking.display !== "omitted") {
+      return failure(
+        `capability_rejected:thinking.display: ${request.thinking.display} cannot be represented by Kiro`,
+        "unsupported_reasoning_display",
+        "thinking.display",
+      );
     }
   }
   if (request.metadata) {
@@ -587,11 +810,11 @@ export function adaptAnthropicMessagesRequest(
     messages.push({ role: "system", content: system, toolCalls: [], path: "system" });
   }
   for (const [index, source] of request.messages.entries()) {
-    const mapped = mapMessage(source, index);
+    const mapped = mapMessage(source, index, request.model);
     if ("ok" in mapped) return mapped;
     if (mapped.replay !== undefined) {
       reasoningReplays.push({
-        lookup: { kind: "anthropic-direct", content: mapped.replay },
+        lookup: mapped.replay,
         outputFingerprint: assistantOutputFingerprint({
           text: textFromParts(mapped.message.content),
           toolCalls: mapped.message.toolCalls.map((call) => ({
@@ -605,6 +828,13 @@ export function adaptAnthropicMessagesRequest(
       });
     }
     messages.push(mapped.message);
+  }
+  if (projectionMode === "safe" && messages.some((message) => message.role === "system")) {
+    return failure(
+      "Invalid request: system messages cannot be projected losslessly to Kiro in safe mode",
+      "unsupported_instruction_projection",
+      "messages",
+    );
   }
   const historyFailure = validateToolHistory(messages, tools);
   if (historyFailure) return historyFailure;
@@ -648,12 +878,27 @@ export function adaptAnthropicMessagesRequest(
             ...(request.thinking.budget_tokens !== undefined
               ? { budgetTokens: request.thinking.budget_tokens }
               : {}),
+            ...(request.thinking.display === "omitted" ? { display: "omitted" as const } : {}),
           },
         }
       : {}),
-    ...(request.max_tokens !== undefined ? { outputTokenLimit: request.max_tokens } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.max_tokens !== undefined && outputTokenLimitMode === undefined
+      ? { outputTokenLimit: request.max_tokens }
+      : {}),
     reasoningReplays,
-    includeEncryptedReasoning: false,
+    includeEncryptedReasoning: request.thinking?.display === "omitted",
   };
-  return { ok: true, value: { source: request, body } };
+  const count = cacheControlCount(request);
+  return {
+    ok: true,
+    value: {
+      source: request,
+      body,
+      cacheControlCount: count,
+      contextManagementRequested: request.context_management !== undefined,
+      ...(request.thinking?.display === "omitted" ? { thinkingDisplay: "omitted" as const } : {}),
+      ...(outputTokenLimitMode !== undefined ? { outputTokenLimitMode } : {}),
+    },
+  };
 }

@@ -3,6 +3,7 @@ import {
   KIRO_OUTPUT_TOKEN_LIMIT_MAX,
   KIRO_OUTPUT_TOKEN_LIMIT_MIN,
   resolveOutputTokenLimit,
+  supportsAdvisoryOutputTokenLimit,
 } from "../src/kiro/output-token-limit.js";
 
 describe("probe-backed Kiro output-token limits", () => {
@@ -42,4 +43,13 @@ describe("probe-backed Kiro output-token limits", () => {
       });
     },
   );
+
+  test("limits advisory compatibility to GPT 5.6 wire models and variants", () => {
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-sol-max", "gpt-5.6-terra", "gpt-5.6-luna-xhigh"]) {
+      expect(supportsAdvisoryOutputTokenLimit(model)).toBe(true);
+    }
+    for (const model of ["claude-opus-5", "qwen3-coder-next", "unknown-model"]) {
+      expect(supportsAdvisoryOutputTokenLimit(model)).toBe(false);
+    }
+  });
 });

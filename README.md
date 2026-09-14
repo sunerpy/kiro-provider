@@ -704,39 +704,29 @@ replay before Codex is marked supported. Full details live in
 
 ## Use with Claude Code
 
-Claude Code uses Anthropic Messages. The last compiled protocol run with Claude Code
-2.1.209, `claude-opus-5`, and max effort passes provider model validation but
-is rejected before Kiro at `context_management`, which has no proven native
-equivalent. The provider does not discard it. Direct Opus 5 Messages JSON/SSE
-within the verified subset passes; the standard Claude Code configuration
-below remains a compatibility probe rather than a full support claim:
+Claude Code 2.1.263 is supported through the existing Anthropic Messages
+surface. For an isolated Linux profile that cannot affect a normal
+Bedrock-backed `claude` command, run the checkout-local launcher:
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
-export ANTHROPIC_API_KEY="sk-your-private-key"
-claude --bare --safe-mode --model claude-opus-5 --effort max
+PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-The gateway accepts either `Authorization: Bearer <key>` or `x-api-key:
-<key>` for Anthropic routes. Direct Messages requests within the verified
-subset support typed JSON/SSE and tools, while `/v1/messages/count_tokens` is
-an explicit estimate. See
-[`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md).
-
-The current account-management and live-usage validation record is in
-[`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md).
-The current typed stream-error contract and downstream Zuno handoff are in
-[`docs/STREAM_ERROR_CONTRACT.md`](docs/STREAM_ERROR_CONTRACT.md) and
-[`docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md`](docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md).
-The preceding local-auth lifecycle record is retained in
-[`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md).
-The preceding protocol/client matrix is retained in
-[`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md).
-The older [`docs/E2E_VALIDATION_2026-08-22.md`](docs/E2E_VALIDATION_2026-08-22.md)
-is retained as historical v0.4 evidence only.
-
-The v3.1.1 stream delivery, RPC decoding and real SDK/Zuno before/after report is in
-[`docs/audits/stream-delivery-recovery-2026-09-13.md`](docs/audits/stream-delivery-recovery-2026-09-13.md).
+It uses a separate `CLAUDE_CONFIG_DIR`, `apiKeyHelper`, the gateway root
+`http://127.0.0.1:8787` (without `/v1`), and Kiro's Opus/Sonnet/Haiku plus
+GPT-5.6 Sol/Terra/Luna model IDs. GPT rows inherit Claude Code's effort picker
+behavior through a version-scoped `modelPicker` mapping. The default is Opus 5
+in Ultra mode, and away/recap summaries are disabled only in this profile.
+Ellipsis-only GPT reasoning is hidden behind a lossless replay token. A separate
+`kiroclaude --bedrock-fable` profile provides the existing native Bedrock Fable
+5.1 model without mixing providers in one conversation. Because Kiro exposes
+no native GPT output-token field, only the launcher explicitly opts into an
+audited advisory `max_tokens` mode; every other client remains fail-closed.
+Current text, tool/result, mid-system, adaptive/omitted thinking, safe
+context-management, cache-hint, and SSE ping behavior is covered. The scripts
+are not installed by the release installer in this revision. See
+[`docs/CLAUDE_CODE.md`](docs/CLAUDE_CODE.md) for configuration, compatibility
+boundaries, and isolated validation.
 
 ## Troubleshooting
 

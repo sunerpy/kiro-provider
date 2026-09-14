@@ -1,17 +1,17 @@
-const GPT_SOL_MODEL = /^gpt-5\.6-sol(?:-|$)/;
+const GPT_56_MODEL = /^gpt-5\.6-(?:sol|terra|luna)(?:-|$)/;
 
 function normalizedReasoning(text: string): string {
   return text.trim();
 }
 
-export function isGptSolReasoningPlaceholder(model: string, text: string): boolean {
-  if (!GPT_SOL_MODEL.test(model)) return false;
+export function isGpt56ReasoningPlaceholder(model: string, text: string): boolean {
+  if (!GPT_56_MODEL.test(model)) return false;
   const normalized = normalizedReasoning(text);
   return normalized === "..." || normalized === "…";
 }
 
-export function couldStillBeGptSolReasoningPlaceholder(model: string, text: string): boolean {
-  if (!GPT_SOL_MODEL.test(model)) return false;
+export function couldStillBeGpt56ReasoningPlaceholder(model: string, text: string): boolean {
+  if (!GPT_56_MODEL.test(model)) return false;
   const normalized = normalizedReasoning(text);
   return (
     normalized === "" ||
@@ -20,4 +20,8 @@ export function couldStillBeGptSolReasoningPlaceholder(model: string, text: stri
     normalized === "..." ||
     normalized === "…"
   );
+}
+
+export function isGpt56Model(model: string): boolean {
+  return GPT_56_MODEL.test(model);
 }

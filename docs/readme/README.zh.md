@@ -659,35 +659,25 @@ Codex 0.150.0-alpha.9 的预期结果是非零退出，并在
 
 ## 配合 Claude Code 使用
 
-Claude Code 使用 Anthropic Messages。最近一次编译后二进制协议门禁使用 Claude Code
-2.1.209、`claude-opus-5` 与 max effort 时已通过 Provider 模型校验，但会在
-调用 Kiro 前被 `context_management` 阻塞；该字段没有经过证明的原生等价
-能力，Provider 不会丢弃它。已验证子集内的直接 Opus 5 Messages JSON/SSE
-通过；以下标准配置仍是兼容性探针，而不是完整支持声明：
+Claude Code 2.1.263 已通过现有 Anthropic Messages 接口兼容。Linux 下可用
+checkout 内的隔离启动器，且不会影响普通 `claude` 的原生 Bedrock 配置：
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
-export ANTHROPIC_API_KEY="sk-your-private-key"
-claude --bare --safe-mode --model claude-opus-5 --effort max
+PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-Anthropic 路由同时接受 `Authorization: Bearer <key>` 和
-`x-api-key: <key>`。落在已验证子集内的直接 Messages 请求支持类型化 JSON/SSE
-和工具；`/v1/messages/count_tokens` 明确是估算值。详见
+启动器使用独立 `CLAUDE_CONFIG_DIR`、`apiKeyHelper`、不带 `/v1` 的网关根地址
+`http://127.0.0.1:8787`，并提供 Kiro 的 Opus/Sonnet/Haiku 以及 GPT-5.6
+Sol/Terra/Luna。GPT 行通过版本受限的 `modelPicker` 映射复用 Claude Code 的
+effort 选择界面。默认使用 Opus 5 + Ultra，并仅在该隔离 profile 内关闭离开后
+recap。GPT 的纯省略号 reasoning 会以无损回放令牌隐藏；另有独立
+`kiroclaude --bedrock-fable` profile 接入已有原生 Bedrock Fable 5.1，避免在同一
+会话混用 provider。Kiro 没有 GPT 原生 output-token 字段，因此只有启动器会显式
+开启可审计的 advisory `max_tokens` 模式；其他客户端仍默认 fail closed。当前
+文本、工具/结果、中途 system、adaptive/omitted thinking、安全 context
+management、cache hint 与 SSE ping 已覆盖。本修订版不会由 release installer
+安装这些脚本。配置、兼容边界与隔离验收见
 [`docs/readme/CLAUDE_CODE.zh.md`](CLAUDE_CODE.zh.md)。
-
-当前账号管理与真实用量验证记录见
-[`docs/audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.5-account-management-validation-2026-08-29.md)。
-v0.5.0 类型化流错误契约与 Zuno 下游接入说明见
-[`流交付与 SDK/Zuno 修复前后报告`](../audits/stream-delivery-recovery-2026-09-13.zh.md)、
-[`docs/STREAM_ERROR_CONTRACT.md`](../STREAM_ERROR_CONTRACT.md) 和
-[`docs/ZUNO_STREAM_ERROR_HANDOFF.zh.md`](../ZUNO_STREAM_ERROR_HANDOFF.zh.md)。
-此前本地认证生命周期记录保留在
-[`docs/audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md`](../audits/kiro-provider-v0.5.0-rc.4-local-auth-maintenance-validation-2026-08-29.md)。
-此前协议与客户端矩阵保留在
-[`docs/audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md`](../audits/kiro-provider-v0.5.0-rc.3-opus5-validation-2026-08-27.md)。
-旧的 [`docs/E2E_VALIDATION_2026-08-22.md`](../E2E_VALIDATION_2026-08-22.md)
-仅保留为历史 v0.4 证据。
 
 ## 排障
 
