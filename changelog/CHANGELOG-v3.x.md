@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.2](https://github.com/sunerpy/kiro-provider/compare/v3.2.1...v3.2.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **release:** 统一 CI 与发布状态机 ([49c58dc](https://github.com/sunerpy/kiro-provider/commit/49c58dcf703172d51db14182f29d325e6f26eb25))
+
 ## [3.2.1](https://github.com/sunerpy/kiro-provider/compare/v3.2.0...v3.2.1) (2026-09-14)
 
 
