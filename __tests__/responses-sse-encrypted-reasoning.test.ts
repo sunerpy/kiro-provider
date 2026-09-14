@@ -7,6 +7,7 @@ import { parseResponsesRequest } from "../src/server/request-schema.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import type { ResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 type ParsedEvent = {
   readonly type: string;
@@ -193,8 +194,17 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
         event.body.item.type === "message",
     );
     expect(reasoningDoneIndex).toBeGreaterThan(messageAdded);
-    // ...but item-level done events still arrive in output order.
-    expect(reasoningDoneIndex).toBeLessThan(messageDoneIndex);
+    // The token covers all output. A client interrupted at reasoning.done must
+    // already have received the complete message and tool call it authenticates.
+    expect(reasoningDoneIndex).toBeGreaterThan(messageDoneIndex);
+    expect(reasoningDoneIndex).toBeGreaterThan(
+      events.findIndex(
+        (event) =>
+          event.type === "response.output_item.done" &&
+          isRecord(event.body.item) &&
+          event.body.item.type === "function_call",
+      ),
+    );
     expect(types.indexOf("response.reasoning_summary_text.done")).toBeLessThan(reasoningDoneIndex);
 
     const reasoningDone = itemDone(events, "reasoning");
@@ -213,10 +223,11 @@ describe("Responses SSE encrypted reasoning completion (A6)", () => {
       "message",
       "function_call",
     ]);
-    // History assembled from output_item.done matches response.completed.output.
+    // Indexed output remains identical despite dependency-safe completion order.
     expect(
       events
         .filter((event) => event.type === "response.output_item.done")
+        .sort((a, b) => Number(a.body.output_index) - Number(b.body.output_index))
         .map((event) => event.body.item),
     ).toEqual(output);
     expectMonotonicSequence(events);
@@ -408,7 +419,7 @@ describe("Responses SSE typed tool restoration failures (B26 first step)", () =>
   test("a malformed custom wrapper fails with invalid_custom_tool_input", async () => {
     const bridge = bridgeFor([{ type: "custom", name: "exec" }]);
     const events = await adapt(
-      [tool(0, "call_1", "kiro_custom_0", '{"input":1}'), completed("tool_calls")],
+      [tool(0, "call_1", statelessCustomWireName("exec"), '{"input":1}'), completed("tool_calls")],
       { bridge },
     );
 

@@ -639,10 +639,14 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       failToolRestore(restored);
       return;
     }
-    // Item-level done events follow output order (reasoning, message, later
-    // reasoning, tool calls) so history assembled from output_item.done matches
-    // response.completed.output even though the reasoning done was deferred.
-    closeReasoning();
+    // A client can preempt at reasoning.done to admit new input. The replay
+    // envelope authenticates this response's entire output, so publish it only
+    // after every associated message/tool item is complete. Otherwise a client
+    // may persist the token while dropping the not-yet-delivered tool calls.
+    // output_index still determines the response's logical output order.
+    const deferReplayCompletion =
+      options.includeEncryptedReasoning || options.captureEncryptedReasoning;
+    if (!deferReplayCompletion) closeReasoning();
     if (messageIndex !== undefined) {
       const item: MessageOutputItem = {
         id: messageId,
@@ -674,27 +678,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       );
       completedOutput.set(messageIndex, item);
     }
-    flushDeferredReasoning();
-    const unattachedEncryptedContent = claimEncryptedContent();
-    if (unattachedEncryptedContent !== undefined) {
-      const outputIndex = nextOutputIndex;
-      nextOutputIndex += 1;
-      const item: ReasoningOutputItem = {
-        id: `rs_${randomUUID()}`,
-        type: "reasoning",
-        summary: [],
-        encrypted_content: unattachedEncryptedContent,
-      };
-      emit((sequence) =>
-        outputItemAdded({
-          item: { id: item.id, type: "reasoning", summary: [] },
-          outputIndex,
-          sequenceNumber: sequence,
-        }),
-      );
-      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
-      completedOutput.set(outputIndex, item);
-    }
+    if (!deferReplayCompletion) flushDeferredReasoning();
     for (const item of restored.items) {
       const accumulated = [...tools.values()].find((tool) => tool.itemId === item.id);
       const outputIndex = accumulated?.outputIndex;
@@ -734,6 +718,30 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         outputItemDone({ item: completedItem, outputIndex, sequenceNumber: sequence }),
       );
       completedOutput.set(outputIndex, completedItem);
+    }
+    if (deferReplayCompletion) {
+      closeReasoning();
+      flushDeferredReasoning();
+    }
+    const unattachedEncryptedContent = claimEncryptedContent();
+    if (unattachedEncryptedContent !== undefined) {
+      const outputIndex = nextOutputIndex;
+      nextOutputIndex += 1;
+      const item: ReasoningOutputItem = {
+        id: `rs_${randomUUID()}`,
+        type: "reasoning",
+        summary: [],
+        encrypted_content: unattachedEncryptedContent,
+      };
+      emit((sequence) =>
+        outputItemAdded({
+          item: { id: item.id, type: "reasoning", summary: [] },
+          outputIndex,
+          sequenceNumber: sequence,
+        }),
+      );
+      emit((sequence) => outputItemDone({ item, outputIndex, sequenceNumber: sequence }));
+      completedOutput.set(outputIndex, item);
     }
     const output = [...completedOutput.entries()]
       .sort(([left], [right]) => left - right)

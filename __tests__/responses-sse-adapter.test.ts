@@ -3,6 +3,7 @@ import {
   SdkStreamProtocolError,
   SemanticStreamTruncationError,
 } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
+import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
   CANONICAL_OUTPUT_VERSION,
@@ -11,6 +12,7 @@ import { parseResponsesRequest } from "../src/server/request-schema.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import type { ResponsesToolBridge } from "../src/server/responses/tool-bridge.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 type ParsedEvent = {
   readonly type: string;
@@ -759,7 +761,10 @@ describe("responsesSseAdapter", () => {
             index: 0,
             id: "call_exec",
             type: "function",
-            function: { name: "kiro_custom_0", arguments: JSON.stringify({ input: "printf ok" }) },
+            function: {
+              name: statelessCustomWireName("exec"),
+              arguments: JSON.stringify({ input: "printf ok" }),
+            },
           },
           {
             index: 1,
@@ -818,7 +823,7 @@ describe("responsesSseAdapter", () => {
             index: 1,
             id: "call_exec",
             type: "function",
-            function: { name: "kiro_custom_0", arguments: '{"input":1}' },
+            function: { name: statelessCustomWireName("exec"), arguments: '{"input":1}' },
           },
         ],
       }),
@@ -984,6 +989,99 @@ describe("responsesSseAdapter", () => {
       },
     });
   });
+
+  test.each([
+    ["gpt-5.6-sol", "..."],
+    ["claude-opus-5", "Inspect the two requested values."],
+    ["gpt-5.6-sol", ""],
+  ])(
+    "delivers all signed output before a %s reasoning interruption boundary (%s)",
+    async (model, reasoning) => {
+      const lines = [
+        ...(reasoning ? [chunk({ reasoning_content: reasoning })] : []),
+        chunk({ content: "Checking both values." }),
+        chunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_a",
+              type: "function",
+              function: { name: "alpha", arguments: "{}" },
+            },
+            {
+              index: 1,
+              id: "call_b",
+              type: "function",
+              function: { name: "beta", arguments: "{}" },
+            },
+          ],
+        }),
+        JSON.stringify({
+          canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+          type: "reasoning_encrypted",
+          encryptedContent: "kr1_signed-complete-output",
+        }),
+        chunk({}, "tool_calls"),
+      ].join("\n");
+      const events = await adaptFull(
+        makeHarness([encoder.encode(`${lines}\n`)], "stall", model),
+        undefined,
+        DEFAULT_RESPONSE_CONFIGURATION,
+        model,
+        true,
+      );
+      const delivered: Readonly<Record<string, unknown>>[] = [];
+      // Codex may stop reading at reasoning.done to admit a queued agent report.
+      // Only completed items reach its next request; deltas/added items do not.
+      for (const event of events) {
+        if (event.type !== "response.output_item.done" || !isRecord(event.body.item)) continue;
+        delivered.push(event.body.item);
+        if (event.body.item.type === "reasoning") break;
+      }
+      expect(delivered.filter((item) => item.type === "function_call")).toHaveLength(2);
+      const parsed = parseResponsesRequest({
+        model,
+        store: false,
+        input: [
+          { role: "user", content: "Check both values." },
+          ...delivered,
+          { type: "function_call_output", call_id: "call_a", output: "A" },
+          { type: "function_call_output", call_id: "call_b", output: "B" },
+          {
+            type: "agent_message",
+            author: "/reviewer",
+            recipient: "/root",
+            content: [{ type: "input_text", text: "An independent review is ready." }],
+          },
+        ],
+        tools: [],
+      });
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      const replayed = adaptResponsesRequest(parsed.value);
+      expect(replayed.ok).toBe(true);
+      if (!replayed.ok) return;
+      expect(replayed.body.reasoningReplays).toHaveLength(1);
+      expect(replayed.body.reasoningReplays[0]?.outputFingerprint).toBe(
+        assistantOutputFingerprint({
+          text: "Checking both values.",
+          toolCalls: [
+            { id: "call_a", name: "alpha", input: "{}" },
+            { id: "call_b", name: "beta", input: "{}" },
+          ],
+        }),
+      );
+      const complete = events.at(-1)?.body.response;
+      expect(isRecord(complete)).toBe(true);
+      if (!isRecord(complete) || !Array.isArray(complete.output)) return;
+      const done = events.filter((event) => event.type === "response.output_item.done");
+      expect(
+        done
+          .sort((a, b) => Number(a.body.output_index) - Number(b.body.output_index))
+          .map((event) => event.body.item),
+      ).toEqual(complete.output);
+    },
+  );
 
   test("fails and cancels upstream on malformed NDJSON", async () => {
     const harness = makeHarness([encoder.encode("{not-json}\n")], "stall");

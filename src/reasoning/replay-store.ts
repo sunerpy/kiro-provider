@@ -356,15 +356,27 @@ export class ReasoningReplayStore {
     now: number,
   ): ReasoningReplayResolution {
     const expectedFingerprint = fingerprintHash(context.outputFingerprint);
-    if (
-      !constantEqual(record.tenantId, context.tenantId) ||
-      record.model !== context.model ||
-      !constantEqual(record.fingerprintHash, expectedFingerprint) ||
-      (context.accountId !== undefined && record.accountId !== context.accountId) ||
-      (context.conversationId !== undefined && record.conversationId !== context.conversationId)
-    ) {
+    const mismatches = (
+      [
+        ["tenant", !constantEqual(record.tenantId, context.tenantId)],
+        ["model", record.model !== context.model],
+        ["output", !constantEqual(record.fingerprintHash, expectedFingerprint)],
+        ["account", context.accountId !== undefined && record.accountId !== context.accountId],
+        [
+          "conversation",
+          context.conversationId !== undefined && record.conversationId !== context.conversationId,
+        ],
+      ] as const
+    )
+      .filter(([, mismatch]) => mismatch)
+      .map(([field]) => field);
+    if (mismatches.length > 0) {
+      auditLog("warn", "reasoning_replay_context_mismatch", {
+        mismatch_fields: mismatches.join(","),
+        token_hash: record.tokenHash.slice(0, 16),
+      });
       throw new ReasoningReplayError(
-        "Reasoning replay context does not match tenant, model, account, conversation, or output",
+        `Reasoning replay context does not match: ${mismatches.join(", ")}. Replay the complete, unchanged assistant output associated with this token`,
         "reasoning_replay_context_mismatch",
       );
     }

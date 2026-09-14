@@ -20,6 +20,7 @@ import {
 } from "../src/protocol/output.js";
 import { createApp } from "../src/server/app.js";
 import { handleResponses } from "../src/server/routes/responses.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 const API_KEY = "sk-responses-integration";
 const MODEL = "gpt-5.6-sol";
@@ -955,7 +956,7 @@ describe("POST /v1/responses", () => {
       [
         {
           toolUseEvent: {
-            name: "kiro_custom_0",
+            name: statelessCustomWireName("exec"),
             toolUseId: "call_exec",
             input: JSON.stringify({ input: "printf ok" }),
             stop: true,
@@ -1053,7 +1054,7 @@ describe("POST /v1/responses", () => {
           toolCalls: [
             {
               id: "call_shared",
-              name: "kiro_custom_0",
+              name: options.body.tools[0]?.wireName,
               input: '{"input":"ok"}',
             },
           ],
@@ -1140,7 +1141,7 @@ describe("POST /v1/responses", () => {
     expect(
       commandInput.conversationState?.currentMessage?.userInputMessage?.userInputMessageContext
         ?.tools?.[0]?.toolSpecification?.name,
-    ).toBe("kiro_ns_0");
+    ).toMatch(/^kiro_ns_[0-9a-f]{40}$/);
   });
 
   test("returns an atomic 502 when a later custom wrapper is malformed", async () => {
@@ -1156,7 +1157,7 @@ describe("POST /v1/responses", () => {
         },
         {
           toolUseEvent: {
-            name: "kiro_custom_0",
+            name: statelessCustomWireName("exec"),
             toolUseId: "call_exec",
             input: '{"input":1}',
             stop: true,

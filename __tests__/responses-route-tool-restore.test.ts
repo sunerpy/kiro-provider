@@ -12,6 +12,7 @@ import {
   type CanonicalOutputToolCall,
 } from "../src/protocol/output.js";
 import { handleResponses, type ResponsesDependencies } from "../src/server/routes/responses.js";
+import { statelessCustomWireName } from "./canonical-test-helpers.js";
 
 const MODEL = "gpt-5.6-sol";
 
@@ -173,7 +174,9 @@ describe("non-stream Responses tool restoration failures", () => {
       }),
       config(),
       dependencies(async () =>
-        completionWithToolCalls([{ id: "call-1", name: "kiro_custom_0", input: '{"input":1}' }]),
+        completionWithToolCalls([
+          { id: "call-1", name: statelessCustomWireName("exec"), input: '{"input":1}' },
+        ]),
       ),
     );
     const body: unknown = await response.json();

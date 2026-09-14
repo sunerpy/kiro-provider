@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import OpenAI from "openai";
+import { CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } from "../src/protocol/output.js";
+import { responsesSseAdapter } from "../src/server/responses/sse-adapter.js";
 import { handleResponses, handleStoredResponse } from "../src/server/routes/responses.js";
 import { fidelityFixture, nativeResponse, sse, textEvents } from "./responses-fidelity-helpers.js";
 
@@ -23,6 +25,68 @@ function client(f: ReturnType<typeof fidelityFixture>): OpenAI {
     },
   });
 }
+
+test("official SDK assembles reasoning completed after its signed message and tool", async () => {
+  const sdk = new OpenAI({
+    apiKey: "sk-sdk-fixture",
+    baseURL: "http://gateway/v1",
+    maxRetries: 0,
+    fetch: async () => {
+      const events = [
+        { type: "started", conversationId: "sdk-order", model: "claude-opus-5", createdAt: 1 },
+        { type: "reasoning_delta", text: "Inspect the requested value." },
+        { type: "text_delta", text: "Checking." },
+        { type: "tool_call_delta", index: 0, id: "call_sdk", name: "echo", arguments: "{}" },
+        { type: "reasoning_encrypted", encryptedContent: "kr1_complete-output" },
+        {
+          type: "completed",
+          finishReason: "tool_calls",
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        },
+      ];
+      const signal = new AbortController().signal;
+      return responsesSseAdapter(
+        new Response(
+          `${events
+            .map((event) => JSON.stringify({ canonicalOutputVersion: 1, ...event }))
+            .join("\n")}\n`,
+          {
+            headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
+          },
+        ),
+        {
+          model: "claude-opus-5",
+          signals: { combined: signal, deadline: signal, client: signal },
+          finalize() {},
+          includeEncryptedReasoning: true,
+          configuration: {
+            instructions: null,
+            maxOutputTokens: null,
+            metadata: {},
+            reasoningEffort: null,
+            toolChoice: "auto",
+            tools: [],
+          },
+        },
+      );
+    },
+  });
+  const stream = sdk.responses.stream({ model: "claude-opus-5", input: "Check." });
+  const doneTypes: string[] = [];
+  stream.on("response.output_item.done", (event) => {
+    doneTypes.push(event.item.type);
+  });
+  const response = await stream.finalResponse();
+  expect(response.status).toBe("completed");
+  expect(doneTypes).toEqual(["message", "function_call", "reasoning"]);
+  expect(response.output.map((item) => item.type)).toEqual([
+    "reasoning",
+    "message",
+    "function_call",
+  ]);
+  expect(response.output[0]).toMatchObject({ encrypted_content: "kr1_complete-output" });
+  expect(response.output_text).toBe("Checking.");
+});
 
 test("official SDK creates, retrieves, lists input, and replays full output", async () => {
   const f = fidelityFixture();

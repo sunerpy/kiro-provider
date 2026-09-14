@@ -73,20 +73,31 @@ describe("redacted Codex Responses fixtures", () => {
     }
   });
 
-  test("keeps unsupported result blocks and unavailable custom bindings explicit", () => {
+  test("rejects unsupported result blocks but replays removed custom tools", () => {
     expect(
       adaptResponsesRequest(parsedResponses(fixture("codex-tool-turn-array.json"))),
     ).toMatchObject({ ok: false, code: "unsupported_tool_result_content" });
-    expect(
-      adaptResponsesRequest(parsedResponses(fixture("codex-custom-tool-turn.json"))),
-    ).toMatchObject({ ok: false, code: "missing_historical_tool_binding" });
+    const result = adaptResponsesRequest(parsedResponses(fixture("codex-custom-tool-turn.json")));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.tools).toHaveLength(0);
+    for (const binding of result.bridge.bindings) {
+      expect(result.bridge.identityFor(binding.wireName)).toBeUndefined();
+    }
   });
 
-  test("rejects namespace history instead of changing public tool identity", () => {
+  test("reprojects namespace history without granting old tools", () => {
     const result = adaptResponsesRequest(
       parsedResponses(fixture("codex-namespace-tool-turn.json")),
     );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe("missing_historical_tool_binding");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.tools).toHaveLength(0);
+    expect(result.bridge.bindings.some((binding) => binding.identity.kind === "namespace")).toBe(
+      true,
+    );
+    for (const binding of result.bridge.bindings) {
+      expect(result.bridge.identityFor(binding.wireName)).toBeUndefined();
+    }
   });
 });

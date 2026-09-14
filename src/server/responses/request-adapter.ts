@@ -501,7 +501,7 @@ function isAssistantOutputItem(item: ResponsesInputItem): boolean {
 }
 
 function isTurnGroupItem(item: ResponsesInputItem): boolean {
-  return isReasoningItem(item) || isAssistantOutputItem(item) || isAgentMessageItem(item);
+  return isReasoningItem(item) || isAssistantOutputItem(item);
 }
 
 type ReplayGroup = {
@@ -513,7 +513,8 @@ type ReplayGroup = {
 // A reasoning item belongs to the maximal run of adjacent assistant-output items
 // (reasoning, assistant messages, function/custom tool calls) around it. Every
 // reasoning item in that run describes the same Kiro turn, so the run shares one
-// output fingerprint and resolves to at most one replay envelope.
+// output fingerprint and resolves to at most one replay envelope. An agent
+// message is external input and ends the run, just like a user/tool input.
 function replayGroupAt(items: readonly ResponsesInputItem[], reasoningIndex: number): ReplayGroup {
   let start = reasoningIndex;
   while (start > 0) {
@@ -552,12 +553,12 @@ function groupHasReplayToken(items: readonly ResponsesInputItem[], group: Replay
   return false;
 }
 
-function groupHasAgentMessage(items: readonly ResponsesInputItem[], group: ReplayGroup): boolean {
-  for (let index = group.start; index <= group.end; index += 1) {
-    const item = items[index];
-    if (item && isAgentMessageItem(item)) return true;
-  }
-  return false;
+function groupPrecedesAgentMessage(
+  items: readonly ResponsesInputItem[],
+  group: ReplayGroup,
+): boolean {
+  const next = items[group.end + 1];
+  return next !== undefined && isAgentMessageItem(next);
 }
 
 function groupOutputFingerprint(
@@ -862,9 +863,16 @@ export function adaptResponsesRequest(
   const toolValidation = validateToolDeclarations(request);
   if (!toolValidation.ok) return toolValidation;
 
+  const reprojectLogicalHistory = previous?.legacyRequest === undefined;
   const bridgeResult = createResponsesToolBridge(request, previous?.items, {
+    // Stateless execution reprojects the complete logical history. Private
+    // aliases can therefore be rebuilt from public identities; old declarations
+    // are not needed and must not become authorization for new calls.
+    // Legacy canonical snapshots already contain wire names; retain their
+    // existing binding requirement instead of re-aliasing a partial history.
+    stableAliases: reprojectLogicalHistory,
     allowHistoricalWithoutDeclarations: true,
-    requireHistoricalBindings: true,
+    requireHistoricalBindings: !reprojectLogicalHistory,
     bindings: previous?.toolBindings,
   });
   if (!bridgeResult.ok) return bridgeResult;
@@ -939,7 +947,10 @@ export function adaptResponsesRequest(
         // The child message becomes external input in the parent conversation,
         // so replaying the child's private reasoning as a parent assistant turn
         // would cross conversation/account boundaries. Keep it non-model-visible.
-        if (group.firstOutputIndex === undefined && groupHasAgentMessage(request.input, group)) {
+        if (
+          group.firstOutputIndex === undefined &&
+          groupPrecedesAgentMessage(request.input, group)
+        ) {
           continue;
         }
         if (item.encrypted_content === undefined || item.encrypted_content === null) {
