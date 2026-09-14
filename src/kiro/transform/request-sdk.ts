@@ -50,6 +50,12 @@ export function transformToSdkRequest(
   if (outputTokenProjection?.ok === false) {
     throw new RequestTransformError(outputTokenProjection.message, outputTokenProjection.code);
   }
+  const additionalModelRequestFields: Record<string, unknown> = {
+    ...(outputTokenProjection?.ok === true
+      ? outputTokenProjection.additionalModelRequestFields
+      : {}),
+    ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+  };
 
   return {
     conversationState: request.conversationState,
@@ -61,10 +67,8 @@ export function transformToSdkRequest(
       body.projectionMode === "native-context-safe"
         ? "kiro-runtime"
         : "codewhisperer",
-    ...(outputTokenProjection?.ok === true
-      ? {
-          additionalModelRequestFields: outputTokenProjection.additionalModelRequestFields,
-        }
+    ...(Object.keys(additionalModelRequestFields).length > 0
+      ? { additionalModelRequestFields }
       : {}),
     streaming: true,
     effectiveModel: resolved,

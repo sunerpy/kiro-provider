@@ -454,7 +454,160 @@ describe("Anthropic request adapter", () => {
     });
   });
 
-  test("rejects unproven models and Kiro-invalid max_tokens ranges before the pipeline", () => {
+  test("accepts Claude Code cache hints and no-op context management without changing input", () => {
+    const result = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "claude-opus-5",
+        max_tokens: 64_000,
+        temperature: 0,
+        system: [
+          { type: "text", text: "billing marker" },
+          {
+            type: "text",
+            text: "You are a Claude coding agent.",
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "runtime context" },
+              {
+                type: "text",
+                text: "Reply with exactly: CLAUDE_CODE_OK",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            name: "Read",
+            description: "Read a file",
+            input_schema: { type: "object" },
+            cache_control: { type: "ephemeral", ttl: "5m" },
+          },
+        ],
+        thinking: { type: "adaptive", display: "omitted" },
+        context_management: {
+          edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+        },
+        output_config: { effort: "max" },
+        metadata: { user_id: '{"session_id":"test-session"}' },
+        stream: true,
+      }),
+      { requireMaxTokens: true },
+      "v3-auto",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          model: "claude-opus-5",
+          stream: true,
+          outputTokenLimit: 64_000,
+          temperature: 0,
+          reasoningEffort: "max",
+          includeEncryptedReasoning: true,
+          thinking: { enabled: true, display: "omitted" },
+          messages: [
+            {
+              role: "system",
+              content: [
+                { type: "text", text: "billing marker" },
+                { type: "text", text: "You are a Claude coding agent." },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "runtime context" },
+                { type: "text", text: "Reply with exactly: CLAUDE_CODE_OK" },
+              ],
+            },
+          ],
+          tools: [{ name: "Read", wireName: "Read" }],
+        },
+        cacheControlCount: 3,
+        contextManagementRequested: true,
+        thinkingDisplay: "omitted",
+      },
+    });
+  });
+
+  test("maps mid-conversation system text and provider replay signatures", () => {
+    const result = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "", signature: "kr1_token" },
+              { type: "text", text: "answer" },
+            ],
+          },
+          { role: "system", content: [{ type: "text", text: "Today is fixed." }] },
+          { role: "user", content: "follow-up" },
+        ],
+      }),
+      {},
+      "v3-auto",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          messages: [
+            { role: "user" },
+            { role: "assistant" },
+            { role: "system", content: [{ type: "text", text: "Today is fixed." }] },
+            { role: "user" },
+          ],
+          reasoningReplays: [{ lookup: { kind: "anthropic-token", signature: "kr1_token" } }],
+        },
+      },
+    });
+  });
+
+  test("restores a hidden GPT placeholder through the exact replay store lookup", () => {
+    const result = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "gpt-5.6-sol",
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                signature: ".KTR.native-placeholder-signature",
+              },
+              { type: "text", text: "answer" },
+            ],
+          },
+          { role: "user", content: "follow-up" },
+        ],
+      }),
+      { unsupportedOutputTokenLimitMode: "advisory" },
+      "v3-auto",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          reasoningReplays: [{ lookup: { kind: "chat-hash", reasoningText: "..." } }],
+        },
+      },
+    });
+  });
+
+  test("keeps GPT max_tokens fail-closed unless the Anthropic caller explicitly accepts advisory mode", () => {
     expect(
       adaptAnthropicMessagesRequest(validRequest({ model: "gpt-5.6-sol" }), {
         requireMaxTokens: true,
@@ -464,6 +617,49 @@ describe("Anthropic request adapter", () => {
       code: "unsupported_output_token_limit",
       param: "max_tokens",
     });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          model: "gpt-5.6-sol",
+          output_config: { effort: "max" },
+        }),
+        {
+          requireMaxTokens: true,
+          unsupportedOutputTokenLimitMode: "advisory",
+        },
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          model: "gpt-5.6-sol",
+          reasoningEffort: "max",
+          includeEncryptedReasoning: false,
+        },
+        outputTokenLimitMode: "advisory",
+      },
+    });
+    const accepted = adaptAnthropicMessagesRequest(validRequest({ model: "gpt-5.6-sol" }), {
+      requireMaxTokens: true,
+      unsupportedOutputTokenLimitMode: "advisory",
+    });
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) {
+      expect(accepted.value.body).not.toHaveProperty("outputTokenLimit");
+    }
+    expect(
+      adaptAnthropicMessagesRequest(validRequest({ model: "qwen3-coder-next" }), {
+        requireMaxTokens: true,
+        unsupportedOutputTokenLimitMode: "advisory",
+      }),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_output_token_limit",
+      param: "max_tokens",
+    });
+  });
+
+  test("rejects Kiro-invalid native max_tokens ranges before the pipeline", () => {
     expect(
       adaptAnthropicMessagesRequest(validRequest({ max_tokens: 1_023 }), {
         requireMaxTokens: true,
@@ -508,20 +704,20 @@ describe("Anthropic request adapter", () => {
     });
   });
 
-  test("rejects cache controls, unknown nested fields, and reasoning aliases", () => {
+  test("rejects unsupported cache controls, context edits, nested fields, and reasoning aliases", () => {
     expect(
       adaptAnthropicMessagesRequest(
         validRequest({
-          system: [{ type: "text", text: "system policy", cache_control: { type: "ephemeral" } }],
+          system: [{ type: "text", text: "system policy", cache_control: { type: "durable" } }],
         }),
         {},
         "legacy-user-prefix",
       ),
     ).toMatchObject({
       ok: false,
-      code: "unsupported_parameter",
-      param: "system.0.cache_control",
-      message: expect.stringContaining("system.0.cache_control"),
+      code: "unsupported_cache_control",
+      param: "system.0.cache_control.type",
+      message: expect.stringContaining("system.0.cache_control.type"),
     });
     expect(
       adaptAnthropicMessagesRequest(
@@ -564,11 +760,46 @@ describe("Anthropic request adapter", () => {
     });
 
     expect(
-      adaptAnthropicMessagesRequest(validRequest({ context_management: { edits: [] } })),
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          context_management: {
+            edits: [
+              {
+                type: "clear_thinking_20251015",
+                keep: { type: "thinking_turns", value: 1 },
+              },
+            ],
+          },
+        }),
+      ),
     ).toMatchObject({
       ok: false,
-      code: "unsupported_parameter",
-      param: "context_management",
+      code: "unsupported_context_edit",
+      param: "context_management.edits.0",
+      message: expect.stringContaining("capability_rejected:context_management"),
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          context_management: {
+            edits: [{ type: "clear_thinking_20251015", keep: "all", future: true }],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_context_edit",
+      param: "context_management.edits.0.future",
+      message: expect.stringContaining("capability_rejected:context_management"),
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({ thinking: { type: "adaptive", display: "updates" } }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_reasoning_display",
+      param: "thinking.display",
     });
   });
 });
@@ -623,6 +854,115 @@ describe("POST /v1/messages", () => {
     });
     expect(captured?.stream).toBe(false);
     expect(leaseEvents).toEqual(["disable", "restore"]);
+  });
+
+  test("routes Claude Code compatibility metadata and omitted thinking to the response adapter", async () => {
+    const response = await handleMessages(
+      request(
+        validRequest({
+          thinking: { type: "adaptive", display: "omitted" },
+          context_management: {
+            edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+          },
+          system: [
+            {
+              type: "text",
+              text: "system policy",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        }),
+      ),
+      config(),
+      dependencies(async () =>
+        canonicalResponse(
+          completion({
+            text: "answer",
+            reasoning: {
+              text: "private reasoning",
+              signature: "native-signature",
+              encryptedContent: "kr1_replay-token",
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(await response.json()).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "", signature: "kr1_replay-token" },
+        { type: "text", text: "answer" },
+      ],
+      context_management: { applied_edits: [] },
+    });
+  });
+
+  test.each([false, true])(
+    "accepts GPT max_tokens as advisory only through the explicit compatibility header (stream=%s)",
+    async (stream) => {
+      let captured: RunChatCompletionOptions | undefined;
+      const response = await handleMessages(
+        request(
+          validRequest({
+            model: "gpt-5.6-sol",
+            max_tokens: 64_000,
+            output_config: { effort: "xhigh" },
+            stream,
+          }),
+          "/v1/messages",
+          {
+            Authorization: `Bearer ${API_KEY}`,
+            "X-Kiro-Output-Token-Limit-Mode": "advisory",
+          },
+        ),
+        config(),
+        dependencies(async (options) => {
+          captured = options;
+          return stream
+            ? ndjson([chunk({ content: "answer" }, null), chunk({}, "stop")])
+            : canonicalResponse(completion({ model: "gpt-5.6-sol", text: "answer" }));
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kiro-output-token-limit-mode")).toBe("advisory-unenforced");
+      expect(captured?.body).toMatchObject({
+        model: "gpt-5.6-sol",
+        reasoningEffort: "xhigh",
+      });
+      expect(captured?.body).not.toHaveProperty("outputTokenLimit");
+      if (stream) await response.text();
+      else await response.json();
+    },
+  );
+
+  test("does not let a missing or misspelled compatibility header bypass GPT max_tokens", async () => {
+    const headerCases: ReadonlyArray<Readonly<Record<string, string>>> = [
+      { Authorization: `Bearer ${API_KEY}` },
+      {
+        Authorization: `Bearer ${API_KEY}`,
+        "X-Kiro-Output-Token-Limit-Mode": "ignore",
+      },
+    ];
+    for (const headers of headerCases) {
+      let called = false;
+      const response = await handleMessages(
+        request(validRequest({ model: "gpt-5.6-terra" }), "/v1/messages", headers),
+        config(),
+        dependencies(async () => {
+          called = true;
+          return canonicalResponse(completion());
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect(called).toBe(false);
+      expect(await response.json()).toMatchObject({
+        type: "error",
+        error: { type: "invalid_request_error" },
+      });
+    }
   });
 
   test("streams Anthropic Messages SSE in protocol order", async () => {
@@ -861,7 +1201,18 @@ describe("Claude Code HTTP surface", () => {
       request(
         {
           model: MODEL,
-          messages: [{ role: "user", content: "count this" }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "count this",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+            },
+          ],
         },
         "/v1/messages/count_tokens",
         { "x-api-key": API_KEY },
@@ -871,6 +1222,7 @@ describe("Claude Code HTTP surface", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-kiro-token-count-mode")).toBe("estimate");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
     expect(body).toMatchObject({ input_tokens: expect.any(Number) });
   });
 

@@ -1,0 +1,178 @@
+#!/bin/sh
+set -eu
+
+fail() {
+  printf 'kiroclaude: %s\n' "$1" >&2
+  exit 1
+}
+
+resolve_effort() {
+  case "$1" in
+    ultra | ultracode)
+      resolved_effort=xhigh
+      resolved_ultracode=true
+      ;;
+    low | medium | high | xhigh | max)
+      resolved_effort=$1
+      resolved_ultracode=false
+      ;;
+    *) fail "unsupported effort '$1' (use ultra, low, medium, high, xhigh, or max)" ;;
+  esac
+}
+
+home=${HOME:-}
+[ -n "$home" ] || fail 'HOME is not set'
+
+backend=${KIROCLAUDE_BACKEND:-kiro}
+case "${1:-}" in
+  --bedrock-fable)
+    backend=bedrock-fable
+    shift
+    ;;
+  --kiro)
+    backend=kiro
+    shift
+    ;;
+esac
+
+claude_bin=${KIROCLAUDE_CLAUDE_BIN:-claude}
+command -v "$claude_bin" >/dev/null 2>&1 || fail "Claude Code executable not found: $claude_bin"
+
+case "$backend" in
+  kiro)
+    config_dir=${KIROCLAUDE_CONFIG_DIR:-"$home/.kiroclaude"}
+    ;;
+  bedrock-fable | fable)
+    backend=bedrock-fable
+    config_dir=${KIROCLAUDE_CONFIG_DIR:-"$home/.kiroclaude-fable"}
+    ;;
+  *) fail "unsupported backend '$backend' (use kiro or bedrock-fable)" ;;
+esac
+[ -n "$config_dir" ] || fail 'KIROCLAUDE_CONFIG_DIR must not be empty'
+if [ -e "$config_dir" ] && [ ! -d "$config_dir" ]; then
+  fail "Claude config path is not a directory: $config_dir"
+fi
+
+if [ "$backend" = kiro ]; then
+  script_dir=$(unset CDPATH; cd -P "$(dirname "$0")" && pwd)
+  helper=${KIROCLAUDE_TOKEN_HELPER:-"$script_dir/kiroclaude-token"}
+  [ -x "$helper" ] || fail "token helper is not executable: $helper"
+
+  provider_config=${KIROCLAUDE_PROVIDER_CONFIG:-"${XDG_CONFIG_HOME:-$home/.config}/kiro-provider/config.json"}
+  base_url=${KIROCLAUDE_BASE_URL:-http://127.0.0.1:8787}
+  model=${KIROCLAUDE_MODEL:-opus}
+  resolve_effort "${KIROCLAUDE_EFFORT:-ultra}"
+  opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5}
+  sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5}
+  haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-haiku-4-5}
+  sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol}
+  terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra}
+  luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna}
+
+  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$opus_model" "$sonnet_model" "$haiku_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
+import json
+import shlex
+import sys
+from urllib.parse import urlsplit
+
+helper, base_url, model, effort, ultracode, opus, sonnet, haiku, sol, terra, luna = sys.argv[1:]
+parsed = urlsplit(base_url)
+if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be an absolute http(s) URL")
+if parsed.query or parsed.fragment or parsed.path.rstrip("/"):
+    raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be the gateway root, without /v1 or another path")
+if not all(value.strip() for value in (model, effort, opus, sonnet, haiku, sol, terra, luna)):
+    raise SystemExit("kiroclaude: model and effort settings must not be empty")
+print(json.dumps({
+    "apiKeyHelper": shlex.quote(helper),
+    "model": model,
+    "effortLevel": effort,
+    "ultracode": ultracode == "true",
+    "awaySummaryEnabled": False,
+    "modelPicker": {
+        "replaceBuiltInOptions": False,
+        "options": [
+            {"model": sol, "label": "GPT-5.6 Sol", "description": "Kiro GPT flagship", "behavesAs": "claude-opus-5"},
+            {"model": terra, "label": "GPT-5.6 Terra", "description": "Kiro GPT balanced", "behavesAs": "claude-opus-5"},
+            {"model": luna, "label": "GPT-5.6 Luna", "description": "Kiro GPT efficient", "behavesAs": "claude-opus-5"},
+        ],
+    },
+    "env": {
+        "ANTHROPIC_BASE_URL": base_url.rstrip("/"),
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": opus,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnet,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku,
+        "ANTHROPIC_CUSTOM_HEADERS": "X-Kiro-Output-Token-Limit-Mode: advisory",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
+    },
+}, separators=(",", ":")))
+PY
+  ) || exit $?
+else
+  model=${KIROCLAUDE_MODEL:-fable}
+  resolve_effort "${KIROCLAUDE_FABLE_EFFORT:-max}"
+  aws_profile=${KIROCLAUDE_AWS_PROFILE:-us-claude}
+  aws_region=${KIROCLAUDE_AWS_REGION:-us-east-2}
+  fable_model=${KIROCLAUDE_FABLE_MODEL:-us.anthropic.claude-fable-5-1}
+
+  settings=$(python3 - "$model" "$resolved_effort" "$resolved_ultracode" "$aws_profile" "$aws_region" "$fable_model" <<'PY'
+import json
+import sys
+
+model, effort, ultracode, profile, region, fable = sys.argv[1:]
+if not all(value.strip() for value in (model, effort, profile, region, fable)):
+    raise SystemExit("kiroclaude: Bedrock Fable settings must not be empty")
+print(json.dumps({
+    "model": model,
+    "effortLevel": effort,
+    "ultracode": ultracode == "true",
+    "awaySummaryEnabled": False,
+    "modelPicker": {
+        "replaceBuiltInOptions": True,
+        "options": [{
+            "model": "fable",
+            "label": "Claude Fable 5.1 (Bedrock)",
+            "description": f"{fable} via AWS profile {profile}",
+        }],
+    },
+    "env": {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": profile,
+        "AWS_REGION": region,
+        "AWS_DEFAULT_REGION": region,
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": fable,
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
+    },
+}, separators=(",", ":")))
+PY
+  ) || exit $?
+fi
+
+# Both backends are process-local and keep ordinary ~/.claude untouched. A
+# separate Fable profile also prevents provider-specific signed thinking and
+# session state from crossing between Kiro and Bedrock.
+export CLAUDE_CONFIG_DIR="$config_dir"
+export CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_CUSTOM_HEADERS
+unset ANTHROPIC_BEDROCK_BASE_URL ANTHROPIC_VERTEX_BASE_URL
+unset ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_AWS_BASE_URL
+unset ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES
+unset CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_MANTLE
+unset CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ENABLE_TOOL_SEARCH
+
+if [ "$backend" = kiro ]; then
+  export KIRO_PROVIDER_CONFIG="$provider_config"
+  unset CLAUDE_CODE_USE_BEDROCK AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION
+  unset ANTHROPIC_DEFAULT_FABLE_MODEL
+else
+  unset KIRO_PROVIDER_CONFIG
+  export CLAUDE_CODE_USE_BEDROCK=1
+  export AWS_PROFILE="$aws_profile"
+  export AWS_REGION="$aws_region"
+  export AWS_DEFAULT_REGION="$aws_region"
+  export ANTHROPIC_DEFAULT_FABLE_MODEL="$fable_model"
+fi
+
+exec "$claude_bin" --settings "$settings" "$@"

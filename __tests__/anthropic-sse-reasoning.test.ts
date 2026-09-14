@@ -20,18 +20,17 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 function canonical(event: Readonly<Record<string, unknown>>): string {
-  return JSON.stringify({ canonicalOutputVersion: CANONICAL_OUTPUT_VERSION, ...event });
+  return JSON.stringify({
+    canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+    ...event,
+  });
 }
 
-const started = canonical({
-  type: "started",
-  conversationId: "conversation-anthropic",
-  model: MODEL,
-  createdAt: 1_700_000_000,
-});
 const reasoning = (text: string): string => canonical({ type: "reasoning_delta", text });
 const signature = (value: string): string =>
   canonical({ type: "reasoning_signature", signature: value });
+const encrypted = (value: string): string =>
+  canonical({ type: "reasoning_encrypted", encryptedContent: value });
 const redacted = (data: string): string => canonical({ type: "reasoning_redacted", data });
 const text = (value: string): string => canonical({ type: "text_delta", text: value });
 const tool = (index: number, id: string, name: string, args: string): string =>
@@ -43,11 +42,17 @@ const completed = (finishReason: "stop" | "tool_calls" = "stop"): string =>
     usage: { inputTokens: 41, outputTokens: 9, totalTokens: 50 },
   });
 
-function pipelineResponse(lines: readonly string[]): Response {
+function pipelineResponse(lines: readonly string[], model = MODEL): Response {
+  const streamStart = canonical({
+    type: "started",
+    conversationId: "conversation-anthropic",
+    model,
+    createdAt: 1_700_000_000,
+  });
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(encoder.encode(`${[started, ...lines].join("\n")}\n`));
+        controller.enqueue(encoder.encode(`${[streamStart, ...lines].join("\n")}\n`));
       },
     }),
     { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
@@ -66,12 +71,22 @@ function signals(): {
   };
 }
 
-function adapter(lines: readonly string[], finalize: () => void = () => undefined): Response {
+function adapter(
+  lines: readonly string[],
+  finalize: () => void = () => undefined,
+  options: {
+    thinkingDisplay?: "omitted";
+    contextManagementRequested?: boolean;
+    cacheControlObserved?: boolean;
+    pingIntervalMs?: number;
+  } = {},
+): Response {
   return anthropicSseAdapter(pipelineResponse(lines), {
     model: MODEL,
     inputTokens: 3,
     signals: signals(),
     finalize,
+    ...options,
   });
 }
 
@@ -210,13 +225,241 @@ describe("Anthropic SSE thinking block ordering (A7)", () => {
   });
 });
 
+describe("Anthropic omitted thinking replay", () => {
+  test("non-stream responses expose an empty thinking block with an opaque replay token", async () => {
+    const completion: CanonicalCompletion = {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      conversationId: "conversation-anthropic",
+      model: MODEL,
+      createdAt: 1_700_000_000,
+      text: "answer",
+      reasoning: {
+        text: "private reasoning",
+        signature: "native-signature",
+        encryptedContent: "kr1_replay-token",
+      },
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 41, outputTokens: 9, totalTokens: 50 },
+    };
+
+    const response = anthropicMessageResponse(completion, MODEL, {
+      thinkingDisplay: "omitted",
+      contextManagementRequested: true,
+      cacheControlObserved: true,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(await response.json()).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "", signature: "kr1_replay-token" },
+        { type: "text", text: "answer" },
+      ],
+      context_management: { applied_edits: [] },
+    });
+  });
+
+  test("streaming suppresses native thinking and publishes only the opaque replay signature", async () => {
+    const response = adapter(
+      [
+        reasoning("private reasoning"),
+        signature("native-signature"),
+        text("answer"),
+        encrypted("kr1_replay-token"),
+        completed(),
+      ],
+      () => undefined,
+      {
+        thinkingDisplay: "omitted",
+        contextManagementRequested: true,
+        cacheControlObserved: true,
+      },
+    );
+    const wire = await response.text();
+    expect(wire).not.toContain("private reasoning");
+    expect(wire).not.toContain("native-signature");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    const frames = parseFrames(wire);
+    const blocks = assertLegalBlockSequence(frames);
+    expect(blocks.map((entry) => [entry.type, entry.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["text", ["text_delta"]],
+    ]);
+    expect(
+      frames.find(
+        (frame) =>
+          frame.type === "content_block_delta" &&
+          isRecord(frame.delta) &&
+          frame.delta.type === "signature_delta",
+      ),
+    ).toMatchObject({ delta: { signature: "kr1_replay-token" } });
+    expect(frames.find((frame) => frame.type === "message_delta")).toMatchObject({
+      context_management: { applied_edits: [] },
+    });
+  });
+
+  test("fails closed rather than leaking native thinking when the replay token is absent", async () => {
+    const frames = parseFrames(
+      await adapter(
+        [
+          reasoning("private reasoning"),
+          signature("native-signature"),
+          text("answer"),
+          completed(),
+        ],
+        () => undefined,
+        { thinkingDisplay: "omitted" },
+      ).text(),
+    );
+    expect(JSON.stringify(frames)).not.toContain("private reasoning");
+    expect(JSON.stringify(frames)).not.toContain("native-signature");
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      error: { type: "api_error" },
+    });
+    expect(frames.some((frame) => frame.type === "message_stop")).toBe(false);
+  });
+});
+
+describe("GPT opaque reasoning placeholders", () => {
+  test.each([
+    ["gpt-5.6-sol", "..."],
+    ["gpt-5.6-terra", "…"],
+    ["gpt-5.6-luna", "..."],
+  ])("non-stream %s preserves replay without exposing %s", async (model, placeholder) => {
+    const completion: CanonicalCompletion = {
+      canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+      conversationId: "conversation-gpt",
+      model,
+      createdAt: 1_700_000_000,
+      text: "answer",
+      reasoning: {
+        text: placeholder,
+        signature: "opaque-gpt-signature",
+        encryptedContent: "kr1_gpt-replay",
+      },
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { inputTokens: 41, outputTokens: 9, totalTokens: 50 },
+    };
+
+    const response = anthropicMessageResponse(completion, model);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "", signature: "opaque-gpt-signature" },
+        { type: "text", text: "answer" },
+      ],
+    });
+  });
+
+  test("streaming buffers split dots and publishes only the opaque replay token", async () => {
+    const response = anthropicSseAdapter(
+      pipelineResponse(
+        [
+          reasoning("."),
+          reasoning("."),
+          reasoning("."),
+          signature("opaque-gpt-signature"),
+          text("answer"),
+          completed(),
+        ],
+        "gpt-5.6-terra",
+      ),
+      {
+        model: "gpt-5.6-terra",
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+        thinkingDisplay: "omitted",
+      },
+    );
+    const frames = parseFrames(await response.text());
+    const blocks = assertLegalBlockSequence(frames);
+    expect(blocks.map((entry) => [entry.type, entry.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["text", ["text_delta"]],
+    ]);
+    expect(JSON.stringify(frames)).not.toContain('"thinking":"..."');
+    expect(
+      frames.find(
+        (frame) =>
+          frame.type === "content_block_delta" &&
+          isRecord(frame.delta) &&
+          frame.delta.type === "signature_delta",
+      ),
+    ).toMatchObject({ delta: { signature: "opaque-gpt-signature" } });
+  });
+
+  test("reorders text-first GPT output after hidden thinking without overlapping blocks", async () => {
+    const frames = parseFrames(
+      await anthropicSseAdapter(
+        pipelineResponse(
+          [text("answer"), reasoning("..."), signature("late-gpt-signature"), completed()],
+          "gpt-5.6-sol",
+        ),
+        {
+          model: "gpt-5.6-sol",
+          inputTokens: 3,
+          signals: signals(),
+          finalize: () => undefined,
+          thinkingDisplay: "omitted",
+        },
+      ).text(),
+    );
+    const blocks = assertLegalBlockSequence(frames);
+    expect(blocks.map((entry) => [entry.type, entry.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["text", ["text_delta"]],
+    ]);
+    expect(JSON.stringify(frames)).not.toContain('"thinking":"..."');
+    expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+  });
+
+  test("does not suppress real GPT reasoning or another model's literal ellipsis", async () => {
+    const gptFrames = parseFrames(
+      await anthropicSseAdapter(
+        pipelineResponse(
+          [
+            reasoning("real GPT reasoning"),
+            signature("gpt-signature"),
+            text("answer"),
+            completed(),
+          ],
+          "gpt-5.6-luna",
+        ),
+        {
+          model: "gpt-5.6-luna",
+          inputTokens: 3,
+          signals: signals(),
+          finalize: () => undefined,
+        },
+      ).text(),
+    );
+    expect(JSON.stringify(gptFrames)).toContain("real GPT reasoning");
+
+    const claudeFrames = parseFrames(
+      await adapter([
+        reasoning("..."),
+        signature("claude-signature"),
+        text("answer"),
+        completed(),
+      ]).text(),
+    );
+    expect(JSON.stringify(claudeFrames)).toContain('"thinking":"..."');
+  });
+});
+
 describe("Anthropic unsigned thinking parity (B22)", () => {
   test("a thinking block that completes without any signature fails like the non-stream 502", async () => {
     const frames = await adapt([reasoning("plan"), text("answer"), completed()]);
 
     assertLegalBlockSequence(frames);
     const streamError = frames.at(-1);
-    expect(streamError).toMatchObject({ type: "error", error: { type: "api_error" } });
+    expect(streamError).toMatchObject({
+      type: "error",
+      error: { type: "api_error" },
+    });
     expect(frames.some((frame) => frame.type === "message_delta")).toBe(false);
 
     const completion: CanonicalCompletion = {
@@ -261,7 +504,10 @@ describe("Anthropic unsigned thinking parity (B22)", () => {
   test("a signature without any thinking block fails instead of completing silently", async () => {
     const frames = await adapt([signature("orphan"), text("answer"), completed()]);
 
-    expect(frames.at(-1)).toMatchObject({ type: "error", error: { type: "api_error" } });
+    expect(frames.at(-1)).toMatchObject({
+      type: "error",
+      error: { type: "api_error" },
+    });
   });
 });
 
@@ -398,6 +644,42 @@ describe("Anthropic SSE backpressure (B17)", () => {
     expect(finalizeCount).toBe(1);
   });
 
+  test("emits keep-alive ping frames during an otherwise silent upstream wait", async () => {
+    let finalizeCount = 0;
+    const silentUpstream = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => undefined);
+        },
+      }),
+      { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+    );
+    const response = anthropicSseAdapter(silentUpstream, {
+      model: MODEL,
+      inputTokens: 3,
+      signals: signals(),
+      finalize: () => {
+        finalizeCount += 1;
+      },
+      pingIntervalMs: 5,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new TypeError("adapter response has no body");
+    const first = await reader.read();
+    const second = await reader.read();
+    expect(first.done).toBe(false);
+    expect(second.done).toBe(false);
+    expect(parseFrames(new TextDecoder().decode(first.value))[0]).toMatchObject({
+      type: "message_start",
+    });
+    expect(parseFrames(new TextDecoder().decode(second.value))[0]).toEqual({
+      type: "ping",
+    });
+    await reader.cancel("done");
+    await Bun.sleep(15);
+    expect(finalizeCount).toBe(1);
+  });
+
   test("a reader that pulls one chunk at a time still receives the full protocol order", async () => {
     const response = adapter([reasoning("plan"), signature("sig"), text("answer"), completed()]);
     const reader = response.body?.getReader();
@@ -443,9 +725,19 @@ describe("Anthropic request validation (B22 input, B24)", () => {
         { role: "user", content: "read it" },
         {
           role: "assistant",
-          content: [{ type: "tool_use", id: "tool-1", name: "read", input: { path: "a" } }],
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "read",
+              input: { path: "a" },
+            },
+          ],
         },
-        { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1" }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-1" }],
+        },
       ]),
       { requireMaxTokens: true },
     );
@@ -454,7 +746,14 @@ describe("Anthropic request validation (B22 input, B24)", () => {
     if (!result.ok) return;
     expect(result.value.body.messages[2]).toMatchObject({
       role: "user",
-      content: [{ type: "tool_result", toolCallId: "tool-1", content: [], isError: false }],
+      content: [
+        {
+          type: "tool_result",
+          toolCallId: "tool-1",
+          content: [],
+          isError: false,
+        },
+      ],
     });
   });
 

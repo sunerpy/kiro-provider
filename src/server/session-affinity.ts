@@ -17,6 +17,7 @@ export interface SessionAffinityHint {
     | "chat.prompt_cache_key"
     | "chat.user_and_initial_input"
     | "chat.initial_input"
+    | "anthropic.header.x-claude-code-session-id"
     | "anthropic.user_and_initial_input"
     | "anthropic.initial_input";
 }
@@ -200,8 +201,17 @@ export function anthropicSessionAffinity(
   request: AnthropicMessagesRequest,
   tenantId: string | undefined,
   mode: SessionAffinityMode = "explicit-only",
+  claudeCodeSessionId?: string,
 ): SessionAffinityHint | undefined {
   if (!tenantId) return undefined;
+  if (claudeCodeSessionId !== undefined && claudeCodeSessionId.length > 0) {
+    return affinityHash(
+      tenantId,
+      "anthropic",
+      "anthropic.header.x-claude-code-session-id",
+      claudeCodeSessionId,
+    );
+  }
   if (mode !== "legacy-initial-input") return undefined;
   const initial = initialAnthropicInput(request);
   if (initial === undefined) return undefined;

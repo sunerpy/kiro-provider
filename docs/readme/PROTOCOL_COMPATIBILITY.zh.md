@@ -42,6 +42,30 @@ OpenAI 官方 Responses 资源还定义了 create、retrieve、delete、cancel �
 items 方法。KiroRuntime 只提供原生创建与续轮，因此 V3 在本地实现其余核心
 生命周期结构。
 
+### Anthropic Messages / Claude Code 边界
+
+Claude Code 2.1.263 已针对 stateless canonical 通道验证。适配器接受当前文本、
+图片、标准工具/结果、中途 system、adaptive thinking、effort、temperature、
+cache hint 与无损 context management 形状。`thinking.display: "omitted"` 使用
+租户绑定的 `kr1_` token 作为 opaque Anthropic signature，在不暴露 thinking
+文本的前提下恢复原始 Kiro signed reasoning。Cache marker 不等于 Anthropic
+缓存实现：成功响应包含 `x-kiro-prompt-cache-mode: unsupported`，cache token
+bucket 为零，只保留模型可见内容。
+
+`context_management` 仅接受 `clear_thinking_20251015` 且 `keep: "all"`，
+并返回 `applied_edits: []`。Destructive edits、Structured Outputs、强制/串行
+工具控制以及未知语义字段继续以 `invalid_request_error` 明确失败。流式响应维持
+Anthropic block 顺序，并在静默期发送 `ping`。`x-claude-code-session-id` 只作为
+租户隔离的 affinity key 使用，不记录原文。
+
+GPT-5.6 Sol/Terra/Luna 的 Anthropic `max_tokens` 默认继续 fail closed。调用方
+只有显式发送 `x-kiro-output-token-limit-mode: advisory` 才会进入兼容路径；且仅
+这三个 GPT wire model 会在调用 Kiro 前省略 Claude Code 的必填 limit，在响应中
+返回 `advisory-unenforced` 并记录结构化审计事件。该例外不改变 OpenAI 接口或
+已经探针确认的 Claude `max_tokens` 投影。Claude Code 2.1.263 使用
+`modelPicker.behavesAs` 为 GPT 行提供 effort/xhigh/max UI，产生的
+`output_config.effort` 再转换为 Kiro GPT `reasoning.effort`。
+
 ## 2. V3 传输选择
 
 ```mermaid

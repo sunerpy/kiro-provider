@@ -215,6 +215,76 @@ describe("anthropic-direct signed thinking replay (B25)", () => {
     });
   });
 
+  test("resolves an Anthropic opaque signature through the encrypted replay store", async () => {
+    const commands: GenerateAssistantResponseCommand[] = [];
+    const client: PipelineSdkClient = {
+      async send(command) {
+        commands.push(command);
+        return responseFrom([{ assistantResponseEvent: { content: "answer" } }]);
+      },
+    };
+    const base = signedThinkingRequest();
+    const body: CanonicalRequest = {
+      ...base,
+      reasoningReplays: [
+        {
+          lookup: { kind: "anthropic-token", signature: "kr1_opaque" },
+          outputFingerprint: "assistant-output",
+          insertBeforeMessage: 1,
+          path: "messages.1.content.0",
+        },
+      ],
+    };
+    let resolvedToken: string | undefined;
+    const replayStore = {
+      readiness: () => ({ writable: true, keyringAvailable: true, missingKeyIds: [] }),
+      store: () => undefined,
+      resolveResponses: (token: string, _context: unknown, insertBeforeMessage: number) => {
+        resolvedToken = token;
+        return {
+          accountId: "account-a",
+          conversationId: "conversation-a",
+          replay: {
+            insertBeforeMessage,
+            content: {
+              kind: "reasoning_text" as const,
+              text: "restored private reasoning",
+              signature: "restored-native-signature",
+            },
+          },
+        };
+      },
+      resolveChat: () => {
+        throw new TypeError("chat lookup must not run");
+      },
+    };
+
+    const response = await runChatCompletion({
+      body,
+      model: MODEL,
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: refresher,
+      makeClient: () => client,
+      tenantId: "tenant-a",
+      reasoningReplayStore: replayStore,
+    });
+
+    expect(response.status).toBe(200);
+    expect(resolvedToken).toBe("kr1_opaque");
+    const history = commands[0]?.input.conversationState?.history ?? [];
+    expect(
+      history.find((entry) => entry.assistantResponseMessage?.reasoningContent !== undefined)
+        ?.assistantResponseMessage?.reasoningContent,
+    ).toEqual({
+      reasoningText: {
+        text: "restored private reasoning",
+        signature: "restored-native-signature",
+      },
+    });
+  });
+
   test("maps Kiro's invalid-signature ValidationException to 400 without retry or account marking", async () => {
     // Given
     const manager = new FakeAccountManager([account("account-a"), account("account-b")]);

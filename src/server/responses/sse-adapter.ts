@@ -38,10 +38,7 @@ import {
   responseFailed,
   responseInProgress,
 } from "./events.js";
-import {
-  couldStillBeGptSolReasoningPlaceholder,
-  isGptSolReasoningPlaceholder,
-} from "./reasoning.js";
+import { couldStillBeGpt56ReasoningPlaceholder, isGpt56ReasoningPlaceholder } from "./reasoning.js";
 import {
   outputTextContent,
   type ResponseRequestConfiguration,
@@ -349,7 +346,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     return reasoningEncryptedContent;
   };
   const finishReasoning = (run: ReasoningRun): void => {
-    if (isGptSolReasoningPlaceholder(options.model, run.text)) {
+    if (isGpt56ReasoningPlaceholder(options.model, run.text)) {
       if (!options.includeEncryptedReasoning && !options.captureEncryptedReasoning) return;
       const encryptedContent = claimEncryptedContent();
       if (encryptedContent === undefined) return;
@@ -467,7 +464,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               sequenceNumber: sequence,
             }),
           );
-        } else if (!couldStillBeGptSolReasoningPlaceholder(options.model, run.text)) {
+        } else if (!couldStillBeGpt56ReasoningPlaceholder(options.model, run.text)) {
           startReasoning(run);
         }
         return;

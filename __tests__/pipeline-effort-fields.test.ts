@@ -128,6 +128,18 @@ describe("effort request fields in the command input (B7)", () => {
     expect(input.additionalModelRequestFields).toEqual({ reasoning: { effort: "high" } });
   });
 
+  test("projects request-scoped Claude Code effort to GPT without an output-token field", async () => {
+    const input = await capturedInput(
+      "gpt-5.6-sol",
+      {},
+      { reasoningEffort: "xhigh", requestedReasoningEffort: "xhigh" },
+    );
+
+    expect(input.additionalModelRequestFields).toEqual({ reasoning: { effort: "xhigh" } });
+    expect(input.additionalModelRequestFields).not.toHaveProperty("max_tokens");
+    expect(input.additionalModelRequestFields).not.toHaveProperty("max_output_tokens");
+  });
+
   test("injects Claude effort using output_config.effort for the wire model", async () => {
     const input = await capturedInput("claude-opus-5", { effort: "max" });
 
@@ -144,6 +156,20 @@ describe("effort request fields in the command input (B7)", () => {
     expect(input.additionalModelRequestFields).toEqual({
       max_tokens: 4096,
       output_config: { effort: "high" },
+    });
+  });
+
+  test("merges Claude temperature with max_tokens and effort", async () => {
+    const input = await capturedInput(
+      "claude-opus-5",
+      { effort: "max" },
+      { outputTokenLimit: 4096, temperature: 0 },
+    );
+
+    expect(input.additionalModelRequestFields).toEqual({
+      max_tokens: 4096,
+      temperature: 0,
+      output_config: { effort: "max" },
     });
   });
 

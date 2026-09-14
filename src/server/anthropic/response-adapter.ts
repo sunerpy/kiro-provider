@@ -12,13 +12,26 @@ import {
   parseCanonicalOutputEventLine,
 } from "../../protocol/output.js";
 import type { IngressSignals } from "../request-lifecycle.js";
+import {
+  couldStillBeGpt56ReasoningPlaceholder,
+  isGpt56Model,
+  isGpt56ReasoningPlaceholder,
+} from "../responses/reasoning.js";
 import { anthropicError, anthropicStreamError } from "./errors.js";
 
-type AdapterOptions = {
+export type AnthropicCompatibilityOptions = {
+  readonly thinkingDisplay?: "omitted";
+  readonly contextManagementRequested?: boolean;
+  readonly cacheControlObserved?: boolean;
+  readonly outputTokenLimitMode?: "advisory";
+};
+
+type AdapterOptions = AnthropicCompatibilityOptions & {
   readonly model: string;
   readonly inputTokens: number;
   readonly signals: IngressSignals;
   readonly finalize: () => void;
+  readonly pingIntervalMs?: number;
 };
 
 type AdapterOutcome =
@@ -63,6 +76,19 @@ function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, numb
   };
 }
 
+function compatibilityHeaders(
+  options: AnthropicCompatibilityOptions,
+): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  if (options.cacheControlObserved) {
+    headers["x-kiro-prompt-cache-mode"] = "unsupported";
+  }
+  if (options.outputTokenLimitMode === "advisory") {
+    headers["x-kiro-output-token-limit-mode"] = "advisory-unenforced";
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
 function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>> | undefined {
   try {
     const parsed: unknown = JSON.parse(argumentsText);
@@ -75,7 +101,11 @@ function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>
   }
 }
 
-export function anthropicMessageResponse(completion: CanonicalCompletion, model: string): Response {
+export function anthropicMessageResponse(
+  completion: CanonicalCompletion,
+  model: string,
+  options: AnthropicCompatibilityOptions = {},
+): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
   const reasoning = completion.reasoning;
   if (
@@ -94,18 +124,44 @@ export function anthropicMessageResponse(completion: CanonicalCompletion, model:
       data: reasoning.redactedContent,
     });
   } else if (reasoning?.text !== undefined || reasoning?.signature !== undefined) {
-    if (!reasoning.text || !reasoning.signature) {
-      return anthropicError(
-        502,
-        "Upstream returned incomplete signed reasoning metadata",
-        "api_error",
-      );
+    const opaquePlaceholder =
+      reasoning.text !== undefined && isGpt56ReasoningPlaceholder(model, reasoning.text);
+    if (opaquePlaceholder) {
+      if (!reasoning.signature) {
+        return anthropicError(
+          502,
+          "Upstream placeholder thinking is missing its native signature",
+          "api_error",
+        );
+      }
+      content.push({ type: "thinking", thinking: "", signature: reasoning.signature });
+    } else if (options.thinkingDisplay === "omitted") {
+      if (!reasoning.signature || !reasoning.encryptedContent?.startsWith("kr1_")) {
+        return anthropicError(
+          502,
+          "Upstream omitted thinking cannot be replayed without a provider token",
+          "api_error",
+        );
+      }
+      content.push({
+        type: "thinking",
+        thinking: "",
+        signature: reasoning.encryptedContent,
+      });
+    } else {
+      if (!reasoning.text || !reasoning.signature) {
+        return anthropicError(
+          502,
+          "Upstream returned incomplete signed reasoning metadata",
+          "api_error",
+        );
+      }
+      content.push({
+        type: "thinking",
+        thinking: reasoning.text,
+        signature: reasoning.signature,
+      });
     }
-    content.push({
-      type: "thinking",
-      thinking: reasoning.text,
-      signature: reasoning.signature,
-    });
   }
   if (completion.text.length > 0) {
     content.push({ type: "text", text: completion.text });
@@ -126,23 +182,29 @@ export function anthropicMessageResponse(completion: CanonicalCompletion, model:
       input,
     });
   }
-  return Response.json({
-    id: `msg_${randomUUID()}`,
-    type: "message",
-    role: "assistant",
-    model,
-    content,
-    stop_reason: completion.finishReason === "tool_calls" ? "tool_use" : "end_turn",
-    stop_sequence: null,
-    usage: usagePayload(completion.usage),
-  });
+  return Response.json(
+    {
+      id: `msg_${randomUUID()}`,
+      type: "message",
+      role: "assistant",
+      model,
+      content,
+      stop_reason: completion.finishReason === "tool_calls" ? "tool_use" : "end_turn",
+      stop_sequence: null,
+      usage: usagePayload(completion.usage),
+      ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
+    },
+    { headers: compatibilityHeaders(options) },
+  );
 }
 
 // allow: SIZE_OK — this state machine owns Anthropic SSE ordering and exactly-once cleanup.
 export function anthropicSseAdapter(pipelineResponse: Response, options: AdapterOptions): Response {
   const upstream =
     pipelineResponse.body ??
-    new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+    new ReadableStream<Uint8Array>({
+      start: (controller) => controller.close(),
+    });
   const reader = upstream.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -156,11 +218,18 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   let reasoningStarted = false;
   let reasoningStopped = false;
   let reasoningSigned = false;
+  let pendingReasoningText = "";
+  let opaquePlaceholderSeen = false;
+  let omittedReasoningSeen = false;
+  let hiddenReplayToken: string | undefined;
   // A signature that has not been written into an open thinking block yet.
   let pendingSignature: string | undefined;
   // Visible reasoning that arrived after text started; it becomes a new block
   // in complete() so no delta ever targets a stopped block.
   let deferredReasoningText = "";
+  // Omitted-thinking replay tokens arrive only after the assistant output is
+  // complete, so text is buffered once omitted reasoning is known.
+  let deferredText = "";
   // Redacted envelopes that arrived while a text block was open.
   const deferredRedacted: string[] = [];
   let redactedEmitted = false;
@@ -171,6 +240,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   let terminalOutcome: AdapterOutcome | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let streamClosed = false;
+  let pingTimer: ReturnType<typeof setInterval> | undefined;
 
   const emit = (event: string, payload: unknown): void => {
     pendingFrames.push(encoder.encode(formatEvent(event, payload)));
@@ -213,6 +283,10 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   const removeClientListener = (): void => {
     options.signals.client.removeEventListener("abort", onClientAbort);
   };
+  const clearPingTimer = (): void => {
+    if (pingTimer !== undefined) clearInterval(pingTimer);
+    pingTimer = undefined;
+  };
   const beginTerminal = (
     outcome: AdapterOutcome,
     reason?: unknown,
@@ -221,6 +295,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     if (!claimTerminal(outcome)) return;
     if (outcome === "consumer-cancel") pendingFrames.length = 0;
     runCleanupSteps(
+      clearPingTimer,
       removeDeadlineListener,
       removeClientListener,
       () => {
@@ -285,6 +360,24 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       index: textIndex,
     });
   };
+  const emitText = (text: string): void => {
+    if (!textStarted) {
+      textIndex = nextContentIndex;
+      nextContentIndex += 1;
+      textStarted = true;
+      emit("content_block_start", {
+        type: "content_block_start",
+        index: textIndex,
+        content_block: { type: "text", text: "" },
+      });
+    }
+    if (textIndex === undefined || text.length === 0) return;
+    emit("content_block_delta", {
+      type: "content_block_delta",
+      index: textIndex,
+      delta: { type: "text_delta", text },
+    });
+  };
   const stopReasoning = (): void => {
     if (!reasoningStarted || reasoningStopped || reasoningIndex === undefined) return;
     if (pendingSignature !== undefined) {
@@ -305,8 +398,72 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       index: reasoningIndex,
     });
   };
+  const emitVisibleReasoning = (text: string): void => {
+    if (!reasoningStarted) {
+      reasoningIndex = nextContentIndex;
+      nextContentIndex += 1;
+      reasoningStarted = true;
+      emit("content_block_start", {
+        type: "content_block_start",
+        index: reasoningIndex,
+        content_block: { type: "thinking", thinking: "", signature: "" },
+      });
+    }
+    if (text.length === 0 || reasoningIndex === undefined) return;
+    emit("content_block_delta", {
+      type: "content_block_delta",
+      index: reasoningIndex,
+      delta: { type: "thinking_delta", thinking: text },
+    });
+  };
+  const emitOpaquePlaceholderSignature = (signature: string): void => {
+    opaquePlaceholderSeen = true;
+    pendingReasoningText = "";
+    emitVisibleReasoning("");
+    if (reasoningIndex === undefined) {
+      failReasoning("Upstream placeholder thinking could not allocate a block");
+      return;
+    }
+    emit("content_block_delta", {
+      type: "content_block_delta",
+      index: reasoningIndex,
+      delta: { type: "signature_delta", signature },
+    });
+    reasoningSigned = true;
+  };
+  const flushPendingReasoning = (): void => {
+    if (pendingReasoningText.length === 0) return;
+    if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
+      opaquePlaceholderSeen = true;
+      pendingReasoningText = "";
+      return;
+    }
+    const text = pendingReasoningText;
+    pendingReasoningText = "";
+    emitVisibleReasoning(text);
+  };
+  const emitHiddenReplayBlock = (token: string): void => {
+    const index = nextContentIndex;
+    nextContentIndex += 1;
+    emit("content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    });
+    emit("content_block_delta", {
+      type: "content_block_delta",
+      index,
+      delta: { type: "signature_delta", signature: token },
+    });
+    emit("content_block_stop", { type: "content_block_stop", index });
+  };
   const visibleReasoningSeen = (): boolean =>
-    reasoningStarted || pendingSignature !== undefined || deferredReasoningText.length > 0;
+    reasoningStarted ||
+    pendingReasoningText.length > 0 ||
+    opaquePlaceholderSeen ||
+    omittedReasoningSeen ||
+    pendingSignature !== undefined ||
+    deferredReasoningText.length > 0;
   const emitRedactedBlock = (data: string): void => {
     const index = nextContentIndex;
     nextContentIndex += 1;
@@ -328,28 +485,51 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           failProtocol("Upstream mixed visible and redacted reasoning payloads");
           return;
         }
+        if (options.thinkingDisplay === "omitted" && isGpt56Model(options.model)) {
+          pendingReasoningText += event.text;
+          if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
+          pendingReasoningText = "";
+          omittedReasoningSeen = true;
+          return;
+        }
+        if (options.thinkingDisplay === "omitted") {
+          omittedReasoningSeen = true;
+          return;
+        }
         if (reasoningStopped || textStarted) {
           deferredReasoningText += event.text;
           return;
         }
-        if (!reasoningStarted) {
-          reasoningIndex = nextContentIndex;
-          nextContentIndex += 1;
-          reasoningStarted = true;
-          emit("content_block_start", {
-            type: "content_block_start",
-            index: reasoningIndex,
-            content_block: { type: "thinking", thinking: "", signature: "" },
-          });
+        if (!reasoningStarted && isGpt56Model(options.model)) {
+          pendingReasoningText += event.text;
+          if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
+          flushPendingReasoning();
+          return;
         }
-        emit("content_block_delta", {
-          type: "content_block_delta",
-          index: reasoningIndex,
-          delta: { type: "thinking_delta", thinking: event.text },
-        });
+        emitVisibleReasoning(event.text);
         return;
       }
       case "reasoning_signature":
+        if (opaquePlaceholderSeen) {
+          if (!reasoningSigned) emitOpaquePlaceholderSignature(event.signature);
+          return;
+        }
+        if (pendingReasoningText.length > 0) {
+          if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
+            emitOpaquePlaceholderSignature(event.signature);
+            return;
+          }
+          if (options.thinkingDisplay === "omitted") {
+            pendingReasoningText = "";
+            omittedReasoningSeen = true;
+            return;
+          }
+          flushPendingReasoning();
+        }
+        if (options.thinkingDisplay === "omitted") {
+          omittedReasoningSeen = true;
+          return;
+        }
         if (reasoningStarted && !reasoningStopped && reasoningIndex !== undefined) {
           emit("content_block_delta", {
             type: "content_block_delta",
@@ -374,27 +554,26 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         return;
       }
       case "reasoning_encrypted":
+        if (options.thinkingDisplay !== "omitted") return;
+        if (redactedEmitted || deferredRedacted.length > 0) return;
+        if (!event.encryptedContent.startsWith("kr1_")) {
+          failReasoning("Upstream returned an invalid provider replay token");
+          return;
+        }
+        hiddenReplayToken = event.encryptedContent;
         return;
       case "text_delta": {
+        flushPendingReasoning();
         stopReasoning();
-        if (!textStarted) {
-          textIndex = nextContentIndex;
-          nextContentIndex += 1;
-          textStarted = true;
-          emit("content_block_start", {
-            type: "content_block_start",
-            index: textIndex,
-            content_block: { type: "text", text: "" },
-          });
+        if (isGpt56Model(options.model) || omittedReasoningSeen || opaquePlaceholderSeen) {
+          deferredText += event.text;
+          return;
         }
-        emit("content_block_delta", {
-          type: "content_block_delta",
-          index: textIndex,
-          delta: { type: "text_delta", text: event.text },
-        });
+        emitText(event.text);
         return;
       }
       case "tool_call_delta": {
+        flushPendingReasoning();
         stopReasoning();
         const tool = tools.get(event.index) ?? {
           id: "",
@@ -451,16 +630,28 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       failProtocol("Malformed upstream tool call");
       return;
     }
+    flushPendingReasoning();
     stopText();
     stopReasoning();
     const deferredSigned = flushDeferredReasoning();
+    const hiddenReasoningSeen = omittedReasoningSeen;
     if (
+      (hiddenReasoningSeen && hiddenReplayToken === undefined) ||
+      (hiddenReasoningSeen && textStarted) ||
       (reasoningStarted && !reasoningSigned) ||
       !deferredSigned ||
       pendingSignature !== undefined
     ) {
       failReasoning("Upstream returned incomplete signed reasoning metadata");
       return;
+    }
+    if (hiddenReasoningSeen && hiddenReplayToken !== undefined) {
+      emitHiddenReplayBlock(hiddenReplayToken);
+    }
+    if (deferredText.length > 0) {
+      emitText(deferredText);
+      deferredText = "";
+      stopText();
     }
     for (const data of deferredRedacted) emitRedactedBlock(data);
     deferredRedacted.length = 0;
@@ -499,6 +690,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         stop_sequence: null,
       },
       usage: usagePayload(usage),
+      ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
     });
     emit("message_stop", { type: "message_stop" });
     beginTerminal("normal-complete");
@@ -532,6 +724,13 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         options.signals.client.addEventListener("abort", onClientAbort, {
           once: true,
         });
+        const pingIntervalMs = options.pingIntervalMs ?? 15_000;
+        pingTimer = setInterval(() => {
+          if (terminalOutcome !== undefined || pendingFrames.length > 0) return;
+          emit("ping", { type: "ping" });
+          if (streamController) flushOne(streamController);
+        }, pingIntervalMs);
+        pingTimer.unref?.();
         if (options.signals.deadline.aborted) onDeadlineAbort();
         else if (options.signals.client.aborted) onClientAbort();
         flushOne(controller);
@@ -628,6 +827,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         "Cache-Control": "no-cache",
         "Content-Type": "text/event-stream; charset=utf-8",
         "x-kiro-token-count-mode": "estimate",
+        ...compatibilityHeaders(options),
       },
     },
   );

@@ -104,6 +104,37 @@ describe("standard-field session affinity", () => {
     expect(anthropicSessionAffinity(anthropic.value.source, TENANT)).toBeUndefined();
   });
 
+  test("uses the Claude Code session header in explicit-only mode", () => {
+    const request = adaptAnthropicMessagesRequest({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "first turn" }],
+    });
+    if (!request.ok) throw new TypeError("fixture must adapt");
+
+    const first = anthropicSessionAffinity(
+      request.value.source,
+      TENANT,
+      "explicit-only",
+      "session-123",
+    );
+    const same = anthropicSessionAffinity(
+      request.value.source,
+      TENANT,
+      "explicit-only",
+      "session-123",
+    );
+    const other = anthropicSessionAffinity(
+      request.value.source,
+      TENANT,
+      "explicit-only",
+      "session-456",
+    );
+
+    expect(first).toEqual(same);
+    expect(first?.source).toBe("anthropic.header.x-claude-code-session-id");
+    expect(first?.keyHash).not.toBe(other?.keyHash);
+  });
+
   test("keeps Chat fallback affinity stable only in legacy mode", () => {
     const first = ChatCompletionRequestSchema.parse({
       model: "gpt-5.6-sol",

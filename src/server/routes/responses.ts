@@ -36,7 +36,7 @@ import type {
 } from "../responses/events.js";
 import { prepareNativeAdaptation } from "../responses/native-adaptation.js";
 import { proxyNativeResponses } from "../responses/native-transport.js";
-import { isGptSolReasoningPlaceholder } from "../responses/reasoning.js";
+import { isGpt56ReasoningPlaceholder } from "../responses/reasoning.js";
 import {
   adaptResponsesRequest,
   type ResponsesPreviousContext,
@@ -274,7 +274,7 @@ function completedResponse(
   const output: ResponseOutputItem[] = [];
   const reasoningText = payload.reasoning?.text;
   const reasoningSummary =
-    reasoningText !== undefined && !isGptSolReasoningPlaceholder(model, reasoningText)
+    reasoningText !== undefined && !isGpt56ReasoningPlaceholder(model, reasoningText)
       ? [{ type: "summary_text" as const, text: reasoningText }]
       : [];
   if (reasoningSummary.length > 0 || payload.reasoning?.encryptedContent) {

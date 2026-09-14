@@ -45,6 +45,35 @@ cancel, and input-item methods. V3 implements those core lifecycle shapes
 locally because KiroRuntime exposes only native response creation and
 continuation.
 
+### Anthropic Messages / Claude Code boundary
+
+Claude Code 2.1.263 is validated against the stateless canonical lane. The
+adapter accepts current text, image, standard tool/result, mid-conversation
+system, adaptive thinking, effort, temperature, cache-hint, and lossless
+context-management shapes. `thinking.display: "omitted"` uses a tenant-bound
+`kr1_` token as the opaque Anthropic signature so the original signed Kiro
+reasoning can be restored without exposing its text. Cache markers are not an
+Anthropic cache implementation: successful responses say
+`x-kiro-prompt-cache-mode: unsupported`, report zero cache-token buckets, and
+preserve only model-visible content.
+
+Only `clear_thinking_20251015` with `keep: "all"` is accepted for
+`context_management`; it returns `applied_edits: []`. Destructive edits,
+Structured Outputs, forced/serial tool controls, and unknown semantic fields
+remain explicit `invalid_request_error` failures. Streaming emits ordered
+Anthropic blocks and keep-alive `ping` events. `x-claude-code-session-id` is
+consumed as a tenant-scoped affinity key and is never logged verbatim.
+
+GPT-5.6 Sol/Terra/Luna remain fail-closed for Anthropic `max_tokens` by
+default. A caller can opt into the exact
+`x-kiro-output-token-limit-mode: advisory` compatibility header; only those
+three GPT wire models then omit Claude Code's required limit before Kiro,
+return `advisory-unenforced`, and emit a structured audit event. This exception
+does not alter the OpenAI surfaces or the probe-backed Claude `max_tokens`
+projection. Claude Code 2.1.263's `modelPicker.behavesAs` supplies GPT rows with
+effort/xhigh/max UI; the resulting `output_config.effort` is translated to
+Kiro GPT `reasoning.effort`.
+
 ## 2. V3 transport selection
 
 ```mermaid

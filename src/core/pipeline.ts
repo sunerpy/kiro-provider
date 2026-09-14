@@ -381,9 +381,11 @@ function resolveReplayState(
       ...(conversationId !== undefined ? { conversationId } : {}),
     };
     const resolved =
-      replay.lookup.kind === "responses-token"
+      replay.lookup.kind === "responses-token" || replay.lookup.kind === "anthropic-token"
         ? store.resolveResponses(
-            replay.lookup.encryptedContent,
+            replay.lookup.kind === "responses-token"
+              ? replay.lookup.encryptedContent
+              : replay.lookup.signature,
             context,
             replay.insertBeforeMessage,
           )

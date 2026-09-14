@@ -4,6 +4,7 @@ export const KIRO_OUTPUT_TOKEN_LIMIT_MIN = 1_024;
 export const KIRO_OUTPUT_TOKEN_LIMIT_MAX = 128_000;
 
 const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set(["claude-sonnet-5", "claude-opus-5"]);
+const ADVISORY_ONLY_MAX_TOKENS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 
 export type OutputTokenLimitResult =
   | {
@@ -16,6 +17,19 @@ export type OutputTokenLimitResult =
       readonly code: "unsupported_output_token_limit" | "invalid_output_token_limit";
       readonly message: string;
     };
+
+/**
+ * Whether a model is known to have no Kiro-native output-token field but can
+ * still generate without one. Callers must explicitly opt into advisory mode;
+ * this predicate never changes resolveOutputTokenLimit's fail-closed result.
+ */
+export function supportsAdvisoryOutputTokenLimit(model: string): boolean {
+  try {
+    return ADVISORY_ONLY_MAX_TOKENS_MODELS.has(resolveModelVariant(model).wireId);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Return the exact Kiro-native projection proven by live probes.
