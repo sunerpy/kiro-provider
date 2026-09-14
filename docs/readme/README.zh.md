@@ -66,6 +66,12 @@ V3 实现 OpenAI Responses 核心资源，并明确暴露所有上游差异：
 `systemPrompt` feature。默认 `v3-auto` 改用 KiroRuntime CreateResponse
 原生 `instructions` 字段。
 
+用量统计保留真实的缓存读写和 reasoning 子项。Kiro 只提供上下文百分比和
+credits 时，默认兼容模式在 `usage.metadata.kiro` 标明估算来源和未知字段；
+严格模式省略不完整的 usage。上下文计数不会再把 GPT 已封顶的旧百分比乘以
+修正后的 prompt 预算。详见[用量与上下文统计](../RESPONSES_USAGE.zh.md)，
+其中也区分了 AI SDK 7 的累计 `usage` 与当前步骤的 `finalStep.usage`。
+
 传输选择、Response 状态、数据保留边界、模型控制与客户端验证见
 [`PROTOCOL_COMPATIBILITY.zh.md`](PROTOCOL_COMPATIBILITY.zh.md) 和
 [`docs/audits/`](../audits/README.md)。
@@ -456,42 +462,42 @@ AI Agent 或安装器只有在以下条件全部满足后，才能认为配置�
 
 配置默认从 `~/.config/kiro-provider/config.json`（或 `$XDG_CONFIG_HOME/kiro-provider/config.json`；Windows 为 `%APPDATA%\kiro-provider\config.json`，旧的 `~/.config` 位置仍作为兜底读取）加载，可被 `KIRO_PROVIDER_*` 环境变量覆盖；`serve` 命令还支持部分 CLI 参数覆盖。配置文件中的未知键会被拒绝并给出相近键提示，数值字段有范围校验，空字符串环境变量视为未设置。优先级为 **CLI 参数 > 环境变量 > 配置文件 > schema 默认值**。
 
-| 字段 | 默认值 | 环境变量 |
-| --- | --- | --- |
-| `host` | `127.0.0.1` | `KIRO_PROVIDER_HOST` |
-| `port` | `8787` | `KIRO_PROVIDER_PORT` |
-| `api_keys` | 必填，不可为空 | `KIRO_PROVIDER_API_KEYS` |
-| `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
-| `protocol_projection_mode` | `v3-auto` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
-| `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
-| `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
-| `opencode_auth_db_path` | `null`（0.7.0 起弃用并忽略） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
-| `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
-| `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
-| `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
-| `enforce_single_instance` | `true` | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE` |
-| `instance_lock_path` | 平台配置目录 | `KIRO_PROVIDER_INSTANCE_LOCK_PATH` |
-| `runtime_endpoint_mode` | `kiro-runtime` | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE` |
-| `dynamic_model_catalog` | `true` | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG` |
-| `model_catalog_ttl_ms` | `900000` | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS` |
-| `model_catalog_stale_ttl_ms` | `86400000` | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` |
-| `model_catalog_request_timeout_ms` | `10000` | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
-| `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
-| `quota_recheck_interval_ms` | `900000` | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS` |
-| `quota_recheck_timeout_ms` | `10000` | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS` |
-| `quota_recheck_concurrency` | `4` | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY` |
-| `account_maintenance_enabled` | `true` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` |
-| `account_maintenance_interval_ms` | `60000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` |
-| `account_maintenance_timeout_ms` | `120000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` |
-| `account_maintenance_concurrency` | `4` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` |
-| `usage_refresh_interval_ms` | `900000` | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS` |
-| `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
-| `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
-| `reasoning_replay_key_path` | 配置目录自动生成 | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
-| `reasoning_replay_keys` | `[]` | `KIRO_PROVIDER_REASONING_REPLAY_KEYS` |
-| `reasoning_replay_ttl_ms` | `86400000` | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS` |
-| `reasoning_replay_max_entries` | `10000` | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` |
-| `log_level` | `info` | `KIRO_PROVIDER_LOG_LEVEL` |
+| 字段                               | 默认值                       | 环境变量                                         |
+| ---------------------------------- | ---------------------------- | ------------------------------------------------ |
+| `host`                             | `127.0.0.1`                  | `KIRO_PROVIDER_HOST`                             |
+| `port`                             | `8787`                       | `KIRO_PROVIDER_PORT`                             |
+| `api_keys`                         | 必填，不可为空               | `KIRO_PROVIDER_API_KEYS`                         |
+| `enable_legacy_chat_completions`   | `false`                      | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS`   |
+| `protocol_projection_mode`         | `v3-auto`                    | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`         |
+| `session_affinity_mode`            | `explicit-only`              | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`            |
+| `auth_source`                      | `local`                      | `KIRO_PROVIDER_AUTH_SOURCE`                      |
+| `opencode_auth_db_path`            | `null`（0.7.0 起弃用并忽略） | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`            |
+| `proxy_url`                        | `null`                       | `KIRO_PROVIDER_PROXY_URL`                        |
+| `default_region`                   | `us-east-1`                  | `KIRO_PROVIDER_DEFAULT_REGION`                   |
+| `sdk_http_keep_alive`              | `false`                      | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`              |
+| `enforce_single_instance`          | `true`                       | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`          |
+| `instance_lock_path`               | 平台配置目录                 | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`               |
+| `runtime_endpoint_mode`            | `kiro-runtime`               | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE`            |
+| `dynamic_model_catalog`            | `true`                       | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG`            |
+| `model_catalog_ttl_ms`             | `900000`                     | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS`             |
+| `model_catalog_stale_ttl_ms`       | `86400000`                   | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS`       |
+| `model_catalog_request_timeout_ms` | `10000`                      | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
+| `account_selection_strategy`       | `lowest-usage`               | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY`       |
+| `quota_recheck_interval_ms`        | `900000`                     | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`        |
+| `quota_recheck_timeout_ms`         | `10000`                      | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`         |
+| `quota_recheck_concurrency`        | `4`                          | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`        |
+| `account_maintenance_enabled`      | `true`                       | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED`      |
+| `account_maintenance_interval_ms`  | `60000`                      | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS`  |
+| `account_maintenance_timeout_ms`   | `120000`                     | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS`   |
+| `account_maintenance_concurrency`  | `4`                          | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY`  |
+| `usage_refresh_interval_ms`        | `900000`                     | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`        |
+| `session_affinity_ttl_ms`          | `86400000`                   | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS`          |
+| `session_affinity_max_entries`     | `10000`                      | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES`     |
+| `reasoning_replay_key_path`        | 配置目录自动生成             | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`        |
+| `reasoning_replay_keys`            | `[]`                         | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`            |
+| `reasoning_replay_ttl_ms`          | `86400000`                   | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`          |
+| `reasoning_replay_max_entries`     | `10000`                      | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`     |
+| `log_level`                        | `info`                       | `KIRO_PROVIDER_LOG_LEVEL`                        |
 
 完整字段说明（包括重试/超时调优参数与仅用于测试的 `test_upstream_endpoint`）见 [`docs/readme/CONFIGURATION.zh.md`](CONFIGURATION.zh.md)。
 

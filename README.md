@@ -72,8 +72,8 @@ account does not advertise the private `systemPrompt` feature. The default
 `v3-auto` path instead uses KiroRuntime CreateResponse's native
 `instructions` field.
 
-`responses_fidelity_mode` defaults to `compatible` and reports known losses in
-`X-Kiro-Compatibility`; `strict` rejects those semantics before generation.
+`responses_fidelity_mode` defaults to `compatible` and reports request projection
+losses in `X-Kiro-Compatibility`; `strict` rejects those semantics before generation.
 `X-Kiro-Transport` distinguishes native, native-adapted, and stateless calls.
 Native tool bridges are enabled only for verified model/region cells. Instruction
 lifting stays experimental until its complete continuation gate passes. See the
@@ -81,6 +81,13 @@ lifting stays experimental until its complete continuation gate passes. See the
 for history, reasoning, instruction-priority boundaries, and storage migration.
 The [before/after report](docs/audits/kiro-provider-responses-before-after-2026-09-10.zh.md)
 includes real OpenAI SDK, Codex, and Zuno results.
+
+Usage preserves measured cache/read/write and reasoning sub-counts. When Kiro only
+provides a context percentage and credits, compatible mode labels estimates and
+unknown fields in `usage.metadata.kiro`; strict mode omits incomplete usage.
+Context accounting does not multiply GPT's capped legacy percentage by its corrected
+prompt budget. See [usage and context accounting](docs/RESPONSES_USAGE.md), including
+the distinction between AI SDK 7's cumulative `usage` and `finalStep.usage`.
 
 For the transport decision table, stored-response contract, data-retention
 boundary, verified model controls, and current client evidence, see
@@ -487,42 +494,42 @@ with the stable base URL and gateway API key.
 
 Config is loaded from `~/.config/kiro-provider/config.json` (or `$XDG_CONFIG_HOME/kiro-provider/config.json`; on Windows `%APPDATA%\kiro-provider\config.json`, with the legacy `~/.config` location still read as a fallback), overridable by `KIRO_PROVIDER_*` environment variables and, for `serve`, by CLI flags. Unknown keys in the file are rejected with a suggestion, numeric fields are range-checked, and an empty environment variable counts as unset. Precedence is **CLI flag > environment variable > config file > schema default**.
 
-| Field | Default | Env var |
-| --- | --- | --- |
-| `host` | `127.0.0.1` | `KIRO_PROVIDER_HOST` |
-| `port` | `8787` | `KIRO_PROVIDER_PORT` |
-| `api_keys` | required, non-empty | `KIRO_PROVIDER_API_KEYS` |
-| `enable_legacy_chat_completions` | `false` | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS` |
-| `protocol_projection_mode` | `v3-auto` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE` |
-| `session_affinity_mode` | `explicit-only` | `KIRO_PROVIDER_SESSION_AFFINITY_MODE` |
-| `auth_source` | `local` | `KIRO_PROVIDER_AUTH_SOURCE` |
-| `opencode_auth_db_path` | `null` (deprecated since 0.7.0, ignored) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH` |
-| `proxy_url` | `null` | `KIRO_PROVIDER_PROXY_URL` |
-| `default_region` | `us-east-1` | `KIRO_PROVIDER_DEFAULT_REGION` |
-| `sdk_http_keep_alive` | `false` | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE` |
-| `enforce_single_instance` | `true` | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE` |
-| `instance_lock_path` | platform config directory | `KIRO_PROVIDER_INSTANCE_LOCK_PATH` |
-| `runtime_endpoint_mode` | `kiro-runtime` | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE` |
-| `dynamic_model_catalog` | `true` | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG` |
-| `model_catalog_ttl_ms` | `900000` | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS` |
-| `model_catalog_stale_ttl_ms` | `86400000` | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS` |
-| `model_catalog_request_timeout_ms` | `10000` | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
-| `account_selection_strategy` | `lowest-usage` | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY` |
-| `quota_recheck_interval_ms` | `900000` | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS` |
-| `quota_recheck_timeout_ms` | `10000` | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS` |
-| `quota_recheck_concurrency` | `4` | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY` |
-| `account_maintenance_enabled` | `true` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED` |
-| `account_maintenance_interval_ms` | `60000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS` |
-| `account_maintenance_timeout_ms` | `120000` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS` |
-| `account_maintenance_concurrency` | `4` | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY` |
-| `usage_refresh_interval_ms` | `900000` | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS` |
-| `session_affinity_ttl_ms` | `86400000` | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS` |
-| `session_affinity_max_entries` | `10000` | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES` |
-| `reasoning_replay_key_path` | auto-generated config path | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH` |
-| `reasoning_replay_keys` | `[]` | `KIRO_PROVIDER_REASONING_REPLAY_KEYS` |
-| `reasoning_replay_ttl_ms` | `86400000` | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS` |
-| `reasoning_replay_max_entries` | `10000` | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES` |
-| `log_level` | `info` | `KIRO_PROVIDER_LOG_LEVEL` |
+| Field                              | Default                                  | Env var                                          |
+| ---------------------------------- | ---------------------------------------- | ------------------------------------------------ |
+| `host`                             | `127.0.0.1`                              | `KIRO_PROVIDER_HOST`                             |
+| `port`                             | `8787`                                   | `KIRO_PROVIDER_PORT`                             |
+| `api_keys`                         | required, non-empty                      | `KIRO_PROVIDER_API_KEYS`                         |
+| `enable_legacy_chat_completions`   | `false`                                  | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS`   |
+| `protocol_projection_mode`         | `v3-auto`                                | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`         |
+| `session_affinity_mode`            | `explicit-only`                          | `KIRO_PROVIDER_SESSION_AFFINITY_MODE`            |
+| `auth_source`                      | `local`                                  | `KIRO_PROVIDER_AUTH_SOURCE`                      |
+| `opencode_auth_db_path`            | `null` (deprecated since 0.7.0, ignored) | `KIRO_PROVIDER_OPENCODE_AUTH_DB_PATH`            |
+| `proxy_url`                        | `null`                                   | `KIRO_PROVIDER_PROXY_URL`                        |
+| `default_region`                   | `us-east-1`                              | `KIRO_PROVIDER_DEFAULT_REGION`                   |
+| `sdk_http_keep_alive`              | `false`                                  | `KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE`              |
+| `enforce_single_instance`          | `true`                                   | `KIRO_PROVIDER_ENFORCE_SINGLE_INSTANCE`          |
+| `instance_lock_path`               | platform config directory                | `KIRO_PROVIDER_INSTANCE_LOCK_PATH`               |
+| `runtime_endpoint_mode`            | `kiro-runtime`                           | `KIRO_PROVIDER_RUNTIME_ENDPOINT_MODE`            |
+| `dynamic_model_catalog`            | `true`                                   | `KIRO_PROVIDER_DYNAMIC_MODEL_CATALOG`            |
+| `model_catalog_ttl_ms`             | `900000`                                 | `KIRO_PROVIDER_MODEL_CATALOG_TTL_MS`             |
+| `model_catalog_stale_ttl_ms`       | `86400000`                               | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS`       |
+| `model_catalog_request_timeout_ms` | `10000`                                  | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS` |
+| `account_selection_strategy`       | `lowest-usage`                           | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY`       |
+| `quota_recheck_interval_ms`        | `900000`                                 | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`        |
+| `quota_recheck_timeout_ms`         | `10000`                                  | `KIRO_PROVIDER_QUOTA_RECHECK_TIMEOUT_MS`         |
+| `quota_recheck_concurrency`        | `4`                                      | `KIRO_PROVIDER_QUOTA_RECHECK_CONCURRENCY`        |
+| `account_maintenance_enabled`      | `true`                                   | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_ENABLED`      |
+| `account_maintenance_interval_ms`  | `60000`                                  | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_INTERVAL_MS`  |
+| `account_maintenance_timeout_ms`   | `120000`                                 | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_TIMEOUT_MS`   |
+| `account_maintenance_concurrency`  | `4`                                      | `KIRO_PROVIDER_ACCOUNT_MAINTENANCE_CONCURRENCY`  |
+| `usage_refresh_interval_ms`        | `900000`                                 | `KIRO_PROVIDER_USAGE_REFRESH_INTERVAL_MS`        |
+| `session_affinity_ttl_ms`          | `86400000`                               | `KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS`          |
+| `session_affinity_max_entries`     | `10000`                                  | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES`     |
+| `reasoning_replay_key_path`        | auto-generated config path               | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`        |
+| `reasoning_replay_keys`            | `[]`                                     | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`            |
+| `reasoning_replay_ttl_ms`          | `86400000`                               | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`          |
+| `reasoning_replay_max_entries`     | `10000`                                  | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`     |
+| `log_level`                        | `info`                                   | `KIRO_PROVIDER_LOG_LEVEL`                        |
 
 The full field reference, including retry/timeout tuning and the test-only `test_upstream_endpoint`, lives in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
