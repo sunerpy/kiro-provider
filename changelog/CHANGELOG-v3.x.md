@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.5](https://github.com/sunerpy/kiro-provider/compare/v3.2.4...v3.2.5) (2026-09-15)
+
+
+### Bug Fixes
+
+* **anthropic:** 保留连续文本簇投影 ([dad2e2d](https://github.com/sunerpy/kiro-provider/commit/dad2e2def6e5a64fa600f4dc89822eaedeeb6e32))
+
 ## [3.2.4](https://github.com/sunerpy/kiro-provider/compare/v3.2.3...v3.2.4) (2026-09-15)
 
 
