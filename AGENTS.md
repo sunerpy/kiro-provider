@@ -66,6 +66,24 @@ Apply these coverage expectations:
 - Logging/diagnostic changes: assert that no model-visible or secret payload crosses the audit boundary.
 - Documentation/config changes: run the config/docs parity tests and verify all linked English/Chinese references remain consistent.
 
+Coverage is a release policy, not an informational report:
+
+- `make coverage-gate` enforces the repository-owned 93% line floor and
+  `make coverage-parity` keeps local exclusions identical to `codecov.yml`.
+- Branch protection must require `CI Success`, `codecov/project`, and
+  `codecov/patch`. Both Codecov statuses use a 93% target with zero threshold;
+  pending, missing, errored, or failed statuses block merge and release.
+- The Codecov upload step must use `fail_ci_if_error: true`. A green local
+  coverage job does not waive an uploader/configuration failure, and a green
+  `CI Success` does not waive either external Codecov status.
+- Generated Release Please PRs may use the repository's strict metadata-only
+  fast lane, but they still run the coverage gate, parity check, upload a report,
+  and satisfy both required Codecov statuses. Never merge a release PR while a
+  required coverage status is absent or red.
+- Do not lower the floor, add an exclusion, or add Codecov tolerance merely to
+  make CI pass. Such policy changes require an explicit rationale, matching
+  local/remote configuration, and regression coverage for the affected code.
+
 Do not claim live client, platform, release, or packaged-binary support from unit tests alone. State which checks were run and which environment-specific checks remain.
 
 ## Git and release discipline
@@ -74,4 +92,8 @@ Do not claim live client, platform, release, or packaged-binary support from uni
 - Use Conventional Commits and semantic PR titles. Normal project subjects use concise Chinese imperative wording with a lowercase scope, for example `fix(responses): 修复续接回放`; release automation uses `chore: release x.y.z`. Do not add AI attribution trailers.
 - Keep feature/fix PRs focused. Release Please owns the package version, release manifest, changelog entry, tag, and draft release unless a specifically authorized recovery requires otherwise.
 - A green workflow is not release proof. Bind acceptance to the exact PR/head SHA and required jobs, then to the exact tag/release assets and checksums; smoke-test downloaded public bytes before declaring publication complete.
+- Before merging any feature or generated release PR, verify all three required
+  contexts (`CI Success`, `codecov/project`, and `codecov/patch`) on the exact
+  current head. Do not publish from a commit whose Codecov gate failed or never
+  reported.
 - Never push directly to `main`, bypass required checks, publish npm/GitHub releases, or replace a locally installed service unless the user explicitly requested that action.

@@ -1,7 +1,7 @@
 {
   "profile": "node",
   "addons": [
-    "pr-title"
+    "codecov"
   ],
   "placeholders": {
     "DEFAULT_BRANCH": "main",
@@ -14,6 +14,7 @@
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     ".oxfmtignore",
+    "codecov.yml",
     "release-please-config.json"
   ]
 }

@@ -1,13 +1,18 @@
+codecov:
+  # Publish Codecov's status only after the repository-owned CI check finishes.
+  # Branch protection separately requires codecov/project and codecov/patch.
+  require_ci_to_pass: true
+
 coverage:
   status:
     project:
       default:
         target: 93%
-        threshold: 1%
+        threshold: 0%
     patch:
       default:
         target: 93%
-        threshold: 1%
+        threshold: 0%
 
 ignore:
   - "__tests__/**"

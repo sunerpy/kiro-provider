@@ -1,4 +1,4 @@
-.PHONY: install fmt fmt-check typecheck lint docs-links scripts-syntax test coverage coverage-gate coverage-parity build build-binary clean security codex-smoke-security check pre-ci ci
+.PHONY: install fmt fmt-check typecheck lint docs-links scripts-syntax test coverage coverage-gate coverage-parity build build-binary clean security codex-smoke-security quality check pre-ci ci
 
 install:
 	bun install --frozen-lockfile
@@ -51,11 +51,15 @@ codex-smoke-security:
 	bash -n scripts/codex-smoke.sh
 	KIRO_PROVIDER_SMOKE_SECURITY_SELF_TEST=1 bash scripts/codex-smoke.sh
 
-# Fast local/CI correctness gate. Coverage remains parallel in CI.
-check: fmt-check typecheck lint docs-links scripts-syntax test build security codex-smoke-security coverage-parity
+# Test-free quality gate. `coverage-gate` owns the test execution in `pre-ci`,
+# so CI does not pay for the same suite twice.
+quality: fmt-check typecheck lint docs-links scripts-syntax build security codex-smoke-security coverage-parity
+
+# Fast local correctness gate for changes that do not need coverage output.
+check: quality test
 
 # High-fidelity release preflight, including the project-owned coverage floor.
-pre-ci: check coverage-gate
+pre-ci: quality coverage-gate
 
 # Compatibility alias retained for existing automation.
 ci: check
