@@ -557,6 +557,9 @@ jobs:
           npm publish "$tarball" --dry-run "${args[@]}"
           case "$NPM_PUBLISH_MODE" in
           publish)
+            # A successful npm publish response is the authoritative registry
+            # acceptance signal. Public packument/CDN visibility is eventually
+            # consistent and is verified after the workflow, not gated here.
             npm publish "$tarball" "${args[@]}"
             ;;
           stage)
@@ -568,22 +571,6 @@ jobs:
             exit 1
             ;;
           esac
-
-      - name: Confirm the version is visible on the registry
-        if: env.NPM_PUBLISH_MODE == 'publish'
-        shell: bash
-        run: |
-          set -euo pipefail
-          spec=$(cat npm-package/package-spec.txt)
-          for _ in 1 2 3 4 5 6; do
-            if npm view "$spec" version >/dev/null 2>&1; then
-              echo "${spec} is visible on the registry"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::${spec} is not visible on the registry after publish"
-          exit 1
 
   publish-release:
     name: Publish Release

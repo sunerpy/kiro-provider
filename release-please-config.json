@@ -9,7 +9,14 @@
       "include-v-in-tag": true,
       "draft": true,
       "force-tag-creation": true,
-      "changelog-path": "changelog/CHANGELOG-v3.x.md"
+      "changelog-path": "changelog/CHANGELOG-v3.x.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".github/scaffold.json",
+          "jsonpath": "$.placeholders.CURRENT_VERSION"
+        }
+      ]
     }
   }
 }
