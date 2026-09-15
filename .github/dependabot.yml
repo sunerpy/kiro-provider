@@ -1,6 +1,6 @@
-# Weekly dependency updates. Keep bot churn bounded: stale PRs do not rebase on
-# every main update, and majors are deliberate maintainer work rather than
-# automatic compatibility migrations.
+# GitHub Actions updates only. Dependabot npm version updates do not update Bun
+# bun.lock, so every generated PR fails the frozen-lockfile gate. Use `bun update`
+# in a maintainer PR for dependency upgrades until the updater supports Bun locks.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -15,23 +15,3 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/"
-    open-pull-requests-limit: 2
-    rebase-strategy: "disabled"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "build"
-      include: "scope"
-    groups:
-      production-dependencies:
-        dependency-type: "production"
-        update-types: ["minor", "patch"]
-      dev-dependencies:
-        dependency-type: "development"
-        update-types: ["minor", "patch"]
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
