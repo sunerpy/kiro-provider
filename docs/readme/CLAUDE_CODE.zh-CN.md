@@ -113,6 +113,10 @@ Claude Code 版本变化，因此当前支持结论仍固定在 2.1.263。
 Messages 适配器支持 Claude Code 2.1.263 的实际请求：
 
 - 文本、base64 图片、标准工具、`tool_use`、`tool_result` 与 `is_error`；
+- 每条 user message 支持一个带图片的 `tool_result`：其中的 base64 图片会提升到
+  同一个 Kiro user turn，同时保留 tool ID、状态、文本和原始图片字节；同一消息内
+  多个图片型 tool result，或与普通 user 图片混用时仍会 fail closed，因为 Kiro
+  无法保留这些不同的图片归属；
 - 顶层及会话中途的 system 文本，按既有 Kiro projection mode 投影；
 - adaptive thinking 与 `output_config.effort`；
 - GPT effort 转换为 Kiro `reasoning.effort`；Claude 模型继续使用

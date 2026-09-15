@@ -127,6 +127,11 @@ Kiro-only limitations explicit:
 
 - text, base64 images, standard tools, `tool_use`, `tool_result`, and
   `is_error`;
+- one image-bearing `tool_result` per user message: its base64 image blocks are
+  lifted into the same Kiro user turn while the tool ID, status, text, and image
+  bytes are preserved; multiple image-bearing results or a mix with direct user
+  images remain fail-closed because Kiro cannot retain those distinct image
+  origins;
 - top-level and mid-conversation system text through the configured Kiro
   projection mode;
 - adaptive thinking and `output_config.effort`;

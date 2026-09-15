@@ -386,6 +386,213 @@ describe("Anthropic request adapter", () => {
     });
   });
 
+  test("lifts one image-valued tool result into the same Kiro user turn", () => {
+    const adapted = adaptAnthropicMessagesRequest(
+      validRequest({
+        tools: [
+          { name: "inspect", description: "inspect state", input_schema: { type: "object" } },
+          { name: "export", description: "export an image", input_schema: { type: "object" } },
+        ],
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tool-text", name: "inspect", input: {} },
+              { type: "tool_use", id: "tool-image", name: "export", input: {} },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "tool-text",
+                content: [{ type: "text", text: "ready" }],
+              },
+              {
+                type: "tool_result",
+                tool_use_id: "tool-image",
+                content: [
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "AQID" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+      { requireMaxTokens: true },
+    );
+
+    expect(adapted.ok).toBe(true);
+    if (!adapted.ok) return;
+    expect(adapted.value.body.messages[1]?.content).toEqual([
+      {
+        type: "tool_result",
+        toolCallId: "tool-text",
+        content: [expect.objectContaining({ type: "text", text: "ready" })],
+        isError: false,
+        path: "messages.1.content.0",
+      },
+      {
+        type: "tool_result",
+        toolCallId: "tool-image",
+        content: [],
+        isError: false,
+        path: "messages.1.content.1",
+      },
+      {
+        type: "image",
+        data: "AQID",
+        mediaType: "image/png",
+        path: "messages.1.content.1.content.0",
+      },
+    ]);
+
+    const transformed = buildCodeWhispererRequest(
+      adapted.value.body,
+      MODEL,
+      new FakeAccountManager().toAuthDetails(account()),
+    );
+    expect(transformed.request.conversationState.currentMessage.userInputMessage).toMatchObject({
+      content: "",
+      images: [{ format: "png", source: { bytes: Uint8Array.from([1, 2, 3]) } }],
+      userInputMessageContext: {
+        toolResults: [
+          { toolUseId: "tool-text", content: [{ text: "ready" }], status: "success" },
+          { toolUseId: "tool-image", content: [], status: "success" },
+        ],
+      },
+    });
+  });
+
+  test("rejects ambiguous image origins across tool results or direct message content", () => {
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AQID" },
+    };
+    const assistant = {
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "tool-a", name: "export", input: {} },
+        { type: "tool_use", id: "tool-b", name: "export", input: {} },
+      ],
+    };
+    const tools = [
+      { name: "export", description: "export an image", input_schema: { type: "object" } },
+    ];
+
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools,
+          messages: [
+            assistant,
+            {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "tool-a", content: [image] },
+                { type: "tool_result", tool_use_id: "tool-b", content: [image] },
+              ],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.1.content.0",
+    });
+
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools,
+          messages: [
+            assistant,
+            {
+              role: "user",
+              content: [image, { type: "tool_result", tool_use_id: "tool-a", content: [image] }],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.1.content.0",
+    });
+
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools,
+          messages: [
+            assistant,
+            {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "tool-a", content: [image] }, image],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.1",
+    });
+  });
+
+  test("rejects malformed or unsupported nested tool-result image content", () => {
+    const result = (content: unknown) =>
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools: [
+            { name: "export", description: "export an image", input_schema: { type: "object" } },
+          ],
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "tool-image", name: "export", input: {} }],
+            },
+            {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "tool-image", content }],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      );
+
+    expect(result({ type: "text", text: "not an array" })).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content",
+    });
+    expect(result([null])).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content.0",
+    });
+    expect(result([{ type: "document", source: { type: "base64", data: "AQID" } }])).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content.0",
+    });
+    expect(
+      result([{ type: "image", source: { type: "url", url: "https://example.test/a" } }]),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_image_source",
+      param: "messages.1.content.0.content.0",
+    });
+  });
+
   test("rejects assistant-prefill requests before contacting Kiro", () => {
     const adapted = adaptAnthropicMessagesRequest(
       validRequest({
