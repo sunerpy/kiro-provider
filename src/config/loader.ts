@@ -264,6 +264,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_REASONING_REPLAY_LEGACY_ACCOUNT_FAILOVER",
+    field: "reasoning_replay_legacy_account_failover",
+    kind: "string",
+  },
+  {
     env: "KIRO_PROVIDER_REASONING_REPLAY_TTL_MS",
     field: "reasoning_replay_ttl_ms",
     kind: "integer",

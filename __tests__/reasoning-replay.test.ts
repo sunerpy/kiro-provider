@@ -209,6 +209,7 @@ describe("ReasoningReplayStore", () => {
 
     const resolved = store.resolveResponses(token, baseContext, 3);
     expect(resolved).toEqual({
+      databaseLegacy: true,
       accountId: baseContext.accountId,
       conversationId: baseContext.conversationId,
       replay: {
@@ -424,6 +425,7 @@ describe("ReasoningReplayStore", () => {
     const bytes = Uint8Array.from([0, 1, 2, 3, 127, 128, 254, 255]);
     const token = requireToken(store.store({ text: "", redactedContent: bytes }, baseContext));
     expect(store.resolveResponses(token, baseContext, 4)).toEqual({
+      databaseLegacy: true,
       accountId: baseContext.accountId,
       conversationId: baseContext.conversationId,
       replay: {

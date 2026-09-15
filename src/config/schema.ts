@@ -106,6 +106,9 @@ export const ConfigSchema = z.object({
   reasoning_replay_keys: z.array(z.string().trim().min(1)).default([]),
   reasoning_replay_token_format: z.enum(["portable-v2", "database-v1"]).default("portable-v2"),
   reasoning_replay_account_failover: z.enum(["verified", "strict"]).default("verified"),
+  reasoning_replay_legacy_account_failover: z
+    .enum(["strict", "verified-current-cell"])
+    .default("strict"),
   reasoning_replay_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   reasoning_replay_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
   effort: EffortSchema.nullable().default(null),
