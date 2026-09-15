@@ -15,9 +15,8 @@ import {
   type CanonicalOutputEvent,
 } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
-import { isLegacyReplayToken } from "../reasoning/replay-token.js";
 import { EffortSchema } from "../kiro/regions.js";
-import { KIRO_CONSTANTS } from "../kiro/constants.js";
+import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields } from "../kiro/effort.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
@@ -130,13 +129,15 @@ type CompletionResult =
     };
 
 interface ReplayState {
-  /** Strict database-v1 owner binding. Portable-v2 origins are preferences only. */
+  /** Owner-bound replay account. Only provenance-authenticated cells omit it. */
   readonly accountId?: string;
   readonly conversationId?: string;
   readonly preferredAccountId?: string;
   readonly preferredConversationId?: string;
   readonly portableCount: number;
   readonly portableRegion?: string;
+  readonly portableRuntimeProtocol?: "codewhisperer" | "kiro-runtime";
+  readonly portableProfileRequired?: true;
   readonly replays: readonly ResolvedReasoningReplay[];
 }
 
@@ -449,25 +450,43 @@ function replayLockedSelectionResult(
 function verifiedPortableReplay(
   options: RunChatCompletionOptions,
   resolved: ReturnType<PipelineReasoningReplayStore["resolveResponses"]>,
-): string | undefined {
+):
+  | {
+      readonly region: string;
+      readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+      readonly profileRequired: true;
+    }
+  | undefined {
   if (options.config.reasoning_replay_account_failover !== "verified") return undefined;
-  const origin = options.accountManager
-    .reconcileFromDb()
-    .find((account) => account.id === resolved.accountId);
-  if (!origin) return undefined;
+  const provenance = resolved.provenance;
+  if (
+    resolved.portable !== true ||
+    !provenance ||
+    provenance.protocol !== options.body.protocol ||
+    !provenance.profileArn ||
+    provenance.upstreamOperation !== "GenerateAssistantResponse"
+  )
+    return undefined;
   // Cells are added only after the direct A -> B/new-conversation probe passes.
-  // Keeping the matrix explicit makes an upstream behavior change fail closed.
-  const key = `${options.body.protocol}:${options.model}:${origin.region}:${resolved.replay.content.kind}`;
-  return VERIFIED_PORTABLE_REPLAY_CELLS.has(key) ? origin.region : undefined;
+  // Every dimension comes from the authenticated mint envelope; mutable account
+  // rows and the protocol used to present a token are never provenance.
+  const key = `${provenance.protocol}:${options.model}:${provenance.region}:${provenance.runtimeProtocol}:profile:${resolved.replay.content.kind}`;
+  return VERIFIED_PORTABLE_REPLAY_CELLS.has(key)
+    ? {
+        region: provenance.region,
+        runtimeProtocol: provenance.runtimeProtocol,
+        profileRequired: true,
+      }
+    : undefined;
 }
 
 const VERIFIED_PORTABLE_REPLAY_CELLS = new Set([
   // 2026-09-15, Kiro CLI 2.21.1 / KiroRuntime us-east-1: three consecutive
   // account-A -> account-B + new-conversation tool-result replays passed at max.
-  "responses:gpt-5.6-sol:us-east-1:reasoning_text",
+  "responses:gpt-5.6-sol:us-east-1:kiro-runtime:profile:reasoning_text",
   // The same direct signed-thinking probe passed 3/3 with Claude Sonnet 5;
   // Messages still preserves its own public thinking/signature contract.
-  "anthropic-messages:claude-sonnet-5:us-east-1:reasoning_text",
+  "anthropic-messages:claude-sonnet-5:us-east-1:kiro-runtime:profile:reasoning_text",
 ]);
 
 function resolveReplayState(
@@ -491,6 +510,8 @@ function resolveReplayState(
   let preferredConversationId = binding?.conversationId;
   let portableCount = 0;
   let portableRegion: string | undefined;
+  let portableRuntimeProtocol: "codewhisperer" | "kiro-runtime" | undefined;
+  let portableProfileRequired: true | undefined;
   const replays: ResolvedReasoningReplay[] = [];
   const tokenItems = options.body.reasoningReplays.flatMap((replay, index) => {
     if (replay.lookup.kind !== "responses-token" && replay.lookup.kind !== "anthropic-token") {
@@ -592,29 +613,21 @@ function resolveReplayState(
         "reasoning_replay_not_found",
       );
     }
-    const legacyProviderToken =
-      replay.lookup.kind === "responses-token"
-        ? replay.lookup.encryptedContent
-        : replay.lookup.kind === "anthropic-token"
-          ? replay.lookup.signature
-          : undefined;
-    // Portability is an upstream property of the authenticated exact reasoning
-    // envelope, not of the kr1_/kr2_ wrapper. This lets recovered legacy fork
-    // tokens use the same narrow verified matrix while strict mode remains
-    // owner-bound.
-    const verifiedRegion =
-      resolved.portable === true ||
-      (legacyProviderToken !== undefined && isLegacyReplayToken(legacyProviderToken))
-        ? verifiedPortableReplay(options, resolved)
-        : undefined;
-    if (verifiedRegion !== undefined) {
-      if (portableRegion !== undefined && portableRegion !== verifiedRegion) {
+    const verified = verifiedPortableReplay(options, resolved);
+    if (verified !== undefined) {
+      if (
+        (portableRegion !== undefined && portableRegion !== verified.region) ||
+        (portableRuntimeProtocol !== undefined &&
+          portableRuntimeProtocol !== verified.runtimeProtocol)
+      ) {
         throw new ReasoningReplayError(
-          "Portable reasoning replay items resolve to different verified regions",
+          "Portable reasoning replay items resolve to different verified mint cells",
           "reasoning_replay_context_mismatch",
         );
       }
-      portableRegion = verifiedRegion;
+      portableRegion = verified.region;
+      portableRuntimeProtocol = verified.runtimeProtocol;
+      portableProfileRequired = verified.profileRequired;
       portableCount += 1;
       preferredAccountId ??= resolved.accountId;
       preferredConversationId ??= resolved.conversationId;
@@ -641,6 +654,8 @@ function resolveReplayState(
     ...(preferredAccountId !== undefined ? { preferredAccountId } : {}),
     ...(preferredConversationId !== undefined ? { preferredConversationId } : {}),
     ...(portableRegion !== undefined ? { portableRegion } : {}),
+    ...(portableRuntimeProtocol !== undefined ? { portableRuntimeProtocol } : {}),
+    ...(portableProfileRequired ? { portableProfileRequired } : {}),
     portableCount,
     replays,
   };
@@ -650,6 +665,11 @@ function reasoningCaptureOptions(
   options: RunChatCompletionOptions,
   accountId: string,
   conversationId: string,
+  mint: {
+    readonly region: string;
+    readonly profileArn?: string;
+    readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+  },
 ): {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning: boolean;
@@ -703,6 +723,11 @@ function reasoningCaptureOptions(
         accountId,
         conversationId,
         outputFingerprint,
+        protocol: canonical.protocol,
+        region: mint.region,
+        ...(mint.profileArn !== undefined ? { profileArn: mint.profileArn } : {}),
+        runtimeProtocol: mint.runtimeProtocol,
+        upstreamOperation: "GenerateAssistantResponse",
       }),
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
@@ -1084,8 +1109,15 @@ function selectAttemptAccount(
       (accountId) =>
         !state.modelRejectedAccountIds.has(accountId) &&
         (state.replayState.portableRegion === undefined ||
-          accounts.find((account) => account.id === accountId)?.region ===
-            state.replayState.portableRegion),
+          (() => {
+            const account = accounts.find((candidate) => candidate.id === accountId);
+            if (!account) return false;
+            const region = extractRegionFromArn(account.profileArn) ?? account.region;
+            return (
+              region === state.replayState.portableRegion &&
+              (!state.replayState.portableProfileRequired || account.profileArn !== undefined)
+            );
+          })()),
     ),
   );
   const selected = options.accountManager.selectHealthyAccount(
@@ -1370,6 +1402,15 @@ async function runAttempt(
       },
       ...(parsedEffort.success ? { effort: parsedEffort.data } : {}),
     });
+    if (
+      state.replayState.portableRuntimeProtocol !== undefined &&
+      prepared.runtimeProtocol !== state.replayState.portableRuntimeProtocol
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay request does not match the authenticated upstream operation",
+        "reasoning_replay_context_mismatch",
+      );
+    }
     options.onProjection?.(prepared.diagnostics);
     const plannedAttempt = state.sdkDispatches + 1;
     const conversationHash = auditHash(prepared.conversationId);
@@ -1489,7 +1530,11 @@ async function runAttempt(
       throw error;
     }
     options.diagnostics?.accepted();
-    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId);
+    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId, {
+      region: prepared.region,
+      ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
+      runtimeProtocol: prepared.runtimeProtocol,
+    });
     const attemptContext: AttemptStreamContext = {
       options,
       signal,

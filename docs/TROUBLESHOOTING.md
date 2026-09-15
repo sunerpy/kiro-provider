@@ -268,6 +268,17 @@ Invalid signature in thinking block`.
   client that cannot store the token should omit reasoning items from
   history instead of sending summaries alone.
 
+### `400 reasoning_replay_expired`
+
+- **Cause:** A current `kr2_` token reached its authenticated absolute expiry, a
+  database-backed `kr1_` row reached its idle expiry, or a pre-release `kr2_`
+  envelope reached the persisted compatibility cutoff. Restarting the provider
+  does not extend any of these deadlines.
+- **Remedy:** Continue from a newer assistant turn that carries a fresh token, or
+  start/fork from history that omits the expired reasoning item. Do not keep an
+  old replay key solely to bypass expiry; key retention cannot override the
+  authenticated token lifetime.
+
 ### `reasoning_replay_locked: false` in `upstream_affinity_selected`
 
 - **Look at:** The `info` event `upstream_affinity_selected` (per attempt)

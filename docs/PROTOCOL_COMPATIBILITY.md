@@ -53,13 +53,15 @@ adapter accepts current text, image, standard tool/result, mid-conversation
 system, adaptive thinking, effort, temperature, cache-hint, and lossless
 context-management shapes. `thinking.display: "omitted"` uses a tenant/model/output-bound
 `kr2_` token as the opaque Anthropic signature so the original signed Kiro
-reasoning can be restored without exposing its text; legacy `kr1_` remains
-readable. Empty signed Claude thinking is preserved. Cache markers remain
+reasoning can be restored without exposing its text. Current tokens authenticate
+an absolute TTL and mint protocol/region/profile/operation; legacy `kr1_` remains
+readable but owner-bound. Empty signed Claude thinking is preserved. Cache markers remain
 performance hints: `x-kiro-prompt-cache-mode` reports `server-auto`,
 `explicit-checkpoints`, or `off`; measured cache read/write buckets are mapped
 and unknown buckets are `null`, never fabricated as zero. The same verified
 account-failover gate used by Responses applies to omitted Messages thinking;
-currently only Claude Sonnet 5 signed text in `us-east-1` is enabled.
+currently only provenance-authenticated Claude Sonnet 5 signed text minted via
+KiroRuntime `GenerateAssistantResponse` with a profile in `us-east-1` is enabled.
 
 Only `clear_thinking_20251015` with `keep: "all"` is accepted for
 `context_management`; it returns `applied_edits: []`. Destructive edits,
@@ -149,7 +151,7 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
 - function tools, custom grammar tools, and namespace identity through
   request-local private aliases;
 - Codex collaboration `agent_message` content and author/recipient metadata;
-- signed or redacted Kiro reasoning replay through tenant/model/output-bound `kr2_` tokens with legacy `kr1_` reads.
+- signed or redacted Kiro reasoning replay through TTL- and mint-provenance-bound `kr2_` tokens, with owner-bound legacy `kr1_` reads.
 
 In `v3-auto`, this lane uses the explicit legacy instruction prefix only when
 the native Responses lane cannot represent the request. It never moves a
@@ -303,7 +305,10 @@ token without requiring `include`; no token is fabricated without a complete env
 V1 stateless records retain their known canonical history in new V3 envelopes.
 V2 native records remain readable, but cannot continue by ID without the durable
 owner metadata they never stored. An affinity cache cannot reconstruct the missing
-region/profile identity. Replay requiring missing legacy reasoning order fails explicitly.
+region/profile identity. Replay requiring missing legacy reasoning order fails explicitly. Legacy `kr1_`
+and pre-release `kr2_` envelopes without authenticated mint provenance never
+enter cross-account migration; the latter are accepted owner-bound only during
+one persisted compatibility window.
 
 The [live validation report](audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)
 records passed and failed probes, supported cells, storage migration, and commands.

@@ -72,6 +72,11 @@ const baseContext = {
   accountId: "account-a",
   conversationId: "conversation-a",
   outputFingerprint: "output-fingerprint-a",
+  protocol: "responses",
+  region: "us-east-1",
+  profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+  runtimeProtocol: "kiro-runtime",
+  upstreamOperation: "GenerateAssistantResponse",
 } as const;
 
 function requireToken(value: string | undefined): string {
@@ -101,9 +106,12 @@ describe("ReasoningReplayStore", () => {
     const { path, store } = fixture(
       config(undefined, { reasoning_replay_token_format: "portable-v2" }),
     );
-    const token = requireToken(store.store({ text: "", signature: "signed-empty" }, baseContext));
+    const now = Date.now();
+    const token = requireToken(
+      store.store({ text: "", signature: "signed-empty" }, baseContext, now),
+    );
     expect(token).toStartWith("kr2_");
-    expect(store.resolveResponses(token, baseContext, 0)).toEqual({
+    expect(store.resolveResponses(token, baseContext, 0)).toMatchObject({
       accountId: baseContext.accountId,
       conversationId: baseContext.conversationId,
       portable: true,
@@ -112,6 +120,10 @@ describe("ReasoningReplayStore", () => {
         content: { kind: "reasoning_text", text: "", signature: "signed-empty" },
       },
     });
+    expectReplayError(
+      () => store.resolveResponses(token, { ...baseContext, now: now + 60_000 }, 0),
+      "reasoning_replay_expired",
+    );
     const raw = openRaw(path);
     expect(
       raw.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM reasoning_replay").get(),

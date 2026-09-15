@@ -75,10 +75,10 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 | `session_affinity_max_entries`      | 整数，`1`-`1000000`，默认 `10000`                                                        | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES`      | 最多保留的会话绑定数；超限时优先清理最久未使用的记录。                                                                                                                                                                                                |
 | `reasoning_replay_key_path`         | `string \| null`，默认 `null`                                                            | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`         | reasoning 密钥文件覆盖路径。`null` 使用平台配置目录；未配置环境密钥环时会原子生成 `reasoning-replay-keys.json`，POSIX 权限强制为 `0600`。                                                                                                             |
 | `reasoning_replay_keys`             | `string[]`，默认 `[]`                                                                    | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`             | AES-256-GCM 密钥环。环境变量使用逗号分隔的 `key-id:base64url-32-byte-key`，key ID 可省略。首个密钥用于新记录加密，其余只解密旧记录。                                                                                                                  |
-| `reasoning_replay_token_format`     | `"portable-v2" \| "database-v1"`，默认 `"portable-v2"`                                   | `KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT`     | `portable-v2` 生成绑定租户、模型和完整输出指纹的自包含 AEAD token，不依赖 SQLite 保留周期；`database-v1` 仅用于回滚/诊断。两种格式都可读取。                                                                                                          |
-| `reasoning_replay_account_failover` | `"verified" \| "strict"`，默认 `"verified"`                                              | `KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER` | 只有内置兼容矩阵中按协议、模型、区域和 replay 类型精确验证过的单元才允许迁移账号；其余仍绑定原 owner。`strict` 禁止所有迁移。                                                                                                                         |
-| `reasoning_replay_ttl_ms`           | 整数，`1`-`2147483647`，默认 `86400000`（24 小时）                                       | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`           | 仅用于旧版数据库 `kr1_` 记录的滑动空闲有效期；自包含 `kr2_` 不受此值影响，只要解密 key 仍在密钥环中就可回放。                                                                                                                                         |
-| `reasoning_replay_max_entries`      | 整数，`1`-`1000000`，默认 `10000`                                                        | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`      | 旧版 `kr1_` 记录上限；`kr2_` 不占用该表。清理过期记录后按 LRU 淘汰。                                                                                                                                                                                  |
+| `reasoning_replay_token_format`     | `"portable-v2" \| "database-v1"`，默认 `"portable-v2"`                                   | `KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT`     | `portable-v2` 生成带认证绝对有效期与 mint 来源证据的自包含 AEAD token，不依赖 SQLite payload 保留周期；`database-v1` 仅用于回滚/诊断。两种格式都可读取。                                                                                              |
+| `reasoning_replay_account_failover` | `"verified" \| "strict"`，默认 `"verified"`                                              | `KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER` | 只有 token 认证的 mint 协议、模型、有效区域、profile 是否存在、runtime operation 与 replay 类型全部命中内置实测单元时才允许迁移；旧格式或来源证据不完整时仍绑定原 owner。`strict` 禁止所有迁移。                                                      |
+| `reasoning_replay_ttl_ms`           | 整数，`1`-`2147483647`，默认 `86400000`（24 小时）                                       | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`           | 数据库 `kr1_` 使用该值作为滑动空闲有效期；新铸造的自包含 `kr2_` 使用该值作为认证绝对有效期。缺少认证过期时间的预发布 `kr2_` 仅在一个持久化的同长度过渡窗口内 owner-bound 可读。                                                                       |
+| `reasoning_replay_max_entries`      | 整数，`1`-`1000000`，默认 `10000`                                                        | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`      | 旧版 `kr1_` 与预发布 `kr2_` 过渡记录上限；当前自包含 `kr2_` payload 不占用 replay 表。清理过期记录后按 LRU 淘汰。                                                                                                                                     |
 | `effort`                            | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| null`，默认 `null`                   | `KIRO_PROVIDER_EFFORT`                            | 可选的全局推理强度覆盖，应用于每个请求。`null` 表示不强制覆盖，除非请求自身指定。                                                                                                                                                                     |
 | `auto_effort_mapping`               | `boolean`，默认 `true`                                                                   | `KIRO_PROVIDER_AUTO_EFFORT_MAPPING`               | 启用后，网关会自动映射模型变体后缀与请求的 effort。环境变量值接受 `true`、`false`、`1`、`0`。                                                                                                                                                         |
 | `log_level`                         | `"debug" \| "info" \| "warn" \| "error"`，默认 `"info"`                                  | `KIRO_PROVIDER_LOG_LEVEL`                         | 结构化审计日志（stderr 上每行一个 JSON 对象）的最低输出级别。级别顺序为 `debug < info < warn < error`，低于阈值的事件被丢弃；`warn` 会屏蔽 `upstream_affinity_selected` 等逐请求 `info` 事件。所有加载配置的命令（`serve`、`login`、`accounts refresh | relogin`）都会应用该值。 |
@@ -307,21 +307,25 @@ Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同�
 
 Kiro 返回签名文本（包括空文本配非空签名）或 redacted reasoning 时，默认
 `portable-v2` 写端会在 Responses `reasoning.encrypted_content` 返回自包含
-`kr2_...` AEAD token。认证上下文绑定租户、模型、完整 assistant 输出指纹和
-key ID，来源账号/conversation 保存在密文内。该 token 不依赖 SQLite TTL/LRU，
-按 1 KiB 桶随机填充，并以 4 MiB 为 fail-closed wire 上限。无签名文本、冲突
-签名或 text/redacted 混合事件仍不会生成 token。
+`kr2_...` AEAD token。密文认证 envelope 同时绑定租户、模型、完整 assistant
+输出指纹、来源账号/conversation、mint 协议、有效区域、来源 profile、runtime
+protocol、上游 operation、签发/绝对过期时间与 key ID。该 token 不依赖 SQLite
+payload 保留，按 1 KiB 桶随机填充，并以 4 MiB 为 fail-closed wire 上限。无签名
+文本、冲突签名或 text/redacted 混合事件仍不会生成 token。
 
 `database-v1` 仍可用于回滚，历史 `kr1_...` 继续可读。其数据库只保存 token/
 指纹哈希与 AES-256-GCM 密文；命中会批量读取、轮换到活动 key 并续期 idle TTL。
-token 外层格式不决定上游可迁移性：从备份认证恢复的 `kr1_` 与承载同一份精确
-reasoning 的 `kr2_` 共用同一证据门控。
+历史 `kr1_` 没有认证 mint 协议/区域/profile/operation，因此始终绑定原 owner，
+不能进入 verified 迁移单元。缺少这些字段的预发布 `kr2_` 同样 owner-bound，且只在
+本版本首次打开数据库时建立的一个持久化过渡截止时间之前可读。
 
-`reasoning_replay_account_failover: "verified"` 当前只允许两类 signed
+`reasoning_replay_account_failover: "verified"` 当前只允许带完整认证来源证据、由
+KiroRuntime `GenerateAssistantResponse` 且带 profile 铸造的 signed
 `reasoning_text`：Responses + GPT-5.6 Sol + `us-east-1`，以及 Anthropic Messages +
-Claude Sonnet 5 + `us-east-1`。redacted reasoning、Terra、Luna、Opus、其他区域及
-所有未列组合仍绑定原 owner；`strict` 禁用上述两个单元。严格绑定失败会分别返回
-额度、限流、认证、健康或模型错误，不再全部折叠成通用 503。
+Claude Sonnet 5 + `us-east-1`。当前请求协议和投影 runtime operation 仍须与 mint
+envelope 一致，目标账号也须解析到同一有效区域并带 profile。redacted reasoning、
+旧 token、Terra、Luna、Opus、其他区域及所有未列组合仍绑定原 owner；`strict`
+禁用上述两个单元。严格绑定失败会分别返回额度、限流、认证、健康或模型错误。
 
 密钥配置优先级：
 
@@ -335,9 +339,9 @@ Claude Sonnet 5 + `us-east-1`。redacted reasoning、Terra、Luna、Opus、其�
 export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026-07:<old-key>'
 ```
 
-首项为活动加密密钥。旧 key 应保留到所有引用其 `kr2_` token 的客户端历史
-退出；删除 key 会显式撤销这些自包含 token。对历史 `kr1_`，若任一未过期数据库
-记录引用了缺失 key，服务构造会失败，不会悄悄破坏活动会话。日志不会
+首项为活动加密密钥。旧 key 至少要保留到它最后铸造 token 后的完整 replay TTL，
+并等待持久化的预发布兼容截止时间过去；提前删除会显式撤销对应 token。若未过期
+`kr1_` 或过渡记录引用了缺失 key，服务构造会失败，不会悄悄破坏活动会话。日志不会
 包含密钥、原始回放令牌、签名、reasoning 文本、redacted bytes 或请求提示词。
 
 ## 文件位置

@@ -48,13 +48,14 @@ items 方法。KiroRuntime 只提供原生创建与续轮，因此 V3 在本地�
 Claude Code 2.1.270 已针对 stateless canonical 通道验证。适配器接受当前文本、
 图片、标准工具/结果、中途 system、adaptive thinking、effort、temperature、
 cache hint 与无损 context management 形状。`thinking.display: "omitted"` 使用
-绑定租户、模型与完整输出的 `kr2_` token 作为 opaque Anthropic signature，
-在不暴露 thinking 文本的前提下恢复原始 Kiro signed reasoning；历史 `kr1_`
-仍可读，Claude 空文本签名也会保留。Cache marker 仍是性能提示：
+绑定 TTL、租户、模型、完整输出以及 mint 协议/区域/profile/operation 的
+`kr2_` token 作为 opaque Anthropic signature，在不暴露 thinking 文本的前提下
+恢复原始 Kiro signed reasoning；历史 `kr1_` 仍可读但保持 owner-bound，Claude
+空文本签名也会保留。Cache marker 仍是性能提示：
 `x-kiro-prompt-cache-mode` 返回 `server-auto`、`explicit-checkpoints` 或 `off`；
-只映射上游实测 cache read/write，未知 bucket 返回 `null`，不再伪造为零。Messages
-的 omitted thinking 与 Responses 共用 verified 账号故障切换门控；当前只开放
-`us-east-1` 的 Claude Sonnet 5 signed text。
+只映射上游实测 cache read/write，未知 bucket 返回 `null`，不再伪造为零。Messages 的 omitted thinking 与 Responses 共用 verified 账号故障切换门控；
+当前只开放带认证来源证据、由带 profile 的 KiroRuntime
+`GenerateAssistantResponse` 在 `us-east-1` 铸造的 Claude Sonnet 5 signed text。
 
 `context_management` 仅接受 `clear_thinking_20251015` 且 `keep: "all"`，
 并返回 `applied_edits: []`。Destructive edits、Structured Outputs、强制/串行
@@ -138,7 +139,7 @@ CodeWhisperer/Kiro 流式管道。它保留：
   提升一个内联图片块，同时保留相邻文本和工具关联；
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
-- 通过绑定租户、模型与完整输出的 `kr2_` token 回放（兼容读取历史 `kr1_`） Kiro 签名或 redacted reasoning。
+- 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
 
 在 `v3-auto` 中，只有原生 Responses 通道不能承载请求时，该通道才使用显式
 legacy 指令前缀。它不会把尾部指令移入更早历史，也不会构造空 current user。
@@ -279,5 +280,7 @@ Nullable 字段在路由前归一化，显式 Responses effort 优先于模型�
 V1 stateless 的已知 canonical 历史保存在新 V3 记录中。V2 native 缺少完整归属，
 仍可 Retrieve，但不能依赖亲和缓存补造区域/profile 后继续使用该 ID。
 需要回放却缺少原始 reasoning 位置的旧记录会明确报错；回滚须使用匹配的数据库备份。
+历史 `kr1_` 与缺少认证 mint 来源的预发布 `kr2_` 不会进入跨账号迁移；后者只在
+一个持久化的兼容窗口内 owner-bound 可读。
 
 详见[真实验证报告](../audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)。

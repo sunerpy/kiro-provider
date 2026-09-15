@@ -15,6 +15,7 @@ import {
   encodePortableReplayToken,
   isLegacyReplayToken,
   isPortableReplayToken,
+  type PortableReplayMintProvenance,
   PortableReplayTokenError,
 } from "./replay-token.js";
 
@@ -38,6 +39,11 @@ export interface ReasoningCaptureContext {
   readonly accountId: string;
   readonly conversationId: string;
   readonly outputFingerprint: string;
+  readonly protocol: PortableReplayMintProvenance["protocol"];
+  readonly region: string;
+  readonly profileArn?: string;
+  readonly runtimeProtocol: PortableReplayMintProvenance["runtimeProtocol"];
+  readonly upstreamOperation: PortableReplayMintProvenance["upstreamOperation"];
 }
 
 export interface ReasoningReplayContext {
@@ -53,8 +59,11 @@ export interface ReasoningReplayContext {
 export interface ReasoningReplayResolution {
   readonly accountId: string;
   readonly conversationId: string;
-  /** Portable replay may be routed to another verified account/conversation. */
+  /** Only provenance-authenticated portable replay may enter a verified cell. */
   readonly portable?: true;
+  readonly provenance?: PortableReplayMintProvenance;
+  /** Pre-release kr2/v2 compatibility is bounded and remains owner-bound. */
+  readonly legacyPortable?: true;
   readonly replay: ResolvedReasoningReplay;
 }
 
@@ -201,6 +210,7 @@ export class ReasoningReplayStore {
     this.#ttlMs = config.reasoning_replay_ttl_ms;
     this.#maxEntries = config.reasoning_replay_max_entries;
     this.#tokenFormat = config.reasoning_replay_token_format;
+    this.#database.ensureLegacyPortableReplayCutoff(Date.now(), this.#ttlMs);
     const missing = this.readiness().missingKeyIds;
     if (missing.length > 0) {
       throw new TypeError(
@@ -252,6 +262,7 @@ export class ReasoningReplayStore {
 
     if (this.#tokenFormat === "portable-v2") {
       try {
+        const expiresAt = now + this.#ttlMs;
         return encodePortableReplayToken(
           capture,
           {
@@ -260,6 +271,15 @@ export class ReasoningReplayStore {
             outputFingerprint: context.outputFingerprint,
           },
           { accountId: context.accountId, conversationId: context.conversationId },
+          {
+            protocol: context.protocol,
+            region: context.region,
+            ...(context.profileArn !== undefined ? { profileArn: context.profileArn } : {}),
+            runtimeProtocol: context.runtimeProtocol,
+            upstreamOperation: context.upstreamOperation,
+            issuedAt: now,
+            expiresAt,
+          },
           this.#keyring.active,
         );
       } catch (error) {
@@ -368,13 +388,39 @@ export class ReasoningReplayStore {
               outputFingerprint: context.outputFingerprint,
             },
             this.#keyring,
+            context.now ?? Date.now(),
           );
+          if (decoded.legacy) {
+            const now = context.now ?? Date.now();
+            const acceptedUntil = this.#database.acceptLegacyPortableReplay(
+              tokenHash(token),
+              decoded.keyId,
+              now,
+              this.#ttlMs,
+              this.#maxEntries,
+            );
+            if (acceptedUntil === undefined) {
+              throw new ReasoningReplayError(
+                "Legacy portable reasoning replay compatibility has expired",
+                "reasoning_replay_expired",
+              );
+            }
+            legacyCount += 1;
+            keyIds.add(decoded.keyId);
+            return {
+              accountId: decoded.accountId,
+              conversationId: decoded.conversationId,
+              legacyPortable: true as const,
+              replay: { insertBeforeMessage, content: decoded.content },
+            };
+          }
           portableCount += 1;
           keyIds.add(decoded.keyId);
           return {
             accountId: decoded.accountId,
             conversationId: decoded.conversationId,
             portable: true as const,
+            provenance: decoded.provenance,
             replay: { insertBeforeMessage, content: decoded.content },
           };
         } catch (error) {

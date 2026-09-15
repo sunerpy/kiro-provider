@@ -5,7 +5,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import type { KiroReasoningContent } from "../protocol/canonical.js";
+import type { CanonicalProtocol, KiroReasoningContent } from "../protocol/canonical.js";
 import type { ReasoningReplayKey, ReasoningReplayKeyring } from "./keyring.js";
 
 export const PORTABLE_REPLAY_PREFIX = "kr2_";
@@ -14,12 +14,14 @@ export const MAX_PORTABLE_REPLAY_TOKEN_BYTES = 4 * 1024 * 1024;
 // Base64 expands bytes by 4/3. Keep plaintext below 3 MB so padding,
 // authenticated headers, nonce and tag always fit the 4 MiB public token cap.
 const MAX_PORTABLE_REPLAY_PLAINTEXT_BYTES = 3_000_000;
-const TOKEN_VERSION = 2;
+const LEGACY_TOKEN_VERSION = 2;
+const TOKEN_VERSION = 3;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 const CONTEXT_DIGEST_BYTES = 32;
 const PADDING_BUCKET_BYTES = 1024;
-const AAD_DOMAIN = "kiro-provider-reasoning-replay-v2";
+const LEGACY_AAD_DOMAIN = "kiro-provider-reasoning-replay-v2";
+const AAD_DOMAIN = "kiro-provider-reasoning-replay-v3";
 
 export interface PortableReplayCapture {
   readonly text: string;
@@ -38,16 +40,42 @@ export interface PortableReplayOrigin {
   readonly conversationId: string;
 }
 
-interface PortableReplayEnvelope {
-  readonly version: 2;
-  readonly accountId: string;
-  readonly conversationId: string;
+export interface PortableReplayMintProvenance {
+  readonly protocol: CanonicalProtocol;
+  readonly region: string;
+  readonly profileArn?: string;
+  readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+  readonly upstreamOperation: "GenerateAssistantResponse";
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+type ReplayMaterial = {
   readonly outputFingerprint: string;
   readonly kind: "reasoning_text" | "redacted_content";
   readonly text?: string;
   readonly signature?: string;
   readonly redactedContent?: string;
+};
+
+interface LegacyPortableReplayEnvelope extends PortableReplayOrigin, ReplayMaterial {
+  readonly version: 2;
 }
+
+interface PortableReplayEnvelope
+  extends PortableReplayOrigin,
+    PortableReplayMintProvenance,
+    ReplayMaterial {
+  readonly version: 3;
+}
+
+export type DecodedPortableReplayToken = PortableReplayOrigin & {
+  readonly content: KiroReasoningContent;
+  readonly keyId: string;
+} & (
+    | { readonly legacy: true }
+    | { readonly legacy: false; readonly provenance: PortableReplayMintProvenance }
+  );
 
 export class PortableReplayTokenError extends Error {
   readonly name = "PortableReplayTokenError";
@@ -79,10 +107,10 @@ function lengthPrefixed(value: string): Buffer {
   return Buffer.concat([length, bytes]);
 }
 
-function aad(context: PortableReplayContext, keyId: string): Buffer {
+function aad(context: PortableReplayContext, keyId: string, version: number): Buffer {
   return Buffer.concat([
-    lengthPrefixed(AAD_DOMAIN),
-    lengthPrefixed(String(TOKEN_VERSION)),
+    lengthPrefixed(version === LEGACY_TOKEN_VERSION ? LEGACY_AAD_DOMAIN : AAD_DOMAIN),
+    lengthPrefixed(String(version)),
     lengthPrefixed(keyId),
     lengthPrefixed(context.tenantId),
     lengthPrefixed(context.model),
@@ -102,11 +130,10 @@ function canonicalBase64(value: string): Uint8Array {
   return Uint8Array.from(bytes);
 }
 
-function envelopeFor(
+function replayMaterial(
   capture: PortableReplayCapture,
   context: PortableReplayContext,
-  origin: PortableReplayOrigin,
-): PortableReplayEnvelope {
+): ReplayMaterial {
   const hasRedacted = capture.redactedContent !== undefined;
   const hasSignedText = capture.signature !== undefined && capture.signature.length > 0;
   if (hasRedacted === hasSignedText) {
@@ -119,20 +146,43 @@ function envelopeFor(
   }
   return hasRedacted
     ? {
-        version: 2,
-        ...origin,
         outputFingerprint: context.outputFingerprint,
         kind: "redacted_content",
         redactedContent: Buffer.from(capture.redactedContent as Uint8Array).toString("base64"),
       }
     : {
-        version: 2,
-        ...origin,
         outputFingerprint: context.outputFingerprint,
         kind: "reasoning_text",
         text: capture.text,
         signature: capture.signature,
       };
+}
+
+function envelopeFor(
+  capture: PortableReplayCapture,
+  context: PortableReplayContext,
+  origin: PortableReplayOrigin,
+  provenance: PortableReplayMintProvenance,
+): PortableReplayEnvelope {
+  if (
+    !Number.isSafeInteger(provenance.issuedAt) ||
+    !Number.isSafeInteger(provenance.expiresAt) ||
+    provenance.issuedAt <= 0 ||
+    provenance.expiresAt <= provenance.issuedAt ||
+    provenance.region.length === 0 ||
+    (provenance.profileArn !== undefined && provenance.profileArn.length === 0)
+  ) {
+    throw new PortableReplayTokenError(
+      "Reasoning replay mint provenance is invalid",
+      "invalid_reasoning_replay",
+    );
+  }
+  return {
+    version: TOKEN_VERSION,
+    ...origin,
+    ...provenance,
+    ...replayMaterial(capture, context),
+  };
 }
 
 function paddedPlaintext(envelope: PortableReplayEnvelope): Buffer {
@@ -150,8 +200,12 @@ function paddedPlaintext(envelope: PortableReplayEnvelope): Buffer {
   return Buffer.concat([length, payload, randomBytes(paddedLength - used)]);
 }
 
-function contextDigest(domain: string, value: string): Buffer {
-  return createHash("sha256").update(`kiro-provider-replay-v2-${domain}\0`).update(value).digest();
+function contextDigest(domain: string, value: string, version: number): Buffer {
+  const prefix =
+    version === LEGACY_TOKEN_VERSION
+      ? `kiro-provider-replay-v2-${domain}\0`
+      : `kiro-provider-replay-v3-${domain}\0`;
+  return createHash("sha256").update(prefix).update(value).digest();
 }
 
 function encodeHeader(
@@ -169,9 +223,9 @@ function encodeHeader(
   return Buffer.concat([
     Buffer.from([TOKEN_VERSION, keyId.byteLength]),
     keyId,
-    contextDigest("tenant", context.tenantId),
-    contextDigest("model", context.model),
-    contextDigest("output", context.outputFingerprint),
+    contextDigest("tenant", context.tenantId, TOKEN_VERSION),
+    contextDigest("model", context.model, TOKEN_VERSION),
+    contextDigest("output", context.outputFingerprint, TOKEN_VERSION),
     nonce,
   ]);
 }
@@ -180,12 +234,13 @@ export function encodePortableReplayToken(
   capture: PortableReplayCapture,
   context: PortableReplayContext,
   origin: PortableReplayOrigin,
+  provenance: PortableReplayMintProvenance,
   key: ReasoningReplayKey,
 ): string {
-  const envelope = envelopeFor(capture, context, origin);
+  const envelope = envelopeFor(capture, context, origin, provenance);
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key.key, nonce);
-  cipher.setAAD(aad(context, key.id));
+  cipher.setAAD(aad(context, key.id, TOKEN_VERSION));
   const ciphertext = Buffer.concat([cipher.update(paddedPlaintext(envelope)), cipher.final()]);
   const token = `${PORTABLE_REPLAY_PREFIX}${Buffer.concat([
     encodeHeader(key, nonce, context),
@@ -225,7 +280,60 @@ function decodeTokenBytes(token: string): Buffer {
   return bytes;
 }
 
-function parseEnvelope(plaintext: Buffer): PortableReplayEnvelope {
+function replayEnvelope(value: unknown): LegacyPortableReplayEnvelope | PortableReplayEnvelope {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("version" in value) ||
+    (value.version !== LEGACY_TOKEN_VERSION && value.version !== TOKEN_VERSION) ||
+    !("accountId" in value) ||
+    typeof value.accountId !== "string" ||
+    !("conversationId" in value) ||
+    typeof value.conversationId !== "string" ||
+    !("outputFingerprint" in value) ||
+    typeof value.outputFingerprint !== "string" ||
+    !("kind" in value) ||
+    (value.kind !== "reasoning_text" && value.kind !== "redacted_content")
+  ) {
+    throw new PortableReplayTokenError(
+      "Reasoning replay plaintext has an invalid envelope",
+      "reasoning_replay_decryption_failed",
+    );
+  }
+  if (value.version === LEGACY_TOKEN_VERSION) return value as LegacyPortableReplayEnvelope;
+  if (
+    !("protocol" in value) ||
+    (value.protocol !== "responses" &&
+      value.protocol !== "anthropic-messages" &&
+      value.protocol !== "chat-completions") ||
+    !("region" in value) ||
+    typeof value.region !== "string" ||
+    value.region.length === 0 ||
+    ("profileArn" in value &&
+      value.profileArn !== undefined &&
+      (typeof value.profileArn !== "string" || value.profileArn.length === 0)) ||
+    !("runtimeProtocol" in value) ||
+    (value.runtimeProtocol !== "codewhisperer" && value.runtimeProtocol !== "kiro-runtime") ||
+    !("upstreamOperation" in value) ||
+    value.upstreamOperation !== "GenerateAssistantResponse" ||
+    !("issuedAt" in value) ||
+    typeof value.issuedAt !== "number" ||
+    !Number.isSafeInteger(value.issuedAt) ||
+    value.issuedAt <= 0 ||
+    !("expiresAt" in value) ||
+    typeof value.expiresAt !== "number" ||
+    !Number.isSafeInteger(value.expiresAt) ||
+    value.expiresAt <= value.issuedAt
+  ) {
+    throw new PortableReplayTokenError(
+      "Reasoning replay plaintext has invalid mint provenance",
+      "reasoning_replay_decryption_failed",
+    );
+  }
+  return value as PortableReplayEnvelope;
+}
+
+function parseEnvelope(plaintext: Buffer): LegacyPortableReplayEnvelope | PortableReplayEnvelope {
   if (plaintext.byteLength < 4) {
     throw new PortableReplayTokenError(
       "Reasoning replay plaintext is truncated",
@@ -248,29 +356,12 @@ function parseEnvelope(plaintext: Buffer): PortableReplayEnvelope {
       "reasoning_replay_decryption_failed",
     );
   }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("version" in parsed) ||
-    parsed.version !== 2 ||
-    !("accountId" in parsed) ||
-    typeof parsed.accountId !== "string" ||
-    !("conversationId" in parsed) ||
-    typeof parsed.conversationId !== "string" ||
-    !("outputFingerprint" in parsed) ||
-    typeof parsed.outputFingerprint !== "string" ||
-    !("kind" in parsed) ||
-    (parsed.kind !== "reasoning_text" && parsed.kind !== "redacted_content")
-  ) {
-    throw new PortableReplayTokenError(
-      "Reasoning replay plaintext has an invalid envelope",
-      "reasoning_replay_decryption_failed",
-    );
-  }
-  return parsed as PortableReplayEnvelope;
+  return replayEnvelope(parsed);
 }
 
-function contentFromEnvelope(envelope: PortableReplayEnvelope): KiroReasoningContent {
+function contentFromEnvelope(
+  envelope: LegacyPortableReplayEnvelope | PortableReplayEnvelope,
+): KiroReasoningContent {
   if (envelope.kind === "redacted_content") {
     if (
       typeof envelope.redactedContent !== "string" ||
@@ -302,7 +393,8 @@ export function decodePortableReplayToken(
   token: string,
   context: PortableReplayContext,
   keyring: ReasoningReplayKeyring,
-): PortableReplayOrigin & { readonly content: KiroReasoningContent; readonly keyId: string } {
+  now: number = Date.now(),
+): DecodedPortableReplayToken {
   const bytes = decodeTokenBytes(token);
   if (bytes.byteLength < 2 + 1 + 3 * CONTEXT_DIGEST_BYTES + NONCE_BYTES + TAG_BYTES) {
     throw new PortableReplayTokenError(
@@ -316,7 +408,7 @@ export function decodePortableReplayToken(
   const nonceStart = contextStart + 3 * CONTEXT_DIGEST_BYTES;
   const headerLength = nonceStart + NONCE_BYTES;
   if (
-    version !== TOKEN_VERSION ||
+    (version !== LEGACY_TOKEN_VERSION && version !== TOKEN_VERSION) ||
     keyIdLength === 0 ||
     bytes.byteLength < headerLength + TAG_BYTES
   ) {
@@ -334,9 +426,9 @@ export function decodePortableReplayToken(
     );
   }
   const expectedDigests = [
-    contextDigest("tenant", context.tenantId),
-    contextDigest("model", context.model),
-    contextDigest("output", context.outputFingerprint),
+    contextDigest("tenant", context.tenantId, version),
+    contextDigest("model", context.model, version),
+    contextDigest("output", context.outputFingerprint, version),
   ];
   for (const [index, expected] of expectedDigests.entries()) {
     const actual = bytes.subarray(
@@ -356,7 +448,7 @@ export function decodePortableReplayToken(
   let plaintext: Buffer;
   try {
     const decipher = createDecipheriv("aes-256-gcm", key.key, nonce);
-    decipher.setAAD(aad(context, keyId));
+    decipher.setAAD(aad(context, keyId, version));
     decipher.setAuthTag(tag);
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
@@ -366,16 +458,36 @@ export function decodePortableReplayToken(
     );
   }
   const envelope = parseEnvelope(plaintext);
-  if (envelope.outputFingerprint !== context.outputFingerprint) {
+  if (envelope.version !== version || envelope.outputFingerprint !== context.outputFingerprint) {
     throw new PortableReplayTokenError(
       "Reasoning replay output fingerprint does not match",
       "reasoning_replay_context_mismatch",
     );
   }
-  return {
+  const base = {
     accountId: envelope.accountId,
     conversationId: envelope.conversationId,
     content: contentFromEnvelope(envelope),
     keyId,
+  };
+  if (envelope.version === LEGACY_TOKEN_VERSION) return { ...base, legacy: true };
+  if (envelope.expiresAt <= now) {
+    throw new PortableReplayTokenError(
+      "Reasoning replay token has expired",
+      "reasoning_replay_expired",
+    );
+  }
+  return {
+    ...base,
+    legacy: false,
+    provenance: {
+      protocol: envelope.protocol,
+      region: envelope.region,
+      ...(envelope.profileArn !== undefined ? { profileArn: envelope.profileArn } : {}),
+      runtimeProtocol: envelope.runtimeProtocol,
+      upstreamOperation: envelope.upstreamOperation,
+      issuedAt: envelope.issuedAt,
+      expiresAt: envelope.expiresAt,
+    },
   };
 }

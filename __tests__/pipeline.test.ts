@@ -40,6 +40,7 @@ function account(id: string, overrides: Partial<ManagedAccount> = {}): ManagedAc
     email: `${id}@example.com`,
     authMethod: "desktop",
     region: "us-east-1",
+    profileArn: `arn:aws:codewhisperer:us-east-1:123456789012:profile/${id}`,
     refreshToken: `${id}-refresh`,
     accessToken: `${id}-access`,
     expiresAt: Date.now() + 3_600_000,
@@ -102,6 +103,7 @@ class FakeAccountManager implements PipelineAccountManager {
       authMethod: selected.authMethod,
       region: selected.region,
       email: selected.email,
+      ...(selected.profileArn ? { profileArn: selected.profileArn } : {}),
     };
   }
 
@@ -315,7 +317,7 @@ function reasoningReplayRequest(): CanonicalRequest {
   return {
     canonicalVersion: 1,
     protocol: "responses",
-    projectionMode: "safe",
+    projectionMode: "v3-auto",
     model: "gpt-5.6-sol",
     stream: false,
     messages: [
@@ -366,7 +368,14 @@ function anthropicReasoningReplayRequest(): CanonicalRequest {
 function reasoningReplayStore(
   accountId: string,
   conversationId: string,
-  portable = false,
+  portableProtocol?: "responses" | "anthropic-messages",
+  provenanceOverrides: Partial<{
+    protocol: "responses" | "anthropic-messages";
+    region: string;
+    profileArn: string;
+    runtimeProtocol: "codewhisperer" | "kiro-runtime";
+    upstreamOperation: "GenerateAssistantResponse";
+  }> = {},
 ): PipelineReasoningReplayStore {
   return {
     readiness: () => ({ writable: true, keyringAvailable: true, missingKeyIds: [] }),
@@ -374,7 +383,21 @@ function reasoningReplayStore(
     resolveResponses: (_token, _context, insertBeforeMessage) => ({
       accountId,
       conversationId,
-      ...(portable ? { portable: true as const } : {}),
+      ...(portableProtocol
+        ? {
+            portable: true as const,
+            provenance: {
+              protocol: portableProtocol,
+              region: "us-east-1",
+              profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source-account",
+              runtimeProtocol: "kiro-runtime" as const,
+              upstreamOperation: "GenerateAssistantResponse" as const,
+              issuedAt: Date.now() - 1_000,
+              expiresAt: Date.now() + 60_000,
+              ...provenanceOverrides,
+            },
+          }
+        : {}),
       replay: {
         insertBeforeMessage,
         content: {
@@ -1028,7 +1051,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       ]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
-      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", true),
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", "responses"),
       makeClient: (...factoryArgs) => {
         selectedAccountIds.push(factoryArgs[5]);
         return {
@@ -1057,7 +1080,89 @@ describe("runChatCompletion signed reasoning replay lock", () => {
     expect(conversations[0]).not.toBe("conversation-a");
   });
 
-  test("migrates a verified legacy replay even when session affinity still points at its owner", async () => {
+  test("uses authenticated mint region even when the origin account row later drifts", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", {
+          region: "eu-west-1",
+          profileArn: "arn:aws:codewhisperer:eu-west-1:123456789012:profile/account-a",
+          usedCount: 10_000,
+          limitCount: 10_000,
+        }),
+        account("account-b"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", "responses"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "mint region" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-b"]);
+  });
+
+  test("does not cross protocols when the presentation differs from authenticated mint provenance", async () => {
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: anthropicReasoningReplayRequest(),
+      model: "claude-sonnet-5",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", "responses"),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(402);
+    expect(clientCalls).toBe(0);
+  });
+
+  test("fails closed when the current request would use a different upstream operation", async () => {
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: { ...reasoningReplayRequest(), projectionMode: "safe" },
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b"),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", "responses"),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_context_mismatch" },
+    });
+    expect(clientCalls).toBe(0);
+  });
+
+  test("keeps a legacy replay owner-bound even when verified failover is enabled", async () => {
     const affinityStore = new AccountsDatabase(":memory:");
     try {
       affinityStore.claimSessionAffinity(
@@ -1091,10 +1196,11 @@ describe("runChatCompletion signed reasoning replay lock", () => {
         },
       });
 
-      expect(response.status).toBe(200);
-      expect(selectedAccountIds).toEqual(["account-b"]);
+      expect(response.status).toBe(402);
+      expect(selectedAccountIds).toEqual([]);
       expect(affinityStore.getSessionAffinity("fork-affinity")).toMatchObject({
-        accountId: "account-b",
+        accountId: "account-a",
+        conversationId: "conversation-a",
       });
     } finally {
       affinityStore.close();
@@ -1147,7 +1253,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
     }
   });
 
-  test("migrates an authenticated legacy Sol replay through the same verified cell", async () => {
+  test("does not infer Sol migration provenance from a legacy replay", async () => {
     const selectedAccountIds: Array<string | undefined> = [];
     const response = await runChatCompletion({
       body: reasoningReplayRequest(),
@@ -1169,11 +1275,11 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       },
     });
 
-    expect(response.status).toBe(200);
-    expect(selectedAccountIds).toEqual(["account-b"]);
+    expect(response.status).toBe(402);
+    expect(selectedAccountIds).toEqual([]);
   });
 
-  test("migrates an authenticated legacy Claude Messages replay only in its verified cell", async () => {
+  test("migrates provenance-authenticated Claude Messages replay in its verified cell", async () => {
     const selectedAccountIds: Array<string | undefined> = [];
     const response = await runChatCompletion({
       body: anthropicReasoningReplayRequest(),
@@ -1186,7 +1292,11 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       ]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
-      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      reasoningReplayStore: reasoningReplayStore(
+        "account-a",
+        "conversation-a",
+        "anthropic-messages",
+      ),
       makeClient: (...factoryArgs) => {
         selectedAccountIds.push(factoryArgs[5]);
         return clientWith(async () =>

@@ -235,6 +235,13 @@ placeholder ...`。
   保留明文摘要。无法保存令牌的客户端应从历史中省略 reasoning 条目，而不是
   只发摘要。
 
+### `400 reasoning_replay_expired`
+
+- **原因：** 当前 `kr2_` 已到认证绝对过期时间、数据库 `kr1_` 已到 idle TTL，
+  或预发布 `kr2_` 已超过持久化兼容截止时间。重启 Provider 不会延长这些期限。
+- **处置：** 从带有新 token 的后续 assistant 轮次继续，或创建不含已过期
+  reasoning 条目的新分支/会话。保留旧 key 不能绕过 token 内认证的有效期。
+
 ### `upstream_affinity_selected` 中的 `reasoning_replay_locked: false`
 
 - **查看：** `info` 事件 `upstream_affinity_selected`（每次尝试一条），含

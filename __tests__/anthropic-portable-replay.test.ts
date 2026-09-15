@@ -42,6 +42,11 @@ describe("Anthropic portable replay end-to-end", () => {
         accountId: "account-a",
         conversationId: "conversation-a",
         outputFingerprint,
+        protocol: "anthropic-messages",
+        region: "us-east-1",
+        profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+        runtimeProtocol: "kiro-runtime",
+        upstreamOperation: "GenerateAssistantResponse",
       },
     );
     expect(token).toStartWith("kr2_");
@@ -127,6 +132,11 @@ describe("Anthropic portable replay end-to-end", () => {
         accountId: "account-a",
         conversationId: "conversation-a",
         outputFingerprint,
+        protocol: "anthropic-messages",
+        region: "us-east-1",
+        profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+        runtimeProtocol: "kiro-runtime",
+        upstreamOperation: "GenerateAssistantResponse",
       },
     );
     if (!token) throw new TypeError("missing portable replay token");
@@ -215,6 +225,11 @@ describe("Anthropic portable replay end-to-end", () => {
         accountId: "account-a",
         conversationId: "conversation-a",
         outputFingerprint,
+        protocol: "anthropic-messages",
+        region: "us-east-1",
+        profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+        runtimeProtocol: "kiro-runtime",
+        upstreamOperation: "GenerateAssistantResponse",
       },
     );
     if (!token) throw new TypeError("missing portable replay token");

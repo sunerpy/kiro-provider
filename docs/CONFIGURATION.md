@@ -75,10 +75,10 @@ Configuration is validated once at startup; any violation raises a `ConfigLoadEr
 | `session_affinity_max_entries`      | integer, `1`-`1000000`, default `10000`                                                     | `KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES`      | Maximum persisted session bindings. When over the limit, least-recently-seen entries are removed.                                                                                                                                                                                                                                                                                              |
 | `reasoning_replay_key_path`         | `string \| null`, default `null`                                                            | `KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH`         | Key-file override. `null` uses the platform config directory and atomically creates `reasoning-replay-keys.json` when no environment keyring is configured. POSIX mode is forced to `0600`.                                                                                                                                                                                                    |
 | `reasoning_replay_keys`             | `string[]`, default `[]`                                                                    | `KIRO_PROVIDER_REASONING_REPLAY_KEYS`             | AES-256-GCM keyring. Environment entries are comma-separated `key-id:base64url-32-byte-key` values; the key ID may be omitted. The first key encrypts new records and later keys only decrypt old records.                                                                                                                                                                                     |
-| `reasoning_replay_token_format`     | `"portable-v2" \| "database-v1"`, default `"portable-v2"`                                   | `KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT`     | `portable-v2` emits tenant/model/output-bound self-contained AEAD replay tokens that do not depend on SQLite retention. `database-v1` is a rollback/diagnostic writer; both formats remain readable.                                                                                                                                                                                           |
-| `reasoning_replay_account_failover` | `"verified" \| "strict"`, default `"verified"`                                              | `KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER` | Allows replay account migration only for exact protocol/model/region/replay-kind cells proven portable by the built-in compatibility matrix. Every other replay stays owner-bound; `strict` disables all migration.                                                                                                                                                                            |
-| `reasoning_replay_ttl_ms`           | integer, `1`-`2147483647`, default `86400000` (24 h)                                        | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`           | Sliding idle lifetime for legacy database-backed `kr1_` records. It does not expire self-contained `kr2_` tokens; those remain valid while their key stays configured.                                                                                                                                                                                                                         |
-| `reasoning_replay_max_entries`      | integer, `1`-`1000000`, default `10000`                                                     | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`      | Maximum legacy `kr1_` records. Least-recently-used rows are removed after expiry cleanup; `kr2_` tokens do not consume this table.                                                                                                                                                                                                                                                             |
+| `reasoning_replay_token_format`     | `"portable-v2" \| "database-v1"`, default `"portable-v2"`                                   | `KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT`     | `portable-v2` emits self-contained AEAD replay tokens with an authenticated absolute lifetime and mint provenance; they do not depend on SQLite payload retention. `database-v1` is a rollback/diagnostic writer; both formats remain readable.                                                                                                                                                |
+| `reasoning_replay_account_failover` | `"verified" \| "strict"`, default `"verified"`                                              | `KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER` | Allows replay account migration only when the token authenticates the exact mint protocol, model, effective region, profile presence, runtime operation, and replay kind of a proven compatibility cell. Legacy or incomplete provenance stays owner-bound; `strict` disables all migration.                                                                                                   |
+| `reasoning_replay_ttl_ms`           | integer, `1`-`2147483647`, default `86400000` (24 h)                                        | `KIRO_PROVIDER_REASONING_REPLAY_TTL_MS`           | Sliding idle lifetime for database-backed `kr1_` records and absolute lifetime for newly minted self-contained `kr2_` tokens. Pre-release `kr2_` envelopes without an authenticated expiry are accepted owner-bound only during one persisted transition window of this length.                                                                                                                |
+| `reasoning_replay_max_entries`      | integer, `1`-`1000000`, default `10000`                                                     | `KIRO_PROVIDER_REASONING_REPLAY_MAX_ENTRIES`      | Maximum legacy `kr1_` records and bounded pre-release `kr2_` transition records. Current self-contained `kr2_` payloads do not consume the replay table.                                                                                                                                                                                                                                       |
 | `effort`                            | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| null`, default `null`                   | `KIRO_PROVIDER_EFFORT`                            | Optional global reasoning-effort override applied to every request. `null` leaves effort unset unless the request specifies it.                                                                                                                                                                                                                                                                |
 | `auto_effort_mapping`               | `boolean`, default `true`                                                                   | `KIRO_PROVIDER_AUTO_EFFORT_MAPPING`               | When enabled, the gateway automatically maps model-variant suffixes and request effort. Environment values accept `true`, `false`, `1`, `0`.                                                                                                                                                                                                                                                   |
 | `log_level`                         | `"debug" \| "info" \| "warn" \| "error"`, default `"info"`                                  | `KIRO_PROVIDER_LOG_LEVEL`                         | Minimum level of the structured audit log (one JSON object per line on stderr). Levels order `debug < info < warn < error`; events below the threshold are dropped. `warn` silences per-request `info` events such as `upstream_affinity_selected`. Applied by every command that loads configuration (`serve`, `login`, `accounts refresh                                                     | relogin`). |
@@ -355,28 +355,35 @@ Kiro physically deleted its upstream response state.
 
 ## Encrypted reasoning replay
 
-When Kiro emits signed-text (including an empty text with a non-empty
+When Kiro emits signed text (including empty text with a non-empty
 signature) or redacted reasoning, the default `portable-v2` writer returns a
 self-contained `kr2_...` AEAD value in Responses `reasoning.encrypted_content`.
-Its authenticated context binds tenant, model, complete assistant-output
-fingerprint and key ID; origin account/conversation metadata stays encrypted.
-The token does not depend on SQLite TTL/LRU and is padded to 1 KiB buckets, with
-a 4 MiB fail-closed wire limit. Unsigned text, conflicting signatures, or mixed
-text/redacted events still produce no replay token.
+The encrypted and authenticated envelope binds tenant, model, complete
+assistant-output fingerprint, origin account/conversation, mint protocol,
+effective region, source profile, runtime protocol, upstream operation, issue
+time, absolute expiry, and key ID. It does not depend on SQLite payload retention,
+is padded to 1 KiB buckets, and has a 4 MiB fail-closed wire limit. Unsigned text,
+conflicting signatures, or mixed text/redacted events still produce no token.
 
 `database-v1` remains available for rollback and legacy `kr1_...` tokens remain
 readable. Their database rows store only token/fingerprint hashes plus
 AES-256-GCM ciphertext; successful reads are batched, rotate to the active key,
-and renew the configured idle TTL. Token wrapping does not determine upstream
-portability: an authenticated `kr1_` recovered from backup and a `kr2_` carrying
-the same exact reasoning can use the same evidence gate.
+and renew the configured idle TTL. Because historical `kr1_` rows do not
+authenticate mint protocol/region/profile/operation, they remain owner-bound and
+never enter a verified migration cell. Pre-release `kr2_` envelopes that lack
+those fields are also owner-bound and accepted only until one persisted
+compatibility cutoff established when this version first opens the database.
 
-`reasoning_replay_account_failover: "verified"` currently permits only signed
-`reasoning_text` for Responses + GPT-5.6 Sol + `us-east-1`, and Anthropic
-Messages + Claude Sonnet 5 + `us-east-1`. Redacted reasoning, Terra, Luna, Opus,
-other regions, and every unlisted combination remain owner-bound. `strict`
-disables both cells. A strict owner failure is reported as a typed quota,
-rate-limit, authentication, health, or model error rather than one generic 503.
+`reasoning_replay_account_failover: "verified"` currently permits only
+provenance-authenticated signed `reasoning_text` minted through KiroRuntime
+`GenerateAssistantResponse` with a profile: Responses + GPT-5.6 Sol +
+`us-east-1`, and Anthropic Messages + Claude Sonnet 5 + `us-east-1`. The request
+protocol and projected runtime operation must still match the mint envelope, and
+the target account must resolve to the same effective region with a profile.
+Redacted reasoning, legacy tokens, Terra, Luna, Opus, other regions, and every
+unlisted combination remain owner-bound. `strict` disables both cells. A strict
+owner failure is reported as a typed quota, rate-limit, authentication, health,
+or model error rather than one generic 503.
 
 Key configuration precedence is:
 
@@ -391,11 +398,11 @@ random source; do not copy this placeholder):
 export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026-07:<old-key>'
 ```
 
-The first entry is active for encryption. Keep old keys until every client history
-containing their `kr2_` tokens has retired; removing a key explicitly revokes
-those self-contained tokens. For legacy `kr1_`, if any unexpired database row
-references a missing key, service construction fails instead of silently
-breaking active sessions. Logs never contain key material, raw replay tokens,
+The first entry is active for encryption. Keep an old key for at least the full
+configured replay TTL after the last token it minted, and until the persisted
+pre-release compatibility cutoff has passed. Removing it earlier explicitly
+revokes those tokens. If an unexpired `kr1_` or transition record references a
+missing key, service construction fails instead of silently breaking sessions. Logs never contain key material, raw replay tokens,
 signatures, reasoning text, redacted bytes, or request prompt content.
 
 ## File locations

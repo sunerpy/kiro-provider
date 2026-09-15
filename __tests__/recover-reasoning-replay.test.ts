@@ -20,6 +20,11 @@ const replayContext = {
   accountId: "account-a",
   conversationId: "conversation-a",
   outputFingerprint: "output-a",
+  protocol: "responses",
+  region: "us-east-1",
+  profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+  runtimeProtocol: "kiro-runtime",
+  upstreamOperation: "GenerateAssistantResponse",
 } as const;
 
 function account(): ManagedAccount {

@@ -56,6 +56,10 @@ interface KeyIdRow {
   key_id: string;
 }
 
+interface ReplayCompatibilityRow {
+  expires_at: number;
+}
+
 export interface ReasoningReplayRecord {
   readonly tokenHash: string;
   readonly chatLookupHash: string | null;
@@ -328,6 +332,28 @@ const MIGRATIONS: readonly Migration[] = [
     db.run(`
       CREATE INDEX IF NOT EXISTS stored_responses_lru_idx
       ON stored_responses (last_seen, id)
+    `);
+  },
+  // v7: bounded compatibility for self-contained replay tokens minted by the
+  // local pre-release v2 candidate. New public tokens carry their own expiry.
+  (db) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS replay_compatibility_state (
+        name TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS legacy_portable_replay (
+        token_hash TEXT PRIMARY KEY,
+        key_id TEXT NOT NULL,
+        first_seen INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS legacy_portable_replay_key_id_idx
+      ON legacy_portable_replay (key_id, expires_at)
     `);
   },
 ];
@@ -713,12 +739,86 @@ export class AccountsDatabase {
 
   activeReasoningReplayKeyIds(now: number = Date.now()): string[] {
     return this.db
-      .query<KeyIdRow, [number]>(`
-	      SELECT DISTINCT key_id FROM reasoning_replay
-	      WHERE expires_at > ? ORDER BY key_id ASC
-	    `)
-      .all(now)
+      .query<KeyIdRow, [number, number]>(`
+		      SELECT DISTINCT key_id FROM (
+		        SELECT key_id FROM reasoning_replay WHERE expires_at > ?
+		        UNION
+		        SELECT key_id FROM legacy_portable_replay WHERE expires_at > ?
+		      ) ORDER BY key_id ASC
+		    `)
+      .all(now, now)
       .map((row) => row.key_id);
+  }
+
+  /**
+   * Opens one process-independent transition window for pre-release kr2/v2
+   * tokens. Every accepted token shares the first window's absolute cutoff, so
+   * a restart or delayed first presentation cannot extend compatibility.
+   */
+  ensureLegacyPortableReplayCutoff(now: number, ttlMs: number): number {
+    return this.withImmediateTransaction(() => {
+      const policyName = "portable-v2-transition";
+      const existing = this.db
+        .query<ReplayCompatibilityRow, [string]>(
+          "SELECT expires_at FROM replay_compatibility_state WHERE name = ?",
+        )
+        .get(policyName);
+      if (existing) return existing.expires_at;
+      const cutoff = now + ttlMs;
+      this.db
+        .query("INSERT INTO replay_compatibility_state (name, expires_at) VALUES (?, ?)")
+        .run(policyName, cutoff);
+      return cutoff;
+    });
+  }
+
+  acceptLegacyPortableReplay(
+    tokenHash: string,
+    keyId: string,
+    now: number,
+    ttlMs: number,
+    maxEntries: number,
+  ): number | undefined {
+    return this.withImmediateTransaction(() => {
+      const policyName = "portable-v2-transition";
+      const policy = this.db
+        .query<ReplayCompatibilityRow, [string]>(
+          "SELECT expires_at FROM replay_compatibility_state WHERE name = ?",
+        )
+        .get(policyName);
+      const cutoff = policy?.expires_at ?? now + ttlMs;
+      if (!policy)
+        this.db
+          .query("INSERT INTO replay_compatibility_state (name, expires_at) VALUES (?, ?)")
+          .run(policyName, cutoff);
+      this.db.query("DELETE FROM legacy_portable_replay WHERE expires_at <= ?").run(now);
+      if (now >= cutoff) return undefined;
+      this.db
+        .query(`
+          INSERT INTO legacy_portable_replay (token_hash, key_id, first_seen, expires_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(token_hash) DO NOTHING
+        `)
+        .run(tokenHash, keyId, now, cutoff);
+      const count =
+        this.db.query<CountRow, []>("SELECT COUNT(*) AS count FROM legacy_portable_replay").get()
+          ?.count ?? 0;
+      const overflow = Math.max(0, count - maxEntries);
+      if (overflow > 0) {
+        this.db
+          .query(`
+            DELETE FROM legacy_portable_replay
+            WHERE token_hash IN (
+              SELECT token_hash FROM legacy_portable_replay
+              WHERE token_hash != ?
+              ORDER BY first_seen ASC, token_hash ASC
+              LIMIT ?
+            )
+          `)
+          .run(tokenHash, overflow);
+      }
+      return cutoff;
+    });
   }
 
   pruneReasoningReplay(now: number = Date.now(), maxEntries = 10_000): number {
