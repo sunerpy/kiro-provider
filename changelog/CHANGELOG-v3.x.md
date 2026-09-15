@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.4](https://github.com/sunerpy/kiro-provider/compare/v3.2.3...v3.2.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* **anthropic:** 支持图片型工具结果 ([9e64658](https://github.com/sunerpy/kiro-provider/commit/9e6465819c85b97a2369fc793ff3c73729a51c63))
+
 ## [3.2.3](https://github.com/sunerpy/kiro-provider/compare/v3.2.2...v3.2.3) (2026-09-15)
 
 
