@@ -348,6 +348,36 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
     expect((caught as RequestTransformError).param).toBe("messages.0.content.2");
   });
 
+  test("projects one contiguous text run beside non-text content", () => {
+    const image = {
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      path: "messages.0.content.image",
+    };
+    for (const parts of [
+      [
+        image,
+        textPart("first", "messages.0.content.1"),
+        textPart("second", "messages.0.content.2"),
+      ],
+      [
+        textPart("first", "messages.0.content.0"),
+        textPart("second", "messages.0.content.1"),
+        image,
+      ],
+    ]) {
+      const prepared = transformToSdkRequest(
+        request([message("user", parts, "messages.0")]),
+        MODEL,
+        auth,
+      );
+      expect(currentUserInput(prepared).content).toBe("firstsecond");
+      expect(currentUserInput(prepared).images).toEqual([
+        { format: "png", source: { bytes: Uint8Array.from([1, 2, 3]) } },
+      ]);
+    }
+  });
+
   test("projects inline files through Kiro native documents without prompt text", () => {
     const prepared = transformToSdkRequest(
       request([

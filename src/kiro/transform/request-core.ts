@@ -129,16 +129,22 @@ function nativeInstructionProjection(
 function validateContentBlockProjection(messages: readonly CanonicalMessage[]): void {
   for (const message of messages) {
     if (message.role === "system" || message.role === "developer") continue;
-    const textParts = message.content.filter((part) => part.type === "text");
-    if (textParts.length <= 1 || message.content.every((part) => part.type === "text")) {
-      continue;
+    let textRunStarted = false;
+    let nonTextAfterText = false;
+    for (const part of message.content) {
+      if (part.type === "text") {
+        if (nonTextAfterText) {
+          throw new RequestTransformError(
+            `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
+            "unsupported_content_block_projection",
+            part.path,
+          );
+        }
+        textRunStarted = true;
+      } else if (textRunStarted) {
+        nonTextAfterText = true;
+      }
     }
-    const firstUnprojectable = textParts[1];
-    throw new RequestTransformError(
-      `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
-      "unsupported_content_block_projection",
-      firstUnprojectable?.path ?? message.path,
-    );
   }
 }
 

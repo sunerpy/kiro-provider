@@ -117,6 +117,8 @@ Messages 适配器支持 Claude Code 2.1.263 的实际请求：
   同一个 Kiro user turn，同时保留 tool ID、状态、文本和原始图片字节；同一消息内
   多个图片型 tool result，或与普通 user 图片混用时仍会 fail closed，因为 Kiro
   无法保留这些不同的图片归属；
+- 相邻文本块只要构成一个连续文本簇，就能在图片或 tool result 旁保持原始字节顺序；
+  真正的 `text → 非文本 → text` 交错输入仍会 fail closed，因为 Kiro 只有一个文本字段；
 - 顶层及会话中途的 system 文本，按既有 Kiro projection mode 投影；
 - adaptive thinking 与 `output_config.effort`；
 - GPT effort 转换为 Kiro `reasoning.effort`；Claude 模型继续使用

@@ -386,7 +386,7 @@ describe("Anthropic request adapter", () => {
     });
   });
 
-  test("lifts one image-valued tool result into the same Kiro user turn", () => {
+  test("lifts one image-valued tool result beside an adjacent text run", () => {
     const adapted = adaptAnthropicMessagesRequest(
       validRequest({
         tools: [
@@ -419,6 +419,8 @@ describe("Anthropic request adapter", () => {
                   },
                 ],
               },
+              { type: "text", text: "continue " },
+              { type: "text", text: "now" },
             ],
           },
         ],
@@ -449,6 +451,16 @@ describe("Anthropic request adapter", () => {
         mediaType: "image/png",
         path: "messages.1.content.1.content.0",
       },
+      expect.objectContaining({
+        type: "text",
+        text: "continue ",
+        path: "messages.1.content.2.text",
+      }),
+      expect.objectContaining({
+        type: "text",
+        text: "now",
+        path: "messages.1.content.3.text",
+      }),
     ]);
 
     const transformed = buildCodeWhispererRequest(
@@ -457,7 +469,7 @@ describe("Anthropic request adapter", () => {
       new FakeAccountManager().toAuthDetails(account()),
     );
     expect(transformed.request.conversationState.currentMessage.userInputMessage).toMatchObject({
-      content: "",
+      content: "continue now",
       images: [{ format: "png", source: { bytes: Uint8Array.from([1, 2, 3]) } }],
       userInputMessageContext: {
         toolResults: [
