@@ -3,8 +3,20 @@ name: CodeQL
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "__tests__/**"
+      - "tsconfig*.json"
+      - ".github/workflows/codeql.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/**"
+      - "__tests__/**"
+      - "tsconfig*.json"
+      - ".github/workflows/codeql.yml"
   merge_group:
   schedule:
     - cron: "17 3 * * 1"
