@@ -251,7 +251,10 @@ async function headerOnlyUpstream() {
       }
     }
   })();
-  const port = await within(ready.promise, 2_000);
+  // Process startup is a liveness bound, not the delivery-performance
+  // assertion. Coverage instrumentation and shared runners can legitimately
+  // take more than two seconds to spawn Node.
+  const port = await within(ready.promise, 10_000);
   return {
     port,
     accepted: accepted.promise,
@@ -410,8 +413,8 @@ describe("tool fragment delivery over real HTTP and the AWS SDK", () => {
         protocol_projection_mode: "v3-auto",
         enable_legacy_chat_completions: true,
         test_upstream_endpoint: `http://127.0.0.1:${port}`,
-        request_timeout_ms: 2_000,
-        stream_idle_timeout_ms: 1_000,
+        request_timeout_ms: 15_000,
+        stream_idle_timeout_ms: 10_000,
       });
       const gateway = Bun.serve({
         hostname: "127.0.0.1",
@@ -443,15 +446,18 @@ describe("tool fragment delivery over real HTTP and the AWS SDK", () => {
       try {
         const pending = call(abort.signal);
         void pending.catch(() => undefined);
-        await within(upstream.accepted, 1_000);
-        const response = await within(pending, 250);
+        await within(upstream.accepted, 5_000);
+        // This remains strictly before the 10 s idle timeout that would fire if
+        // the gateway waited for a first SDK event, while allowing hosted-runner
+        // scheduling jitter.
+        const response = await within(pending, 2_000);
         expect(response.status).toBe(200);
         expect(response.headers.get("x-request-id")).toMatch(/^req_/);
         abort.abort();
-        await within(upstream.closed, 500);
-        const second = await within(call(AbortSignal.timeout(1_000)), 500);
+        await within(upstream.closed, 2_000);
+        const second = await within(call(AbortSignal.timeout(5_000)), 2_000);
         expect(second.status).toBe(200);
-        await within(upstream.secondAccepted, 500);
+        await within(upstream.secondAccepted, 2_000);
         await second.body?.cancel();
         expect(upstream.requests()).toBe(2);
       } finally {
