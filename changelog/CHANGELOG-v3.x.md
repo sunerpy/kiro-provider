@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/sunerpy/kiro-provider/compare/v3.2.9...v3.3.0) (2026-09-15)
+
+
+### Features
+
+* **replay:** 增加可移植回放与缓存适配 ([4e82788](https://github.com/sunerpy/kiro-provider/commit/4e82788f6eadc6fe7c5ba45d6f5d42d010a28d88))
+
 ## [3.2.9](https://github.com/sunerpy/kiro-provider/compare/v3.2.8...v3.2.9) (2026-09-15)
 
 
