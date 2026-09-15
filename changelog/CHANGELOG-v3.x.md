@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.2.7](https://github.com/sunerpy/kiro-provider/compare/v3.2.6...v3.2.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **ci:** 禁用不兼容的 Bun 依赖更新 ([7a172d9](https://github.com/sunerpy/kiro-provider/commit/7a172d94ac0768fe384fc4b31e7abb26b0085dab))
+* **ci:** 稳定流式交付存活测试 ([45645a0](https://github.com/sunerpy/kiro-provider/commit/45645a0b093751a997c39d0120083e252ffa4be6))
+
 ## [3.2.6](https://github.com/sunerpy/kiro-provider/compare/v3.2.5...v3.2.6) (2026-09-15)
 
 
