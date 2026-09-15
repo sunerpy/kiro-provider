@@ -41,8 +41,9 @@ Provider 需要预先启动，并至少有一个可用账号。Codex 启动前�
 
 仓库内真实客户端门禁覆盖：普通完成回合、命令成功与失败、失败后的恢复、
 compaction、Ultra reasoning，以及通过 `spawn_agent`、子代理响应和 `wait` 完成的
-namespace 协作。验收还会检查输出中是否泄露 Provider 私有 custom/namespace
-别名。
+namespace 协作。仓库内 Codex 契约还会回放当前 `view_image` 的 function output
+形状：保留工具调用关联，并把图片字节提升到同一个 Kiro user turn。验收还会检查输出
+中是否泄露 Provider 私有 custom/namespace 别名。
 
 V3 按请求选择通道。普通兼容请求使用原生 KiroRuntime Responses；需要 custom
 grammar、namespace 工具、`agent_message`、`additional_tools`、
@@ -72,6 +73,8 @@ reasoning envelope 或 prompt 正文。
   `/responses/compact` 与精确 `/responses/input_tokens` 会被拒绝。
 - 为兼容 Codex，V3 接受 `parallel_tool_calls: false`，但 Kiro 无法保证工具严格
   串行执行。
+- 图片型工具结果必须使用内联 data URL，并且每个结果最多包含一个图片块；远程图片
+  URL 仍会被拒绝。
 - `store: false` 只关闭 Provider 的本地 Response 镜像，不等于 AWS Zero Data
   Retention 保证。
 

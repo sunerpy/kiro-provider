@@ -131,7 +131,8 @@ CodeWhisperer/Kiro 流式管道。它保留：
 
 - 开头、中间与尾部指令的顺序；
 - 任意非空文本字节，包括纯空白输入；
-- 图片、内联文档、工具结果及其 current-input 边界；
+- 图片、内联文档、工具结果及其 current-input 边界，包括从 function/custom 工具结果
+  提升一个内联图片块，同时保留相邻文本和工具关联；
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
 - 通过租户绑定 `kr1_` token 回放 Kiro 签名或 redacted reasoning。
@@ -171,7 +172,7 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 
 | 请求能力 | V3 契约 |
 | --- | --- |
-| 文本、消息数组、图片、内联文档 | 在已记录的 Kiro 格式限制内支持。 |
+| 文本、消息数组、图片、内联文档 | 在已记录的 Kiro 格式限制内支持；function/custom 工具结果可携带一个内联 data-URL 图片块。 |
 | `instructions`、`system`、`developer` | 普通 V3 通道使用原生字段；stateless fallback 保序投影。 |
 | Function 工具 | 能走原生时走原生，否则 fallback。 |
 | Namespace 与自由文本 custom 工具 | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。 |

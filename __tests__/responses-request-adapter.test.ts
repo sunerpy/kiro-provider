@@ -90,6 +90,35 @@ describe("Responses canonical adaptation", () => {
     });
   });
 
+  test("preserves the detail hint on an inline image without changing its bytes", () => {
+    const result = adapt({
+      model: TEST_MODEL,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: "data:image/png;base64,AQID",
+              detail: "high",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.messages[0]?.content).toEqual([
+      {
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        path: "input.0.content.0",
+        sourceMetadata: { detail: "high" },
+      },
+    ]);
+  });
+
   test("maps inline input_file to a native document without adding model-visible text", () => {
     const result = adapt({
       model: TEST_MODEL,
@@ -422,6 +451,169 @@ describe("Responses exact function/custom tools", () => {
         { type: "text", text: "B" },
       ],
     });
+  });
+
+  test("lifts one inline image from a custom tool result without losing its association", () => {
+    const result = adapt({
+      model: TEST_MODEL,
+      tools: [{ type: "custom", name: "inspect_image", description: "Inspect an image" }],
+      input: [
+        {
+          type: "custom_tool_call",
+          call_id: "call_image",
+          name: "inspect_image",
+          input: "image.png",
+        },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_image",
+          output: [
+            { type: "input_text", text: "captured" },
+            {
+              type: "input_image",
+              image_url: "data:image/png;base64,AQID",
+              detail: "high",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.messages[1]?.content).toEqual([
+      {
+        type: "tool_result",
+        toolCallId: "call_image",
+        content: [expect.objectContaining({ type: "text", text: "captured" })],
+        isError: false,
+        path: "input.1",
+      },
+      {
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        path: "input.1.output.1",
+        sourceMetadata: { detail: "high" },
+      },
+    ]);
+    const projected = buildCodeWhispererRequest(result.body, TEST_MODEL, TEST_AUTH);
+    const current = projected.request.conversationState.currentMessage.userInputMessage;
+    expect(current?.userInputMessageContext?.toolResults).toEqual([
+      {
+        toolUseId: "call_image",
+        content: [{ text: "captured" }],
+        status: "success",
+      },
+    ]);
+    expect(current?.images?.[0]).toMatchObject({ format: "png" });
+  });
+
+  test("keeps image-valued tool results fail-closed when their origin is ambiguous", () => {
+    const call = {
+      type: "function_call",
+      call_id: "call_image",
+      name: "view_image",
+      arguments: "{}",
+    } as const;
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_image", image_url: "https://example.test/image.png" }],
+          },
+        ],
+      },
+      "unsupported_image_source",
+      "input.1.output.0.image_url",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [
+              { type: "input_image", image_url: "data:image/png;base64,AQID" },
+              { type: "input_image", image_url: "data:image/png;base64,BAUG" },
+            ],
+          },
+        ],
+      },
+      "unsupported_tool_result_content",
+      "input.1.output.1",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [
+              {
+                type: "input_image",
+                image_url: "data:image/png;base64,AQID",
+                detail: "maximum",
+              },
+            ],
+          },
+        ],
+      },
+      "unsupported_image_detail",
+      "input.1.output.0.detail",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_image", detail: "high" }],
+          },
+        ],
+      },
+      "invalid_image_data",
+      "input.1.output.0.image_url",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_file", file_data: "data:text/plain;base64,QQ==" }],
+          },
+        ],
+      },
+      "unsupported_tool_result_content",
+      "input.1.output.0",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_text" }],
+          },
+        ],
+      },
+      "unsupported_tool_result_content",
+      "input.1.output.0.text",
+    );
   });
 
   test("round-trips custom raw input byte-for-byte through a private wire alias", () => {

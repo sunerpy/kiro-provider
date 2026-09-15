@@ -1281,6 +1281,84 @@ describe("POST /v1/responses", () => {
     expect(secondCommand).toContain("service is healthy");
   });
 
+  test("projects current and replayed Codex view_image results into Kiro image turns", async () => {
+    const server = scriptedServer([
+      eventsWith({ text: "image understood" }),
+      eventsWith({ text: "history understood" }),
+    ]);
+    const input = [
+      {
+        type: "function_call",
+        call_id: "call_view_image",
+        name: "view_image",
+        arguments: '{"path":"capture.png"}',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_view_image",
+        output: [
+          {
+            type: "input_image",
+            image_url: "data:image/png;base64,AQID",
+            detail: "high",
+          },
+        ],
+      },
+    ];
+
+    const response = await postResponse(server, {
+      model: MODEL,
+      input,
+      stream: false,
+      store: false,
+    });
+
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).toMatchObject({ status: "completed", output: expect.any(Array) });
+    const command = server.capturedCommandInputs[0] as GenerateAssistantResponseCommandInput;
+    const current = command.conversationState?.currentMessage?.userInputMessage;
+    expect(current?.content).toBe("");
+    expect(current?.userInputMessageContext?.toolResults).toEqual([
+      {
+        toolUseId: "call_view_image",
+        content: [],
+        status: "success",
+      },
+    ]);
+    expect(current?.images?.[0]).toMatchObject({ format: "png" });
+    expect(Array.from(current?.images?.[0]?.source?.bytes ?? [])).toEqual([1, 2, 3]);
+
+    const replay = await postResponse(server, {
+      model: MODEL,
+      input: [
+        ...input,
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue" }],
+        },
+      ],
+      stream: false,
+      store: false,
+    });
+    expect(replay.status).toBe(200);
+    await replay.json();
+    const replayCommand = server.capturedCommandInputs[1] as GenerateAssistantResponseCommandInput;
+    const historyImageTurn = replayCommand.conversationState?.history?.find(
+      (entry) => entry.userInputMessage?.userInputMessageContext?.toolResults?.length === 1,
+    )?.userInputMessage;
+    expect(historyImageTurn?.userInputMessageContext?.toolResults).toEqual([
+      {
+        toolUseId: "call_view_image",
+        content: [],
+        status: "success",
+      },
+    ]);
+    expect(historyImageTurn?.images?.[0]).toMatchObject({ format: "png" });
+    expect(Array.from(historyImageTurn?.images?.[0]?.source?.bytes ?? [])).toEqual([1, 2, 3]);
+  });
+
   test.each([
     ["missing authorization", null],
     ["wrong authorization", "Bearer wrong"],

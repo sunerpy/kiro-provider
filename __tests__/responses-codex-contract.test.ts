@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
-import { parsedResponses } from "./canonical-test-helpers.js";
+import { parsedResponses, TEST_AUTH, TEST_MODEL } from "./canonical-test-helpers.js";
 
 function fixture(name: string): unknown {
   return JSON.parse(readFileSync(join(import.meta.dir, "fixtures", name), "utf8"));
@@ -73,10 +74,47 @@ describe("redacted Codex Responses fixtures", () => {
     }
   });
 
-  test("rejects unsupported result blocks but replays removed custom tools", () => {
-    expect(
-      adaptResponsesRequest(parsedResponses(fixture("codex-tool-turn-array.json"))),
-    ).toMatchObject({ ok: false, code: "unsupported_tool_result_content" });
+  test("preserves the current Codex view_image tool result through Kiro projection", () => {
+    const result = adaptResponsesRequest(
+      parsedResponses(fixture("codex-tool-turn-array.json")),
+      "legacy-user-prefix",
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.messages[1]?.content).toEqual([
+      {
+        type: "tool_result",
+        toolCallId: "CALL_ID_REDACTED",
+        content: [
+          expect.objectContaining({ type: "text", text: "ARRAY_TOOL_OUTPUT_FIRST" }),
+          expect.objectContaining({ type: "text", text: "ARRAY_TOOL_OUTPUT_SECOND" }),
+        ],
+        isError: false,
+        path: "input.1",
+      },
+      {
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        path: "input.1.output.1",
+        sourceMetadata: { detail: "high" },
+      },
+    ]);
+
+    const projected = buildCodeWhispererRequest(result.body, TEST_MODEL, TEST_AUTH);
+    const current = projected.request.conversationState.currentMessage.userInputMessage;
+    expect(current?.content).toBe("");
+    expect(current?.userInputMessageContext?.toolResults).toEqual([
+      {
+        toolUseId: "CALL_ID_REDACTED",
+        content: [{ text: "ARRAY_TOOL_OUTPUT_FIRST" }, { text: "ARRAY_TOOL_OUTPUT_SECOND" }],
+        status: "success",
+      },
+    ]);
+    expect(current?.images?.[0]).toMatchObject({ format: "png" });
+    expect(Array.from(current?.images?.[0]?.source.bytes ?? [])).toEqual([1, 2, 3]);
+  });
+
+  test("replays removed custom tools without granting them", () => {
     const result = adaptResponsesRequest(parsedResponses(fixture("codex-custom-tool-turn.json")));
     expect(result.ok).toBe(true);
     if (!result.ok) return;

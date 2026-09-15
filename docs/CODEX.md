@@ -42,8 +42,10 @@ Authenticated `GET /ready` must return HTTP 200 before Codex starts.
 The checked-in real-client gate covers a normal completed turn, successful and
 failed command execution, recovery after a command failure, compaction, Ultra
 reasoning, and namespace collaboration through `spawn_agent`, a child response,
-and `wait`. Captured output is also checked for leakage of the provider's private
-custom/namespace aliases.
+and `wait`. The checked-in Codex contract also replays the current `view_image`
+function-output shape: its tool association remains intact while the image bytes
+are lifted into the same Kiro user turn. Captured output is also checked for
+leakage of the provider's private custom/namespace aliases.
 
 V3 selects its transport per request. Ordinary compatible requests use native
 KiroRuntime Responses. Requests that need custom grammar, namespace tools,
@@ -75,6 +77,8 @@ envelopes, and prompt text are not persisted.
   `/responses/compact`, and exact `/responses/input_tokens` are rejected.
 - `parallel_tool_calls: false` is accepted for Codex compatibility, but Kiro
   cannot guarantee strictly serial tool execution.
+- Image-valued tool results require an inline data URL and at most one image
+  block per result; remote image URLs remain rejected.
 - `store: false` disables the provider's local response mirror; it is not an AWS
   Zero Data Retention guarantee.
 

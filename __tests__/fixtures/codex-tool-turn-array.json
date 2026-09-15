@@ -12,7 +12,11 @@
       "call_id": "CALL_ID_REDACTED",
       "output": [
         { "type": "input_text", "text": "ARRAY_TOOL_OUTPUT_FIRST" },
-        { "type": "input_image", "image_url": "IMAGE_URL_REDACTED" },
+        {
+          "type": "input_image",
+          "image_url": "data:image/png;base64,AQID",
+          "detail": "high"
+        },
         { "type": "output_text", "text": "ARRAY_TOOL_OUTPUT_SECOND" }
       ]
     }

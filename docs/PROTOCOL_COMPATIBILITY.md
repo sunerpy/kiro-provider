@@ -140,7 +140,9 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
 
 - leading, intermediate, and trailing instruction order;
 - non-empty text bytes, including whitespace-only input;
-- images, inline documents, tool results, and their current-input boundary;
+- images, inline documents, tool results, and their current-input boundary,
+  including one inline image block lifted from a function/custom tool result
+  without losing its adjacent text or tool association;
 - function tools, custom grammar tools, and namespace identity through
   request-local private aliases;
 - Codex collaboration `agent_message` content and author/recipient metadata;
@@ -188,7 +190,7 @@ request physical deletion of Kiro's server-side response state.
 
 | Request feature | V3 contract |
 | --- | --- |
-| Text, message arrays, images, inline documents | Supported within documented Kiro format limits. |
+| Text, message arrays, images, inline documents | Supported within documented Kiro format limits; a function/custom tool result may carry one inline data-URL image block. |
 | `instructions`, `system`, `developer` | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback. |
 | Function tools | Native where possible; stateless fallback otherwise. |
 | Namespace and free-form custom tools | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path. |

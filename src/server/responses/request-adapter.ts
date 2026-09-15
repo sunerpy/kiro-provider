@@ -5,6 +5,7 @@ import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
+  type CanonicalImagePart,
   type CanonicalMessage,
   type CanonicalRequest,
   type CanonicalTextPart,
@@ -195,6 +196,48 @@ function isReasoningItem(item: ResponsesInputItem): item is ResponsesReasoningIt
   return item.type === "reasoning";
 }
 
+function mapInputImagePart(
+  part: Readonly<Record<string, unknown>>,
+  path: string,
+): ProtocolResult<CanonicalImagePart> {
+  const keys = validateAllowedKeys(part, path, new Set(["type", "image_url", "detail"]));
+  if (!keys.ok) return keys;
+  if (typeof part.image_url !== "string") {
+    return protocolFailure(
+      "invalid_image_data",
+      `Responses image ${path}.image_url must be a string`,
+      `${path}.image_url`,
+    );
+  }
+  if (
+    part.detail !== undefined &&
+    part.detail !== "auto" &&
+    part.detail !== "low" &&
+    part.detail !== "high"
+  ) {
+    return protocolFailure(
+      "unsupported_image_detail",
+      `Responses image ${path}.detail must be auto, low, or high`,
+      `${path}.detail`,
+    );
+  }
+  if (!part.image_url.startsWith("data:")) {
+    return protocolFailure(
+      "unsupported_image_source",
+      "Responses images must use data URLs because Kiro cannot fetch remote image URLs",
+      `${path}.image_url`,
+    );
+  }
+  return {
+    ok: true,
+    value: {
+      type: "image",
+      url: part.image_url,
+      ...canonicalSource(part, path, ["detail"]),
+    },
+  };
+}
+
 function mapContentParts(
   parts: readonly ResponsesContentPart[],
   path: string,
@@ -219,17 +262,10 @@ function mapContentParts(
       });
       continue;
     }
-    if (part.type === "input_image" && "image_url" in part && typeof part.image_url === "string") {
-      const keys = validateAllowedKeys(part, partPath, new Set(["type", "image_url"]));
-      if (!keys.ok) return keys;
-      if (!part.image_url.startsWith("data:")) {
-        return protocolFailure(
-          "unsupported_image_source",
-          "Responses images must use data URLs because Kiro cannot fetch remote image URLs",
-          `${partPath}.image_url`,
-        );
-      }
-      mapped.push({ type: "image", url: part.image_url, path: partPath });
+    if (part.type === "input_image") {
+      const image = mapInputImagePart(part, partPath);
+      if (!image.ok) return image;
+      mapped.push(image.value);
       continue;
     }
     if (part.type === "input_file") {
@@ -331,22 +367,45 @@ function mapAgentMessageContent(
   };
 }
 
-function outputTextParts(
+function outputContentParts(
   output: ResponsesFunctionCallOutputItem["output"] | ResponsesCustomToolCallOutputItem["output"],
   path: string,
-): ProtocolResult<readonly CanonicalTextPart[]> {
-  if (typeof output === "string") return { ok: true, value: [textPart(output, path)] };
-  const parts: CanonicalTextPart[] = [];
+): ProtocolResult<{
+  readonly text: readonly CanonicalTextPart[];
+  readonly images: readonly CanonicalImagePart[];
+}> {
+  if (typeof output === "string") {
+    return { ok: true, value: { text: [textPart(output, path)], images: [] } };
+  }
+  const text: CanonicalTextPart[] = [];
+  const images: CanonicalImagePart[] = [];
   for (const [index, part] of output.entries()) {
     const partPath = `${path}.${index}`;
-    if (
-      (part.type !== "input_text" && part.type !== "output_text" && part.type !== "text") ||
-      typeof part.text !== "string"
-    ) {
+    if (part.type === "input_image") {
+      if (images.length > 0) {
+        return protocolFailure(
+          "unsupported_tool_result_content",
+          `Tool output ${path} may contain at most one image block so its Kiro tool association remains unambiguous`,
+          partPath,
+        );
+      }
+      const image = mapInputImagePart(part, partPath);
+      if (!image.ok) return image;
+      images.push(image.value);
+      continue;
+    }
+    if (part.type !== "input_text" && part.type !== "output_text" && part.type !== "text") {
       return protocolFailure(
         "unsupported_tool_result_content",
-        `Tool output ${partPath} must be a text block`,
+        `Tool output ${partPath} must be a text or inline image block`,
         partPath,
+      );
+    }
+    if (typeof part.text !== "string") {
+      return protocolFailure(
+        "unsupported_tool_result_content",
+        `Tool output ${partPath}.text must be a string`,
+        `${partPath}.text`,
       );
     }
     const keys = validateAllowedKeys(
@@ -357,12 +416,12 @@ function outputTextParts(
         : new Set(["type", "text"]),
     );
     if (!keys.ok) return keys;
-    parts.push({
+    text.push({
       ...textPart(part.text, `${partPath}.text`),
       ...canonicalSource(part, `${partPath}.text`, ["annotations", "logprobs", "parsed"]),
     });
   }
-  return { ok: true, value: parts };
+  return { ok: true, value: { text, images } };
 }
 
 function validateInputItemShape(item: ResponsesInputItem, path: string): ProtocolResult<undefined> {
@@ -1073,7 +1132,7 @@ export function adaptResponsesRequest(
         continue;
       }
       if (isFunctionCallOutputItem(item) || isCustomToolCallOutputItem(item)) {
-        const content = outputTextParts(item.output, `${path}.output`);
+        const content = outputContentParts(item.output, `${path}.output`);
         if (!content.ok) return content;
         messages.push({
           role: "tool",
@@ -1081,10 +1140,14 @@ export function adaptResponsesRequest(
             {
               type: "tool_result",
               toolCallId: item.call_id,
-              content: content.value,
+              content: content.value.text,
               isError: false,
               ...canonicalSource(item, path),
             },
+            // Kiro tool results carry text only. Lift one image-bearing result
+            // into the same user turn so the bytes remain model-visible while
+            // the adjacent empty/text result preserves its tool association.
+            ...content.value.images,
           ],
           toolCalls: [],
           ...canonicalSource(item, path),
