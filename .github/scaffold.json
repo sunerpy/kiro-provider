@@ -1,11 +1,13 @@
 {
   "profile": "node",
-  "addons": ["pr-title"],
+  "addons": [
+    "pr-title"
+  ],
   "placeholders": {
     "DEFAULT_BRANCH": "main",
     "PACKAGE_MANAGER": "bun",
     "BINARY": "kiro-provider",
-    "CURRENT_VERSION": "3.2.2"
+    "CURRENT_VERSION": "3.2.3"
   },
   "drift_allow": [
     ".github/dependabot.yml",
