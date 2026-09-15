@@ -1,5 +1,6 @@
 # Documentation
 
+The rendered site is [kiro-provider.firlab.app](https://kiro-provider.firlab.app/).
 The root [README](../README.md) is the install and five-minute quickstart. Use
 this index for the complete operator, protocol, integration, and evidence set.
 Simplified Chinese translations live in [`docs/readme/`](readme/); audit records
