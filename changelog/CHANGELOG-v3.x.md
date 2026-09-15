@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.0](https://github.com/sunerpy/kiro-provider/compare/v3.3.1...v3.4.0) (2026-09-15)
+
+
+### Features
+
+* **cli:** 增加账号列表排序与版本自更新 ([e7fa4ca](https://github.com/sunerpy/kiro-provider/commit/e7fa4ca62e0fc1a879b58ddf4d96c6459809432c))
+* **cli:** 增加账号列表排序与版本自更新 ([a0ef8fd](https://github.com/sunerpy/kiro-provider/commit/a0ef8fdc1f68468fde509d0a1b0f08dcdad650cf))
+
 ## [3.3.1](https://github.com/sunerpy/kiro-provider/compare/v3.3.0...v3.3.1) (2026-09-15)
 
 
