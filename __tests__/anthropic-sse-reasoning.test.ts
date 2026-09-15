@@ -955,7 +955,12 @@ describe("Anthropic SSE backpressure (B17)", () => {
     const reader = response.body?.getReader();
     if (!reader) throw new TypeError("adapter response has no body");
     const first = await reader.read();
-    const second = await reader.read();
+    const second = await Promise.race([
+      reader.read(),
+      Bun.sleep(500).then(() => {
+        throw new TypeError("keep-alive ping timer did not wake the pending stream read");
+      }),
+    ]);
     expect(first.done).toBe(false);
     expect(second.done).toBe(false);
     expect(parseFrames(new TextDecoder().decode(first.value))[0]).toMatchObject({

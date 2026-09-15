@@ -801,7 +801,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
             pendingFrames.pop();
           }
         }, pingIntervalMs);
-        pingTimer.unref?.();
+        // Production keep-alives must not keep the process alive by themselves.
+        // An explicit interval is a test clock, however: Bun on Windows may
+        // starve an unref'ed timer when the only consumer is a pending stream
+        // read, turning the keep-alive assertion into a job-wide hang.
+        if (options.pingIntervalMs === undefined) pingTimer.unref?.();
         if (options.signals.deadline.aborted) onDeadlineAbort();
         else if (options.signals.client.aborted) onClientAbort();
         flushOne(controller);
