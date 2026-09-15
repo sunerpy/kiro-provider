@@ -146,6 +146,14 @@ function createHarness(
     runImportAccounts: (options) => {
       imports.push(options);
     },
+    // The update paths are covered by cli-version-check.test.ts; failing loudly
+    // here keeps an accidental network call from passing silently.
+    checkForUpdate: () => {
+      throw new Error("checkForUpdate must not be called by this test");
+    },
+    runSelfUpdate: () => {
+      throw new Error("runSelfUpdate must not be called by this test");
+    },
     openDb: (...paths: readonly string[]) => {
       dbPaths.push(paths[0]);
       return {
@@ -181,8 +189,8 @@ function createHarness(
 
 describe("parseCliArgs", () => {
   test("parses long and short version flags", () => {
-    expect(parseCliArgs(["--version"])).toEqual({ kind: "version" });
-    expect(parseCliArgs(["-V"])).toEqual({ kind: "version" });
+    expect(parseCliArgs(["--version"])).toEqual({ kind: "version", check: false, json: false });
+    expect(parseCliArgs(["-V"])).toEqual({ kind: "version", check: false, json: false });
   });
 
   test("parses serve overrides", () => {
@@ -252,6 +260,7 @@ describe("parseCliArgs", () => {
     expect(parseCliArgs(["accounts", "list", "--details"])).toEqual({
       kind: "accounts-list",
       mode: "details",
+      sort: { field: "email", order: "asc" },
     });
     expect(
       parseCliArgs(["accounts", "refresh", "--all", "--config", "/tmp/config.json", "--json"]),

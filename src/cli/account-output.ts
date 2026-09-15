@@ -23,6 +23,62 @@ export type AccountAvailability =
   | "unhealthy"
   | "available";
 
+/**
+ * Columns `accounts list --sort` accepts. `usage` is the used/limit ratio
+ * rather than the raw counter, so accounts with different quotas stay
+ * comparable; `overage` is the paid overage counter.
+ */
+export const ACCOUNT_SORT_FIELDS = [
+  "email",
+  "id",
+  "auth",
+  "region",
+  "health",
+  "availability",
+  "usage",
+  "overage",
+  "last-sync",
+  "last-used",
+  "token-expires",
+  "generation",
+] as const;
+
+export type AccountSortField = (typeof ACCOUNT_SORT_FIELDS)[number];
+
+export const ACCOUNT_SORT_ORDERS = ["asc", "desc"] as const;
+
+export type AccountSortOrder = (typeof ACCOUNT_SORT_ORDERS)[number];
+
+export type AccountListSort = {
+  readonly field: AccountSortField;
+  readonly order: AccountSortOrder;
+};
+
+/** `accounts list` keeps sorting by email ascending when no flag is given. */
+export const DEFAULT_ACCOUNT_SORT: AccountListSort = { field: "email", order: "asc" };
+
+export function isAccountSortField(value: string): value is AccountSortField {
+  return (ACCOUNT_SORT_FIELDS as readonly string[]).includes(value);
+}
+
+export function isAccountSortOrder(value: string): value is AccountSortOrder {
+  return (ACCOUNT_SORT_ORDERS as readonly string[]).includes(value);
+}
+
+/**
+ * Availability ordered from most to least usable so `--sort availability`
+ * ascending answers "what can the scheduler pick right now", with transient
+ * states above quota gates and the permanently dead accounts last.
+ */
+const AVAILABILITY_RANK: Readonly<Record<AccountAvailability, number>> = {
+  available: 0,
+  "rate-limited": 1,
+  unhealthy: 2,
+  "overage-blocked": 3,
+  "quota-exhausted": 4,
+  "needs-relogin": 5,
+};
+
 export class AccountNotFoundError extends Error {
   constructor(readonly identifier: string) {
     super(`Account not found: ${identifier}`);
@@ -75,6 +131,94 @@ export function accountAvailability(
   return "available";
 }
 
+/** `undefined` marks "this account has no value for the selected column". */
+type SortKey = string | number | undefined;
+
+function positiveTimestamp(value: number | undefined): number | undefined {
+  return value !== undefined && value > 0 ? value : undefined;
+}
+
+function usageRatio(account: StoredAccount): number | undefined {
+  const limit = account.limitCount ?? 0;
+  if (limit <= 0) return undefined;
+  return (account.usedCount ?? 0) / limit;
+}
+
+function sortKey(
+  account: StoredAccount,
+  field: AccountSortField,
+  policy: OveragePolicy,
+  now: number,
+): SortKey {
+  switch (field) {
+    case "email":
+      return normalizedEmail(account.email);
+    case "id":
+      return account.id;
+    case "auth":
+      return account.authMethod;
+    case "region":
+      return account.region;
+    case "health":
+      return account.isHealthy ? 0 : 1;
+    case "availability":
+      return AVAILABILITY_RANK[accountAvailability(account, policy, now)];
+    case "usage":
+      return usageRatio(account);
+    case "overage":
+      return account.overageCount ?? 0;
+    case "last-sync":
+      return positiveTimestamp(account.lastSync);
+    case "last-used":
+      return positiveTimestamp(account.lastUsed);
+    case "token-expires":
+      return positiveTimestamp(account.expiresAt);
+    case "generation":
+      return account.generation;
+  }
+}
+
+function compareKeys(left: SortKey, right: SortKey): number {
+  if (typeof left === "string" && typeof right === "string") return left.localeCompare(right);
+  if (typeof left === "number" && typeof right === "number") {
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
+  return 0;
+}
+
+/**
+ * Sorts by one column with a stable email/id tiebreak. Accounts with no value
+ * for the column (unknown quota, never synced) always land at the bottom, in
+ * both directions, so `--order desc` cannot fill the top of the list with
+ * placeholders.
+ */
+export function sortAccounts(
+  accounts: readonly StoredAccount[],
+  sort: AccountListSort = DEFAULT_ACCOUNT_SORT,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+  now = Date.now(),
+): StoredAccount[] {
+  const descending = sort.order === "desc";
+  return accounts
+    .map((account) => ({
+      account,
+      key: sortKey(account, sort.field, policy, now),
+      email: normalizedEmail(account.email),
+    }))
+    .sort((left, right) => {
+      if (left.key === undefined || right.key === undefined) {
+        if (left.key !== right.key) return left.key === undefined ? 1 : -1;
+      } else {
+        const compared = compareKeys(left.key, right.key);
+        if (compared !== 0) return descending ? -compared : compared;
+      }
+      return (
+        left.email.localeCompare(right.email) || left.account.id.localeCompare(right.account.id)
+      );
+    })
+    .map(({ account }) => account);
+}
+
 function formatUsage(account: StoredAccount): string {
   const used = account.usedCount ?? 0;
   const limit = account.limitCount ?? 0;
@@ -108,6 +252,7 @@ function renderTable(headers: readonly string[], rows: readonly (readonly string
 function accountJson(
   account: StoredAccount,
   policy: OveragePolicy,
+  now: number,
 ): Readonly<Record<string, unknown>> {
   const used = account.usedCount ?? 0;
   const limit = account.limitCount ?? 0;
@@ -119,7 +264,7 @@ function accountJson(
     oidc_region: account.oidcRegion ?? null,
     start_url: account.startUrl ?? null,
     health: account.isHealthy ? "healthy" : "unhealthy",
-    availability: accountAvailability(account, policy),
+    availability: accountAvailability(account, policy, now),
     unhealthy_reason: account.unhealthyReason ?? null,
     used_count: used,
     limit_count: limit,
@@ -137,14 +282,14 @@ export function formatAccountList(
   accounts: readonly StoredAccount[],
   mode: AccountListMode,
   policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+  sort: AccountListSort = DEFAULT_ACCOUNT_SORT,
+  now = Date.now(),
 ): string[] {
-  const sorted = [...accounts].sort(
-    (left, right) => left.email.localeCompare(right.email) || left.id.localeCompare(right.id),
-  );
+  const sorted = sortAccounts(accounts, sort, policy, now);
   if (mode === "json") {
     return [
       JSON.stringify(
-        sorted.map((account) => accountJson(account, policy)),
+        sorted.map((account) => accountJson(account, policy, now)),
         null,
         2,
       ),
@@ -172,7 +317,7 @@ export function formatAccountList(
         account.authMethod,
         account.region,
         account.isHealthy ? "healthy" : "unhealthy",
-        accountAvailability(account, policy),
+        accountAvailability(account, policy, now),
         formatUsage(account),
         String(account.overageCount ?? 0),
         formatTimestamp(account.lastSync),
@@ -188,7 +333,7 @@ export function formatAccountList(
       account.email,
       account.region,
       account.isHealthy ? "healthy" : "unhealthy",
-      accountAvailability(account, policy),
+      accountAvailability(account, policy, now),
       formatUsage(account),
     ]),
   );

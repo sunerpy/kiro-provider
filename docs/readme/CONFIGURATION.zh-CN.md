@@ -13,7 +13,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。
+配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。`--version` 与 `self-update` 既不加载配置也不打开账号库，代理依次取自 `--proxy`、`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`，因此配置文件有问题也不会阻塞升级。
 
 ## 校验规则
 
@@ -129,6 +129,8 @@ kiro-provider 会独立完成：
 kiro-provider accounts list
 kiro-provider accounts list --details
 kiro-provider accounts list --json
+kiro-provider accounts list --sort availability
+kiro-provider accounts list --sort usage --order desc
 kiro-provider accounts refresh --all
 kiro-provider accounts refresh <id|email> --json
 kiro-provider accounts relogin <id|email>
@@ -138,6 +140,14 @@ kiro-provider accounts remove <id|email>
 默认列表为对齐后的摘要；`--details` 与 `--json` 会显示用于消歧重复邮箱的稳定
 内部 ID，但绝不包含 access token、refresh token 或 client secret。邮箱匹配不区分
 大小写，且只有唯一匹配时才允许继续。
+
+未指定 `--sort <field>` 时按邮箱升序排列，`--order asc|desc` 控制方向。支持的字段为
+`email`（默认）、`id`、`auth`、`region`、`health`、`availability`、`usage`、
+`overage`、`last-sync`、`last-used`、`token-expires`、`generation`，并接受
+`LAST_USED`、`last_used` 这类等价写法。`availability` 从最可用排到最不可用；
+`usage` 比较已用/上限的比例而非原始计数，使不同额度的账号仍可比较。所选列没有取值的
+账号（额度未知、从未同步）在两个方向上都排在最后，键相同时依次回退到邮箱和内部 ID，
+因此顺序稳定。三种输出模式都遵循该排序。
 
 手工 refresh 始终调用 Kiro 权威用量接口，包括刚刷新过或当前已耗尽的账号；
 仅在 access token 临近到期，或收到一次 invalid-bearer 响应后才刷新 token。

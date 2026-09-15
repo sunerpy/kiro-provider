@@ -193,6 +193,46 @@ without storing a Windows password. A true pre-login Windows service requires
 a service wrapper and a deliberately configured user account; do not run it
 as `LocalSystem` and expect the same provider-owned files.
 
+## Upgrading the service binary
+
+Check what is published before touching a running service:
+
+```bash
+kiro-provider --version --check
+kiro-provider self-update --check
+```
+
+`self-update` replaces the installed binary in place after verifying the release
+asset against that release's `SHA256SUMS`. It writes nothing on a digest
+mismatch, keeps the existing permission bits, and stages the download in the
+install directory so the swap is a same-filesystem rename. It never touches the
+config, the account store, or the unit file, and it does not restart anything.
+
+Because the running process keeps its own open image, the service continues on
+the old build until you restart it:
+
+```bash
+kiro-provider self-update --yes
+systemctl --user restart kiro-provider.service
+kiro-provider --version
+```
+
+Windows scheduled task:
+
+```powershell
+kiro-provider self-update --yes
+Stop-ScheduledTask -TaskName "kiro-provider"
+Start-ScheduledTask -TaskName "kiro-provider"
+```
+
+On Windows the old image is parked aside when it is locked and rolled back if
+the replacement fails, so stop the task first when you can.
+
+For a pinned service, pass the same version you would set in
+`KIRO_PROVIDER_VERSION` (`self-update --tag 3.3.1 --yes`) instead of following
+the newest release. `--tag` is an instruction, not a suggestion: an older tag
+downgrades. Use `--force` to reinstall the version you are already on.
+
 ## Health checks and automation contract
 
 After either installation, verify both process liveness and authenticated

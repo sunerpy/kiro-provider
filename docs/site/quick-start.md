@@ -19,6 +19,8 @@ kiro-provider --version
 
 The installer verifies the binary against the release `SHA256SUMS`. For a long-lived service, pin `KIRO_PROVIDER_VERSION` instead of following `latest`. Windows, Bun, and source-install options are documented in the [project README](https://github.com/sunerpy/kiro-provider#install).
 
+Later, `kiro-provider --version --check` reports the newest release and `kiro-provider self-update` replaces this binary with it after verifying the same `SHA256SUMS`. See [Running as a background service](../SERVICE.md) for upgrading an installed service.
+
 ## 2. Create a private gateway key
 
 ```bash

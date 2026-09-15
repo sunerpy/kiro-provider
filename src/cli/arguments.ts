@@ -1,4 +1,13 @@
 import { parseArgs } from "node:util";
+import {
+  ACCOUNT_SORT_FIELDS,
+  ACCOUNT_SORT_ORDERS,
+  type AccountListSort,
+  DEFAULT_ACCOUNT_SORT,
+  isAccountSortField,
+  isAccountSortOrder,
+} from "./account-output.js";
+import { normalizeReleaseTag } from "./release-version.js";
 
 export const CLI_USAGE = `Usage: kiro-provider <command> [options]
 
@@ -7,8 +16,10 @@ Commands:
       Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>]
       Sign in directly to the provider-owned local auth store.
-  accounts list [--details | --json]
+  accounts list [--details | --json] [--sort <field>] [--order asc|desc]
       List accounts without exposing credentials.
+      Sort fields: email (default), id, auth, region, health, availability,
+      usage, overage, last-sync, last-used, token-expires, generation.
   accounts refresh (--all | <id|email>) [--config <path>] [--json]
       Refresh authoritative usage now and renew access tokens when needed.
   accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]
@@ -18,13 +29,36 @@ Commands:
       Rows whose local copy is newer are skipped unless --force is given.
   accounts remove <id|email> [--yes]
       Remove an account from the provider-owned local store and write a tombstone.
+  self-update [--check] [--tag <version>] [--yes] [--json] [--proxy <url>] [--force]
+      Replace this standalone binary with a GitHub release build, after
+      verifying its published SHA256SUMS digest. npm installs must be upgraded
+      with the package manager instead.
 
 Options:
   -h, --help     Show this help.
-  -V, --version  Show the installed version.`;
+  -V, --version  Show the installed version. Add --check to look up the latest
+                 release, and --json for machine-readable output.`;
 
 type HelpCommand = { readonly kind: "help" };
-type VersionCommand = { readonly kind: "version" };
+type VersionCommand = {
+  readonly kind: "version";
+  /** Query GitHub for the newest release instead of printing the version only. */
+  readonly check: boolean;
+  readonly json: boolean;
+  readonly proxy?: string;
+};
+type SelfUpdateCommand = {
+  readonly kind: "self-update";
+  /** Report what would be installed without downloading or writing anything. */
+  readonly check: boolean;
+  readonly json: boolean;
+  readonly yes: boolean;
+  /** Reinstall even when the resolved release matches the running version. */
+  readonly force: boolean;
+  /** Release tag to install instead of the newest one, normalized to `vX.Y.Z`. */
+  readonly tag?: string;
+  readonly proxy?: string;
+};
 type ServeCommand = {
   readonly kind: "serve";
   readonly configPath?: string;
@@ -41,6 +75,7 @@ type LoginCommand = {
 type AccountsListCommand = {
   readonly kind: "accounts-list";
   readonly mode: "table" | "details" | "json";
+  readonly sort: AccountListSort;
 };
 type AccountsRefreshCommand = {
   readonly kind: "accounts-refresh";
@@ -69,6 +104,7 @@ type AccountsRemoveCommand = {
 export type CliCommand =
   | HelpCommand
   | VersionCommand
+  | SelfUpdateCommand
   | ServeCommand
   | LoginCommand
   | AccountsListCommand
@@ -156,12 +192,43 @@ function parseImport(args: readonly string[]): AccountsImportCommand | HelpComma
   };
 }
 
+/** Accepts `LAST_USED` and `last_used` as aliases of the documented spelling. */
+function sortToken(value: string): string {
+  return value.trim().toLowerCase().replaceAll("_", "-");
+}
+
+function parseAccountSort(field: string | undefined, order: string | undefined): AccountListSort {
+  let resolvedField = DEFAULT_ACCOUNT_SORT.field;
+  if (field !== undefined) {
+    const token = sortToken(field);
+    if (!isAccountSortField(token)) {
+      throw new CliUsageError(
+        `Unknown accounts list sort field: ${field}. Supported fields: ${ACCOUNT_SORT_FIELDS.join(", ")}`,
+      );
+    }
+    resolvedField = token;
+  }
+  let resolvedOrder = DEFAULT_ACCOUNT_SORT.order;
+  if (order !== undefined) {
+    const token = sortToken(order);
+    if (!isAccountSortOrder(token)) {
+      throw new CliUsageError(
+        `Unknown accounts list sort order: ${order}. Supported orders: ${ACCOUNT_SORT_ORDERS.join(", ")}`,
+      );
+    }
+    resolvedOrder = token;
+  }
+  return { field: resolvedField, order: resolvedOrder };
+}
+
 function parseAccountList(args: readonly string[]): AccountsListCommand | HelpCommand {
   const parsed = parseArgs({
     args: [...args],
     options: {
       details: { type: "boolean" },
       json: { type: "boolean" },
+      sort: { type: "string" },
+      order: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -174,6 +241,7 @@ function parseAccountList(args: readonly string[]): AccountsListCommand | HelpCo
   return {
     kind: "accounts-list",
     mode: parsed.values.json ? "json" : parsed.values.details ? "details" : "table",
+    sort: parseAccountSort(parsed.values.sort, parsed.values.order),
   };
 }
 
@@ -253,6 +321,63 @@ function parseAccountRemove(args: readonly string[]): AccountsRemoveCommand | He
   };
 }
 
+function parseVersion(args: readonly string[]): VersionCommand | HelpCommand {
+  const parsed = parseArgs({
+    args: [...args],
+    options: {
+      check: { type: "boolean" },
+      json: { type: "boolean" },
+      proxy: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (parsed.values.help) return { kind: "help" };
+  return {
+    kind: "version",
+    check: parsed.values.check ?? false,
+    json: parsed.values.json ?? false,
+    ...(parsed.values.proxy ? { proxy: parsed.values.proxy } : {}),
+  };
+}
+
+function parseSelfUpdate(args: readonly string[]): SelfUpdateCommand | HelpCommand {
+  const parsed = parseArgs({
+    args: [...args],
+    options: {
+      check: { type: "boolean" },
+      json: { type: "boolean" },
+      yes: { type: "boolean", short: "y" },
+      force: { type: "boolean" },
+      tag: { type: "string" },
+      proxy: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+    strict: true,
+    allowPositionals: false,
+  });
+  if (parsed.values.help) return { kind: "help" };
+  let tag: string | undefined;
+  if (parsed.values.tag !== undefined) {
+    tag = normalizeReleaseTag(parsed.values.tag);
+    if (tag === undefined) {
+      throw new CliUsageError(
+        `Invalid self-update tag: ${parsed.values.tag}. Expected a release version such as 3.4.0.`,
+      );
+    }
+  }
+  return {
+    kind: "self-update",
+    check: parsed.values.check ?? false,
+    json: parsed.values.json ?? false,
+    yes: parsed.values.yes ?? false,
+    force: parsed.values.force ?? false,
+    ...(tag ? { tag } : {}),
+    ...(parsed.values.proxy ? { proxy: parsed.values.proxy } : {}),
+  };
+}
+
 function parseAccounts(args: readonly string[]): CliCommand {
   const action = args[0];
   switch (action) {
@@ -284,7 +409,10 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
       return { kind: "help" };
     case "--version":
     case "-V":
-      return { kind: "version" };
+    case "version":
+      return parseVersion(argv.slice(1));
+    case "self-update":
+      return parseSelfUpdate(argv.slice(1));
     case "serve":
       return parseServe(argv.slice(1));
     case "login":

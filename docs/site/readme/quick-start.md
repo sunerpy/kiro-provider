@@ -19,6 +19,8 @@ kiro-provider --version
 
 安装脚本会使用 Release 中的 `SHA256SUMS` 校验二进制。常驻服务应设置 `KIRO_PROVIDER_VERSION` 固定版本，不要直接跟随 `latest`。Windows、Bun 和源码安装方式见[项目 README](https://github.com/sunerpy/kiro-provider/blob/main/docs/readme/README.zh-CN.md#安装)。
 
+之后可以用 `kiro-provider --version --check` 查看最新 Release，并用 `kiro-provider self-update` 在校验同一份 `SHA256SUMS` 后替换当前二进制。升级已安装的服务见[后台服务](../../readme/SERVICE.zh-CN.md)。
+
 ## 2. 创建私有网关 Key
 
 ```bash
