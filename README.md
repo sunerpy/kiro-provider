@@ -158,13 +158,14 @@ or region.
 | --- | --- | --- |
 | Zuno | OpenAI Responses | [Native provider configuration and session routing](docs/ZUNO.md) |
 | Codex CLI | OpenAI Responses | [Isolated profile and compatibility checks](docs/CODEX.md) |
-| Claude Code | Anthropic Messages | [Isolated `kiroclaude` profile and model selection](docs/CLAUDE_CODE.md) |
+| Claude Code | Anthropic Messages | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
 | Other SDKs | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md) |
 
-The client guides use isolated profiles so the ordinary `codex` and `claude`
-commands keep their existing providers and state. They also record the exact
-client versions last tested. Treat those versions as dated evidence, not a
-promise about future request shapes.
+Codex uses an isolated profile. `kiroclaude` instead keeps Claude's native
+state and applies a provider/model overlay only to the launched process, so the
+ordinary `claude` command keeps its provider. The guides record the exact
+client versions last tested; treat them as dated evidence, not a promise about
+future request shapes.
 
 ## Configuration
 

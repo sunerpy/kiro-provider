@@ -150,12 +150,13 @@ console.log(response.output_text);
 | --- | --- | --- |
 | Zuno | OpenAI Responses | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md) |
 | Codex CLI | OpenAI Responses | [隔离 profile 与兼容性检查](CODEX.zh-CN.md) |
-| Claude Code | Anthropic Messages | [隔离 `kiroclaude` profile 与模型选择](CLAUDE_CODE.zh-CN.md) |
+| Claude Code | Anthropic Messages | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
 | 其他 SDK | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md) |
 
-客户端指南都使用隔离 profile，因此普通 `codex` 和 `claude` 命令仍保留原有的
-Provider 与状态。指南也会注明最近一次验证的客户端版本；这些版本是带日期的实测
-记录，不代表未来版本一定保持相同请求格式。
+Codex 使用隔离 profile；`kiroclaude` 则保留 Claude 原生状态，只为当前进程覆盖
+provider 与模型，因此普通 `claude` 命令仍保留原有 provider。指南会注明最近一次
+验证的客户端版本；这些版本是带日期的实测记录，不代表未来版本一定保持相同请求
+格式。
 
 ## 配置
 

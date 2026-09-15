@@ -45,8 +45,26 @@ keys = [
   "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_ENABLE_AWAY_SUMMARY",
   "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "ANTHROPIC_DEFAULT_FABLE_MODEL",
 ]
+def merge(base, override):
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = merge(merged.get(key), value)
+        return merged
+    return override
+native_settings = {}
+config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+native_path = os.path.join(config_dir, "settings.json")
+if os.path.isfile(native_path):
+    with open(native_path, encoding="utf-8") as source:
+        native_settings = json.load(source)
+overlay = json.loads(arguments[arguments.index("--settings") + 1])
 with open(path, "w", encoding="utf-8") as output:
-    json.dump({"arguments": arguments, "env": {key: os.environ.get(key) for key in keys}}, output)
+    json.dump({
+        "arguments": arguments,
+        "env": {key: os.environ.get(key) for key in keys},
+        "effectiveSettings": merge(native_settings, overlay),
+    }, output)
 PY
 `,
     { mode: 0o755 },
@@ -72,20 +90,41 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
     ENABLE_TOOL_SEARCH: "true",
     ANTHROPIC_CUSTOM_HEADERS: "X-Unrelated: must-not-leak",
     CLAUDE_CODE_ENABLE_AWAY_SUMMARY: "1",
-    AWS_PROFILE: "must-not-leak",
-    AWS_REGION: "must-not-leak",
-    AWS_DEFAULT_REGION: "must-not-leak",
+    AWS_PROFILE: "shell-profile",
+    AWS_REGION: "shell-region",
+    AWS_DEFAULT_REGION: "shell-default-region",
     ANTHROPIC_DEFAULT_FABLE_MODEL: "must-not-leak",
   } as Record<string, string>;
 }
 
 describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => {
-  test("uses an isolated profile, apiKeyHelper, current beta features, and exact arguments", () => {
+  test("shares the native Claude home while applying process-local Kiro defaults", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
     const nativeSettings = join(root, ".claude", "settings.json");
     mkdirSync(join(root, ".claude"), { recursive: true });
-    writeFileSync(nativeSettings, '{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}\n');
+    mkdirSync(join(root, ".claude", "skills"));
+    writeFileSync(join(root, ".claude", "skills", "shared-skill.md"), "shared\n");
+    writeFileSync(
+      nativeSettings,
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          AWS_PROFILE: "native-bedrock",
+          AWS_REGION: "us-east-2",
+          ANTHROPIC_DEFAULT_FABLE_MODEL: "native-fable",
+        },
+        permissions: {
+          defaultMode: "manual",
+          allow: ["Read"],
+          deny: ["Bash(rm *)"],
+        },
+        enabledPlugins: { "typescript-lsp@claude-plugins-official": true },
+        model: "fable",
+        effortLevel: "low",
+        tui: "fullscreen",
+      })}\n`,
+    );
     const original = readFileSync(nativeSettings, "utf8");
 
     const result = Bun.spawnSync(["sh", launcher, "--print", "hello"], {
@@ -96,8 +135,14 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
       arguments: string[];
       env: Record<string, string | null>;
+      effectiveSettings: {
+        enabledPlugins: Record<string, boolean>;
+        tui: string;
+        permissions: { defaultMode: string; allow: string[]; deny: string[] };
+        env: Record<string, string>;
+      };
     };
-    expect(capture.env.CLAUDE_CONFIG_DIR).toBe(join(root, ".kiroclaude"));
+    expect(capture.env.CLAUDE_CONFIG_DIR).toBeNull();
     expect(capture.env.KIRO_PROVIDER_CONFIG).toBe(join(root, "provider.json"));
     for (const key of [
       "ANTHROPIC_API_KEY",
@@ -120,6 +165,8 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       model: string;
       effortLevel: string;
       ultracode: boolean;
+      permissions?: { defaultMode: string };
+      skipDangerousModePermissionPrompt?: boolean;
       awaySummaryEnabled: boolean;
       modelPicker: {
         replaceBuiltInOptions: boolean;
@@ -134,8 +181,10 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     };
     expect(settings.apiKeyHelper).toBe(helper);
     expect(settings.model).toBe("opus");
-    expect(settings.effortLevel).toBe("xhigh");
+    expect(settings.effortLevel).toBe("max");
     expect(settings.ultracode).toBe(true);
+    expect(settings).not.toHaveProperty("permissions");
+    expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
     expect(settings.awaySummaryEnabled).toBe(false);
     expect(settings.modelPicker).toEqual({
       replaceBuiltInOptions: false,
@@ -166,20 +215,43 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
       ANTHROPIC_CUSTOM_HEADERS: "X-Kiro-Output-Token-Limit-Mode: advisory",
+      CLAUDE_CODE_USE_BEDROCK: "0",
+      CLAUDE_CODE_USE_VERTEX: "0",
+      CLAUDE_CODE_USE_FOUNDRY: "0",
+      CLAUDE_CODE_USE_MANTLE: "0",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_ENABLE_AWAY_SUMMARY: "0",
     });
-    expect(capture.env.CLAUDE_CODE_ENABLE_AWAY_SUMMARY).toBe("0");
     for (const key of [
-      "AWS_PROFILE",
-      "AWS_REGION",
-      "AWS_DEFAULT_REGION",
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
       "ANTHROPIC_DEFAULT_FABLE_MODEL",
     ]) {
-      expect(capture.env[key]).toBeNull();
+      expect(settings.env[key]).toBe("");
     }
+    expect(capture.effectiveSettings.enabledPlugins).toEqual({
+      "typescript-lsp@claude-plugins-official": true,
+    });
+    expect(capture.effectiveSettings.tui).toBe("fullscreen");
+    expect(capture.effectiveSettings.permissions).toEqual({
+      defaultMode: "manual",
+      allow: ["Read"],
+      deny: ["Bash(rm *)"],
+    });
+    expect(capture.effectiveSettings.env.CLAUDE_CODE_USE_BEDROCK).toBe("0");
+    expect(capture.effectiveSettings.env.AWS_PROFILE).toBe("native-bedrock");
+    expect(capture.effectiveSettings.env.AWS_REGION).toBe("us-east-2");
+    expect(capture.effectiveSettings.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8787");
+    expect(capture.env.CLAUDE_CODE_ENABLE_AWAY_SUMMARY).toBe("0");
+    expect(capture.env.AWS_PROFILE).toBe("shell-profile");
+    expect(capture.env.AWS_REGION).toBe("shell-region");
+    expect(capture.env.AWS_DEFAULT_REGION).toBe("shell-default-region");
+    expect(capture.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeNull();
     expect(settings.env).not.toHaveProperty("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
     expect(readFileSync(nativeSettings, "utf8")).toBe(original);
+    expect(readFileSync(join(root, ".claude", "skills", "shared-skill.md"), "utf8")).toBe(
+      "shared\n",
+    );
   });
 
   test("supports isolated endpoint and model overrides without appending /v1", () => {
@@ -187,6 +259,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     const fake = fakeClaude(root);
     const env = {
       ...environment(root, fake),
+      CLAUDE_CONFIG_DIR: join(root, "native-custom"),
       KIROCLAUDE_BASE_URL: "https://gateway.example.test",
       KIROCLAUDE_CONFIG_DIR: join(root, "isolated"),
       KIROCLAUDE_MODEL: "sonnet",
@@ -207,20 +280,59 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       model: string;
       effortLevel: string;
       ultracode: boolean;
+      permissions?: { defaultMode: string };
+      skipDangerousModePermissionPrompt?: boolean;
       env: Record<string, string>;
     };
     expect(capture.env.CLAUDE_CONFIG_DIR).toBe(join(root, "isolated"));
     expect(settings.model).toBe("sonnet");
     expect(settings.effortLevel).toBe("high");
     expect(settings.ultracode).toBe(false);
+    expect(settings).not.toHaveProperty("permissions");
+    expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
     expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://gateway.example.test");
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("opus-custom");
     expect(capture.arguments.slice(-3)).toEqual(["--model", "claude-sonnet-5", "task"]);
   });
 
-  test("offers Fable 5.1 through an isolated native Bedrock backend", () => {
+  test("preserves an inherited native Claude config directory", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
+    const nativeCustom = join(root, "native-custom");
+    mkdirSync(nativeCustom);
+    writeFileSync(join(nativeCustom, "settings.json"), '{"tui":"fullscreen"}\n');
+
+    const result = Bun.spawnSync(["sh", launcher, "--print", "hello"], {
+      env: {
+        ...environment(root, fake),
+        CLAUDE_CONFIG_DIR: nativeCustom,
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      env: Record<string, string | null>;
+      effectiveSettings: { tui: string };
+    };
+    expect(capture.env.CLAUDE_CONFIG_DIR).toBe(nativeCustom);
+    expect(capture.effectiveSettings.tui).toBe("fullscreen");
+  });
+
+  test("offers Fable 5.1 through the shared native Bedrock backend", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude", "settings.json"),
+      `${JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_VERTEX: "1",
+          ANTHROPIC_BASE_URL: "https://native-gateway.example.test",
+          ANTHROPIC_BEDROCK_BASE_URL: "https://native-bedrock-gateway.example.test",
+          ANTHROPIC_API_KEY: "native-key-must-not-survive",
+        },
+      })}\n`,
+    );
     const result = Bun.spawnSync(["sh", launcher, "--bedrock-fable", "--print", "hello"], {
       env: {
         ...environment(root, fake),
@@ -233,12 +345,15 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
       arguments: string[];
       env: Record<string, string | null>;
+      effectiveSettings: { env: Record<string, string> };
     };
     const settings = JSON.parse(capture.arguments[1] as string) as {
       apiKeyHelper?: string;
       model: string;
       effortLevel: string;
       ultracode: boolean;
+      permissions?: { defaultMode: string };
+      skipDangerousModePermissionPrompt?: boolean;
       awaySummaryEnabled: boolean;
       modelPicker: {
         replaceBuiltInOptions: boolean;
@@ -247,7 +362,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       env: Record<string, string>;
     };
 
-    expect(capture.env.CLAUDE_CONFIG_DIR).toBe(join(root, ".kiroclaude-fable"));
+    expect(capture.env.CLAUDE_CONFIG_DIR).toBeNull();
     expect(capture.env.KIRO_PROVIDER_CONFIG).toBeNull();
     expect(capture.env.ANTHROPIC_BASE_URL).toBeNull();
     expect(capture.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
@@ -272,6 +387,16 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       },
       env: {
         CLAUDE_CODE_USE_BEDROCK: "1",
+        CLAUDE_CODE_USE_VERTEX: "0",
+        CLAUDE_CODE_USE_FOUNDRY: "0",
+        CLAUDE_CODE_USE_MANTLE: "0",
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_AUTH_TOKEN: "",
+        ANTHROPIC_BASE_URL: "",
+        ANTHROPIC_BEDROCK_BASE_URL: "",
+        ANTHROPIC_VERTEX_BASE_URL: "",
+        ANTHROPIC_FOUNDRY_BASE_URL: "",
+        ANTHROPIC_AWS_BASE_URL: "",
         AWS_PROFILE: "us-claude",
         AWS_REGION: "us-east-2",
         AWS_DEFAULT_REGION: "us-east-2",
@@ -279,7 +404,65 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
         CLAUDE_CODE_ENABLE_AWAY_SUMMARY: "0",
       },
     });
+    expect(settings).not.toHaveProperty("permissions");
+    expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
+    expect(capture.effectiveSettings.env.CLAUDE_CODE_USE_VERTEX).toBe("0");
+    expect(capture.effectiveSettings.env.ANTHROPIC_BASE_URL).toBe("");
+    expect(capture.effectiveSettings.env.ANTHROPIC_BEDROCK_BASE_URL).toBe("");
+    expect(capture.effectiveSettings.env.ANTHROPIC_API_KEY).toBe("");
     expect(capture.arguments.slice(-2)).toEqual(["--print", "hello"]);
+  });
+
+  test("allows an explicit safer permission mode without changing shared settings", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const nativeSettings = join(root, ".claude", "settings.json");
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(nativeSettings, '{"permissions":{"defaultMode":"bypassPermissions"}}\n');
+    const original = readFileSync(nativeSettings, "utf8");
+
+    const result = Bun.spawnSync(["sh", launcher, "--permission-mode", "plan", "task"], {
+      env: {
+        ...environment(root, fake),
+        KIROCLAUDE_PERMISSION_MODE: "manual",
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+      effectiveSettings: {
+        permissions: { defaultMode: string };
+        skipDangerousModePermissionPrompt: boolean;
+      };
+    };
+    expect(capture.effectiveSettings.permissions.defaultMode).toBe("manual");
+    expect(capture.effectiveSettings.skipDangerousModePermissionPrompt).toBe(false);
+    expect(capture.arguments.slice(-3)).toEqual(["--permission-mode", "plan", "task"]);
+    expect(readFileSync(nativeSettings, "utf8")).toBe(original);
+  });
+
+  test("enables bypassPermissions only through an explicit launcher override", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+
+    const result = Bun.spawnSync(["sh", launcher, "task"], {
+      env: {
+        ...environment(root, fake),
+        KIROCLAUDE_PERMISSION_MODE: "bypassPermissions",
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+    };
+    const settings = JSON.parse(capture.arguments[1] as string) as {
+      permissions: { defaultMode: string };
+      skipDangerousModePermissionPrompt: boolean;
+    };
+    expect(settings.permissions).toEqual({ defaultMode: "bypassPermissions" });
+    expect(settings.skipDangerousModePermissionPrompt).toBe(true);
   });
 
   test("helper emits only the first valid key from an owner-only config", () => {
@@ -361,5 +544,11 @@ open(os.environ["KIROCLAUDE_REQUEST_MARKER"], "w").write("sent")
     });
     expect(badEffort.exitCode).toBe(1);
     expect(badEffort.stderr.toString()).toContain("unsupported effort");
+
+    const badPermission = Bun.spawnSync(["sh", launcher], {
+      env: { ...environment(root, fake), KIROCLAUDE_PERMISSION_MODE: "danger-full-access" },
+    });
+    expect(badPermission.exitCode).toBe(1);
+    expect(badPermission.stderr.toString()).toContain("unsupported permission mode");
   });
 });

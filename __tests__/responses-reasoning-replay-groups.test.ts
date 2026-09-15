@@ -165,6 +165,44 @@ describe("Responses reasoning replay turn groups (A8)", () => {
     ]);
   });
 
+  test.each(["developer", "system"] as const)(
+    "keeps autonomous turns separate across a %s input boundary",
+    (role) => {
+      const result = adaptResponsesRequest(
+        parsedResponses({
+          model: TEST_MODEL,
+          include: ["reasoning.encrypted_content"],
+          tools: TOOLS,
+          input: [
+            reasoningItem({ encrypted_content: "kr1_turn_one" }),
+            { role: "assistant", content: "answer" },
+            { role, content: "continue the autonomous task" },
+            reasoningItem({ encrypted_content: "kr1_turn_two" }),
+            { role: "assistant", content: "done" },
+            USER_NEXT,
+          ],
+        }),
+        "legacy-user-prefix",
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.body.reasoningReplays.map((replay) => replay.insertBeforeMessage)).toEqual([
+        0, 2,
+      ]);
+      expect(result.body.reasoningReplays.map((replay) => replay.outputFingerprint)).toEqual([
+        assistantOutputFingerprint({ text: "answer", toolCalls: [] }),
+        assistantOutputFingerprint({ text: "done", toolCalls: [] }),
+      ]);
+      expect(result.body.messages.map((entry) => entry.role)).toEqual([
+        "assistant",
+        role,
+        "assistant",
+        "user",
+      ]);
+    },
+  );
+
   test("keeps child reasoning out of the parent tool replay after an agent report", () => {
     const result = adapt([
       reasoningItem({ encrypted_content: "kr1_child" }),
