@@ -64,6 +64,8 @@ export interface ReasoningReplayResolution {
   readonly provenance?: PortableReplayMintProvenance;
   /** Pre-release kr2/v2 compatibility is bounded and remains owner-bound. */
   readonly legacyPortable?: true;
+  /** Authenticated, unexpired kr1 database record; carries no mint provenance. */
+  readonly databaseLegacy?: true;
   readonly replay: ResolvedReasoningReplay;
 }
 
@@ -471,6 +473,7 @@ export class ReasoningReplayStore {
       return {
         accountId: record.accountId,
         conversationId: record.conversationId,
+        databaseLegacy: true as const,
         replay: { insertBeforeMessage, content: replayContent(envelope) },
       };
     });

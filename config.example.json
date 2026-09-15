@@ -47,6 +47,7 @@
   "reasoning_replay_keys": [],
   "reasoning_replay_token_format": "portable-v2",
   "reasoning_replay_account_failover": "verified",
+  "reasoning_replay_legacy_account_failover": "strict",
   "reasoning_replay_ttl_ms": 86400000,
   "reasoning_replay_max_entries": 10000,
   "effort": null,

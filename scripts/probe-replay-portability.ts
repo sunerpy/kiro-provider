@@ -7,7 +7,7 @@ import {
   GenerateAssistantResponseCommand,
   type GenerateAssistantResponseCommandInput,
 } from "@aws/codewhisperer-streaming-client";
-import { createSdkClient } from "../src/core/sdk-client.js";
+import { attachKiroRuntimeRequest, createSdkClient } from "../src/core/sdk-client.js";
 import { encodeRefreshToken } from "../src/kiro/auth.js";
 import { KIRO_CONSTANTS } from "../src/kiro/constants.js";
 import { buildEffortRequestFields } from "../src/kiro/effort.js";
@@ -51,7 +51,8 @@ function loadAccounts(limit = 6): Account[] {
           AND (limit_count = 0 OR used_count < limit_count)
         ORDER BY used_count ASC, expires_at DESC LIMIT ?
       `)
-      .all(now + 30 * 60_000, now, limit);
+      // Two requests each have a 120-second deadline; keep a one-minute margin.
+      .all(now + 5 * 60_000, now, limit);
     return rows.map((row) => {
       const authMethod = row.auth_method === "idc" ? "idc" : "desktop";
       return {
@@ -88,25 +89,38 @@ function client(account: Account) {
     undefined,
     account.id,
     false,
-    "kiro-runtime",
+    runtimeProtocol(),
   );
 }
 
+function runtimeProtocol(): "kiro-runtime" | "codewhisperer" {
+  const value = arg("--runtime-protocol", "kiro-runtime");
+  if (value !== "kiro-runtime" && value !== "codewhisperer")
+    throw new TypeError("--runtime-protocol must be kiro-runtime or codewhisperer");
+  return value;
+}
+
 async function collect(account: Account, state: State, model: string, effort: Effort) {
-  const response = await client(account).send(
-    new GenerateAssistantResponseCommand({
-      conversationState: state,
-      ...(account.auth.profileArn ? { profileArn: account.auth.profileArn } : {}),
-      additionalModelRequestFields: buildEffortRequestFields(model, effort),
-    } as GenerateAssistantResponseCommandInput),
-  );
+  const command = new GenerateAssistantResponseCommand({
+    conversationState: state,
+    ...(account.auth.profileArn ? { profileArn: account.auth.profileArn } : {}),
+    additionalModelRequestFields: buildEffortRequestFields(model, effort),
+  } as GenerateAssistantResponseCommandInput);
+  if (runtimeProtocol() === "kiro-runtime") attachKiroRuntimeRequest(command);
+  const response = await client(account).send(command, {
+    abortSignal: AbortSignal.timeout(120_000),
+  });
   let text = "";
   let reasoningText = "";
   let signature = "";
   let redacted: Uint8Array | undefined;
   const tools = new Map<string, { toolUseId: string; name: string; input: string }>();
+  const eventCounts: Record<string, number> = {};
   let metering: number | undefined;
   for await (const event of response.generateAssistantResponseResponse ?? []) {
+    for (const eventType of Object.keys(event)) {
+      eventCounts[eventType] = (eventCounts[eventType] ?? 0) + 1;
+    }
     if (event.assistantResponseEvent?.content) text += event.assistantResponseEvent.content;
     if (event.reasoningContentEvent?.text) reasoningText += event.reasoningContentEvent.text;
     if (event.reasoningContentEvent?.signature) signature += event.reasoningContentEvent.signature;
@@ -121,7 +135,15 @@ async function collect(account: Account, state: State, model: string, effort: Ef
     }
     if (typeof event.meteringEvent?.usage === "number") metering = event.meteringEvent.usage;
   }
-  return { text, reasoningText, signature, redacted, tools: [...tools.values()], metering };
+  return {
+    text,
+    reasoningText,
+    signature,
+    redacted,
+    tools: [...tools.values()],
+    metering,
+    eventCounts,
+  };
 }
 
 async function main(): Promise<void> {
@@ -157,7 +179,9 @@ async function main(): Promise<void> {
   ];
   const firstUser: Message = {
     userInputMessage: {
-      content: `Call replay_probe exactly once with marker ${marker}.`,
+      content: process.argv.includes("--reasoning-challenge")
+        ? `Work out the smallest positive integer n such that n mod 17 = 5, n mod 19 = 7, n mod 23 = 11, and n mod 29 = 13. Verify each remainder carefully using your reasoning before calling replay_probe exactly once with marker ${marker}. After the tool result, reply with that marker only.`
+        : `Call replay_probe exactly once with marker ${marker}.`,
       modelId: model,
       origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR as UserInput["origin"],
       userInputMessageContext: { tools },
@@ -177,6 +201,27 @@ async function main(): Promise<void> {
     effort,
   );
   const tool = first.tools[0];
+  if (!tool || !tool.toolUseId || !tool.name || (!first.signature && !first.redacted)) {
+    process.stdout.write(
+      `${JSON.stringify({
+        schema_version: 1,
+        model,
+        effort,
+        runtime_protocol: runtimeProtocol(),
+        region: pair.auth.region,
+        source_account_hash: hash(pair.id),
+        target_account_hash: hash(second.id),
+        phase: "first_turn",
+        text_chars: first.text.length,
+        reasoning_chars: first.reasoningText.length,
+        signature_chars: first.signature.length,
+        redacted_bytes: first.redacted?.byteLength ?? 0,
+        first_tool_count: first.tools.length,
+        event_counts: first.eventCounts,
+        passed: false,
+      })}\n`,
+    );
+  }
   if (!tool || !tool.toolUseId || !tool.name)
     throw new Error("first turn returned no complete tool");
   if (!first.signature && !first.redacted)
@@ -263,6 +308,7 @@ async function main(): Promise<void> {
         schema_version: 1,
         model,
         effort,
+        runtime_protocol: runtimeProtocol(),
         region: pair.auth.region,
         source_account_hash: hash(pair.id),
         target_account_hash: hash(second.id),

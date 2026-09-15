@@ -135,6 +135,7 @@ interface ReplayState {
   readonly preferredAccountId?: string;
   readonly preferredConversationId?: string;
   readonly portableCount: number;
+  readonly legacyPortableCount: number;
   readonly portableRegion?: string;
   readonly portableRuntimeProtocol?: "codewhisperer" | "kiro-runtime";
   readonly portableProfileRequired?: true;
@@ -450,32 +451,60 @@ function replayLockedSelectionResult(
 function verifiedPortableReplay(
   options: RunChatCompletionOptions,
   resolved: ReturnType<PipelineReasoningReplayStore["resolveResponses"]>,
+  legacyOrigins?: ReadonlyMap<string, ManagedAccount>,
 ):
   | {
       readonly region: string;
       readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
       readonly profileRequired: true;
+      readonly legacyCurrentCell?: true;
     }
   | undefined {
   if (options.config.reasoning_replay_account_failover !== "verified") return undefined;
   const provenance = resolved.provenance;
+  if (resolved.portable === true && provenance) {
+    if (
+      provenance.protocol !== options.body.protocol ||
+      !provenance.profileArn ||
+      provenance.upstreamOperation !== "GenerateAssistantResponse"
+    )
+      return undefined;
+    // Cells are added only after the direct A -> B/new-conversation probe passes.
+    // Every dimension comes from the authenticated mint envelope; mutable account
+    // rows and the protocol used to present a token are never provenance.
+    const key = `${provenance.protocol}:${options.model}:${provenance.region}:${provenance.runtimeProtocol}:profile:${resolved.replay.content.kind}`;
+    return VERIFIED_PORTABLE_REPLAY_CELLS.has(key)
+      ? {
+          region: provenance.region,
+          runtimeProtocol: provenance.runtimeProtocol,
+          profileRequired: true,
+        }
+      : undefined;
+  }
   if (
-    resolved.portable !== true ||
-    !provenance ||
-    provenance.protocol !== options.body.protocol ||
-    !provenance.profileArn ||
-    provenance.upstreamOperation !== "GenerateAssistantResponse"
+    (resolved.legacyPortable !== true && resolved.databaseLegacy !== true) ||
+    options.config.reasoning_replay_legacy_account_failover !== "verified-current-cell" ||
+    (options.body.projectionMode !== "v3-auto" &&
+      options.body.projectionMode !== "native-context-safe" &&
+      options.body.projectionMode !== "legacy-user-prefix")
   )
     return undefined;
-  // Cells are added only after the direct A -> B/new-conversation probe passes.
-  // Every dimension comes from the authenticated mint envelope; mutable account
-  // rows and the protocol used to present a token are never provenance.
-  const key = `${provenance.protocol}:${options.model}:${provenance.region}:${provenance.runtimeProtocol}:profile:${resolved.replay.content.kind}`;
+  const origin = legacyOrigins?.get(resolved.accountId);
+  if (!origin?.profileArn) return undefined;
+  // Explicit recovery for authenticated kr1 records and pre-release kr2/v2.
+  // The store validates tenant/model/output/owner/content and the record TTL
+  // or persisted transition cutoff before supplying the legacy marker. The
+  // operator attests the missing mint dimensions using the current owner cell.
+  const region = extractRegionFromArn(origin.profileArn) ?? origin.region;
+  const runtimeProtocol =
+    options.body.projectionMode === "legacy-user-prefix" ? "codewhisperer" : "kiro-runtime";
+  const key = `${options.body.protocol}:${options.model}:${region}:${runtimeProtocol}:profile:${resolved.replay.content.kind}`;
   return VERIFIED_PORTABLE_REPLAY_CELLS.has(key)
     ? {
-        region: provenance.region,
-        runtimeProtocol: provenance.runtimeProtocol,
+        region,
+        runtimeProtocol,
         profileRequired: true,
+        legacyCurrentCell: true,
       }
     : undefined;
 }
@@ -484,9 +513,15 @@ const VERIFIED_PORTABLE_REPLAY_CELLS = new Set([
   // 2026-09-15, Kiro CLI 2.21.1 / KiroRuntime us-east-1: three consecutive
   // account-A -> account-B + new-conversation tool-result replays passed at max.
   "responses:gpt-5.6-sol:us-east-1:kiro-runtime:profile:reasoning_text",
+  // 2026-09-16: direct account-A -> B/new-conversation signed tool replay;
+  // Responses stateless v3-auto currently projects through this SDK operation.
+  "responses:gpt-5.6-sol:us-east-1:codewhisperer:profile:reasoning_text",
   // The same direct signed-thinking probe passed 3/3 with Claude Sonnet 5;
   // Messages still preserves its own public thinking/signature contract.
   "anthropic-messages:claude-sonnet-5:us-east-1:kiro-runtime:profile:reasoning_text",
+  // 2026-09-16: Opus 5 at xhigh, signed reasoning + complete tool result,
+  // source-account -> another account/new conversation passed 3/3.
+  "anthropic-messages:claude-opus-5:us-east-1:kiro-runtime:profile:reasoning_text",
 ]);
 
 function resolveReplayState(
@@ -499,7 +534,7 @@ function resolveReplayState(
     | undefined,
 ): ReplayState {
   if (options.body.reasoningReplays.length === 0) {
-    return { replays: [], portableCount: 0 };
+    return { replays: [], portableCount: 0, legacyPortableCount: 0 };
   }
   // Session affinity is a routing preference, not replay authorization. The
   // authenticated replay envelope determines strict ownership; verified cells
@@ -509,9 +544,14 @@ function resolveReplayState(
   let preferredAccountId = binding?.accountId;
   let preferredConversationId = binding?.conversationId;
   let portableCount = 0;
+  let legacyPortableCount = 0;
   let portableRegion: string | undefined;
   let portableRuntimeProtocol: "codewhisperer" | "kiro-runtime" | undefined;
   let portableProfileRequired: true | undefined;
+  const legacyOrigins =
+    options.config.reasoning_replay_legacy_account_failover === "verified-current-cell"
+      ? new Map(options.accountManager.reconcileFromDb().map((account) => [account.id, account]))
+      : undefined;
   const replays: ResolvedReasoningReplay[] = [];
   const tokenItems = options.body.reasoningReplays.flatMap((replay, index) => {
     if (replay.lookup.kind !== "responses-token" && replay.lookup.kind !== "anthropic-token") {
@@ -613,7 +653,7 @@ function resolveReplayState(
         "reasoning_replay_not_found",
       );
     }
-    const verified = verifiedPortableReplay(options, resolved);
+    const verified = verifiedPortableReplay(options, resolved, legacyOrigins);
     if (verified !== undefined) {
       if (
         (portableRegion !== undefined && portableRegion !== verified.region) ||
@@ -629,6 +669,7 @@ function resolveReplayState(
       portableRuntimeProtocol = verified.runtimeProtocol;
       portableProfileRequired = verified.profileRequired;
       portableCount += 1;
+      if (verified.legacyCurrentCell) legacyPortableCount += 1;
       preferredAccountId ??= resolved.accountId;
       preferredConversationId ??= resolved.conversationId;
     } else {
@@ -648,6 +689,14 @@ function resolveReplayState(
     }
     replays.push(resolved.replay);
   }
+  if (legacyPortableCount > 0) {
+    auditLog("warn", "reasoning_replay_legacy_failover_admitted", {
+      protocol: options.body.protocol,
+      model: options.model,
+      region: portableRegion,
+      replay_count: legacyPortableCount,
+    });
+  }
   return {
     ...(accountId !== undefined ? { accountId } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
@@ -657,6 +706,7 @@ function resolveReplayState(
     ...(portableRuntimeProtocol !== undefined ? { portableRuntimeProtocol } : {}),
     ...(portableProfileRequired ? { portableProfileRequired } : {}),
     portableCount,
+    legacyPortableCount,
     replays,
   };
 }
@@ -1290,6 +1340,7 @@ function bindAttemptAffinity(
       from_account_hash: auditHash(state.replayState.preferredAccountId),
       to_account_hash: auditHash(selected.id),
       replay_count: state.replayState.portableCount,
+      legacy_replay_count: state.replayState.legacyPortableCount,
     });
   }
 
