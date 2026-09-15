@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.2.3](https://github.com/sunerpy/kiro-provider/compare/v3.2.2...v3.2.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **release:** 排除自动版本元数据格式化 ([7ad7f91](https://github.com/sunerpy/kiro-provider/commit/7ad7f910d8c0399d4f47b1d48ad7cc35f3439b9e))
+* **release:** 避免 npm 索引传播假失败 ([0f52aa6](https://github.com/sunerpy/kiro-provider/commit/0f52aa61f0a73f5d01176b85ace674054ab21766))
+
 ## [3.2.2](https://github.com/sunerpy/kiro-provider/compare/v3.2.1...v3.2.2) (2026-09-14)
 
 
