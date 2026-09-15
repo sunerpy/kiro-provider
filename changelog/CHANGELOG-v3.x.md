@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.8](https://github.com/sunerpy/kiro-provider/compare/v3.2.7...v3.2.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* **responses:** 支持图片型工具结果 ([7125810](https://github.com/sunerpy/kiro-provider/commit/7125810377c99c8b3508b246b586c34fbb6618d2))
+
 ## [3.2.7](https://github.com/sunerpy/kiro-provider/compare/v3.2.6...v3.2.7) (2026-09-15)
 
 
