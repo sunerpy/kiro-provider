@@ -526,6 +526,71 @@ describe("Anthropic request adapter", () => {
       code: "unsupported_tool_result_content",
       param: "messages.1.content.1.content.0",
     });
+
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools,
+          messages: [
+            assistant,
+            {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "tool-a", content: [image] }, image],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      ),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.1",
+    });
+  });
+
+  test("rejects malformed or unsupported nested tool-result image content", () => {
+    const result = (content: unknown) =>
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          tools: [
+            { name: "export", description: "export an image", input_schema: { type: "object" } },
+          ],
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "tool-image", name: "export", input: {} }],
+            },
+            {
+              role: "user",
+              content: [{ type: "tool_result", tool_use_id: "tool-image", content }],
+            },
+          ],
+        }),
+        { requireMaxTokens: true },
+      );
+
+    expect(result({ type: "text", text: "not an array" })).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content",
+    });
+    expect(result([null])).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content.0",
+    });
+    expect(result([{ type: "document", source: { type: "base64", data: "AQID" } }])).toMatchObject({
+      ok: false,
+      code: "unsupported_tool_result_content",
+      param: "messages.1.content.0.content.0",
+    });
+    expect(
+      result([{ type: "image", source: { type: "url", url: "https://example.test/a" } }]),
+    ).toMatchObject({
+      ok: false,
+      code: "unsupported_image_source",
+      param: "messages.1.content.0.content.0",
+    });
   });
 
   test("rejects assistant-prefill requests before contacting Kiro", () => {
