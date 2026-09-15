@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.6](https://github.com/sunerpy/kiro-provider/compare/v3.2.5...v3.2.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **ci:** 精简发布验证链路 ([f64bfdf](https://github.com/sunerpy/kiro-provider/commit/f64bfdfd21dfb17b22d0d423f941d2feb6c358da))
+
 ## [3.2.5](https://github.com/sunerpy/kiro-provider/compare/v3.2.4...v3.2.5) (2026-09-15)
 
 
