@@ -1,46 +1,55 @@
-# Using kiro-provider with Claude Code
+# Use kiro-provider with Claude Code
 
-kiro-provider exposes the Anthropic-compatible endpoints used by Claude Code:
+[简体中文](readme/CLAUDE_CODE.zh-CN.md) · English
+
+**Last validated client:** Claude Code 2.1.263. Newer releases may add beta
+headers or request fields; validate their wire shape before extending this
+support claim.
+
+kiro-provider exposes the two Anthropic-compatible routes Claude Code needs:
 
 - `POST /v1/messages`
-- `POST /v1/messages/count_tokens` (estimated; responses include
-  `x-kiro-token-count-mode: estimate`)
+- `POST /v1/messages/count_tokens` — an estimate, marked by
+  `x-kiro-token-count-mode: estimate`
 
-The compatibility target for this revision is Claude Code **2.1.263**. A future
-Claude Code release can add beta headers or body fields, so re-capture its
-request shape before claiming compatibility with a newer version.
+## Start an isolated Kiro session
 
-## Isolated `kiroclaude` profile
+First check that the local gateway is healthy and ready:
 
-The repository contains Linux launch helpers under `scripts/`. They deliberately
-use a separate `CLAUDE_CONFIG_DIR`, so settings, plugins, credentials, signed
-thinking, and session history never mix with the normal `~/.claude` profile.
-The launcher does not edit `~/.claude/settings.json`; a normal `claude` command
-therefore keeps its existing provider, including native Amazon Bedrock.
+```bash
+curl -fsS http://127.0.0.1:8787/health
+curl -fsS -H "Authorization: Bearer $(scripts/kiroclaude-token)" \
+  http://127.0.0.1:8787/ready
+```
 
-For a checkout-only invocation:
+Then run Claude Code through the repository launcher:
 
 ```bash
 PATH="$PWD/scripts:$PATH" kiroclaude -p 'Reply with exactly: KIROCLAUDE_OK'
 ```
 
-Defaults:
+`kiroclaude` sets `CLAUDE_CONFIG_DIR=~/.kiroclaude`. It does not edit
+`~/.claude/settings.json`, so the ordinary `claude` command keeps its current
+provider, including native Amazon Bedrock. The separate directory also prevents
+Kiro credentials, signed thinking, and session history from mixing with the
+normal Claude profile.
 
-- gateway root: `http://127.0.0.1:8787` (do not append `/v1`);
-- profile: `~/.kiroclaude`;
-- built-in model aliases: `claude-opus-5`, `claude-sonnet-5`, and
-  `claude-haiku-4-5`;
-- additional picker rows: `gpt-5.6-sol`, `gpt-5.6-terra`, and
-  `gpt-5.6-luna`;
-- selected model/mode: Opus 5 with `effortLevel: "xhigh"` and
-  `ultracode: true` (shown as Ultra mode by Claude Code);
-- away/recap summaries disabled in this isolated profile with both
-  `awaySummaryEnabled: false` and `CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0`;
-- nonessential Claude traffic disabled because Kiro does not enforce Structured
-  Outputs used by title/classifier requests;
-- experimental betas remain enabled.
+The release installer does not install these helper scripts. Run them from a
+checkout for tests, or copy/link them after deciding to keep this profile.
 
-Override them without changing the ordinary Claude profile:
+### Defaults and overrides
+
+| Setting | Default |
+| --- | --- |
+| Gateway root | `http://127.0.0.1:8787` (no `/v1` suffix) |
+| Profile | `~/.kiroclaude` |
+| Model | Opus 5 |
+| Reasoning | Ultra: `effortLevel: "xhigh"`, `ultracode: true` |
+| Away recap | Disabled |
+| Nonessential title/classifier traffic | Disabled |
+| Experimental betas | Enabled |
+
+Override only the isolated process when needed:
 
 ```bash
 KIROCLAUDE_BASE_URL=http://127.0.0.1:18787 \
@@ -50,137 +59,114 @@ KIROCLAUDE_EFFORT=high \
 PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-`KIROCLAUDE_EFFORT=ultra` (the default) enables Ultracode and sends `xhigh`.
-Explicit `low`, `medium`, `high`, `xhigh`, or `max` values disable Ultracode
-and select that ordinary effort rung.
+`KIROCLAUDE_EFFORT=ultra` is the default and sends `xhigh` with Ultracode
+enabled. `low`, `medium`, `high`, `xhigh`, and `max` select the corresponding
+ordinary effort level and disable Ultracode.
 
-`kiroclaude-token` is used through Claude Code's `apiKeyHelper`. It reads the
-first non-empty `api_keys` entry from
-`${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json` (override with
-`KIROCLAUDE_PROVIDER_CONFIG`), requires an owner-only file mode, and never puts
-the key in the tool subprocess environment.
+The launcher registers `kiroclaude-token` as Claude Code's `apiKeyHelper`. The
+helper reads the first non-empty `api_keys` value from
+`${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json`, or from
+`KIROCLAUDE_PROVIDER_CONFIG` when set. It refuses files not owned by the current
+user or accessible by other users, and it never exports the key to tool
+subprocesses.
 
-These scripts are not installed by the release installer in this revision. Copy
-or link them only after deciding to make the profile permanent; isolated smoke
-tests can run them directly from the checkout.
+## Choose a model
 
-### Bedrock Fable 5.1 fallback
+The built-in Claude rows map to `claude-opus-5`, `claude-sonnet-5`, and
+`claude-haiku-4-5`. The launcher also adds `gpt-5.6-sol`, `gpt-5.6-terra`, and
+`gpt-5.6-luna` to the picker.
 
-Fable cannot be added as another row in the Kiro model picker: Claude Code
-selects its provider/base URL per process, not per model row. The configured
-MyOpenAI service exposes OpenAI APIs but no Anthropic Messages endpoint, while
-the existing native Bedrock profile exposes Fable 5.1. Start that fallback as
-a separate process and profile:
+Claude Code's gateway discovery filters out model IDs without `claude` or
+`anthropic`, so the GPT rows must be declared explicitly. Each uses
+`behavesAs: "claude-opus-5"` as the client-side capability template. This
+exposes adaptive thinking and the left/right effort control without duplicating
+each model at every effort level. Claude Code reports a conservative 200K
+context window for these custom rows; it does not enforce Kiro's larger GPT
+limits from this declaration.
 
-```bash
-PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
-```
-
-This uses `~/.kiroclaude-fable`, `model: "fable"`, max effort,
-`AWS_PROFILE=us-claude`, `AWS_REGION=us-east-2`, and
-`ANTHROPIC_DEFAULT_FABLE_MODEL=us.anthropic.claude-fable-5-1`. It does not use
-the Kiro `apiKeyHelper` or `ANTHROPIC_BASE_URL`. Override those three Bedrock
-values with `KIROCLAUDE_AWS_PROFILE`, `KIROCLAUDE_AWS_REGION`, and
-`KIROCLAUDE_FABLE_MODEL`; override its effort separately with
-`KIROCLAUDE_FABLE_EFFORT`. This is a launch-time backend choice, not a hot
-model switch within an existing Kiro conversation.
-
-### GPT model picker and output-limit boundary
-
-Claude Code gateway discovery deliberately keeps only model IDs containing
-`claude` or `anthropic`, so it cannot discover the GPT IDs returned by
-kiro-provider. The launcher instead supplies three explicit `modelPicker` rows.
-Each row has `behavesAs: "claude-opus-5"`, which Claude Code 2.1.263 accepts as
-the capability template for effort, xhigh/max effort, and adaptive thinking.
-This is why selecting Sol, Terra, or Luna exposes the same left/right effort
-control without adding five suffix variants per model. Claude Code currently
-reports a conservative 200K context window for these custom rows; the launcher
-does not claim the larger Kiro-side GPT limit as a client-enforced window.
-
-Claude Code always sends a positive `max_tokens` (64,000 in the validated GPT
-request), but Kiro's GPT stateless schema rejects every tested output-token
-field spelling. The launcher therefore sends the explicit request header:
+Claude Code also sends a positive `max_tokens` (64,000 in the validated GPT
+request), while Kiro's GPT stateless schema rejects every tested upstream
+output-token field. The launcher therefore sends:
 
 ```text
 X-Kiro-Output-Token-Limit-Mode: advisory
 ```
 
-For GPT-5.6 Sol/Terra/Luna only, this says the caller accepts that `max_tokens`
-is required by Claude Code but cannot be enforced upstream. The provider omits
-the field from Kiro, emits the audit event
+For the three GPT-5.6 models only, this opts into an explicit compromise: the
+provider removes `max_tokens` before calling Kiro, logs
 `anthropic_output_token_limit_unenforced`, and returns
-`x-kiro-output-token-limit-mode: advisory-unenforced`. Missing, misspelled, or
-non-GPT uses of the header do not bypass validation. OpenAI Responses, Chat
-Completions, ordinary Anthropic clients, and a normal `claude` command retain
-the existing fail-closed behavior.
+`x-kiro-output-token-limit-mode: advisory-unenforced`. Missing or invalid
+headers and non-GPT requests remain fail closed. The setting does not change
+OpenAI Responses, Chat Completions, another Anthropic client, or the ordinary
+`claude` command.
 
-The three GPT IDs can be overridden for a compatible private catalog with
-`KIROCLAUDE_SOL_MODEL`, `KIROCLAUDE_TERRA_MODEL`, and
-`KIROCLAUDE_LUNA_MODEL`. Since `behavesAs` and Claude Code request shapes can
-change between releases, the current support claim remains pinned to Claude
-Code 2.1.263.
+Private catalogs may override the three IDs with `KIROCLAUDE_SOL_MODEL`,
+`KIROCLAUDE_TERRA_MODEL`, and `KIROCLAUDE_LUNA_MODEL`.
 
-## Supported Claude Code request behavior
+### Use Fable 5.1 through native Bedrock
 
-The Messages adapter accepts the current Claude Code request shape while keeping
-Kiro-only limitations explicit:
-
-- text, base64 images, standard tools, `tool_use`, `tool_result`, and
-  `is_error`;
-- one image-bearing `tool_result` per user message: its base64 image blocks are
-  lifted into the same Kiro user turn while the tool ID, status, text, and image
-  bytes are preserved; multiple image-bearing results or a mix with direct user
-  images remain fail-closed because Kiro cannot retain those distinct image
-  origins;
-- adjacent text blocks remain byte-exact when they form one contiguous run
-  beside images or tool results; genuinely interleaved `text → non-text → text`
-  input remains fail-closed because Kiro exposes one text field;
-- top-level and mid-conversation system text through the configured Kiro
-  projection mode;
-- adaptive thinking and `output_config.effort`;
-- GPT effort is translated to Kiro's `reasoning.effort`; Claude models keep
-  Kiro's `output_config.effort`;
-- GPT-5.6 Sol/Terra/Luna ellipsis-only reasoning placeholders are buffered and
-  omitted, including split `"." + "." + "."` streams; Claude Code receives an
-  empty thinking block with the unchanged native signature, and continuation
-  restores the exact stored placeholder by assistant-output fingerprint;
-- `thinking.display: "omitted"`: real signed Kiro thinking is encrypted in the
-  replay store, while Claude Code receives an empty thinking block and an opaque
-  `kr1_` signature that restores the original block on continuation;
-- prompt-cache markers are validated and removed as performance hints, with
-  `x-kiro-prompt-cache-mode: unsupported` and zero cache-token usage making the
-  lack of Anthropic prompt caching explicit;
-- `context_management` is accepted only for the lossless
-  `clear_thinking_20251015` / `keep: "all"` form and reports
-  `applied_edits: []`;
-- `temperature` for the supported Claude path;
-- real Anthropic SSE block ordering, stream errors, backpressure, and periodic
-  `ping` events during upstream silence;
-- `x-claude-code-session-id` as an explicit account/conversation affinity key.
-
-The provider still rejects semantics Kiro cannot represent. Destructive context
-edits, Structured Outputs, forced tool selection, serial-tool guarantees, and
-unknown beta/tool fields return an Anthropic `invalid_request_error` rather than
-being silently discarded. Prompt caching and token counting remain estimates,
-not Anthropic-native services.
-
-## Readiness and troubleshooting
-
-Before starting Claude Code, require:
+Fable cannot be another Kiro picker row because Claude Code chooses its provider
+and base URL once per process. Start the Bedrock fallback with its own profile:
 
 ```bash
-curl -fsS http://127.0.0.1:8787/health
-curl -fsS -H "Authorization: Bearer $(scripts/kiroclaude-token)" \
-  http://127.0.0.1:8787/ready
+PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
 ```
 
-A helper permission error means the provider config is not owner-only; use
-`chmod 600` on the file. A `capability_rejected:context_management` error means
-the client requested a destructive edit outside the lossless subset. Do not
-work around these errors with an unreviewed field-stripping proxy.
+This mode uses `~/.kiroclaude-fable`, `model: "fable"`, max effort,
+`AWS_PROFILE=us-claude`, `AWS_REGION=us-east-2`, and
+`ANTHROPIC_DEFAULT_FABLE_MODEL=us.anthropic.claude-fable-5-1`. It does not set
+the Kiro token helper or `ANTHROPIC_BASE_URL`. Override those values with
+`KIROCLAUDE_AWS_PROFILE`, `KIROCLAUDE_AWS_REGION`,
+`KIROCLAUDE_FABLE_MODEL`, and `KIROCLAUDE_FABLE_EFFORT`.
 
-References:
+Changing between Kiro and Bedrock requires a new process; it is not a model
+switch inside an existing conversation.
 
-- [Claude Messages API](https://platform.claude.com/docs/en/api/messages/create)
-- [Claude Code gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol)
-- [Claude Code environment variables](https://code.claude.com/docs/en/env-vars)
+## Compatibility boundary
+
+The adapter accepts the request shapes observed from Claude Code 2.1.263:
+
+- text, base64 images, standard tools, `tool_use`, `tool_result`, and `is_error`;
+- one image-bearing `tool_result` in a user message, with the tool identity,
+  status, text, and image bytes preserved;
+- adjacent text blocks that form one contiguous run around an image or tool
+  result;
+- top-level and mid-conversation system text through the configured projection
+  mode;
+- adaptive thinking, `output_config.effort`, and supported Claude
+  `temperature`;
+- GPT effort projected to `reasoning.effort`, while Claude effort remains
+  `output_config.effort`;
+- encrypted replay of omitted signed thinking through opaque `kr1_` signatures;
+- removal of GPT-5.6 ellipsis-only reasoning placeholders, including split
+  `"." + "." + "."` streams, with exact stored replay on continuation;
+- prompt-cache markers as validated but unsupported hints, reported by
+  `x-kiro-prompt-cache-mode: unsupported` and zero cache-token usage;
+- the lossless `clear_thinking_20251015` / `keep: "all"`
+  `context_management` form, reported with `applied_edits: []`;
+- Anthropic SSE ordering, stream errors, backpressure, silence-period `ping`
+  events, and `x-claude-code-session-id` affinity.
+
+A message with multiple image-bearing tool results, or direct user images mixed
+with an image-bearing tool result, is rejected because Kiro cannot preserve the
+separate image origins. A real `text → non-text → text` interleave is rejected
+for the same reason: Kiro exposes one text field.
+
+The provider also rejects destructive context edits, Structured Outputs,
+forced tool selection, hard serial-tool requirements, and unknown beta/tool
+fields with an Anthropic `invalid_request_error`. It does not silently remove
+those semantics. Prompt caching and token counting remain estimates, not native
+Anthropic services.
+
+## Troubleshooting
+
+| Symptom | Action |
+| --- | --- |
+| Token helper reports unsafe permissions | Run `chmod 600 ~/.config/kiro-provider/config.json` and confirm the current user owns the file. |
+| `capability_rejected:context_management` | The client requested a destructive edit outside the supported lossless form. Do not hide it with an unreviewed field-stripping proxy. |
+| Kiro GPT row is absent | Start through `kiroclaude`; gateway discovery alone filters out the GPT IDs. |
+| Ordinary `claude` uses the wrong backend | Check the normal `~/.claude` profile. `kiroclaude` does not modify it. |
+
+References: [Messages API](https://platform.claude.com/docs/en/api/messages/create),
+[Claude Code gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol),
+and [Claude Code environment variables](https://code.claude.com/docs/en/env-vars).

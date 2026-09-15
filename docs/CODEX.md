@@ -1,31 +1,16 @@
-# Using kiro-provider V3 with Codex CLI
+# Use kiro-provider V3 with Codex CLI
 
-> **Status**: current guide · **Latest checked-in validation**: Codex CLI 0.154.0 (2026-09-14)
+[简体中文](readme/CODEX.zh-CN.md) · English
 
-kiro-provider V3 exposes the OpenAI Responses wire API expected by a Codex
-custom `model_provider`.
+**Last checked-in validation:** Codex CLI 0.154.0 on 2026-09-14.
 
-## Supported V3 contract
+kiro-provider V3 exposes the OpenAI Responses wire API used by a Codex custom
+`model_provider`.
 
-The checked-in isolated real-client evidence covers:
+## Run with an isolated profile
 
-- a normal `response.completed` turn;
-- custom command execution with the exact side effect;
-- a failed command followed by successful recovery;
-- namespace collaboration through `spawn_agent`, a child response, and
-  `wait`;
-- compaction and Ultra reasoning paths on Codex CLI 0.154.0;
-- no leakage of the provider's private custom/namespace aliases.
-
-Codex request shapes that require custom grammar, namespace tools,
-`agent_message`, `additional_tools`, `parallel_tool_calls: false`, encrypted
-reasoning, or `store: false` automatically use V3's stateless compatibility
-lane. Ordinary requests use native KiroRuntime Responses.
-
-## Configuration
-
-Do not modify a real Codex profile while testing. Use isolated file and SQLite
-state:
+Do not test against a real Codex profile. Create temporary file and SQLite state,
+then point the custom provider at the local gateway:
 
 ```bash
 export CODEX_TEST_ROOT="$(mktemp -d)"
@@ -34,7 +19,7 @@ export CODEX_SQLITE_HOME="$CODEX_TEST_ROOT/sqlite"
 mkdir -p "$CODEX_HOME" "$CODEX_SQLITE_HOME"
 export LOCALGW_KEY="sk-...your gateway api key..."
 
-cat > "$CODEX_HOME/config.toml" <<'EOF'
+cat > "$CODEX_HOME/config.toml" <<'EOF_CONFIG'
 model = "gpt-5.6-sol"
 model_provider = "localgw"
 model_reasoning_effort = "xhigh"
@@ -44,19 +29,31 @@ name = "Local Kiro Gateway"
 base_url = "http://127.0.0.1:8787/v1"
 env_key = "LOCALGW_KEY"
 wire_api = "responses"
-EOF
+EOF_CONFIG
 
 codex exec --skip-git-repo-check "Reply with exactly: CODEX_OK"
 ```
 
-The gateway must already be running with a populated provider-owned account
-store. Require authenticated `GET /ready` to return HTTP 200 before starting
-the client.
+The provider must already be running with at least one usable account.
+Authenticated `GET /ready` must return HTTP 200 before Codex starts.
 
-## Reproducible smoke gate
+## What the V3 contract covers
 
-The repository smoke script creates isolated Codex state, an isolated capture
-proxy, and a temporary workspace:
+The checked-in real-client gate covers a normal completed turn, successful and
+failed command execution, recovery after a command failure, compaction, Ultra
+reasoning, and namespace collaboration through `spawn_agent`, a child response,
+and `wait`. Captured output is also checked for leakage of the provider's private
+custom/namespace aliases.
+
+V3 selects its transport per request. Ordinary compatible requests use native
+KiroRuntime Responses. Requests that need custom grammar, namespace tools,
+`agent_message`, `additional_tools`, `parallel_tool_calls: false`, encrypted
+reasoning, or `store: false` use the canonical stateless lane.
+
+## Reproduce the smoke gate
+
+The smoke script builds an isolated Codex profile, capture proxy, and temporary
+workspace:
 
 ```bash
 CODEX_SMOKE_CODEX_BIN=/absolute/path/to/codex \
@@ -65,23 +62,23 @@ KIRO_PROVIDER_SMOKE_MODE=tools \
 bash scripts/codex-smoke.sh
 ```
 
-The capture writes only sanitized request-shape metadata (counts, item types,
-roles, hashes, and presence flags) to an owner-only temporary directory and is
-deleted by the exit trap. It never persists credentials, raw request bodies,
-reasoning envelopes, or prompt text.
+The capture contains only sanitized request metadata: counts, item types, roles,
+hashes, and presence flags. It is stored in an owner-only temporary directory
+and deleted by the exit trap. Credentials, raw request bodies, reasoning
+envelopes, and prompt text are not persisted.
 
-## Remaining boundaries
+## Limits
 
-- OpenAI hosted Web Search, File Search, Computer Use, and hosted MCP tools are
-  not provided by KiroRuntime.
+- KiroRuntime does not provide OpenAI-hosted Web Search, File Search, Computer
+  Use, or hosted MCP tools.
 - `background`, Responses `conversation`, Structured Outputs,
-  `/responses/compact`, and exact `/responses/input_tokens` are explicitly
-  unsupported.
+  `/responses/compact`, and exact `/responses/input_tokens` are rejected.
 - `parallel_tool_calls: false` is accepted for Codex compatibility, but Kiro
-  does not provide a hard serial-tool guarantee.
-- `store: false` prevents local response mirroring; it is not an AWS Zero Data
-  Retention guarantee.
+  cannot guarantee strictly serial tool execution.
+- `store: false` disables the provider's local response mirror; it is not an AWS
+  Zero Data Retention guarantee.
 
-See [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md), the
-[initial V3 validation](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md),
-and the later [replay/compaction validation](audits/responses-replay-delivery-2026-09-14.zh.md).
+For the complete wire contract, see [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md).
+The dated [initial V3 validation](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md)
+and [replay/compaction validation](audits/responses-replay-delivery-2026-09-14.zh.md)
+record the corresponding evidence.
