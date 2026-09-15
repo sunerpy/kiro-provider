@@ -132,6 +132,9 @@ Kiro-only limitations explicit:
   bytes are preserved; multiple image-bearing results or a mix with direct user
   images remain fail-closed because Kiro cannot retain those distinct image
   origins;
+- adjacent text blocks remain byte-exact when they form one contiguous run
+  beside images or tool results; genuinely interleaved `text → non-text → text`
+  input remains fail-closed because Kiro exposes one text field;
 - top-level and mid-conversation system text through the configured Kiro
   projection mode;
 - adaptive thinking and `output_config.effort`;
