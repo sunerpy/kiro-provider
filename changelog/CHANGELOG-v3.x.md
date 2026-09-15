@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.1](https://github.com/sunerpy/kiro-provider/compare/v3.3.0...v3.3.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* **replay:** 修复历史会话额度耗尽后的账号切换 ([#77](https://github.com/sunerpy/kiro-provider/issues/77)) ([50900f6](https://github.com/sunerpy/kiro-provider/commit/50900f6d21c74c1d91a8ed08f4eb4b7594dc0895))
+
 ## [3.3.0](https://github.com/sunerpy/kiro-provider/compare/v3.2.9...v3.3.0) (2026-09-15)
 
 
