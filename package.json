@@ -43,9 +43,9 @@
     "check": "bun run fmt:check && bun run typecheck && bun run lint && bun run docs:links && bun run test && bun run build"
   },
   "dependencies": {
-    "@aws-sdk/core": "3.975.3",
+    "@aws-sdk/core": "3.978.0",
     "@aws/codewhisperer-streaming-client": "^1.0.34",
-    "@smithy/node-http-handler": "4.9.7",
+    "@smithy/node-http-handler": "4.12.1",
     "ajv": "8.20.0",
     "https-proxy-agent": "^9.1.0",
     "js-tiktoken": "1.0.21",
