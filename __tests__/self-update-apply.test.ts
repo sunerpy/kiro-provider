@@ -130,17 +130,21 @@ describe("runSelfUpdate", () => {
     expect(readdirSync(join(binary, ".."))).toEqual(["kiro-provider"]);
   });
 
-  test("preserves the existing permission bits and keeps the file executable", async () => {
-    const binary = installRoot();
-    chmodSync(binary, 0o700);
-    await update(binary, releaseFetch().fetch);
-    expect(statSync(binary).mode & 0o777).toBe(0o700);
+  // Windows honours only the read-only bit, so a mode always reads back as 0o666.
+  test.skipIf(process.platform === "win32")(
+    "preserves the existing permission bits and keeps the file executable",
+    async () => {
+      const binary = installRoot();
+      chmodSync(binary, 0o700);
+      await update(binary, releaseFetch().fetch);
+      expect(statSync(binary).mode & 0o777).toBe(0o700);
 
-    const readOnlyExec = installRoot();
-    chmodSync(readOnlyExec, 0o644);
-    await update(readOnlyExec, releaseFetch().fetch);
-    expect(statSync(readOnlyExec).mode & 0o777).toBe(0o744);
-  });
+      const readOnlyExec = installRoot();
+      chmodSync(readOnlyExec, 0o644);
+      await update(readOnlyExec, releaseFetch().fetch);
+      expect(statSync(readOnlyExec).mode & 0o777).toBe(0o744);
+    },
+  );
 
   test("refuses a checksum mismatch and leaves the installed binary untouched", async () => {
     const binary = installRoot();
@@ -300,15 +304,19 @@ describe("runSelfUpdate", () => {
     expect(downgradePrompts[0]).toContain("with the OLDER release 3.2.0");
   });
 
-  test("refuses an install directory it cannot write to", async () => {
-    const binary = installRoot();
-    const directory = join(binary, "..");
-    chmodSync(directory, 0o500);
-    try {
-      await expect(update(binary, releaseFetch().fetch)).rejects.toThrow("No write permission");
-      expect(readFileSync(binary, "utf8")).toBe(OLD_BYTES);
-    } finally {
-      chmodSync(directory, 0o700);
-    }
-  });
+  // Windows ignores directory permission bits, so the guard cannot be provoked there.
+  test.skipIf(process.platform === "win32")(
+    "refuses an install directory it cannot write to",
+    async () => {
+      const binary = installRoot();
+      const directory = join(binary, "..");
+      chmodSync(directory, 0o500);
+      try {
+        await expect(update(binary, releaseFetch().fetch)).rejects.toThrow("No write permission");
+        expect(readFileSync(binary, "utf8")).toBe(OLD_BYTES);
+      } finally {
+        chmodSync(directory, 0o700);
+      }
+    },
+  );
 });
