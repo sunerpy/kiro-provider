@@ -13,7 +13,7 @@ For every field, the effective value is the first one found, in this order:
 3. **Configuration file** — JSON at the resolved config path.
 4. **Schema default** — the zod schema default in `src/config/schema.ts`.
 
-The config file path defaults to the platform configuration root plus `kiro-provider/config.json` (see [File locations](#file-locations)): `$XDG_CONFIG_HOME/kiro-provider/config.json` or `~/.config/kiro-provider/config.json` on Linux/macOS, `%APPDATA%\kiro-provider\config.json` on Windows. `accounts list|import|remove` target the provider-owned local authentication store without loading gateway configuration, so `accounts import` does not accept `--config`. `accounts refresh|relogin` load refresh, timeout, region, proxy, and `quota_recheck_concurrency` settings from the selected config and require `auth_source: "local"`.
+The config file path defaults to the platform configuration root plus `kiro-provider/config.json` (see [File locations](#file-locations)): `$XDG_CONFIG_HOME/kiro-provider/config.json` or `~/.config/kiro-provider/config.json` on Linux/macOS, `%APPDATA%\kiro-provider\config.json` on Windows. `accounts list|import|remove` target the provider-owned local authentication store without loading gateway configuration, so `accounts import` does not accept `--config`. `accounts refresh|relogin` load refresh, timeout, region, proxy, and `quota_recheck_concurrency` settings from the selected config and require `auth_source: "local"`. `--version` and `self-update` load neither the config nor the account store; they take a proxy from `--proxy`, then `KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`, so a broken config cannot block an upgrade.
 
 ## Validation rules
 
@@ -138,6 +138,8 @@ The local account store can be operated without OpenCode:
 kiro-provider accounts list
 kiro-provider accounts list --details
 kiro-provider accounts list --json
+kiro-provider accounts list --sort availability
+kiro-provider accounts list --sort usage --order desc
 kiro-provider accounts refresh --all
 kiro-provider accounts refresh <id|email> --json
 kiro-provider accounts relogin <id|email>
@@ -148,6 +150,17 @@ The default list is an aligned summary. `--details` and `--json` expose the
 stable internal ID needed to disambiguate duplicate emails, but never include
 access tokens, refresh tokens, or client secrets. Email identifiers are
 case-insensitive and accepted only when exactly one row matches.
+
+Rows are sorted by email ascending unless `--sort <field>` says otherwise, and
+`--order asc|desc` flips the direction. The supported fields are `email`
+(default), `id`, `auth`, `region`, `health`, `availability`, `usage`, `overage`,
+`last-sync`, `last-used`, `token-expires`, and `generation`; `LAST_USED` and
+`last_used` are accepted as aliases. `availability` ranks accounts from most to
+least usable, and `usage` compares the used/limit ratio rather than the raw
+counter so accounts with different quotas stay comparable. Accounts with no
+value for the chosen column (an unknown quota, a row never synced) sort last in
+both directions, and equal keys fall back to email then internal ID, so the
+order is stable. All three output modes honour the sort.
 
 Manual refresh always calls Kiro's authoritative usage endpoint, including for
 fresh or currently exhausted rows. It refreshes an access token only when it is

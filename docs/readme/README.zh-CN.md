@@ -74,6 +74,31 @@ irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install
 常驻服务建议设置 `KIRO_PROVIDER_VERSION` 固定版本，不要直接跟随 `latest`。完整配置
 见[后台服务指南](SERVICE.zh-CN.md)。
 
+### 查看版本与升级
+
+`--version` 只打印已安装版本；加 `--check` 会查询 GitHub 上最新的 Release，加
+`--json` 输出机器可读格式。
+
+```bash
+kiro-provider --version
+kiro-provider --version --check
+```
+
+独立二进制可以自我替换。`self-update` 会下载当前平台的 Release 资产，先用该版本的
+`SHA256SUMS` 校验摘要，通过后才原地替换二进制；摘要不匹配时已安装的文件保持不变。
+
+```bash
+kiro-provider self-update --check          # 只报告将要安装的版本
+kiro-provider self-update                  # 确认后替换
+kiro-provider self-update --yes            # 免交互
+kiro-provider self-update --tag 3.3.1      # 指定版本，也可用于回退
+```
+
+npm 安装请改用包管理器升级（`bun add -g @sunerpy/kiro-provider@latest`），
+`self-update` 会拒绝并给出提示。两个命令都支持 `--proxy <url>`，否则依次读取
+`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`。它们都不加载网关配置，因此
+`config.json` 有问题也不会阻塞升级。以服务方式部署时，请在更新后重启服务。
+
 ## 快速开始
 
 ### 1. 创建网关配置

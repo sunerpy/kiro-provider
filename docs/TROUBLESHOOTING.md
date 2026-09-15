@@ -29,6 +29,10 @@ in-stream error codes are specified in
   | `unhealthy`       | Marked unhealthy for a transient reason (`HEALTH` is `unhealthy`).                                                      |
   | `needs-relogin`   | The refresh token or OIDC client is permanently dead; only `accounts relogin` recovers it.                              |
 
+  With many accounts, `--sort availability` puts the rows in that same order,
+  worst last, and `--sort usage --order desc` brings the accounts closest to
+  their quota to the top.
+
 - **HTTP status and `error.code`.** OpenAI-shaped routes return
   `{ "error": { "type", "code", "message" } }`; `/v1/messages` returns the
   Anthropic envelope, where quota `402` becomes `429 rate_limit_error` and the

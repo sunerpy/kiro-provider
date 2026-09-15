@@ -78,6 +78,35 @@ For a service install, set `KIRO_PROVIDER_VERSION` to a release version instead
 of following `latest`. See the [service guide](docs/SERVICE.md) for a pinned,
 long-lived setup.
 
+### Check the version and upgrade
+
+`--version` prints the installed version only. Add `--check` to look up the
+newest GitHub release, and `--json` for machine-readable output.
+
+```bash
+kiro-provider --version
+kiro-provider --version --check
+```
+
+A standalone binary can replace itself. `self-update` downloads the release
+asset for this platform, verifies it against the release's `SHA256SUMS`, and
+only then swaps the binary in place; a digest mismatch leaves the installed
+copy untouched.
+
+```bash
+kiro-provider self-update --check          # report what would be installed
+kiro-provider self-update                  # ask, then replace
+kiro-provider self-update --yes            # non-interactive
+kiro-provider self-update --tag 3.3.1      # pin a release, including a downgrade
+```
+
+npm installs are upgraded with the package manager instead
+(`bun add -g @sunerpy/kiro-provider@latest`); `self-update` refuses them and
+says so. Both commands accept `--proxy <url>` and otherwise honour
+`KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`. Neither loads the
+gateway config, so a broken `config.json` cannot block an upgrade. Restart the
+service after updating a service install.
+
 ## Quickstart
 
 ### 1. Create the gateway config

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ACCOUNT_SORT_FIELDS } from "../src/cli/account-output.js";
 import { CLI_USAGE, type CliDependencies, main, parseCliArgs } from "../src/cli/main.js";
 import { ConfigSchema } from "../src/config/schema.js";
 import { getAuditLogLevel, resetAuditLogLevel } from "../src/core/audit-log.js";
@@ -53,6 +54,12 @@ function createDependencies(logLevel: "debug" | "info" | "warn" | "error"): {
       accounts: [],
     }),
     runImportAccounts: () => undefined,
+    checkForUpdate: () => {
+      throw new Error("checkForUpdate must not be called by this test");
+    },
+    runSelfUpdate: () => {
+      throw new Error("runSelfUpdate must not be called by this test");
+    },
     openDb: () => ({
       getAccounts: () => [account()],
       insertAccount: (managed) => ({ ...managed, generation: 1 }),
@@ -78,6 +85,24 @@ describe("CLI usage text", () => {
   test("documents --force and no longer documents --config for accounts import", () => {
     expect(CLI_USAGE).toContain("accounts import [--from <path>] [--force]");
     expect(CLI_USAGE).not.toContain("accounts import [--from <path>] [--config");
+  });
+
+  test("documents the accounts list sort flags and every supported field", () => {
+    expect(CLI_USAGE).toContain(
+      "accounts list [--details | --json] [--sort <field>] [--order asc|desc]",
+    );
+    expect(CLI_USAGE).toContain("email (default)");
+    for (const field of ACCOUNT_SORT_FIELDS) {
+      expect(CLI_USAGE).toContain(field);
+    }
+  });
+
+  test("documents self-update alongside the version flags", () => {
+    expect(CLI_USAGE).toContain(
+      "self-update [--check] [--tag <version>] [--yes] [--json] [--proxy <url>] [--force]",
+    );
+    expect(CLI_USAGE).toContain("SHA256SUMS");
+    expect(CLI_USAGE).toContain("-V, --version");
   });
 });
 

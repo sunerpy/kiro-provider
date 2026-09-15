@@ -26,6 +26,9 @@
   | `unhealthy`       | 因临时原因被标记不健康（`HEALTH` 为 `unhealthy`）。                                   |
   | `needs-relogin`   | refresh token 或 OIDC 客户端已永久失效；只有 `accounts relogin` 能恢复。              |
 
+  账号较多时，`--sort availability` 会按上表顺序排列（最不可用的排在最后），
+  `--sort usage --order desc` 则把最接近额度上限的账号排到最前。
+
 - **HTTP 状态码与 `error.code`。** OpenAI 形态的路由返回
   `{ "error": { "type", "code", "message" } }`；`/v1/messages` 返回 Anthropic
   信封，其中额度 `402` 会映射为 `429 rate_limit_error`，Provider 的错误码

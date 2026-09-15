@@ -185,6 +185,41 @@ Remove-Item "$env:APPDATA\kiro-provider\service.ps1"
 登录前运行，则需要 Windows 服务包装器和一个经过明确配置的用户账号；不要
 让 `LocalSystem` 运行后仍假设它能读取原用户的 provider 文件。
 
+## 升级服务二进制
+
+在改动运行中的服务前，先确认已发布的版本：
+
+```bash
+kiro-provider --version --check
+kiro-provider self-update --check
+```
+
+`self-update` 会先用对应 Release 的 `SHA256SUMS` 校验资产摘要，通过后才原地替换已安装的
+二进制。摘要不匹配时不写入任何内容；替换会保留原有权限位，并把下载暂存在安装目录内，
+使替换是同一文件系统上的 rename。它不会改动配置、账号库或单元文件，也不会重启任何服务。
+
+由于运行中的进程持有自己已打开的镜像，重启之前服务仍在运行旧版本：
+
+```bash
+kiro-provider self-update --yes
+systemctl --user restart kiro-provider.service
+kiro-provider --version
+```
+
+Windows 计划任务：
+
+```powershell
+kiro-provider self-update --yes
+Stop-ScheduledTask -TaskName "kiro-provider"
+Start-ScheduledTask -TaskName "kiro-provider"
+```
+
+Windows 上如果旧镜像被占用，会先将其移到一旁，替换失败时回滚，因此尽量先停止任务。
+
+固定版本的服务请传入与 `KIRO_PROVIDER_VERSION` 相同的版本
+（`self-update --tag 3.3.1 --yes`），而不是跟随最新 Release。`--tag` 是明确指令而非建议：
+指定更旧的版本即为回退。要重装当前版本请加 `--force`。
+
 ## 健康检查与自动化契约
 
 安装任一服务后，都应同时检查进程存活状态和需鉴权的就绪状态：

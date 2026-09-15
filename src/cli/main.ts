@@ -4,6 +4,7 @@ import { loadConfig } from "../config/loader.js";
 import type { Config } from "../config/schema.js";
 import { setAuditLogLevel } from "../core/audit-log.js";
 import type { AccountRefreshSummary } from "../core/quota-rechecker.js";
+import { DEFAULT_OVERAGE_POLICY } from "../kiro/health.js";
 import { startServer } from "../server/app.js";
 import { ACCOUNTS_DB_PATH, AccountsDatabase, type StoredAccount } from "../storage/accounts-db.js";
 import {
@@ -19,6 +20,18 @@ import {
 } from "./import-accounts.js";
 import { type LoginOptions, type LoginResult, runLogin } from "./login.js";
 import { runAccountRefresh } from "./refresh-accounts.js";
+import {
+  checkForUpdate,
+  formatSelfUpdateResult,
+  formatUpdateCheck,
+  formatVersion,
+  runSelfUpdate,
+  type SelfUpdateDependencies,
+  type SelfUpdateOptions,
+  type SelfUpdateResult,
+  type UpdateCheck,
+  type UpdateCheckOptions,
+} from "./self-update.js";
 
 export type { CliCommand } from "./arguments.js";
 export { CLI_USAGE, parseCliArgs } from "./arguments.js";
@@ -47,6 +60,11 @@ export type CliDependencies = {
     options: ImportAccountsOptions,
     dependencies: ImportAccountsDependencies,
   ) => unknown;
+  readonly checkForUpdate: (options: UpdateCheckOptions) => Promise<UpdateCheck>;
+  readonly runSelfUpdate: (
+    options: SelfUpdateOptions,
+    dependencies: SelfUpdateDependencies,
+  ) => Promise<SelfUpdateResult>;
   readonly openDb: (path: string) => AccountsStore;
   readonly confirm: (message: string) => Promise<boolean>;
   readonly stdout: (message: string) => void;
@@ -73,6 +91,8 @@ const defaultDependencies: CliDependencies = {
   runLogin,
   runAccountRefresh,
   runImportAccounts,
+  checkForUpdate,
+  runSelfUpdate,
   openDb: (path) => new AccountsDatabase(path),
   confirm: confirmOnTerminal,
   stdout: console.log,
@@ -84,9 +104,39 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
     case "help":
       dependencies.stdout(CLI_USAGE);
       return 0;
-    case "version":
-      dependencies.stdout(`kiro-provider ${CLI_VERSION}`);
+    case "version": {
+      if (!command.check) {
+        for (const line of formatVersion(CLI_VERSION, command.json)) dependencies.stdout(line);
+        return 0;
+      }
+      const check = await dependencies.checkForUpdate({
+        currentVersion: CLI_VERSION,
+        ...(command.proxy ? { proxyUrl: command.proxy } : {}),
+      });
+      for (const line of formatUpdateCheck(check, command.json)) dependencies.stdout(line);
       return 0;
+    }
+    case "self-update": {
+      const result = await dependencies.runSelfUpdate(
+        {
+          currentVersion: CLI_VERSION,
+          check: command.check,
+          force: command.force,
+          assumeYes: command.yes,
+          ...(command.tag ? { tag: command.tag } : {}),
+          ...(command.proxy ? { proxyUrl: command.proxy } : {}),
+        },
+        { confirm: dependencies.confirm },
+      );
+      const lines = formatSelfUpdateResult(result, command.json);
+      if (result.status === "cancelled") {
+        for (const line of lines) dependencies.stderr(line);
+        dependencies.stderr("Use --yes for non-interactive confirmation.");
+        return 1;
+      }
+      for (const line of lines) dependencies.stdout(line);
+      return 0;
+    }
     case "serve": {
       const overrides: Partial<Config> = {
         ...(command.host ? { host: command.host } : {}),
@@ -123,7 +173,13 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
     case "accounts-list": {
       const database = dependencies.openDb(ACCOUNTS_DB_PATH);
       try {
-        for (const line of formatAccountList(database.getAccounts(), command.mode)) {
+        const lines = formatAccountList(
+          database.getAccounts(),
+          command.mode,
+          DEFAULT_OVERAGE_POLICY,
+          command.sort,
+        );
+        for (const line of lines) {
           dependencies.stdout(line);
         }
       } finally {
