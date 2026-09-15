@@ -37,6 +37,13 @@ If it is usable, start broad investigations with `codegraph explore "<question>"
 
 Use Bun and the checked-in lockfile. Pin new dependencies to an exact version and update `bun.lock` with the canonical npm registry configured in `bunfig.toml`.
 
+Dependabot is intentionally limited to GitHub Actions. Its npm updater changes
+`package.json` without regenerating Bun's `bun.lock`, so those PRs cannot pass
+the frozen-lockfile gate. Upgrade runtime or development dependencies in a
+maintainer PR with `bun update <packages>`, review both `package.json` and
+`bun.lock`, then run `make pre-ci`. Do not re-enable npm Dependabot until a real
+PR proves it updates the Bun lockfile atomically.
+
 Start with the smallest relevant regression test, then expand validation to the affected boundary. Typical commands are:
 
 ```bash
