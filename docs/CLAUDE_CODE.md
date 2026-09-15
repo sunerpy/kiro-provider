@@ -44,7 +44,7 @@ new session when switching between native Bedrock and Kiro if the old
 continuation contains signed thinking that the other provider cannot replay.
 
 The release installer does not install these helper scripts. Run them from a
-checkout for tests, or copy/link them after deciding to keep this profile.
+checkout for tests, or copy/link them after deciding to keep this launcher.
 
 ### Defaults and overrides
 
