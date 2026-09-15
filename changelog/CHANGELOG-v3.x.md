@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.9](https://github.com/sunerpy/kiro-provider/compare/v3.2.8...v3.2.9) (2026-09-15)
+
+
+### Bug Fixes
+
+* **claude:** 共享原生状态并隔离提供器路由 ([4b62e51](https://github.com/sunerpy/kiro-provider/commit/4b62e51bdcf5001e5c4a476c3a6bdecfcc1c4662))
+
 ## [3.2.8](https://github.com/sunerpy/kiro-provider/compare/v3.2.7...v3.2.8) (2026-09-15)
 
 
