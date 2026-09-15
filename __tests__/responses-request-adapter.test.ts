@@ -569,6 +569,51 @@ describe("Responses exact function/custom tools", () => {
       "unsupported_image_detail",
       "input.1.output.0.detail",
     );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_image", detail: "high" }],
+          },
+        ],
+      },
+      "invalid_image_data",
+      "input.1.output.0.image_url",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_file", file_data: "data:text/plain;base64,QQ==" }],
+          },
+        ],
+      },
+      "unsupported_tool_result_content",
+      "input.1.output.0",
+    );
+    expectFailure(
+      {
+        model: TEST_MODEL,
+        input: [
+          call,
+          {
+            type: "function_call_output",
+            call_id: "call_image",
+            output: [{ type: "input_text" }],
+          },
+        ],
+      },
+      "unsupported_tool_result_content",
+      "input.1.output.0.text",
+    );
   });
 
   test("round-trips custom raw input byte-for-byte through a private wire alias", () => {
