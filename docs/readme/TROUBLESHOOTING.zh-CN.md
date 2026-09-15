@@ -254,6 +254,19 @@ placeholder ...`。
   迁移单元。真实迁移还会输出只含哈希的 `reasoning_replay_account_migrated`。
   `false` 是正常值，不是错误。
 
+### replay 绑定账号错误码
+
+owner-bound signed reasoning 无法继续时，Provider 保留原因且不切账号：
+`reasoning_replay_account_quota_exhausted`（402）、
+`reasoning_replay_account_rate_limited`（429）、
+`reasoning_replay_account_reauthentication_required`（403）、
+`reasoning_replay_account_refresh_failed`（503）、
+`reasoning_replay_model_unavailable`（503），或 owner 不可用/不健康 503。上游
+401/invalid bearer 后的强制刷新若发现凭证永久失效，返回重新登录 403；若是网络/
+临时刷新失败，返回 refresh 503，不再降级成通用
+`reasoning_replay_account_unavailable`。前者重新登录，后者检查代理/出网并在不更换
+replay token 和账号的前提下重试。
+
 ## 进程与配置
 
 ### 启动失败 `service_instance_already_running`；日志出现 `single_instance_lock_busy` 或 `single_instance_lock_compromised`

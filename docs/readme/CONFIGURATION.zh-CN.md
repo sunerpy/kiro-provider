@@ -325,7 +325,9 @@ KiroRuntime `GenerateAssistantResponse` 且带 profile 铸造的 signed
 Claude Sonnet 5 + `us-east-1`。当前请求协议和投影 runtime operation 仍须与 mint
 envelope 一致，目标账号也须解析到同一有效区域并带 profile。redacted reasoning、
 旧 token、Terra、Luna、Opus、其他区域及所有未列组合仍绑定原 owner；`strict`
-禁用上述两个单元。严格绑定失败会分别返回额度、限流、认证、健康或模型错误。
+禁用上述两个单元。严格绑定失败会分别返回额度、限流、重新登录、刷新、健康或模型错误；
+`reasoning_replay_account_reauthentication_required` 与可重试的
+`reasoning_replay_account_refresh_failed` 不再混为通用 503。
 
 密钥配置优先级：
 

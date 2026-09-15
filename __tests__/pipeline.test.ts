@@ -10,6 +10,7 @@ import {
   runChatCompletion,
 } from "../src/core/pipeline.js";
 import { createPipelineStreamResponse } from "../src/core/pipeline-stream.js";
+import { AccountUnavailableError } from "../src/core/token-refresher.js";
 import { KiroTokenRefreshError } from "../src/kiro/errors.js";
 import { ModelCapabilityService } from "../src/kiro/model-capabilities.js";
 import type {
@@ -1495,7 +1496,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
 
     expect(response.status).toBe(403);
     expect(await errorBody(response)).toMatchObject({
-      error: { code: "reasoning_replay_account_auth_required" },
+      error: { code: "reasoning_replay_account_reauthentication_required" },
     });
     expect(new Set(selectedAccountIds)).toEqual(new Set(["account-a"]));
     expect(manager.unhealthy).toEqual(["account-a"]);
@@ -1526,11 +1527,99 @@ describe("runChatCompletion signed reasoning replay lock", () => {
 
     expect(response.status).toBe(403);
     expect(await errorBody(response)).toMatchObject({
-      error: { code: "reasoning_replay_account_auth_required" },
+      error: { code: "reasoning_replay_account_reauthentication_required" },
     });
     expect(sends).toBe(1);
     expect(refresher.forceSignals).toHaveLength(1);
     expect(manager.unhealthy).toEqual(["account-a"]);
+  });
+
+  test("returns typed refresh failure after the replay owner exhausts its network retry", async () => {
+    const refresher = new FakeTokenRefresher();
+    refresher.refreshHandler = async () => {
+      throw new KiroTokenRefreshError("Token refresh failed: fetch failed", "NETWORK_ERROR");
+    };
+    let sends = 0;
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({
+        reasoning_replay_account_failover: "strict",
+        rate_limit_retry_delay_ms: 1,
+      }),
+      accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
+      tokenRefresher: refresher,
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () => {
+        sends += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_refresh_failed" },
+    });
+    expect(refresher.refreshSignals).toHaveLength(2);
+    expect(sends).toBe(0);
+  });
+
+  test("keeps forced-refresh transport failure distinct from owner unavailability", async () => {
+    const refresher = new FakeTokenRefresher();
+    refresher.forceHandler = async () => {
+      throw new KiroTokenRefreshError("Token refresh failed: fetch failed", "NETWORK_ERROR");
+    };
+    let sends = 0;
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "strict" }),
+      accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
+      tokenRefresher: refresher,
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () =>
+        clientWith(async () => {
+          sends += 1;
+          throw sdkError(401, "expired bearer token");
+        }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_refresh_failed" },
+    });
+    expect(sends).toBe(1);
+    expect(refresher.forceSignals).toHaveLength(1);
+  });
+
+  test("reports a replay owner removed during forced refresh as unavailable", async () => {
+    const refresher = new FakeTokenRefresher();
+    refresher.forceHandler = async (selected) => {
+      throw new AccountUnavailableError(selected.id);
+    };
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "strict" }),
+      accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
+      tokenRefresher: refresher,
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () =>
+        clientWith(async () => {
+          throw sdkError(401, "expired bearer token");
+        }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_unavailable" },
+    });
   });
 });
 

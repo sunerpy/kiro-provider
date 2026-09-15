@@ -422,8 +422,8 @@ function replayLockedSelectionResult(
       kind: "result",
       result: replayAccountError(
         403,
-        "The account bound to signed reasoning replay requires authentication",
-        "reasoning_replay_account_auth_required",
+        "The account bound to signed reasoning replay requires re-authentication",
+        "reasoning_replay_account_reauthentication_required",
       ),
     };
   }
@@ -950,20 +950,35 @@ async function continueAfterRefreshFailure(
   state: LoopState,
   failed: ManagedAccount,
   failure: RefreshFailure,
+  source: "initial" | "forced" = "initial",
 ): Promise<LoopDirective> {
   const action = excludeAfterRefreshFailure(options, state, failed, failure);
-  if (
-    state.replayLocked &&
-    failure instanceof KiroTokenRefreshError &&
-    isRefreshTokenDead(refreshFailureReason(failure))
-  ) {
-    return returning(
-      replayAccountError(
-        403,
-        "The account bound to signed reasoning replay requires authentication",
-        "reasoning_replay_account_auth_required",
-      ),
-    );
+  if (state.replayLocked) {
+    if (
+      failure instanceof KiroTokenRefreshError &&
+      isRefreshTokenDead(refreshFailureReason(failure))
+    ) {
+      return returning(
+        replayAccountError(
+          403,
+          "The account bound to signed reasoning replay requires re-authentication",
+          "reasoning_replay_account_reauthentication_required",
+        ),
+      );
+    }
+    if (failure instanceof AccountUnavailableError) return returning(replayUnavailable());
+    // An initial NETWORK_ERROR receives the existing one bounded same-account
+    // retry. A forced refresh follows an upstream credential rejection and must
+    // surface its own typed failure instead of re-sending the rejected token.
+    if (action !== "retry" || source === "forced") {
+      return returning(
+        replayAccountError(
+          503,
+          "Token refresh failed for the account bound to signed reasoning replay",
+          "reasoning_replay_account_refresh_failed",
+        ),
+      );
+    }
   }
   if (action === "retry") {
     await abortableSleep(options.config.rate_limit_retry_delay_ms, signal);
@@ -1995,7 +2010,7 @@ async function applyClassification(
       } catch (refreshError) {
         if (signal.aborted) throw abortReason(signal);
         if (!isRefreshFailure(refreshError)) throw refreshError;
-        return continueAfterRefreshFailure(options, signal, state, account, refreshError);
+        return continueAfterRefreshFailure(options, signal, state, account, refreshError, "forced");
       }
       return CONTINUE;
     case "retry":

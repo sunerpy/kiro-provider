@@ -294,6 +294,20 @@ Invalid signature in thinking block`.
   `reasoning_replay_account_migrated` with hashes only. `false` is normal and is
   not an error.
 
+### Replay-bound account error codes
+
+When owner-bound signed reasoning cannot proceed, the provider keeps the cause
+without switching accounts: `reasoning_replay_account_quota_exhausted` (402),
+`reasoning_replay_account_rate_limited` (429),
+`reasoning_replay_account_reauthentication_required` (403),
+`reasoning_replay_account_refresh_failed` (503),
+`reasoning_replay_model_unavailable` (503), or an owner
+unavailable/unhealthy 503. A failed forced refresh after upstream 401/invalid
+bearer returns the re-authentication code for dead credentials and the refresh
+code for transport/temporary refresh failures; it no longer degrades to generic
+`reasoning_replay_account_unavailable`. Re-login for the 403. For refresh 503,
+check proxy/egress and retry without changing the replay token or account.
+
 ## Process and configuration
 
 ### Startup fails with `service_instance_already_running`; `single_instance_lock_busy` or `single_instance_lock_compromised` in the log

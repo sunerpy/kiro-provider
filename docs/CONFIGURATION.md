@@ -382,8 +382,10 @@ protocol and projected runtime operation must still match the mint envelope, and
 the target account must resolve to the same effective region with a profile.
 Redacted reasoning, legacy tokens, Terra, Luna, Opus, other regions, and every
 unlisted combination remain owner-bound. `strict` disables both cells. A strict
-owner failure is reported as a typed quota, rate-limit, authentication, health,
-or model error rather than one generic 503.
+owner failure is reported as a typed quota, rate-limit, re-authentication,
+refresh, health, or model error rather than one generic 503. In particular,
+`reasoning_replay_account_reauthentication_required` is distinct from the
+retryable `reasoning_replay_account_refresh_failed`.
 
 Key configuration precedence is:
 
