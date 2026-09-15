@@ -50,7 +50,7 @@
     "https-proxy-agent": "^9.1.0",
     "js-tiktoken": "1.0.21",
     "proper-lockfile": "^4.1.2",
-    "zod": "^3.24.0"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@ai-sdk/openai": "4.0.66",
