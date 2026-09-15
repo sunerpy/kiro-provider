@@ -7,6 +7,7 @@ import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
   type CanonicalContentPart,
+  type CanonicalImagePart,
   type CanonicalMessage,
   type CanonicalReasoningReplay,
   type CanonicalRequest,
@@ -287,34 +288,91 @@ function systemParts(
 function toolResultContent(
   value: unknown,
   path: string,
-): AnthropicFailure | readonly CanonicalTextPart[] {
+):
+  | AnthropicFailure
+  | {
+      readonly text: readonly CanonicalTextPart[];
+      readonly images: readonly CanonicalImagePart[];
+    } {
   // Anthropic's tool_result.content is optional; an omitted result is empty.
-  if (value === undefined) return [];
-  if (typeof value === "string") return [textPart(value, path)];
+  if (value === undefined) return { text: [], images: [] };
+  if (typeof value === "string") return { text: [textPart(value, path)], images: [] };
   if (!Array.isArray(value)) {
     return failure(
-      `Invalid request: ${path} must be a string or text block array`,
+      `Invalid request: ${path} must be a string or text/image block array`,
       "unsupported_tool_result_content",
       path,
     );
   }
-  const parts: CanonicalTextPart[] = [];
+  const text: CanonicalTextPart[] = [];
+  const images: CanonicalImagePart[] = [];
   for (const [index, block] of value.entries()) {
-    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
+    const blockPath = `${path}.${index}`;
+    if (!isRecord(block)) {
       return failure(
-        `Invalid request: ${path}.${index} must be a text block`,
+        `Invalid request: ${blockPath} must be a text or base64 image block`,
         "unsupported_tool_result_content",
-        `${path}.${index}`,
+        blockPath,
       );
     }
-    const blockPath = `${path}.${index}`;
-    const keys = validateAllowedKeys(block, blockPath, new Set(["type", "text", "cache_control"]));
-    if (keys) return keys;
-    const cacheControl = validateCacheControl(block.cache_control, `${blockPath}.cache_control`);
-    if (cacheControl) return cacheControl;
-    parts.push(textPart(block.text, `${path}.${index}.text`));
+    if (block.type === "text" && typeof block.text === "string") {
+      const keys = validateAllowedKeys(
+        block,
+        blockPath,
+        new Set(["type", "text", "cache_control"]),
+      );
+      if (keys) return keys;
+      const cacheControl = validateCacheControl(block.cache_control, `${blockPath}.cache_control`);
+      if (cacheControl) return cacheControl;
+      text.push(textPart(block.text, `${blockPath}.text`));
+      continue;
+    }
+    if (block.type === "image") {
+      const image = base64ImagePart(block, blockPath);
+      if (isFailure(image)) return image;
+      images.push(image);
+      continue;
+    }
+    return failure(
+      `Invalid request: ${blockPath} must be a text or base64 image block`,
+      "unsupported_tool_result_content",
+      blockPath,
+    );
   }
-  return parts;
+  return { text, images };
+}
+
+function base64ImagePart(
+  block: Readonly<Record<string, unknown>>,
+  path: string,
+): AnthropicFailure | CanonicalImagePart {
+  const keys = validateAllowedKeys(block, path, new Set(["type", "source", "cache_control"]));
+  if (keys) return keys;
+  const cacheControl = validateCacheControl(block.cache_control, `${path}.cache_control`);
+  if (cacheControl) return cacheControl;
+  if (
+    !isRecord(block.source) ||
+    block.source.type !== "base64" ||
+    typeof block.source.data !== "string"
+  ) {
+    return failure(
+      `Invalid request: ${path} requires a base64 image source`,
+      "unsupported_image_source",
+      path,
+    );
+  }
+  const sourceKeys = validateAllowedKeys(
+    block.source,
+    `${path}.source`,
+    new Set(["type", "data", "media_type"]),
+  );
+  if (sourceKeys) return sourceKeys;
+  return {
+    type: "image",
+    data: block.source.data,
+    ...(typeof block.source.media_type === "string" ? { mediaType: block.source.media_type } : {}),
+    path,
+  };
 }
 
 function reasoningContent(
@@ -443,6 +501,8 @@ function mapMessage(
   const content: CanonicalContentPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   let replay: CanonicalReasoningReplay["lookup"] | undefined;
+  let directImagePath: string | undefined;
+  let imageToolResultPath: string | undefined;
   for (const [blockIndex, block] of message.content.entries()) {
     const blockPath = `${path}.content.${blockIndex}`;
     if (message.role === "system" && block.type !== "text") {
@@ -476,42 +536,17 @@ function mapMessage(
         break;
       }
       case "image": {
-        const keys = validateAllowedKeys(
-          block,
-          blockPath,
-          new Set(["type", "source", "cache_control"]),
-        );
-        if (keys) return keys;
-        const cacheControl = validateCacheControl(
-          block.cache_control,
-          `${blockPath}.cache_control`,
-        );
-        if (cacheControl) return cacheControl;
-        if (
-          !isRecord(block.source) ||
-          block.source.type !== "base64" ||
-          typeof block.source.data !== "string"
-        ) {
+        if (imageToolResultPath !== undefined) {
           return failure(
-            `Invalid request: ${blockPath} requires a base64 image source`,
-            "unsupported_image_source",
+            `Invalid request: ${blockPath} cannot be combined with an image-valued tool result because Kiro cannot retain both image origins`,
+            "unsupported_tool_result_content",
             blockPath,
           );
         }
-        const sourceKeys = validateAllowedKeys(
-          block.source,
-          `${blockPath}.source`,
-          new Set(["type", "data", "media_type"]),
-        );
-        if (sourceKeys) return sourceKeys;
-        content.push({
-          type: "image",
-          data: block.source.data,
-          ...(typeof block.source.media_type === "string"
-            ? { mediaType: block.source.media_type }
-            : {}),
-          path: blockPath,
-        });
+        const image = base64ImagePart(block, blockPath);
+        if (isFailure(image)) return image;
+        directImagePath = blockPath;
+        content.push(image);
         break;
       }
       case "tool_use": {
@@ -562,13 +597,35 @@ function mapMessage(
         }
         const resultContent = toolResultContent(block.content, `${blockPath}.content`);
         if (isFailure(resultContent)) return resultContent;
+        if (resultContent.images.length > 0) {
+          if (directImagePath !== undefined) {
+            return failure(
+              `Invalid request: ${resultContent.images[0]?.path} cannot be combined with a direct message image because Kiro cannot retain both image origins`,
+              "unsupported_tool_result_content",
+              resultContent.images[0]?.path,
+            );
+          }
+          if (imageToolResultPath !== undefined) {
+            return failure(
+              `Invalid request: ${resultContent.images[0]?.path} belongs to a second image-valued tool result, but Kiro cannot retain both tool associations`,
+              "unsupported_tool_result_content",
+              resultContent.images[0]?.path,
+            );
+          }
+          imageToolResultPath = blockPath;
+        }
         content.push({
           type: "tool_result",
           toolCallId: block.tool_use_id,
-          content: resultContent,
+          content: resultContent.text,
           isError: block.is_error === true,
           path: blockPath,
         });
+        // Kiro's ToolResult content supports only text/JSON, while its user
+        // message supports native images. Lift one image-bearing result into
+        // that same user turn; with only one such result, the tool association
+        // remains unambiguous and the image bytes stay model-visible.
+        content.push(...resultContent.images);
         break;
       }
       case "thinking":
