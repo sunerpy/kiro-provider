@@ -21,6 +21,7 @@ import type {
 } from "../types.js";
 import { RequestTransformError } from "./errors.js";
 import { buildHistory, currentUserInput } from "./history-builder.js";
+import { estimateSdkInputTokens } from "./usage-estimator.js";
 
 export interface RequestTransformResult {
   readonly request: CodeWhispererRequest;
@@ -35,6 +36,12 @@ export interface RequestTransformIdentity {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
+  readonly promptCaching?: {
+    readonly mode: "server-auto" | "explicit-checkpoints" | "off";
+    readonly supported: boolean;
+    readonly maximumCheckpoints?: number;
+    readonly minimumTokens?: number;
+  };
 }
 
 function cloneMessage(message: CanonicalMessage): CanonicalMessage {
@@ -483,13 +490,102 @@ function toolsForKiro(
       );
     }
   }
-  return tools.map((tool) => ({
-    toolSpecification: {
-      name: tool.wireName,
-      description: tool.description as string,
-      inputSchema: { json: { ...tool.inputSchema } },
+  return tools.flatMap((tool) => [
+    {
+      toolSpecification: {
+        name: tool.wireName,
+        description: tool.description as string,
+        inputSchema: { json: { ...tool.inputSchema } },
+      },
     },
-  }));
+    ...(tool.cachePoint ? [{ cachePoint: { type: "default" as const } }] : []),
+  ]);
+}
+
+function clearCachePoints(
+  history: CodeWhispererMessage[],
+  tools: NonNullable<
+    NonNullable<
+      NonNullable<CodeWhispererMessage["userInputMessage"]>["userInputMessageContext"]
+    >["tools"]
+  >,
+): void {
+  for (const message of history) {
+    if (message.userInputMessage) delete message.userInputMessage.cachePoint;
+    if (message.assistantResponseMessage) delete message.assistantResponseMessage.cachePoint;
+  }
+  for (let index = tools.length - 1; index >= 0; index -= 1) {
+    if ("cachePoint" in (tools[index] ?? {})) tools.splice(index, 1);
+  }
+}
+
+function countCachePoints(
+  history: readonly CodeWhispererMessage[],
+  tools: readonly (
+    | { readonly toolSpecification: unknown }
+    | { readonly cachePoint: { readonly type: "default" } }
+  )[],
+): number {
+  return (
+    history.filter(
+      (message) =>
+        message.userInputMessage?.cachePoint !== undefined ||
+        message.assistantResponseMessage?.cachePoint !== undefined,
+    ).length + tools.filter((tool) => "cachePoint" in tool).length
+  );
+}
+
+function applyPromptCacheProjection(
+  identity: RequestTransformIdentity,
+  history: CodeWhispererMessage[],
+  currentMessage: CodeWhispererMessage,
+  tools: NonNullable<
+    NonNullable<
+      NonNullable<CodeWhispererMessage["userInputMessage"]>["userInputMessageContext"]
+    >["tools"]
+  >,
+  systemPrompt: string | undefined,
+): void {
+  const capability = identity.promptCaching;
+  if (capability?.mode !== "explicit-checkpoints" || capability.supported !== true) {
+    clearCachePoints(history, tools);
+    return;
+  }
+  const maximum = capability.maximumCheckpoints ?? 4;
+  let count = countCachePoints(history, tools);
+  if (count > maximum) {
+    throw new RequestTransformError(
+      `Request has ${count} cache checkpoints but Kiro allows at most ${maximum}`,
+      "too_many_cache_checkpoints",
+    );
+  }
+  const estimate = estimateSdkInputTokens({
+    conversationState: {
+      chatTriggerType: KIRO_CONSTANTS.CHAT_TRIGGER_TYPE_MANUAL,
+      conversationId: "cache-estimate",
+      currentMessage,
+      ...(history.length > 0 ? { history } : {}),
+    },
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+  });
+  if (estimate < (capability.minimumTokens ?? 1)) {
+    clearCachePoints(history, tools);
+    return;
+  }
+  if (
+    count < maximum &&
+    tools.some((tool) => "toolSpecification" in tool) &&
+    !tools.some((tool) => "cachePoint" in tool)
+  ) {
+    tools.push({ cachePoint: { type: "default" } });
+    count += 1;
+  }
+  if (count < maximum) {
+    const last = history.at(-1);
+    if (last?.userInputMessage) last.userInputMessage.cachePoint = { type: "default" };
+    else if (last?.assistantResponseMessage)
+      last.assistantResponseMessage.cachePoint = { type: "default" };
+  }
 }
 
 function hasExecutableInput(input: NonNullable<CodeWhispererMessage["userInputMessage"]>): boolean {
@@ -589,6 +685,15 @@ export function buildCodeWhispererRequest(
     currentInput.userInputMessageContext.tools = suppliedTools;
   }
 
+  const currentMessage: CodeWhispererMessage = { userInputMessage: currentInput };
+  applyPromptCacheProjection(
+    identity,
+    history,
+    currentMessage,
+    suppliedTools,
+    projection.systemPrompt,
+  );
+
   const convId = identity.conversationId ?? randomUUID();
   const request: CodeWhispererRequest = {
     conversationState: {
@@ -596,7 +701,7 @@ export function buildCodeWhispererRequest(
       conversationId: convId,
       agentContinuationId: randomUUID(),
       agentTaskType: "vibe",
-      currentMessage: { userInputMessage: currentInput },
+      currentMessage,
       ...(history.length > 0 ? { history } : {}),
     },
     ...(auth.profileArn ? { profileArn: auth.profileArn } : {}),

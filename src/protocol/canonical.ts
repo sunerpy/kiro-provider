@@ -65,6 +65,8 @@ export interface CanonicalMessage extends CanonicalSource {
   readonly role: CanonicalRole;
   readonly content: readonly CanonicalContentPart[];
   readonly toolCalls: readonly CanonicalToolCall[];
+  /** Performance-only cache hint after this complete message. */
+  readonly cachePoint?: boolean;
 }
 
 export interface CanonicalToolDeclaration extends CanonicalSource {
@@ -76,6 +78,8 @@ export interface CanonicalToolDeclaration extends CanonicalSource {
   readonly inputSchema: Readonly<Record<string, unknown>>;
   readonly origin?: "request" | "input";
   readonly strict?: false;
+  /** Performance-only cache hint after this tool declaration. */
+  readonly cachePoint?: boolean;
 }
 
 export interface CanonicalReasoningReplay extends CanonicalSource {
@@ -85,6 +89,8 @@ export interface CanonicalReasoningReplay extends CanonicalSource {
     | { readonly kind: "chat-hash"; readonly reasoningText: string }
     | { readonly kind: "anthropic-direct"; readonly content: KiroReasoningContent };
   readonly outputFingerprint: string;
+  /** Exact historical encodings accepted only when resolving legacy replay storage. */
+  readonly compatibleOutputFingerprints?: readonly string[];
   readonly insertBeforeMessage: number;
 }
 
@@ -175,13 +181,32 @@ export function canonicalFingerprint(value: unknown): string {
     .digest("hex");
 }
 
+function fingerprintToolInput(input: string): unknown {
+  try {
+    return JSON.parse(input) as unknown;
+  } catch {
+    return input;
+  }
+}
+
+/** Fingerprint emitted before tool arguments were normalized as semantic JSON values. */
+export function legacyAssistantOutputFingerprint(output: CanonicalAssistantOutput): string {
+  return canonicalFingerprint({
+    text: output.text,
+    toolCalls: output.toolCalls,
+  });
+}
+
 export function assistantOutputFingerprint(output: CanonicalAssistantOutput): string {
   return canonicalFingerprint({
     text: output.text,
     toolCalls: output.toolCalls.map((call) => ({
       id: call.id,
       name: call.name,
-      input: call.input,
+      // Kiro streams JSON arguments with non-semantic whitespace and property
+      // order. Public Responses/Messages parse and re-serialize them, so bind
+      // replay to the canonical JSON value rather than the raw wire spelling.
+      input: fingerprintToolInput(call.input),
     })),
   });
 }

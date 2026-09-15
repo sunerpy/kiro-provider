@@ -101,9 +101,11 @@ describe("AccountsDatabase schema versioning", () => {
     expect(rawUserVersion(path)).toBe(ACCOUNTS_DB_SCHEMA_VERSION);
     expect(rawTables(path)).toEqual([
       "accounts",
+      "legacy_portable_replay",
       "output_lineage",
       "reasoning_replay",
       "removed_accounts",
+      "replay_compatibility_state",
       "session_affinity",
       "stored_responses",
     ]);
@@ -203,6 +205,23 @@ describe("AccountsDatabase account removal cascade", () => {
     });
     expect(database.getReasoningReplayRecord("token-b")).toMatchObject({ accountId: "account-b" });
     expect(database.getAccounts().map((row) => row.id)).toEqual(["account-b"]);
+  });
+});
+
+describe("AccountsDatabase legacy portable replay transition", () => {
+  test("persists one absolute compatibility cutoff across reopen and key readiness", () => {
+    const path = temporaryDatabasePath();
+    const first = open(path);
+    expect(first.ensureLegacyPortableReplayCutoff(1_000, 100)).toBe(1_100);
+    expect(first.acceptLegacyPortableReplay("token-a", "key-old", 1_001, 999, 10)).toBe(1_100);
+    expect(first.activeReasoningReplayKeyIds(1_050)).toEqual(["key-old"]);
+
+    const reopened = open(path);
+    expect(reopened.ensureLegacyPortableReplayCutoff(1_050, 10_000)).toBe(1_100);
+    expect(
+      reopened.acceptLegacyPortableReplay("token-b", "key-old", 1_100, 10_000, 10),
+    ).toBeUndefined();
+    expect(reopened.activeReasoningReplayKeyIds(1_100)).toEqual([]);
   });
 });
 

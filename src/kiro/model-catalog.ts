@@ -4,7 +4,7 @@ import {
   GPT_56_TOTAL_CONTEXT_LIMIT,
   getModelContextLimit,
 } from "./constants.js";
-import type { KiroAvailableModel } from "./management-client.js";
+import type { KiroAvailableModel, KiroPromptCachingCapability } from "./management-client.js";
 
 export type InputModality = "text" | "image" | "pdf";
 type OutputModality = "text";
@@ -17,6 +17,7 @@ export type ModelCatalogEntry = {
   readonly contextLimit: number;
   readonly outputLimit: number;
   readonly rateMultiplier?: number;
+  readonly promptCaching?: KiroPromptCachingCapability;
   readonly additionalModelRequestFieldsSchema?: Readonly<Record<string, unknown>>;
   readonly modalities: {
     readonly input: readonly InputModality[];
@@ -620,6 +621,7 @@ export function modelCatalogFromAvailableModels(
           ? { description: model.description }
           : {}),
       ...(model.rateMultiplier !== undefined ? { rateMultiplier: model.rateMultiplier } : {}),
+      ...(model.promptCaching !== undefined ? { promptCaching: model.promptCaching } : {}),
       ...(model.additionalModelRequestFieldsSchema !== undefined
         ? {
             additionalModelRequestFieldsSchema: model.additionalModelRequestFieldsSchema,

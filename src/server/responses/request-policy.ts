@@ -3,6 +3,7 @@ import { resolveEffort } from "../../kiro/effort.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import type { Effort } from "../../kiro/types.js";
 import { isRecord } from "../../protocol/adapter-utils.js";
+import { isProviderReplayToken } from "../../reasoning/replay-token.js";
 import { openAiError } from "../errors.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
 import {
@@ -61,7 +62,7 @@ export function hasProviderReasoning(request: ResponsesRequest): boolean {
       (item) =>
         item.type === "reasoning" &&
         typeof item.encrypted_content === "string" &&
-        item.encrypted_content.startsWith("kr1_"),
+        isProviderReplayToken(item.encrypted_content),
     )
   );
 }
@@ -74,7 +75,7 @@ export function hasNativeReasoning(request: ResponsesRequest): boolean {
         item.type === "reasoning" &&
         typeof item.encrypted_content === "string" &&
         item.encrypted_content.length > 0 &&
-        !item.encrypted_content.startsWith("kr1_"),
+        !isProviderReplayToken(item.encrypted_content),
     )
   );
 }

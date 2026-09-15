@@ -83,11 +83,18 @@ function toolResults(parts: readonly CanonicalContentPart[]): ToolResult[] {
   );
 }
 
-function asUserInput(message: CanonicalMessage, resolved: string): UserInput {
+function asUserInput(
+  message: CanonicalMessage,
+  resolved: string,
+  includeCachePoint = true,
+): UserInput {
   const userInput: UserInput = {
     content: textFromParts(message.content),
     modelId: resolved,
     origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
+    ...(includeCachePoint && message.cachePoint
+      ? { cachePoint: { type: "default" as const } }
+      : {}),
   };
   const results = toolResults(message.content);
   if (results.length > 0) {
@@ -134,6 +141,7 @@ function asAssistantResponse(
   const assistant: AssistantResponse = {
     content: textFromParts(message.content),
     ...(reasoningContent !== undefined ? { reasoningContent } : {}),
+    ...(message.cachePoint ? { cachePoint: { type: "default" as const } } : {}),
   };
   const toolUses = [
     ...message.content.flatMap((part) =>
@@ -209,5 +217,6 @@ export function buildHistory(
 }
 
 export function currentUserInput(message: CanonicalMessage, resolved: string): UserInput {
-  return asUserInput(message, resolved);
+  // The current message is volatile by definition and must never become a prefix checkpoint.
+  return asUserInput(message, resolved, false);
 }

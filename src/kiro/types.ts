@@ -71,23 +71,28 @@ export interface CodeWhispererMessage {
       format: "csv" | "doc" | "docx" | "html" | "md" | "pdf" | "txt" | "xls" | "xlsx";
       source: { bytes: Uint8Array };
     }>;
+    cachePoint?: { type: "default" };
     userInputMessageContext?: {
       toolResults?: Array<{
         toolUseId: string;
         content: Array<{ text?: string }>;
         status?: string;
       }>;
-      tools?: Array<{
-        toolSpecification: {
-          name: string;
-          description: string;
-          inputSchema: { json: Record<string, unknown> };
-        };
-      }>;
+      tools?: Array<
+        | {
+            toolSpecification: {
+              name: string;
+              description: string;
+              inputSchema: { json: Record<string, unknown> };
+            };
+          }
+        | { cachePoint: { type: "default" } }
+      >;
     };
   };
   assistantResponseMessage?: {
     content: string;
+    cachePoint?: { type: "default" };
     reasoningContent?:
       | { reasoningText: { text: string; signature: string } }
       | { redactedContent: Uint8Array };

@@ -44,16 +44,16 @@ Release installer 目前不安装这些辅助脚本。临时测试可直接从 c
 
 ### 默认值与覆盖方式
 
-| 设置 | 默认值 |
-| --- | --- |
-| 网关根地址 | `http://127.0.0.1:8787`，不能带 `/v1` |
-| Claude 状态 | 共享原生 `~/.claude` 与 `~/.claude.json` |
-| 模型 | Opus 5 |
-| 推理模式 | Ultra，即 `effortLevel: "max"`、`ultracode: true` |
-| 权限模式 | 继承 Claude 原生设置；启动器默认不覆盖 |
-| 离开后的 recap | 关闭 |
-| 标题、分类等非必要流量 | 关闭 |
-| Experimental betas | 开启 |
+| 设置                   | 默认值                                            |
+| ---------------------- | ------------------------------------------------- |
+| 网关根地址             | `http://127.0.0.1:8787`，不能带 `/v1`             |
+| Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`          |
+| 模型                   | Opus 5                                            |
+| 推理模式               | Ultra，即 `effortLevel: "max"`、`ultracode: true` |
+| 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖            |
+| 离开后的 recap         | 关闭                                              |
+| 标题、分类等非必要流量 | 关闭                                              |
+| Experimental betas     | 开启                                              |
 
 需要调整时，只覆盖当前进程。仅在明确需要隔离 Claude home 时设置
 `KIROCLAUDE_CONFIG_DIR`：
@@ -145,11 +145,11 @@ provider，还应新建会话，不能在已有会话中当作普通模型切换
 - adaptive thinking、`output_config.effort` 和 Claude 路径支持的 `temperature`；
 - GPT effort 投影到 `reasoning.effort`，Claude effort 保持
   `output_config.effort`；
-- 通过 opaque `kr1_` signature 加密回放被隐藏的 signed thinking；
+- 通过 opaque `kr2_` signature（兼容读取历史 `kr1_`） 加密回放被隐藏的 signed thinking；
 - 隐藏 GPT-5.6 纯省略号 reasoning，包括 `"." + "." + "."` 分片，并在续轮时
   精确恢复已存储的原始块；
-- 校验 prompt-cache marker 后将其作为不支持的提示移除，同时返回
-  `x-kiro-prompt-cache-mode: unsupported` 和零 cache-token 用量；
+- 将 prompt-cache marker 作为性能提示并通过 `x-kiro-prompt-cache-mode` 报告；
+  默认使用 server-auto，显式 checkpoint 受能力门控，只返回上游实测 cache 用量；
 - 无损的 `clear_thinking_20251015` / `keep: "all"` `context_management`，返回
   `applied_edits: []`；
 - Anthropic SSE 顺序、流内错误、背压、上游静默期间的 `ping`，以及
@@ -165,13 +165,13 @@ caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。
 
 ## 排障
 
-| 现象 | 处理方式 |
-| --- | --- |
-| Token helper 报文件权限不安全 | 运行 `chmod 600 ~/.config/kiro-provider/config.json`，并确认文件属于当前用户。 |
+| 现象                                     | 处理方式                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------- |
+| Token helper 报文件权限不安全            | 运行 `chmod 600 ~/.config/kiro-provider/config.json`，并确认文件属于当前用户。  |
 | `capability_rejected:context_management` | 客户端请求了支持范围外的 destructive edit。不要用未经审计的删字段代理隐藏错误。 |
-| Picker 中没有 Kiro GPT 模型 | 通过 `kiroclaude` 启动；单靠 gateway discovery 会过滤这些 ID。 |
-| 普通 `claude` 使用了错误后端 | 检查普通 `~/.claude` 配置；`kiroclaude` 不会修改它。 |
-| 恢复会话时报 provider 签名无效 | 在 Kiro 与原生 Bedrock 之间切换后新建会话。 |
+| Picker 中没有 Kiro GPT 模型              | 通过 `kiroclaude` 启动；单靠 gateway discovery 会过滤这些 ID。                  |
+| 普通 `claude` 使用了错误后端             | 检查普通 `~/.claude` 配置；`kiroclaude` 不会修改它。                            |
+| 恢复会话时报 provider 签名无效           | 在 Kiro 与原生 Bedrock 之间切换后新建会话。                                     |
 
 参考资料：[Messages API](https://platform.claude.com/docs/en/api/messages/create)、
 [Claude Code settings](https://code.claude.com/docs/en/settings)、

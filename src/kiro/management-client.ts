@@ -4,6 +4,12 @@ import type { KiroAuthDetails } from "./types.js";
 
 export type KiroSupportedInputType = "TEXT" | "IMAGE";
 
+export interface KiroPromptCachingCapability {
+  readonly supportsPromptCaching: boolean;
+  readonly maximumCacheCheckpointsPerRequest?: number;
+  readonly minimumTokensPerCacheCheckpoint?: number;
+}
+
 export interface KiroAvailableModel {
   readonly modelId: string;
   readonly modelName: string;
@@ -14,6 +20,7 @@ export interface KiroAvailableModel {
     readonly maxOutputTokens: number;
   };
   readonly rateMultiplier?: number;
+  readonly promptCaching?: KiroPromptCachingCapability;
   readonly additionalModelRequestFieldsSchema?: Readonly<Record<string, unknown>>;
 }
 
@@ -57,6 +64,25 @@ function parseModel(value: unknown): KiroAvailableModel | undefined {
         (item): item is KiroSupportedInputType => item === "TEXT" || item === "IMAGE",
       )
     : [];
+  const promptCaching = isRecord(value.promptCaching)
+    ? {
+        supportsPromptCaching: value.promptCaching.supportsPromptCaching === true,
+        ...(positiveInteger(value.promptCaching.maximumCacheCheckpointsPerRequest) !== undefined
+          ? {
+              maximumCacheCheckpointsPerRequest: positiveInteger(
+                value.promptCaching.maximumCacheCheckpointsPerRequest,
+              ) as number,
+            }
+          : {}),
+        ...(positiveInteger(value.promptCaching.minimumTokensPerCacheCheckpoint) !== undefined
+          ? {
+              minimumTokensPerCacheCheckpoint: positiveInteger(
+                value.promptCaching.minimumTokensPerCacheCheckpoint,
+              ) as number,
+            }
+          : {}),
+      }
+    : undefined;
   return {
     modelId,
     modelName,
@@ -64,6 +90,7 @@ function parseModel(value: unknown): KiroAvailableModel | undefined {
     supportedInputTypes,
     tokenLimits: { maxInputTokens, maxOutputTokens },
     ...(typeof value.rateMultiplier === "number" ? { rateMultiplier: value.rateMultiplier } : {}),
+    ...(promptCaching !== undefined ? { promptCaching } : {}),
     ...(isRecord(value.additionalModelRequestFieldsSchema)
       ? { additionalModelRequestFieldsSchema: value.additionalModelRequestFieldsSchema }
       : {}),

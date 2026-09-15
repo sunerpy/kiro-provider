@@ -26,18 +26,18 @@ KiroRuntime 原生 `POST /v1/responses`，当原生操作无法保真承载请�
 
 ## 1. 公开 HTTP 接口
 
-| 方法与路径 | V3 行为 |
-| --- | --- |
-| `POST /v1/responses` | 创建流式或非流式 Response。 |
-| `GET /v1/responses/{id}` | 读取租户隔离的本地 Response 镜像。 |
-| `DELETE /v1/responses/{id}` | 删除本地镜像，并阻止后续网关续轮。 |
-| `GET /v1/responses/{id}/input_items` | 支持 `after`、`limit` 1–100 与 `order`；默认 `desc`。 |
-| `POST /v1/responses/{id}/cancel` | 对已终止镜像返回 `response_not_cancellable`；不支持 background 执行。 |
-| `POST /v1/responses/input_tokens` | 识别该路径，但返回 HTTP 501 `unsupported_endpoint`。 |
-| `POST /v1/responses/compact` | 识别该路径，但返回 HTTP 501 `unsupported_endpoint`。 |
-| `POST /v1/messages` | Anthropic Messages 兼容接口。 |
-| `POST /v1/messages/count_tokens` | Anthropic 兼容估算，并返回 `x-kiro-token-count-mode: estimate`。 |
-| `POST /v1/chat/completions` | 旧接口；只有开启 `enable_legacy_chat_completions` 才可用。 |
+| 方法与路径                           | V3 行为                                                               |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `POST /v1/responses`                 | 创建流式或非流式 Response。                                           |
+| `GET /v1/responses/{id}`             | 读取租户隔离的本地 Response 镜像。                                    |
+| `DELETE /v1/responses/{id}`          | 删除本地镜像，并阻止后续网关续轮。                                    |
+| `GET /v1/responses/{id}/input_items` | 支持 `after`、`limit` 1–100 与 `order`；默认 `desc`。                 |
+| `POST /v1/responses/{id}/cancel`     | 对已终止镜像返回 `response_not_cancellable`；不支持 background 执行。 |
+| `POST /v1/responses/input_tokens`    | 识别该路径，但返回 HTTP 501 `unsupported_endpoint`。                  |
+| `POST /v1/responses/compact`         | 识别该路径，但返回 HTTP 501 `unsupported_endpoint`。                  |
+| `POST /v1/messages`                  | Anthropic Messages 兼容接口。                                         |
+| `POST /v1/messages/count_tokens`     | Anthropic 兼容估算，并返回 `x-kiro-token-count-mode: estimate`。      |
+| `POST /v1/chat/completions`          | 旧接口；只有开启 `enable_legacy_chat_completions` 才可用。            |
 
 OpenAI 官方 Responses 资源还定义了 create、retrieve、delete、cancel 与 input
 items 方法。KiroRuntime 只提供原生创建与续轮，因此 V3 在本地实现其余核心
@@ -45,13 +45,17 @@ items 方法。KiroRuntime 只提供原生创建与续轮，因此 V3 在本地�
 
 ### Anthropic Messages / Claude Code 边界
 
-Claude Code 2.1.263 已针对 stateless canonical 通道验证。适配器接受当前文本、
+Claude Code 2.1.270 已针对 stateless canonical 通道验证。适配器接受当前文本、
 图片、标准工具/结果、中途 system、adaptive thinking、effort、temperature、
 cache hint 与无损 context management 形状。`thinking.display: "omitted"` 使用
-租户绑定的 `kr1_` token 作为 opaque Anthropic signature，在不暴露 thinking
-文本的前提下恢复原始 Kiro signed reasoning。Cache marker 不等于 Anthropic
-缓存实现：成功响应包含 `x-kiro-prompt-cache-mode: unsupported`，cache token
-bucket 为零，只保留模型可见内容。
+绑定 TTL、租户、模型、完整输出以及 mint 协议/区域/profile/operation 的
+`kr2_` token 作为 opaque Anthropic signature，在不暴露 thinking 文本的前提下
+恢复原始 Kiro signed reasoning；历史 `kr1_` 仍可读但保持 owner-bound，Claude
+空文本签名也会保留。Cache marker 仍是性能提示：
+`x-kiro-prompt-cache-mode` 返回 `server-auto`、`explicit-checkpoints` 或 `off`；
+只映射上游实测 cache read/write，未知 bucket 返回 `null`，不再伪造为零。Messages 的 omitted thinking 与 Responses 共用 verified 账号故障切换门控；
+当前只开放带认证来源证据、由带 profile 的 KiroRuntime
+`GenerateAssistantResponse` 在 `us-east-1` 铸造的 Claude Sonnet 5 signed text。
 
 `context_management` 仅接受 `clear_thinking_20251015` 且 `keep: "all"`，
 并返回 `applied_edits: []`。Destructive edits、Structured Outputs、强制/串行
@@ -88,7 +92,7 @@ flowchart TD
 - custom grammar 与尚未验证的原生工具桥接组合；
 - Codex `additional_tools` 与 `agent_message`；
 - 存在可调用工具时的 `parallel_tool_calls: false`；
-- `include: ["reasoning.encrypted_content"]`，或 input 中带有 Provider `kr1_` token。
+- `include: ["reasoning.encrypted_content"]`，或 input 中带有 Provider `kr1_` 或 `kr2_` token。
 
 引用原生已存储 Response 的请求会继续使用原生通道。如果新请求要求把该原生
 lineage 切换到 stateless 通道，V3 会明确报错，不会弱化 `store`、effort、
@@ -107,19 +111,19 @@ CLI 不会直接调用另一个公开 Mantle 端点。
 
 已验证原生能力：
 
-| 能力 | GPT-5.6 Sol | Claude Opus 5 |
-| --- | --- | --- |
-| `instructions` | 支持 | 原样转发；us-east-1 的优先级仍未通过验证 |
-| 标准 Responses JSON 与 SSE | 支持 | 支持 |
-| Function 工具 | 支持 | 支持 |
-| `previous_response_id` | 绑定持久归属；受影响的 opaque 历史精确回放 | us-east-1 中恢复完整历史后调用 CreateResponse |
-| `max_output_tokens` | 支持 | 支持 |
-| `reasoning.effort: xhigh` | 支持 | 支持 |
-| `truncation: disabled` | 支持 | 支持 |
-| `truncation: auto` | 支持 | 本地拒绝 |
-| `temperature` | 本地拒绝 | 支持 |
-| `top_p` | 本地拒绝 | 本地拒绝 |
-| `max` effort | 切换 stateless | 切换 stateless |
+| 能力                       | GPT-5.6 Sol                                | Claude Opus 5                                 |
+| -------------------------- | ------------------------------------------ | --------------------------------------------- |
+| `instructions`             | 支持                                       | 原样转发；us-east-1 的优先级仍未通过验证      |
+| 标准 Responses JSON 与 SSE | 支持                                       | 支持                                          |
+| Function 工具              | 支持                                       | 支持                                          |
+| `previous_response_id`     | 绑定持久归属；受影响的 opaque 历史精确回放 | us-east-1 中恢复完整历史后调用 CreateResponse |
+| `max_output_tokens`        | 支持                                       | 支持                                          |
+| `reasoning.effort: xhigh`  | 支持                                       | 支持                                          |
+| `truncation: disabled`     | 支持                                       | 支持                                          |
+| `truncation: auto`         | 支持                                       | 本地拒绝                                      |
+| `temperature`              | 本地拒绝                                   | 支持                                          |
+| `top_p`                    | 本地拒绝                                   | 本地拒绝                                      |
+| `max` effort               | 切换 stateless                             | 切换 stateless                                |
 
 Provider 会删除 `billing` 等私有上游字段，并在公开响应中保留客户端请求的模型
 变体与归一化 OpenAI 字段。
@@ -135,7 +139,7 @@ CodeWhisperer/Kiro 流式管道。它保留：
   提升一个内联图片块，同时保留相邻文本和工具关联；
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
-- 通过租户绑定 `kr1_` token 回放 Kiro 签名或 redacted reasoning。
+- 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
 
 在 `v3-auto` 中，只有原生 Responses 通道不能承载请求时，该通道才使用显式
 legacy 指令前缀。它不会把尾部指令移入更早历史，也不会构造空 current user。
@@ -170,27 +174,27 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 
 ## 6. 请求能力矩阵
 
-| 请求能力 | V3 契约 |
-| --- | --- |
-| 文本、消息数组、图片、内联文档 | 在已记录的 Kiro 格式限制内支持；function/custom 工具结果可携带一个内联 data-URL 图片块。 |
-| `instructions`、`system`、`developer` | 普通 V3 通道使用原生字段；stateless fallback 保序投影。 |
-| Function 工具 | 能走原生时走原生，否则 fallback。 |
-| Namespace 与自由文本 custom 工具 | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。 |
-| `agent_message` | Stateless fallback；保留可见内容，不把子代理加密元数据注入父模型。 |
-| `tool_choice: auto` / `none` | 在不存在冲突的未完成工具状态时支持。 |
-| Required、指定或受约束 tool choice | 拒绝。 |
-| `strict: true` | 拒绝，因为 Kiro 无法保证 strict schema。 |
-| `store: true` / 省略 | 支持并写入本地镜像。 |
-| `store: false` | 走 stateless，不写本地 Response 镜像。 |
-| `previous_response_id` | 支持本地镜像中的原生或 stateless Response。 |
-| Responses `conversation` 对象 | 返回 `unsupported_stateful_responses`。 |
-| Structured Outputs / JSON schema | 返回 `unsupported_structured_output`。 |
-| 内置 Web Search、File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。 |
-| 远程图片 URL 与 OpenAI `file_id` | 拒绝；应发送 data URL 或内联文件数据。 |
-| `background: true` | 拒绝。 |
-| Prompt template、moderation、context management | 拒绝。 |
-| `metadata`、`client_metadata`、`prompt_cache_key` | 用于响应回显、租户/会话路由或兼容元数据；不宣称等价于 Kiro prompt cache。 |
-| `text.verbosity` | 作为兼容元数据接受；Kiro 没有经过验证的 verbosity 控制。 |
+| 请求能力                                             | V3 契约                                                                                  |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 文本、消息数组、图片、内联文档                       | 在已记录的 Kiro 格式限制内支持；function/custom 工具结果可携带一个内联 data-URL 图片块。 |
+| `instructions`、`system`、`developer`                | 普通 V3 通道使用原生字段；stateless fallback 保序投影。                                  |
+| Function 工具                                        | 能走原生时走原生，否则 fallback。                                                        |
+| Namespace 与自由文本 custom 工具                     | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。          |
+| `agent_message`                                      | Stateless fallback；保留可见内容，不把子代理加密元数据注入父模型。                       |
+| `tool_choice: auto` / `none`                         | 在不存在冲突的未完成工具状态时支持。                                                     |
+| Required、指定或受约束 tool choice                   | 拒绝。                                                                                   |
+| `strict: true`                                       | 拒绝，因为 Kiro 无法保证 strict schema。                                                 |
+| `store: true` / 省略                                 | 支持并写入本地镜像。                                                                     |
+| `store: false`                                       | 走 stateless，不写本地 Response 镜像。                                                   |
+| `previous_response_id`                               | 支持本地镜像中的原生或 stateless Response。                                              |
+| Responses `conversation` 对象                        | 返回 `unsupported_stateful_responses`。                                                  |
+| Structured Outputs / JSON schema                     | 返回 `unsupported_structured_output`。                                                   |
+| 内置 Web Search、File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。                                                      |
+| 远程图片 URL 与 OpenAI `file_id`                     | 拒绝；应发送 data URL 或内联文件数据。                                                   |
+| `background: true`                                   | 拒绝。                                                                                   |
+| Prompt template、moderation、context management      | 拒绝。                                                                                   |
+| `metadata`、`client_metadata`、`prompt_cache_key`    | 用于响应回显、租户/会话路由或兼容元数据；不宣称等价于 Kiro prompt cache。                |
+| `text.verbosity`                                     | 作为兼容元数据接受；Kiro 没有经过验证的 verbosity 控制。                                 |
 
 ## 7. Native-context 结论
 
@@ -276,5 +280,7 @@ Nullable 字段在路由前归一化，显式 Responses effort 优先于模型�
 V1 stateless 的已知 canonical 历史保存在新 V3 记录中。V2 native 缺少完整归属，
 仍可 Retrieve，但不能依赖亲和缓存补造区域/profile 后继续使用该 ID。
 需要回放却缺少原始 reasoning 位置的旧记录会明确报错；回滚须使用匹配的数据库备份。
+历史 `kr1_` 与缺少认证 mint 来源的预发布 `kr2_` 不会进入跨账号迁移；后者只在
+一个持久化的兼容窗口内 owner-bound 可读。
 
 详见[真实验证报告](../audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)。

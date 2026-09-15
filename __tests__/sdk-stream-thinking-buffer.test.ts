@@ -60,10 +60,10 @@ describe("SDK stream protocol fidelity", () => {
     });
   });
 
-  test("does not publish incomplete or ambiguous reasoning replay material", () => {
+  test("preserves a signature-only empty thinking block but rejects ambiguous material", () => {
     const signatureOnly = createReasoningCaptureState();
     appendReasoningCapture(signatureOnly, { signature: "sig" });
-    expect(resolveReasoningCapture(signatureOnly)).toEqual({ text: "" });
+    expect(resolveReasoningCapture(signatureOnly)).toEqual({ text: "", signature: "sig" });
 
     const conflicting = createReasoningCaptureState();
     appendReasoningCapture(conflicting, { text: "native reasoning", signature: "sig-a" });
@@ -113,7 +113,18 @@ describe("SDK stream protocol fidelity", () => {
     )) {
       signatureOnly.push(chunk);
     }
-    expect(signatureOnly.some((event) => event.type === "reasoning_signature")).toBe(false);
+    const emptyDeltaIndex = signatureOnly.findIndex(
+      (event) => event.type === "reasoning_delta" && event.text === "",
+    );
+    const signatureOnlyIndex = signatureOnly.findIndex(
+      (event) => event.type === "reasoning_signature" && event.signature === "sig-only",
+    );
+    const signatureOnlyTextIndex = signatureOnly.findIndex(
+      (event) => event.type === "text_delta" && event.text === "answer",
+    );
+    expect(emptyDeltaIndex).toBeGreaterThanOrEqual(0);
+    expect(signatureOnlyIndex).toBeGreaterThan(emptyDeltaIndex);
+    expect(signatureOnlyIndex).toBeLessThan(signatureOnlyTextIndex);
   });
 
   test("classifies contradictory reasoning metadata as a protocol error", async () => {

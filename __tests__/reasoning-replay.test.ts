@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,7 @@ function config(
   return ConfigSchema.parse({
     api_keys: ["test-key"],
     reasoning_replay_keys: keyEntries,
+    reasoning_replay_token_format: "database-v1",
     reasoning_replay_ttl_ms: 60_000,
     reasoning_replay_max_entries: 100,
     ...overrides,
@@ -71,6 +72,11 @@ const baseContext = {
   accountId: "account-a",
   conversationId: "conversation-a",
   outputFingerprint: "output-fingerprint-a",
+  protocol: "responses",
+  region: "us-east-1",
+  profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/source",
+  runtimeProtocol: "kiro-runtime",
+  upstreamOperation: "GenerateAssistantResponse",
 } as const;
 
 function requireToken(value: string | undefined): string {
@@ -96,6 +102,75 @@ function openRaw(path: string): Database {
 }
 
 describe("ReasoningReplayStore", () => {
+  test("portable-v2 survives an empty database and preserves empty signed thinking", () => {
+    const { path, store } = fixture(
+      config(undefined, { reasoning_replay_token_format: "portable-v2" }),
+    );
+    const now = Date.now();
+    const token = requireToken(
+      store.store({ text: "", signature: "signed-empty" }, baseContext, now),
+    );
+    expect(token).toStartWith("kr2_");
+    expect(store.resolveResponses(token, baseContext, 0)).toMatchObject({
+      accountId: baseContext.accountId,
+      conversationId: baseContext.conversationId,
+      portable: true,
+      replay: {
+        insertBeforeMessage: 0,
+        content: { kind: "reasoning_text", text: "", signature: "signed-empty" },
+      },
+    });
+    expectReplayError(
+      () => store.resolveResponses(token, { ...baseContext, now: now + 60_000 }, 0),
+      "reasoning_replay_expired",
+    );
+    const raw = openRaw(path);
+    expect(
+      raw.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM reasoning_replay").get(),
+    ).toEqual({ count: 0 });
+    raw.close();
+  });
+
+  test("resolves a 268-token legacy history with one aggregate success event", () => {
+    const { store } = fixture(
+      config(undefined, { reasoning_replay_max_entries: 500, reasoning_replay_ttl_ms: 600_000 }),
+    );
+    const now = Date.now();
+    const items = Array.from({ length: 268 }, (_, index) => {
+      const outputFingerprint = `output-${index}`;
+      return {
+        token: requireToken(
+          store.store(
+            { text: `reasoning-${index}`, signature: `signature-${index}` },
+            { ...baseContext, outputFingerprint },
+            now,
+          ),
+        ),
+        context: { ...baseContext, outputFingerprint, now: now + 1 },
+        insertBeforeMessage: index,
+      };
+    });
+    const stderr = spyOn(console, "error").mockImplementation(() => undefined);
+    const started = performance.now();
+    const resolutions = store.resolveResponsesBatch(items);
+    const elapsedMs = performance.now() - started;
+    expect(resolutions).toHaveLength(268);
+    expect(resolutions[267]?.replay.insertBeforeMessage).toBe(267);
+    const successEvents = stderr.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as { event?: string; replay_count?: number })
+      .filter(({ event }) => event === "reasoning_replay_resolved");
+    expect(successEvents).toHaveLength(1);
+    expect(successEvents[0]).toMatchObject({
+      event: "reasoning_replay_resolved",
+      replay_count: 268,
+      portable_count: 0,
+      legacy_count: 268,
+      key_count: 1,
+    });
+    expect(elapsedMs).toBeLessThan(100);
+    stderr.mockRestore();
+  });
+
   test("stores only token/fingerprint hashes and decrypts an exact signed replay", () => {
     const { path, store } = fixture();
     const reasoning = "private-reasoning-4b2f7156-d62d-4ad7-a09e-47e8f94c5853";
@@ -171,6 +246,13 @@ describe("ReasoningReplayStore", () => {
     const oldToken = requireToken(
       first.store.store({ text: "old reasoning", signature: "old signature" }, baseContext, now),
     );
+    requireToken(
+      first.store.store(
+        { text: "unread old reasoning", signature: "unread old signature" },
+        { ...baseContext, outputFingerprint: "unread-old-output" },
+        now,
+      ),
+    );
     first.database.close();
     databases.delete(first.database);
 
@@ -222,6 +304,43 @@ describe("ReasoningReplayStore", () => {
     expectReplayError(
       () => store.resolveResponses(token, { ...baseContext, now: now + 25 }, 0),
       "reasoning_replay_expired",
+    );
+  });
+
+  test("accepts an exact legacy output fingerprint compatibility candidate", () => {
+    const { store } = fixture();
+    const token = requireToken(
+      store.store(
+        { text: "legacy reasoning", signature: "legacy signature" },
+        { ...baseContext, outputFingerprint: "pre-normalization-output" },
+      ),
+    );
+
+    expect(
+      store.resolveResponses(
+        token,
+        {
+          ...baseContext,
+          outputFingerprint: "normalized-output",
+          compatibleOutputFingerprints: ["pre-normalization-output"],
+        },
+        0,
+      ),
+    ).toMatchObject({
+      replay: { content: { text: "legacy reasoning", signature: "legacy signature" } },
+    });
+    expectReplayError(
+      () =>
+        store.resolveResponses(
+          token,
+          {
+            ...baseContext,
+            outputFingerprint: "different-output",
+            compatibleOutputFingerprints: ["also-different"],
+          },
+          0,
+        ),
+      "reasoning_replay_context_mismatch",
     );
   });
 
@@ -388,8 +507,8 @@ describe("ReasoningReplayStore", () => {
       ),
     ).toMatchObject({ accountId: baseContext.accountId });
 
-    expect(database.pruneReasoningReplay(now + 13, 2)).toBe(2);
-    expect(database.activeReasoningReplayKeyIds(now + 13)).toEqual([]);
+    expect(database.pruneReasoningReplay(now + 15, 2)).toBe(2);
+    expect(database.activeReasoningReplayKeyIds(now + 15)).toEqual([]);
   });
 });
 

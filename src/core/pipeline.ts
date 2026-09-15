@@ -16,11 +16,12 @@ import {
 } from "../protocol/output.js";
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
-import { KIRO_CONSTANTS } from "../kiro/constants.js";
+import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields } from "../kiro/effort.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   isAccessTokenError,
+  isPermanentError,
   isQuotaExhausted,
   isRefreshTokenDead,
   toDeadReason,
@@ -68,7 +69,11 @@ import {
   type StreamTelemetry,
 } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
-import type { PipelineAffinityBinding, RunChatCompletionOptions } from "./pipeline-types.js";
+import type {
+  PipelineAffinityBinding,
+  PipelineReasoningReplayStore,
+  RunChatCompletionOptions,
+} from "./pipeline-types.js";
 import {
   attachKiroRuntimeRequest,
   createSdkClient,
@@ -124,8 +129,15 @@ type CompletionResult =
     };
 
 interface ReplayState {
+  /** Owner-bound replay account. Only provenance-authenticated cells omit it. */
   readonly accountId?: string;
   readonly conversationId?: string;
+  readonly preferredAccountId?: string;
+  readonly preferredConversationId?: string;
+  readonly portableCount: number;
+  readonly portableRegion?: string;
+  readonly portableRuntimeProtocol?: "codewhisperer" | "kiro-runtime";
+  readonly portableProfileRequired?: true;
   readonly replays: readonly ResolvedReasoningReplay[];
 }
 
@@ -320,17 +332,162 @@ function canonicalOutputFingerprint(request: CanonicalRequest): SdkOutputFingerp
     });
 }
 
-function replayUnavailable(): CompletionResult {
+function replayAccountError(
+  status: number,
+  message: string,
+  code: string,
+  retryAfterMs?: number,
+): CompletionResult {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (retryAfterMs !== undefined) {
+    headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
+  }
   return {
     kind: "response",
-    response: openAiError(
-      503,
-      "The account bound to signed reasoning replay is currently unavailable",
-      "service_unavailable",
-      "reasoning_replay_account_unavailable",
+    response: new Response(
+      JSON.stringify({
+        error: {
+          message,
+          type:
+            status === 429
+              ? "rate_limit_error"
+              : status === 402
+                ? "insufficient_quota"
+                : status === 401 || status === 403
+                  ? "authentication_error"
+                  : "service_unavailable",
+          code,
+          ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
+        },
+      }),
+      { status, headers },
     ),
   };
 }
+
+function replayUnavailable(): CompletionResult {
+  return replayAccountError(
+    503,
+    "The account bound to signed reasoning replay is currently unavailable",
+    "reasoning_replay_account_unavailable",
+  );
+}
+
+function replayLockedSelectionResult(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  accounts: readonly ManagedAccount[],
+  eligibleAccountIds: ReadonlySet<string>,
+): SelectionOutcome {
+  const bound = accounts.find((account) => account.id === state.boundAccountId);
+  if (!bound) {
+    return { kind: "result", result: replayUnavailable() };
+  }
+  const now = Date.now();
+  const remainingMs = options.config.request_timeout_ms - (now - state.startedAt);
+  if (isQuotaExhausted(bound, overagePolicy(options))) {
+    const retryAfterMs =
+      bound.rateLimitResetTime > now ? bound.rateLimitResetTime - now : undefined;
+    return {
+      kind: "result",
+      result: replayAccountError(
+        402,
+        "The account bound to signed reasoning replay has exhausted its included quota",
+        "reasoning_replay_account_quota_exhausted",
+        retryAfterMs,
+      ),
+    };
+  }
+  if (bound.isHealthy && bound.rateLimitResetTime > now) {
+    const waitMs = bound.rateLimitResetTime - now;
+    if (waitMs <= remainingMs) {
+      auditLog("info", "reasoning_replay_rate_limit_wait", {
+        wait_ms: waitMs,
+        remaining_ms: remainingMs,
+      });
+      return { kind: "wait", waitMs };
+    }
+    return {
+      kind: "result",
+      result: replayAccountError(
+        429,
+        "The account bound to signed reasoning replay is temporarily rate-limited",
+        "reasoning_replay_account_rate_limited",
+        waitMs,
+      ),
+    };
+  }
+  if (!bound.isHealthy && isPermanentError(bound.unhealthyReason)) {
+    return {
+      kind: "result",
+      result: replayAccountError(
+        403,
+        "The account bound to signed reasoning replay requires re-authentication",
+        "reasoning_replay_account_reauthentication_required",
+      ),
+    };
+  }
+  if (!eligibleAccountIds.has(bound.id)) {
+    return {
+      kind: "result",
+      result: replayAccountError(
+        503,
+        `Model ${options.model} is unavailable on the account bound to signed reasoning replay`,
+        "reasoning_replay_model_unavailable",
+      ),
+    };
+  }
+  return {
+    kind: "result",
+    result: replayAccountError(
+      503,
+      "The account bound to signed reasoning replay is unhealthy",
+      "reasoning_replay_account_unhealthy",
+    ),
+  };
+}
+
+function verifiedPortableReplay(
+  options: RunChatCompletionOptions,
+  resolved: ReturnType<PipelineReasoningReplayStore["resolveResponses"]>,
+):
+  | {
+      readonly region: string;
+      readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+      readonly profileRequired: true;
+    }
+  | undefined {
+  if (options.config.reasoning_replay_account_failover !== "verified") return undefined;
+  const provenance = resolved.provenance;
+  if (
+    resolved.portable !== true ||
+    !provenance ||
+    provenance.protocol !== options.body.protocol ||
+    !provenance.profileArn ||
+    provenance.upstreamOperation !== "GenerateAssistantResponse"
+  )
+    return undefined;
+  // Cells are added only after the direct A -> B/new-conversation probe passes.
+  // Every dimension comes from the authenticated mint envelope; mutable account
+  // rows and the protocol used to present a token are never provenance.
+  const key = `${provenance.protocol}:${options.model}:${provenance.region}:${provenance.runtimeProtocol}:profile:${resolved.replay.content.kind}`;
+  return VERIFIED_PORTABLE_REPLAY_CELLS.has(key)
+    ? {
+        region: provenance.region,
+        runtimeProtocol: provenance.runtimeProtocol,
+        profileRequired: true,
+      }
+    : undefined;
+}
+
+const VERIFIED_PORTABLE_REPLAY_CELLS = new Set([
+  // 2026-09-15, Kiro CLI 2.21.1 / KiroRuntime us-east-1: three consecutive
+  // account-A -> account-B + new-conversation tool-result replays passed at max.
+  "responses:gpt-5.6-sol:us-east-1:kiro-runtime:profile:reasoning_text",
+  // The same direct signed-thinking probe passed 3/3 with Claude Sonnet 5;
+  // Messages still preserves its own public thinking/signature contract.
+  "anthropic-messages:claude-sonnet-5:us-east-1:kiro-runtime:profile:reasoning_text",
+]);
 
 function resolveReplayState(
   options: RunChatCompletionOptions,
@@ -342,17 +499,80 @@ function resolveReplayState(
     | undefined,
 ): ReplayState {
   if (options.body.reasoningReplays.length === 0) {
-    return { replays: [] };
+    return { replays: [], portableCount: 0 };
   }
-  let accountId = binding?.accountId;
-  let conversationId = binding?.conversationId;
+  // Session affinity is a routing preference, not replay authorization. The
+  // authenticated replay envelope determines strict ownership; verified cells
+  // may deliberately rebind a fork to another account/conversation.
+  let accountId: string | undefined;
+  let conversationId: string | undefined;
+  let preferredAccountId = binding?.accountId;
+  let preferredConversationId = binding?.conversationId;
+  let portableCount = 0;
+  let portableRegion: string | undefined;
+  let portableRuntimeProtocol: "codewhisperer" | "kiro-runtime" | undefined;
+  let portableProfileRequired: true | undefined;
   const replays: ResolvedReasoningReplay[] = [];
-  for (const replay of options.body.reasoningReplays) {
+  const tokenItems = options.body.reasoningReplays.flatMap((replay, index) => {
+    if (replay.lookup.kind !== "responses-token" && replay.lookup.kind !== "anthropic-token") {
+      return [];
+    }
+    if (!options.tenantId) {
+      throw new ReasoningReplayError(
+        "Reasoning replay requires an authenticated tenant context",
+        "reasoning_replay_context_required",
+      );
+    }
+    const token =
+      replay.lookup.kind === "responses-token"
+        ? replay.lookup.encryptedContent
+        : replay.lookup.signature;
+    return [
+      {
+        index,
+        token,
+        context: {
+          tenantId: options.tenantId,
+          model: options.body.model,
+          outputFingerprint: replay.outputFingerprint,
+          ...(replay.compatibleOutputFingerprints !== undefined
+            ? { compatibleOutputFingerprints: replay.compatibleOutputFingerprints }
+            : {}),
+          ...(accountId !== undefined ? { accountId } : {}),
+          ...(conversationId !== undefined ? { conversationId } : {}),
+        },
+        insertBeforeMessage: replay.insertBeforeMessage,
+      },
+    ];
+  });
+  const tokenResolutions = new Map<
+    number,
+    ReturnType<PipelineReasoningReplayStore["resolveResponses"]>
+  >();
+  if (tokenItems.length > 0) {
+    const store = options.reasoningReplayStore;
+    if (!store) {
+      throw new ReasoningReplayError(
+        "Reasoning replay storage is unavailable",
+        "reasoning_replay_store_unavailable",
+        true,
+      );
+    }
+    const resolved = store.resolveResponsesBatch
+      ? store.resolveResponsesBatch(tokenItems)
+      : tokenItems.map((item) =>
+          store.resolveResponses(item.token, item.context, item.insertBeforeMessage),
+        );
+    for (const [position, item] of tokenItems.entries()) {
+      const resolution = resolved[position];
+      if (resolution) tokenResolutions.set(item.index, resolution);
+    }
+  }
+  for (const [index, replay] of options.body.reasoningReplays.entries()) {
     if (replay.lookup.kind === "anthropic-direct") {
       // Kiro validates replayed thinking signatures itself and accepts a valid
       // signature in any conversation and on any account (probe evidence,
-      // docs/audits/kiro-protocol-evidence-probe-2026-09-02.zh.md), so the
-      // signed block is forwarded as-is without an affinity requirement.
+      // docs/audits/kiro-protocol-evidence-probe-2026-09-02.zh.md).
       replays.push({
         insertBeforeMessage: replay.insertBeforeMessage,
         content: replay.lookup.content,
@@ -377,35 +597,66 @@ function resolveReplayState(
       tenantId: options.tenantId,
       model: options.body.model,
       outputFingerprint: replay.outputFingerprint,
+      ...(replay.compatibleOutputFingerprints !== undefined
+        ? { compatibleOutputFingerprints: replay.compatibleOutputFingerprints }
+        : {}),
       ...(accountId !== undefined ? { accountId } : {}),
       ...(conversationId !== undefined ? { conversationId } : {}),
     };
     const resolved =
-      replay.lookup.kind === "responses-token" || replay.lookup.kind === "anthropic-token"
-        ? store.resolveResponses(
-            replay.lookup.kind === "responses-token"
-              ? replay.lookup.encryptedContent
-              : replay.lookup.signature,
-            context,
-            replay.insertBeforeMessage,
-          )
-        : store.resolveChat(replay.lookup.reasoningText, context, replay.insertBeforeMessage);
-    if (
-      (accountId !== undefined && accountId !== resolved.accountId) ||
-      (conversationId !== undefined && conversationId !== resolved.conversationId)
-    ) {
+      replay.lookup.kind === "chat-hash"
+        ? store.resolveChat(replay.lookup.reasoningText, context, replay.insertBeforeMessage)
+        : tokenResolutions.get(index);
+    if (!resolved) {
       throw new ReasoningReplayError(
-        "Reasoning replay items resolve to different accounts or conversations",
-        "reasoning_replay_context_mismatch",
+        "Reasoning replay batch resolution was incomplete",
+        "reasoning_replay_not_found",
       );
     }
-    accountId = resolved.accountId;
-    conversationId = resolved.conversationId;
+    const verified = verifiedPortableReplay(options, resolved);
+    if (verified !== undefined) {
+      if (
+        (portableRegion !== undefined && portableRegion !== verified.region) ||
+        (portableRuntimeProtocol !== undefined &&
+          portableRuntimeProtocol !== verified.runtimeProtocol)
+      ) {
+        throw new ReasoningReplayError(
+          "Portable reasoning replay items resolve to different verified mint cells",
+          "reasoning_replay_context_mismatch",
+        );
+      }
+      portableRegion = verified.region;
+      portableRuntimeProtocol = verified.runtimeProtocol;
+      portableProfileRequired = verified.profileRequired;
+      portableCount += 1;
+      preferredAccountId ??= resolved.accountId;
+      preferredConversationId ??= resolved.conversationId;
+    } else {
+      if (
+        (accountId !== undefined && accountId !== resolved.accountId) ||
+        (conversationId !== undefined && conversationId !== resolved.conversationId)
+      ) {
+        throw new ReasoningReplayError(
+          "Reasoning replay items resolve to different accounts or conversations",
+          "reasoning_replay_context_mismatch",
+        );
+      }
+      accountId = resolved.accountId;
+      conversationId = resolved.conversationId;
+      preferredAccountId = resolved.accountId;
+      preferredConversationId = resolved.conversationId;
+    }
     replays.push(resolved.replay);
   }
   return {
     ...(accountId !== undefined ? { accountId } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
+    ...(preferredAccountId !== undefined ? { preferredAccountId } : {}),
+    ...(preferredConversationId !== undefined ? { preferredConversationId } : {}),
+    ...(portableRegion !== undefined ? { portableRegion } : {}),
+    ...(portableRuntimeProtocol !== undefined ? { portableRuntimeProtocol } : {}),
+    ...(portableProfileRequired ? { portableProfileRequired } : {}),
+    portableCount,
     replays,
   };
 }
@@ -414,6 +665,11 @@ function reasoningCaptureOptions(
   options: RunChatCompletionOptions,
   accountId: string,
   conversationId: string,
+  mint: {
+    readonly region: string;
+    readonly profileArn?: string;
+    readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+  },
 ): {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning: boolean;
@@ -424,7 +680,8 @@ function reasoningCaptureOptions(
   const canonical = options.body;
   const emitEncryptedReasoning =
     canonical.includeEncryptedReasoning === true ||
-    (canonical.protocol === "responses" && canonical.store !== false);
+    (canonical.protocol === "responses" && canonical.store !== false) ||
+    canonical.protocol === "anthropic-messages";
   const emitAnthropicReasoningMetadata = canonical.protocol === "anthropic-messages";
   const captureOutput =
     options.lineage && options.affinityStore
@@ -466,6 +723,11 @@ function reasoningCaptureOptions(
         accountId,
         conversationId,
         outputFingerprint,
+        protocol: canonical.protocol,
+        region: mint.region,
+        ...(mint.profileArn !== undefined ? { profileArn: mint.profileArn } : {}),
+        runtimeProtocol: mint.runtimeProtocol,
+        upstreamOperation: "GenerateAssistantResponse",
       }),
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
@@ -577,6 +839,7 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
   const effectiveBinding = binding ?? lineageBinding;
   const replayState = resolveReplayState(options, effectiveBinding);
   const boundAccountId = replayState.accountId ?? effectiveBinding?.accountId;
+  const preferredAccountId = boundAccountId ?? replayState.preferredAccountId;
   return {
     forcedRefreshAccountIds: new Set<string>(),
     serverErrors: new Map<string, number>(),
@@ -595,9 +858,12 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     replayState,
     replayLocked: replayState.accountId !== undefined,
     boundAccountId,
-    preferredAccountId: boundAccountId,
-    requestAccountId: boundAccountId,
-    requestConversationId: replayState.conversationId ?? effectiveBinding?.conversationId,
+    preferredAccountId,
+    requestAccountId: preferredAccountId,
+    requestConversationId:
+      replayState.conversationId ??
+      effectiveBinding?.conversationId ??
+      replayState.preferredConversationId,
     streamAttempts: 0,
     sdkDispatches: 0,
     streamRetriedAccountIds: new Set<string>(),
@@ -637,6 +903,25 @@ function excludeAfterRefreshFailure(
     });
     return "retry";
   }
+  if (state.replayLocked) {
+    if (failure instanceof KiroTokenRefreshError) {
+      if (refreshTokenDead) {
+        options.accountManager.markUnhealthy(failed, toDeadReason(reason));
+      } else {
+        options.accountManager.markRateLimited(
+          failed,
+          Date.now() + options.config.rate_limit_retry_delay_ms,
+        );
+      }
+    }
+    auditLog("warn", "reasoning_replay_account_refresh_failed", {
+      account_hash: auditHash(failed.id),
+      error_type: failure.name,
+      error_code: failure instanceof KiroTokenRefreshError ? failure.code : undefined,
+      refresh_token_dead: refreshTokenDead,
+    });
+    return "switch";
+  }
   state.requestExcludedAccountIds.add(failed.id);
   if (failure instanceof KiroTokenRefreshError) {
     if (refreshTokenDead) {
@@ -665,8 +950,37 @@ async function continueAfterRefreshFailure(
   state: LoopState,
   failed: ManagedAccount,
   failure: RefreshFailure,
+  source: "initial" | "forced" = "initial",
 ): Promise<LoopDirective> {
-  if (excludeAfterRefreshFailure(options, state, failed, failure) === "retry") {
+  const action = excludeAfterRefreshFailure(options, state, failed, failure);
+  if (state.replayLocked) {
+    if (
+      failure instanceof KiroTokenRefreshError &&
+      isRefreshTokenDead(refreshFailureReason(failure))
+    ) {
+      return returning(
+        replayAccountError(
+          403,
+          "The account bound to signed reasoning replay requires re-authentication",
+          "reasoning_replay_account_reauthentication_required",
+        ),
+      );
+    }
+    if (failure instanceof AccountUnavailableError) return returning(replayUnavailable());
+    // An initial NETWORK_ERROR receives the existing one bounded same-account
+    // retry. A forced refresh follows an upstream credential rejection and must
+    // surface its own typed failure instead of re-sending the rejected token.
+    if (action !== "retry" || source === "forced") {
+      return returning(
+        replayAccountError(
+          503,
+          "Token refresh failed for the account bound to signed reasoning replay",
+          "reasoning_replay_account_refresh_failed",
+        ),
+      );
+    }
+  }
+  if (action === "retry") {
     await abortableSleep(options.config.rate_limit_retry_delay_ms, signal);
   }
   return CONTINUE;
@@ -807,7 +1121,18 @@ function selectAttemptAccount(
   );
   const eligibleAccountIds = new Set(
     [...(cachedEligible ?? candidateAccountIds)].filter(
-      (accountId) => !state.modelRejectedAccountIds.has(accountId),
+      (accountId) =>
+        !state.modelRejectedAccountIds.has(accountId) &&
+        (state.replayState.portableRegion === undefined ||
+          (() => {
+            const account = accounts.find((candidate) => candidate.id === accountId);
+            if (!account) return false;
+            const region = extractRegionFromArn(account.profileArn) ?? account.region;
+            return (
+              region === state.replayState.portableRegion &&
+              (!state.replayState.portableProfileRequired || account.profileArn !== undefined)
+            );
+          })()),
     ),
   );
   const selected = options.accountManager.selectHealthyAccount(
@@ -821,7 +1146,9 @@ function selectAttemptAccount(
     return { kind: "selected", selection: { selected, accounts, eligibleAccountIds } };
   }
 
-  if (state.replayLocked) return { kind: "result", result: replayUnavailable() };
+  if (state.replayLocked) {
+    return replayLockedSelectionResult(options, state, accounts, eligibleAccountIds);
+  }
   if (candidateAccountIds.length === 0 && state.lastAuthenticationFailure) {
     return { kind: "result", result: authenticationFailureResult(state.lastAuthenticationFailure) };
   }
@@ -894,6 +1221,14 @@ function bindAttemptAffinity(
   selected: ManagedAccount,
 ): "proceed" | "reselect" {
   const now = Date.now();
+  const migratedPortableReplay =
+    state.replayState.portableCount > 0 &&
+    state.replayState.preferredAccountId !== undefined &&
+    selected.id !== state.replayState.preferredAccountId;
+  if (migratedPortableReplay) {
+    state.requestAccountId = selected.id;
+    state.requestConversationId = randomUUID();
+  }
   if (options.affinity && options.affinityStore) {
     if (!state.binding) {
       const claimed = options.affinityStore.claimSessionAffinity(
@@ -918,7 +1253,10 @@ function bindAttemptAffinity(
         );
       }
       if (claimed.accountId !== selected.id) return "reselect";
-    } else if (state.binding.accountId === selected.id) {
+    } else if (
+      state.binding.accountId === selected.id &&
+      (!state.replayLocked || state.binding.conversationId === state.replayState.conversationId)
+    ) {
       state.binding = options.affinityStore.claimSessionAffinity(
         options.affinity.keyHash,
         selected.id,
@@ -932,7 +1270,7 @@ function bindAttemptAffinity(
       state.binding = options.affinityStore.rebindSessionAffinity(
         options.affinity.keyHash,
         selected.id,
-        randomUUID(),
+        state.replayLocked ? (state.replayState.conversationId as string) : randomUUID(),
         now,
         options.config.session_affinity_ttl_ms,
         options.config.session_affinity_max_entries,
@@ -942,6 +1280,17 @@ function bindAttemptAffinity(
   } else if (!state.replayLocked && state.requestAccountId !== selected.id) {
     state.requestAccountId = selected.id;
     state.requestConversationId = randomUUID();
+  }
+
+  if (migratedPortableReplay) {
+    auditLog("info", "reasoning_replay_account_migrated", {
+      request_id: options.requestId,
+      protocol: options.body.protocol,
+      model: options.model,
+      from_account_hash: auditHash(state.replayState.preferredAccountId),
+      to_account_hash: auditHash(selected.id),
+      replay_count: state.replayState.portableCount,
+    });
   }
 
   state.preferredAccountId = selected.id;
@@ -1050,13 +1399,33 @@ async function runAttempt(
       nativeSystemPromptEnabled = capability.status === "available";
     }
     const parsedEffort = EffortSchema.safeParse(options.config.effort);
+    const promptCaching = options.modelCapabilities?.promptCaching?.(account.id, options.model);
     const prepared = transformToSdkRequest(options.body, options.model, auth, think, budget, {
       autoEffortMapping: options.config.auto_effort_mapping,
       conversationId: state.requestConversationId,
       nativeSystemPromptEnabled,
       resolvedReasoningReplays: state.replayState.replays,
+      promptCaching: {
+        mode: options.config.kiro_prompt_cache_mode,
+        supported: promptCaching?.supportsPromptCaching === true,
+        ...(promptCaching?.maximumCacheCheckpointsPerRequest !== undefined
+          ? { maximumCheckpoints: promptCaching.maximumCacheCheckpointsPerRequest }
+          : {}),
+        ...(promptCaching?.minimumTokensPerCacheCheckpoint !== undefined
+          ? { minimumTokens: promptCaching.minimumTokensPerCacheCheckpoint }
+          : {}),
+      },
       ...(parsedEffort.success ? { effort: parsedEffort.data } : {}),
     });
+    if (
+      state.replayState.portableRuntimeProtocol !== undefined &&
+      prepared.runtimeProtocol !== state.replayState.portableRuntimeProtocol
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay request does not match the authenticated upstream operation",
+        "reasoning_replay_context_mismatch",
+      );
+    }
     options.onProjection?.(prepared.diagnostics);
     const plannedAttempt = state.sdkDispatches + 1;
     const conversationHash = auditHash(prepared.conversationId);
@@ -1176,7 +1545,11 @@ async function runAttempt(
       throw error;
     }
     options.diagnostics?.accepted();
-    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId);
+    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId, {
+      region: prepared.region,
+      ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
+      runtimeProtocol: prepared.runtimeProtocol,
+    });
     const attemptContext: AttemptStreamContext = {
       options,
       signal,
@@ -1573,10 +1946,10 @@ async function applyClassification(
     if (caught instanceof RequestTransformError || caught instanceof ReasoningReplayError) {
       throw caught;
     }
-    if (state.replayLocked) return returning(replayUnavailable());
     if (isRefreshFailure(caught)) {
       return continueAfterRefreshFailure(options, signal, state, account, caught);
     }
+    if (state.replayLocked) return returning(replayUnavailable());
     throw caught;
   }
   if (isStreamFailureError(caught)) {
@@ -1637,8 +2010,7 @@ async function applyClassification(
       } catch (refreshError) {
         if (signal.aborted) throw abortReason(signal);
         if (!isRefreshFailure(refreshError)) throw refreshError;
-        if (state.replayLocked) return returning(replayUnavailable());
-        return continueAfterRefreshFailure(options, signal, state, account, refreshError);
+        return continueAfterRefreshFailure(options, signal, state, account, refreshError, "forced");
       }
       return CONTINUE;
     case "retry":
@@ -1646,14 +2018,16 @@ async function applyClassification(
       options.diagnostics?.phase("retry_backoff");
       await abortableSleep(classification.retryAfterMs ?? 0, signal);
       return CONTINUE;
-    case "switch":
-      if (state.replayLocked) return returning(replayUnavailable());
-      state.requestExcludedAccountIds.add(account.id);
-      if (error.status === 401 || (error.status === 403 && isAccessTokenError(error.message))) {
+    case "switch": {
+      const authenticationRejected =
+        error.status === 401 || (error.status === 403 && isAccessTokenError(error.message));
+      if (authenticationRejected) {
         state.lastAuthenticationFailure = error;
       }
       if (isQuotaExhaustionClassification(classification)) state.lastQuotaFailure = error;
-      if (error.reason === "TEMPORARILY_SUSPENDED") {
+      if (authenticationRejected && state.replayLocked) {
+        options.accountManager.markUnhealthy(account, toDeadReason(error.message));
+      } else if (error.reason === "TEMPORARILY_SUSPENDED") {
         options.accountManager.markUnhealthy(
           account,
           `InvalidTokenException: Account Suspended: ${error.message}`,
@@ -1666,8 +2040,28 @@ async function applyClassification(
           Date.now() + (classification.retryAfterMs ?? options.config.rate_limit_retry_delay_ms),
         );
       }
+      if (state.replayLocked) {
+        if (error.status === 429) {
+          state.retryCount += 1;
+          if (state.retryCount >= options.config.rate_limit_max_retries) {
+            const retryAfterMs =
+              classification.retryAfterMs ?? options.config.rate_limit_retry_delay_ms;
+            return returning(
+              replayAccountError(
+                429,
+                "The account bound to signed reasoning replay remains rate-limited",
+                "reasoning_replay_account_rate_limited",
+                retryAfterMs,
+              ),
+            );
+          }
+        }
+        return CONTINUE;
+      }
+      state.requestExcludedAccountIds.add(account.id);
       forgetPreferredAccount(state);
       return CONTINUE;
+    }
     case "fail":
       if (isInvalidReasoningSignature(error)) {
         return returning({
@@ -1737,7 +2131,13 @@ async function executeLoop(
         return outcome.result;
       }
       if (outcome.kind === "model-unavailable") {
-        if (state.replayLocked) return replayUnavailable();
+        if (state.replayLocked) {
+          return replayAccountError(
+            503,
+            `Model ${options.model} is unavailable on the account bound to signed reasoning replay`,
+            "reasoning_replay_model_unavailable",
+          );
+        }
         state.modelRejectedAccountIds.add(outcome.account.id);
         forgetPreferredAccount(state);
         continue;

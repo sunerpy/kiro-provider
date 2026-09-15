@@ -20,14 +20,14 @@ in-stream error codes are specified in
 - **`kiro-provider accounts list --details`** (or `--json`). The
   `AVAILABILITY` column is the selection view of each account:
 
-  | Value | Meaning |
-  | --- | --- |
-  | `available` | Healthy, not rate-limited, quota not exhausted. |
-  | `rate-limited` | A `429`/backoff window is active until `RECHECK_AT`. |
-  | `quota-exhausted` | Kiro reported the quota as used up; a due probe re-admits it. |
+  | Value             | Meaning                                                                                                                 |
+  | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+  | `available`       | Healthy, not rate-limited, quota not exhausted.                                                                         |
+  | `rate-limited`    | A `429`/backoff window is active until `RECHECK_AT`.                                                                    |
+  | `quota-exhausted` | Kiro reported the quota as used up; a due probe re-admits it.                                                           |
   | `overage-blocked` | Healthy and within quota, but `stop_on_overage` excludes it because its paid overage count exceeds `overage_threshold`. |
-  | `unhealthy` | Marked unhealthy for a transient reason (`HEALTH` is `unhealthy`). |
-  | `needs-relogin` | The refresh token or OIDC client is permanently dead; only `accounts relogin` recovers it. |
+  | `unhealthy`       | Marked unhealthy for a transient reason (`HEALTH` is `unhealthy`).                                                      |
+  | `needs-relogin`   | The refresh token or OIDC client is permanently dead; only `accounts relogin` recovers it.                              |
 
 - **HTTP status and `error.code`.** OpenAI-shaped routes return
   `{ "error": { "type", "code", "message" } }`; `/v1/messages` returns the
@@ -76,13 +76,13 @@ and apply the same `grep`/`jq` filters to it.
 
 - **Look at:** `accounts list --details` → `AVAILABILITY` `needs-relogin`;
   audit `account_token_refresh_failed` (`warn`) with `refresh_token_dead:
-  true` and an `error_code` such as `invalid_grant`, `InvalidGrantException`,
+true` and an `error_code` such as `invalid_grant`, `InvalidGrantException`,
   `ExpiredTokenException`, or `InvalidTokenException`; the background
   maintenance pass logs the same condition as
   `account_maintenance_token_refresh_failed`.
 - **Cause:** Kiro's token service rejected the refresh token or the OIDC client
   registration itself. Access-token errors (`bearer token ... is invalid`) are
-  *not* permanent and are handled by a forced refresh; only the refresh-dead
+  _not_ permanent and are handled by a forced refresh; only the refresh-dead
   markers park the account.
 - **Remedy:** `kiro-provider accounts relogin <id|email>`. The account keeps
   its internal ID and session-affinity rows. A transient `error_code` such as
@@ -96,7 +96,7 @@ and apply the same `grep`/`jq` filters to it.
 
 - **Look at:** `accounts list` → `EMAIL` column; the `login` command printed
   `Warning: Kiro usage did not include an account email; storing the
-  placeholder ...`.
+placeholder ...`.
 - **Cause:** The IAM Identity Center / Builder ID device-code flow does not
   return an email; the provider fills it from Kiro's `getUsageLimits`
   response. If that lookup failed or the response carried no `email`, the
@@ -173,12 +173,12 @@ and apply the same `grep`/`jq` filters to it.
   `last_event_type`, `event_type_counts`) or `sdk_stream_idle_timeout`
   (`warn`, `idle_timeout_ms`). Around it, the stream-resilience layer emits:
 
-  | Event | Level | Fields | Meaning |
-  | --- | --- | --- | --- |
-  | `sdk_stream_attempt_retry` | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | A non-stream collector failed before an actionable result; nothing was published, so a bounded replacement is allowed. |
-  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash` | Non-stream collection exhausted its attempt budget; the last failure becomes HTTP `502`. |
-  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`, `max_attempts`, `account_hash` | Non-stream collection obtained an empty witnessed completion; one same-account replacement is allowed within the budget. |
-  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`, `account_hash`, `completion_witnessed` | The transport failed *after* an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
+  | Event                                         | Level  | Fields                                                                  | Meaning                                                                                                                                                                         |
+  | --------------------------------------------- | ------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | A non-stream collector failed before an actionable result; nothing was published, so a bounded replacement is allowed.                                                          |
+  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash`                 | Non-stream collection exhausted its attempt budget; the last failure becomes HTTP `502`.                                                                                        |
+  | `sdk_stream_empty_completion_retry`           | `warn` | `attempt`, `max_attempts`, `account_hash`                               | Non-stream collection obtained an empty witnessed completion; one same-account replacement is allowed within the budget.                                                        |
+  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`, `account_hash`, `completion_witnessed`                    | The transport failed _after_ an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
 
 - **Cause:** `upstream_stream_error` is a reader, decoder, transport, or
   embedded upstream failure; `upstream_stream_incomplete` is a clean EOF
@@ -200,15 +200,15 @@ Fields: `terminal_provenance`, `completion_witnessed`, `witness_kind`,
 `reasoning_chars`, `visible_chars`, `tool_count`, `tool_intent_open`,
 `finish_reason_synthesized`, plus `account_hash` and `conversation_hash`.
 
-| `terminal_provenance` | What happened | Who to blame |
-| --- | --- | --- |
-| `normal_complete` | Kiro sent a completion witness and the stream closed cleanly. | Nobody: this is Kiro ending the turn. |
-| `idle_timeout` | No upstream event for `stream_idle_timeout_ms`. | Transport / upstream stall. |
-| `upstream_error` | The SDK reader or Kiro reported an error mid-stream. | Transport / upstream. |
-| `consumer_cancel` | The client closed the response before the stream ended. | The client (its own timeout or user cancel). |
-| `external_abort` | The provider aborted the upstream: `request_timeout_ms` deadline, shutdown, or lock compromise. | Provider configuration or lifecycle. |
+| `terminal_provenance` | What happened                                                                                   | Who to blame                                 |
+| --------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `normal_complete`     | Kiro sent a completion witness and the stream closed cleanly.                                   | Nobody: this is Kiro ending the turn.        |
+| `idle_timeout`        | No upstream event for `stream_idle_timeout_ms`.                                                 | Transport / upstream stall.                  |
+| `upstream_error`      | The SDK reader or Kiro reported an error mid-stream.                                            | Transport / upstream.                        |
+| `consumer_cancel`     | The client closed the response before the stream ended.                                         | The client (its own timeout or user cancel). |
+| `external_abort`      | The provider aborted the upstream: `request_timeout_ms` deadline, shutdown, or lock compromise. | Provider configuration or lifecycle.         |
 
-When a user reports "the model said *Next, I'll run the tests* and then
+When a user reports "the model said _Next, I'll run the tests_ and then
 stopped":
 
 1. Find the turn's `sdk_stream_terminal`.
@@ -239,7 +239,7 @@ stopped":
 - **Look at:** HTTP `400`, `error.code` `invalid_reasoning_signature`
   (Anthropic envelope: `invalid_request_error` with the same message). The
   upstream message names the offending block, e.g. `messages.1.content.0:
-  Invalid signature in thinking block`.
+Invalid signature in thinking block`.
 - **Cause:** Kiro validates replayed `thinking` signatures server-side. The
   client echoed a `thinking` block whose `signature` was altered, truncated,
   re-encoded, or produced by a different model/provider. Signatures are not
@@ -256,17 +256,28 @@ stopped":
 - **Look at:** HTTP `400`, `error.code`
   `unsupported_reasoning_plaintext_replay`, `param` pointing at the
   `input[i]` reasoning item; `invalid_reasoning_replay` is the sibling code
-  for a malformed or non-`kr1_` `encrypted_content`.
+  for a malformed or non-provider (`kr1_` / `kr2_`) `encrypted_content`.
 - **Cause:** The client replayed a `reasoning` item that carries only
   plaintext `summary`/`content` and no `encrypted_content` anywhere in that
   turn. The provider never converts plaintext reasoning into a prompt, so it
   cannot be projected.
 - **Remedy:** Request `include: ["reasoning.encrypted_content"]` and echo the
-  returned `encrypted_content` (`kr1_...`) on the reasoning item when
+  returned `encrypted_content` (`kr2_...` by default; legacy `kr1_...` remains accepted) on the reasoning item when
   replaying the turn. Exactly one reasoning item per turn carries the token;
   other reasoning items in the same turn may keep plaintext summaries. A
   client that cannot store the token should omit reasoning items from
   history instead of sending summaries alone.
+
+### `400 reasoning_replay_expired`
+
+- **Cause:** A current `kr2_` token reached its authenticated absolute expiry, a
+  database-backed `kr1_` row reached its idle expiry, or a pre-release `kr2_`
+  envelope reached the persisted compatibility cutoff. Restarting the provider
+  does not extend any of these deadlines.
+- **Remedy:** Continue from a newer assistant turn that carries a fresh token, or
+  start/fork from history that omits the expired reasoning item. Do not keep an
+  old replay key solely to bypass expiry; key retention cannot override the
+  authenticated token lifetime.
 
 ### `reasoning_replay_locked: false` in `upstream_affinity_selected`
 
@@ -274,21 +285,36 @@ stopped":
   with `affinity_kind`, `affinity_bound`, `account_hash`,
   `conversation_hash`, and `reasoning_replay_locked`.
 - **Meaning:** `reasoning_replay_locked: true` means the request replays
-  encrypted reasoning that is bound to the account that minted it, so
+  encrypted reasoning that remains bound to the account that minted it, so
   account failover is disabled for this request (a failure returns
-  `reasoning_replay_*` rather than switching). `false` means the client is
-  not replaying account-bound reasoning: either no reasoning item is in the
-  history, or the replay kind carries no binding (Anthropic `thinking`
-  signatures are validated by Kiro, not bound locally). `false` is the
-  normal value for most traffic and is not an error.
+  `reasoning_replay_*` rather than switching). `false` means either no replay is
+  present, the replay kind carries no local binding (a native Anthropic
+  `thinking` signature), or an authenticated provider token matched an exact
+  verified migration cell. An actual migration additionally emits
+  `reasoning_replay_account_migrated` with hashes only. `false` is normal and is
+  not an error.
+
+### Replay-bound account error codes
+
+When owner-bound signed reasoning cannot proceed, the provider keeps the cause
+without switching accounts: `reasoning_replay_account_quota_exhausted` (402),
+`reasoning_replay_account_rate_limited` (429),
+`reasoning_replay_account_reauthentication_required` (403),
+`reasoning_replay_account_refresh_failed` (503),
+`reasoning_replay_model_unavailable` (503), or an owner
+unavailable/unhealthy 503. A failed forced refresh after upstream 401/invalid
+bearer returns the re-authentication code for dead credentials and the refresh
+code for transport/temporary refresh failures; it no longer degrades to generic
+`reasoning_replay_account_unavailable`. Re-login for the 403. For refresh 503,
+check proxy/egress and retry without changing the replay token or account.
 
 ## Process and configuration
 
 ### Startup fails with `service_instance_already_running`; `single_instance_lock_busy` or `single_instance_lock_compromised` in the log
 
 - **Look at:** Startup error `Another kiro-provider instance already holds
-  the service lock at <path> (gave up after N attempt(s) ...; a lock left
-  behind by a dead process becomes stale after 15000 ms)` with code
+the service lock at <path> (gave up after N attempt(s) ...; a lock left
+behind by a dead process becomes stale after 15000 ms)` with code
   `service_instance_already_running`; audit `single_instance_lock_busy`
   (`warn`, first retry: `retry_attempts`, `retry_delay_ms`, `stale_ms`),
   `single_instance_lock_acquired` (`info`, `attempts`), and
@@ -304,7 +330,7 @@ stopped":
   provider fails closed: it stops accepting requests, drains for up to 10 s,
   and exits `1` so the service manager restarts it.
 - **Remedy:** For `already_running`, confirm with `systemctl --user
-  is-active kiro-provider.service` that only one service is defined and no
+is-active kiro-provider.service` that only one service is defined and no
   foreground `serve` is running as the same user; a second copy for another
   OS user selects a different config root and lock. For a lock compromise,
   keep the config directory intact and investigate host suspend/resume or
@@ -337,8 +363,8 @@ stopped":
 ### Startup fails with `auth_source "opencode-shared" was removed in kiro-provider 0.7.0`
 
 - **Look at:** The startup message itself: `Copy the OpenCode accounts once
-  with "kiro-provider accounts import [--from <path>]", then set auth_source
-  to "local" or delete the key`.
+with "kiro-provider accounts import [--from <path>]", then set auth_source
+to "local" or delete the key`.
 - **Cause:** The live-reader compatibility mode was removed in 0.7.0 because
   it reintroduced cross-process credential ownership and could block the
   event loop on the shared SQLite lock.
@@ -374,16 +400,16 @@ stopped":
   `HTTP_<status>`, `sdk_stream_upstream_error` with transport codes
   (`ECONNREFUSED`, `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`),
   `model_catalog_refresh_failed`, and finally `503
-  upstream_token_refresh_failed` or `503 no_healthy_accounts`.
+upstream_token_refresh_failed` or `503 no_healthy_accounts`.
   `sdk_connection_pool_selected` (`info`) shows `http_keep_alive` and pool
   hits per account but does not include the proxy address.
-- **Cause:** `proxy_url` routes *all* egress (model calls, token refresh,
+- **Cause:** `proxy_url` routes _all_ egress (model calls, token refresh,
   usage probes, device-code login) through one HTTP(S) proxy. SOCKS is not
   supported. A proxy that returns an HTML block page yields `HTTP_<status>`
   refresh errors that are deliberately treated as transient, so accounts stay
   `rate-limited` rather than `needs-relogin`.
 - **Remedy:** Verify the proxy from the service user's shell (`curl -x
-  "$PROXY" https://oidc.us-east-1.amazonaws.com/`); set `proxy_url` in the
+"$PROXY" https://oidc.us-east-1.amazonaws.com/`); set `proxy_url` in the
   config file or `KIRO_PROVIDER_PROXY_URL` (the `serve --proxy` flag wins over
   both); restart the service. `kiro-provider accounts refresh --all` is the
   quickest end-to-end check because it exercises the token endpoint and the
@@ -396,23 +422,23 @@ Responses, Messages, and Chat request emits one `request_shape` event after
 its canonical request is built and before account selection. It contains only
 counts, booleans, one hash, and two labels:
 
-| Field | Meaning |
-| --- | --- |
-| `request_id` | Random per-public-request correlation id shared with projection, dispatch, and terminal events. |
-| `protocol` | `responses`, `anthropic-messages`, or `chat-completions`. |
-| `projection_mode` | `v3-auto`, `safe`, `native-context-safe`, or `legacy-user-prefix`. |
-| `model` | The requested public model name. |
-| `message_count` | Canonical messages after adaptation. |
-| `user_message_count`, `assistant_message_count`, `tool_message_count`, `instruction_message_count` | Role counts (`instruction_message_count` is `system` plus `developer`). |
-| `tool_declaration_count` | Declared tools. |
-| `tool_call_count` | Tool calls in history (assistant `toolCalls` plus `tool_use` parts, unique by id per message). |
-| `tool_result_count` | Tool results in history. |
-| `orphan_tool_result_count` | Results whose call id matches no call in an earlier message. |
-| `image_count`, `document_count` | Inline attachments. |
-| `has_reasoning_replay`, `reasoning_replay_count` | Whether and how many encrypted reasoning replays the request carries. |
-| `system_instruction_present` | Top-level `instructions`/`system` or a system/developer message exists. |
-| `input_text_chars` | Sum of text lengths over messages, tool-result text, and instructions. A size, never the content. |
-| `tool_set_hash` | `auditHash` of the sorted tool names, so identical tool sets correlate across requests without logging the names. |
+| Field                                                                                              | Meaning                                                                                                           |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `request_id`                                                                                       | Random per-public-request correlation id shared with projection, dispatch, and terminal events.                   |
+| `protocol`                                                                                         | `responses`, `anthropic-messages`, or `chat-completions`.                                                         |
+| `projection_mode`                                                                                  | `v3-auto`, `safe`, `native-context-safe`, or `legacy-user-prefix`.                                                |
+| `model`                                                                                            | The requested public model name.                                                                                  |
+| `message_count`                                                                                    | Canonical messages after adaptation.                                                                              |
+| `user_message_count`, `assistant_message_count`, `tool_message_count`, `instruction_message_count` | Role counts (`instruction_message_count` is `system` plus `developer`).                                           |
+| `tool_declaration_count`                                                                           | Declared tools.                                                                                                   |
+| `tool_call_count`                                                                                  | Tool calls in history (assistant `toolCalls` plus `tool_use` parts, unique by id per message).                    |
+| `tool_result_count`                                                                                | Tool results in history.                                                                                          |
+| `orphan_tool_result_count`                                                                         | Results whose call id matches no call in an earlier message.                                                      |
+| `image_count`, `document_count`                                                                    | Inline attachments.                                                                                               |
+| `has_reasoning_replay`, `reasoning_replay_count`                                                   | Whether and how many encrypted reasoning replays the request carries.                                             |
+| `system_instruction_present`                                                                       | Top-level `instructions`/`system` or a system/developer message exists.                                           |
+| `input_text_chars`                                                                                 | Sum of text lengths over messages, tool-result text, and instructions. A size, never the content.                 |
+| `tool_set_hash`                                                                                    | `auditHash` of the sorted tool names, so identical tool sets correlate across requests without logging the names. |
 
 Use it to answer "did the client send the whole history?", "is a tool result
 arriving without its call?", or "how big is this conversation?" without ever

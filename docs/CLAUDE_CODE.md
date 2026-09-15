@@ -48,16 +48,16 @@ checkout for tests, or copy/link them after deciding to keep this launcher.
 
 ### Defaults and overrides
 
-| Setting | Default |
-| --- | --- |
-| Gateway root | `http://127.0.0.1:8787` (no `/v1` suffix) |
-| Claude state | Shared native `~/.claude` and `~/.claude.json` |
-| Model | Opus 5 |
-| Reasoning | Ultra: `effortLevel: "max"`, `ultracode: true` |
-| Permission mode | Inherit native Claude settings; no launcher override |
-| Away recap | Disabled |
-| Nonessential title/classifier traffic | Disabled |
-| Experimental betas | Enabled |
+| Setting                               | Default                                              |
+| ------------------------------------- | ---------------------------------------------------- |
+| Gateway root                          | `http://127.0.0.1:8787` (no `/v1` suffix)            |
+| Claude state                          | Shared native `~/.claude` and `~/.claude.json`       |
+| Model                                 | Opus 5                                               |
+| Reasoning                             | Ultra: `effortLevel: "max"`, `ultracode: true`       |
+| Permission mode                       | Inherit native Claude settings; no launcher override |
+| Away recap                            | Disabled                                             |
+| Nonessential title/classifier traffic | Disabled                                             |
+| Experimental betas                    | Enabled                                              |
 
 Override only the current process when needed. Set `KIROCLAUDE_CONFIG_DIR` only
 when a deliberately isolated Claude home is required:
@@ -163,11 +163,12 @@ The adapter accepts the request shapes observed from Claude Code 2.1.270:
   `temperature`;
 - GPT effort projected to `reasoning.effort`, while Claude effort remains
   `output_config.effort`;
-- encrypted replay of omitted signed thinking through opaque `kr1_` signatures;
+- encrypted replay of omitted signed thinking through opaque `kr2_` signatures (with legacy `kr1_` reads);
 - removal of GPT-5.6 ellipsis-only reasoning placeholders, including split
   `"." + "." + "."` streams, with exact stored replay on continuation;
-- prompt-cache markers as validated but unsupported hints, reported by
-  `x-kiro-prompt-cache-mode: unsupported` and zero cache-token usage;
+- prompt-cache markers as performance hints reported by `x-kiro-prompt-cache-mode`;
+  server-auto is the default, explicit checkpoints are capability-gated, and only
+  measured cache-token usage is reported;
 - the lossless `clear_thinking_20251015` / `keep: "all"`
   `context_management` form, reported with `applied_edits: []`;
 - Anthropic SSE ordering, stream errors, backpressure, silence-period `ping`
@@ -186,13 +187,13 @@ Anthropic services.
 
 ## Troubleshooting
 
-| Symptom | Action |
-| --- | --- |
-| Token helper reports unsafe permissions | Run `chmod 600 ~/.config/kiro-provider/config.json` and confirm the current user owns the file. |
-| `capability_rejected:context_management` | The client requested a destructive edit outside the supported lossless form. Do not hide it with an unreviewed field-stripping proxy. |
-| Kiro GPT row is absent | Start through `kiroclaude`; gateway discovery alone filters out the GPT IDs. |
-| Ordinary `claude` uses the wrong backend | Check the normal `~/.claude` profile. `kiroclaude` does not modify it. |
-| A resumed session reports an invalid provider signature | Start a new session after switching between Kiro and native Bedrock. |
+| Symptom                                                 | Action                                                                                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Token helper reports unsafe permissions                 | Run `chmod 600 ~/.config/kiro-provider/config.json` and confirm the current user owns the file.                                       |
+| `capability_rejected:context_management`                | The client requested a destructive edit outside the supported lossless form. Do not hide it with an unreviewed field-stripping proxy. |
+| Kiro GPT row is absent                                  | Start through `kiroclaude`; gateway discovery alone filters out the GPT IDs.                                                          |
+| Ordinary `claude` uses the wrong backend                | Check the normal `~/.claude` profile. `kiroclaude` does not modify it.                                                                |
+| A resumed session reports an invalid provider signature | Start a new session after switching between Kiro and native Bedrock.                                                                  |
 
 References: [Messages API](https://platform.claude.com/docs/en/api/messages/create),
 [Claude Code settings](https://code.claude.com/docs/en/settings),

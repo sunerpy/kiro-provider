@@ -52,6 +52,9 @@ export const ConfigSchema = z.object({
   responses_instruction_lift: z.enum(["auto", "off", "experimental"]).default("auto"),
   responses_native_tool_bridge: z.enum(["auto", "off", "experimental"]).default("auto"),
   session_affinity_mode: z.enum(["explicit-only", "legacy-initial-input"]).default("explicit-only"),
+  kiro_prompt_cache_mode: z
+    .enum(["server-auto", "explicit-checkpoints", "off"])
+    .default("server-auto"),
   proxy_url: ProxyUrlSchema,
   sdk_http_keep_alive: z.boolean().default(false),
   enforce_single_instance: z.boolean().default(true),
@@ -101,6 +104,8 @@ export const ConfigSchema = z.object({
   session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
   reasoning_replay_key_path: OptionalPathSchema,
   reasoning_replay_keys: z.array(z.string().trim().min(1)).default([]),
+  reasoning_replay_token_format: z.enum(["portable-v2", "database-v1"]).default("portable-v2"),
+  reasoning_replay_account_failover: z.enum(["verified", "strict"]).default("verified"),
   reasoning_replay_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   reasoning_replay_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
   effort: EffortSchema.nullable().default(null),

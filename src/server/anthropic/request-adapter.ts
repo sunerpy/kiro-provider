@@ -14,10 +14,12 @@ import {
   type CanonicalTextPart,
   type CanonicalToolCall,
   type CanonicalToolDeclaration,
+  legacyAssistantOutputFingerprint,
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
+import { isLegacyReplayToken, isProviderReplayToken } from "../../reasoning/replay-token.js";
 import { isGpt56Model } from "../responses/reasoning.js";
 
 const ContentBlockSchema = z.object({ type: z.string().min(1) }).passthrough();
@@ -152,10 +154,10 @@ function isFailure(value: unknown): value is AnthropicFailure {
 }
 
 /**
- * Prompt-cache controls do not change model-visible input. Kiro owns prompt
- * caching automatically, so the Anthropic marker is accepted as a performance
- * hint but never projected into synthetic prompt text. Keep validation narrow
- * so unrelated beta payloads cannot disappear silently at this boundary.
+ * Prompt-cache controls do not change model-visible input. Kiro caches stable
+ * prefixes automatically; explicit-checkpoints may additionally project this
+ * marker to the native cachePoint field, never to synthetic prompt text. Keep
+ * validation narrow so unrelated beta payloads cannot disappear silently.
  */
 function validateCacheControl(value: unknown, path: string): AnthropicFailure | undefined {
   if (value === undefined) return undefined;
@@ -405,7 +407,7 @@ function reasoningContent(
         `${path}.signature`,
       );
     }
-    if (block.signature.startsWith("kr1_")) {
+    if (isProviderReplayToken(block.signature)) {
       if (block.thinking.length > 0) {
         return failure(
           `Invalid request: ${path}.thinking must be empty when signature is a provider replay token`,
@@ -419,11 +421,10 @@ function reasoningContent(
       if (isGpt56Model(model)) {
         return { kind: "chat-hash", reasoningText: "..." };
       }
-      return failure(
-        `Invalid request: ${path}.thinking cannot be empty with a native signature`,
-        "invalid_reasoning_replay",
-        `${path}.thinking`,
-      );
+      return {
+        kind: "anthropic-direct",
+        content: { kind: "reasoning_text", text: "", signature: block.signature },
+      };
     }
     return {
       kind: "anthropic-direct",
@@ -501,6 +502,7 @@ function mapMessage(
   const content: CanonicalContentPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   let replay: CanonicalReasoningReplay["lookup"] | undefined;
+  let cachePoint = false;
   let directImagePath: string | undefined;
   let imageToolResultPath: string | undefined;
   for (const [blockIndex, block] of message.content.entries()) {
@@ -525,6 +527,7 @@ function mapMessage(
           `${blockPath}.cache_control`,
         );
         if (cacheControl) return cacheControl;
+        cachePoint ||= block.cache_control !== undefined;
         if (typeof block.text !== "string") {
           return failure(
             `Invalid request: ${blockPath}.text must be a string`,
@@ -561,6 +564,7 @@ function mapMessage(
           `${blockPath}.cache_control`,
         );
         if (cacheControl) return cacheControl;
+        cachePoint ||= block.cache_control !== undefined;
         if (typeof block.id !== "string" || typeof block.name !== "string") {
           return failure(
             `Invalid request: ${blockPath} requires id and name`,
@@ -588,6 +592,7 @@ function mapMessage(
           `${blockPath}.cache_control`,
         );
         if (cacheControl) return cacheControl;
+        cachePoint ||= block.cache_control !== undefined;
         if (typeof block.tool_use_id !== "string") {
           return failure(
             `Invalid request: ${blockPath} requires tool_use_id`,
@@ -651,7 +656,13 @@ function mapMessage(
     }
   }
   return {
-    message: { role: message.role, content, toolCalls, path },
+    message: {
+      role: message.role,
+      content,
+      toolCalls,
+      path,
+      ...(cachePoint ? { cachePoint: true } : {}),
+    },
     ...(replay !== undefined ? { replay } : {}),
   };
 }
@@ -694,6 +705,7 @@ function mapTools(
       descriptionPath: `tools.${index}.description`,
       inputSchema: tool.input_schema ?? {},
       path: `tools.${index}`,
+      ...(tool.cache_control !== undefined ? { cachePoint: true } : {}),
     });
   }
   return declarations;
@@ -818,6 +830,14 @@ export function adaptAnthropicMessagesRequest(
   }
   const cacheControl = validateCacheControl(request.cache_control, "cache_control");
   if (cacheControl) return cacheControl;
+  const cacheMarkers = cacheControlCount(request);
+  if (cacheMarkers > 4) {
+    return failure(
+      `Invalid request: at most 4 cache_control markers are supported, received ${cacheMarkers}`,
+      "too_many_cache_checkpoints",
+      "cache_control",
+    );
+  }
   const contextManagement = validateContextManagement(request.context_management);
   if (contextManagement) return contextManagement;
   if (request.thinking) {
@@ -864,22 +884,39 @@ export function adaptAnthropicMessagesRequest(
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
   if (system.length > 0) {
-    messages.push({ role: "system", content: system, toolCalls: [], path: "system" });
+    messages.push({
+      role: "system",
+      content: system,
+      toolCalls: [],
+      path: "system",
+      ...(Array.isArray(request.system) &&
+      request.system.some((block) => block.cache_control !== undefined)
+        ? { cachePoint: true }
+        : {}),
+    });
   }
   for (const [index, source] of request.messages.entries()) {
     const mapped = mapMessage(source, index, request.model);
     if ("ok" in mapped) return mapped;
     if (mapped.replay !== undefined) {
+      const output = {
+        text: textFromParts(mapped.message.content),
+        toolCalls: mapped.message.toolCalls.map((call) => ({
+          id: call.id,
+          name: call.name,
+          input: JSON.stringify(call.input),
+        })),
+      };
+      const outputFingerprint = assistantOutputFingerprint(output);
+      const legacyOutputFingerprint = legacyAssistantOutputFingerprint(output);
       reasoningReplays.push({
         lookup: mapped.replay,
-        outputFingerprint: assistantOutputFingerprint({
-          text: textFromParts(mapped.message.content),
-          toolCalls: mapped.message.toolCalls.map((call) => ({
-            id: call.id,
-            name: call.name,
-            input: JSON.stringify(call.input),
-          })),
-        }),
+        outputFingerprint,
+        ...(mapped.replay.kind === "anthropic-token" &&
+        isLegacyReplayToken(mapped.replay.signature) &&
+        legacyOutputFingerprint !== outputFingerprint
+          ? { compatibleOutputFingerprints: [legacyOutputFingerprint] }
+          : {}),
         insertBeforeMessage: messages.length,
         path: mapped.message.path,
       });
@@ -946,7 +983,7 @@ export function adaptAnthropicMessagesRequest(
     reasoningReplays,
     includeEncryptedReasoning: request.thinking?.display === "omitted",
   };
-  const count = cacheControlCount(request);
+  const count = cacheMarkers;
   return {
     ok: true,
     value: {

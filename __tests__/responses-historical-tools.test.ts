@@ -68,9 +68,11 @@ describe("Responses historical tools are not current execution authority", () =>
     const current =
       projected.request.conversationState.currentMessage.userInputMessage?.userInputMessageContext
         ?.tools ?? [];
-    expect(current.map((item) => item.toolSpecification?.name)).toEqual(
-      tools.map((item) => item.name),
-    );
+    expect(
+      current.map((item) =>
+        "toolSpecification" in item ? item.toolSpecification?.name : undefined,
+      ),
+    ).toEqual(tools.map((item) => item.name));
     expect(adapted.body.tools.map((item) => item.wireName)).toEqual(tools.map((item) => item.name));
     expect(JSON.stringify(input)).toBe(original);
     if (!tools.some((item) => item.name === "read")) {

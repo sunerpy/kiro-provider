@@ -3,6 +3,7 @@ import { RequestTransformError } from "../src/kiro/transform/errors.js";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import {
   assistantOutputFingerprint,
+  canonicalFingerprint,
   type ProtocolProjectionMode,
 } from "../src/protocol/canonical.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
@@ -701,6 +702,50 @@ describe("Responses exact function/custom tools", () => {
 });
 
 describe("Responses reasoning replay input", () => {
+  test("preserves the pre-3.2.9 raw-JSON fingerprint for legacy kr1 replay", () => {
+    const rawArguments = '{ "second": 2, "first": 1 }';
+    const output = {
+      text: "answer",
+      toolCalls: [
+        {
+          id: "call_legacy",
+          name: "lookup",
+          input: rawArguments,
+        },
+      ],
+    };
+    const legacyOutputFingerprint = canonicalFingerprint({
+      text: output.text,
+      toolCalls: output.toolCalls,
+    });
+    const result = adapt({
+      model: TEST_MODEL,
+      include: ["reasoning.encrypted_content"],
+      input: [
+        {
+          type: "reasoning",
+          id: "rs_legacy",
+          encrypted_content: "kr1_legacy-token",
+        },
+        { role: "assistant", content: output.text },
+        {
+          type: "function_call",
+          call_id: "call_legacy",
+          name: "lookup",
+          arguments: rawArguments,
+        },
+        { role: "user", content: "next" },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.reasoningReplays[0]).toMatchObject({
+      outputFingerprint: assistantOutputFingerprint(output),
+      compatibleOutputFingerprints: [legacyOutputFingerprint],
+    });
+  });
+
   test("accepts a returned reasoning item while treating the opaque kr1 token as authoritative", () => {
     const outputFingerprint = assistantOutputFingerprint({
       text: "answer",
