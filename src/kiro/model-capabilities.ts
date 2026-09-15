@@ -3,6 +3,7 @@ import { auditHash, auditLog } from "../core/audit-log.js";
 import {
   type KiroAvailableModel,
   KiroManagementError,
+  type KiroPromptCachingCapability,
   listAvailableModels,
 } from "./management-client.js";
 import {
@@ -49,6 +50,7 @@ export interface ModelCapabilitiesReadiness {
 export interface PipelineModelCapabilities {
   /** Raw upstream percentage basis, before public prompt-capacity corrections. */
   contextUsageWindow?(accountId: string, model: string): number | undefined;
+  promptCaching?(accountId: string, model: string): KiroPromptCachingCapability | undefined;
   ensureAccountModel(
     account: ManagedAccount,
     auth: KiroAuthDetails,
@@ -185,6 +187,13 @@ export class ModelCapabilityService implements PipelineModelCapabilities {
     return wireModel === undefined
       ? undefined
       : snapshot.models.get(wireModel)?.tokenLimits.maxInputTokens;
+  }
+
+  promptCaching(accountId: string, model: string): KiroPromptCachingCapability | undefined {
+    const snapshot = this.snapshots.get(accountId);
+    if (!snapshot || !this.isUsable(snapshot, this.now())) return undefined;
+    const wireModel = staticWireModel(model);
+    return wireModel === undefined ? undefined : snapshot.models.get(wireModel)?.promptCaching;
   }
 
   readiness(): ModelCapabilitiesReadiness {

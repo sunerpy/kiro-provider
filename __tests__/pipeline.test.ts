@@ -346,9 +346,27 @@ function reasoningReplayRequest(): CanonicalRequest {
   };
 }
 
+function anthropicReasoningReplayRequest(): CanonicalRequest {
+  const base = reasoningReplayRequest();
+  const replay = base.reasoningReplays[0];
+  if (!replay) throw new TypeError("missing replay fixture");
+  return {
+    ...base,
+    protocol: "anthropic-messages",
+    model: "claude-sonnet-5",
+    reasoningReplays: [
+      {
+        ...replay,
+        lookup: { kind: "anthropic-token", signature: "kr1_test" },
+      },
+    ],
+  };
+}
+
 function reasoningReplayStore(
   accountId: string,
   conversationId: string,
+  portable = false,
 ): PipelineReasoningReplayStore {
   return {
     readiness: () => ({ writable: true, keyringAvailable: true, missingKeyIds: [] }),
@@ -356,6 +374,7 @@ function reasoningReplayStore(
     resolveResponses: (_token, _context, insertBeforeMessage) => ({
       accountId,
       conversationId,
+      ...(portable ? { portable: true as const } : {}),
       replay: {
         insertBeforeMessage,
         content: {
@@ -995,6 +1014,249 @@ describe("runChatCompletion retry and switching", () => {
 });
 
 describe("runChatCompletion signed reasoning replay lock", () => {
+  test("migrates a verified portable Sol replay to a healthy same-region account", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const conversations: string[] = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a", true),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return {
+          async send(command): Promise<SdkStreamResponse> {
+            conversations.push(
+              String(
+                (command.input.conversationState as { conversationId?: string }).conversationId,
+              ),
+            );
+            return responseFrom([
+              { assistantResponseEvent: { content: "migrated" } },
+              {
+                metadataEvent: {
+                  tokenUsage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 },
+                },
+              },
+            ]);
+          },
+        };
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-b"]);
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).not.toBe("conversation-a");
+  });
+
+  test("migrates a verified legacy replay even when session affinity still points at its owner", async () => {
+    const affinityStore = new AccountsDatabase(":memory:");
+    try {
+      affinityStore.claimSessionAffinity(
+        "fork-affinity",
+        "account-a",
+        "conversation-a",
+        Date.now(),
+        60_000,
+        100,
+      );
+      const selectedAccountIds: Array<string | undefined> = [];
+      const response = await runChatCompletion({
+        body: reasoningReplayRequest(),
+        model: "gpt-5.6-sol",
+        stream: false,
+        config: config({ reasoning_replay_account_failover: "verified" }),
+        accountManager: new PreferredAccountManager([
+          account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+          account("account-b", { usedCount: 1, limitCount: 10_000 }),
+        ]),
+        tokenRefresher: new FakeTokenRefresher(),
+        tenantId: "tenant-a",
+        reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+        affinity: { keyHash: "fork-affinity", source: "responses.client_metadata.thread_id" },
+        affinityStore,
+        makeClient: (...factoryArgs) => {
+          selectedAccountIds.push(factoryArgs[5]);
+          return clientWith(async () =>
+            responseFrom([{ assistantResponseEvent: { content: "affinity migrated" } }]),
+          );
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(selectedAccountIds).toEqual(["account-b"]);
+      expect(affinityStore.getSessionAffinity("fork-affinity")).toMatchObject({
+        accountId: "account-b",
+      });
+    } finally {
+      affinityStore.close();
+    }
+  });
+
+  test("strict replay replaces stale affinity with the signed owner conversation", async () => {
+    const affinityStore = new AccountsDatabase(":memory:");
+    try {
+      affinityStore.claimSessionAffinity(
+        "strict-affinity",
+        "account-b",
+        "conversation-b",
+        Date.now(),
+        60_000,
+        100,
+      );
+      const conversations: string[] = [];
+      const response = await runChatCompletion({
+        body: reasoningReplayRequest(),
+        model: "gpt-5.6-sol",
+        stream: false,
+        config: config({ reasoning_replay_account_failover: "strict" }),
+        accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
+        tokenRefresher: new FakeTokenRefresher(),
+        tenantId: "tenant-a",
+        reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+        affinity: { keyHash: "strict-affinity", source: "responses.client_metadata.thread_id" },
+        affinityStore,
+        makeClient: () => ({
+          async send(command): Promise<SdkStreamResponse> {
+            conversations.push(
+              String(
+                (command.input.conversationState as { conversationId?: string }).conversationId,
+              ),
+            );
+            return responseFrom([{ assistantResponseEvent: { content: "strict owner" } }]);
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(conversations).toEqual(["conversation-a"]);
+      expect(affinityStore.getSessionAffinity("strict-affinity")).toMatchObject({
+        accountId: "account-a",
+        conversationId: "conversation-a",
+      });
+    } finally {
+      affinityStore.close();
+    }
+  });
+
+  test("migrates an authenticated legacy Sol replay through the same verified cell", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "legacy migrated" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-b"]);
+  });
+
+  test("migrates an authenticated legacy Claude Messages replay only in its verified cell", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: anthropicReasoningReplayRequest(),
+      model: "claude-sonnet-5",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "messages migrated" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-b"]);
+  });
+
+  test("keeps an unverified Terra legacy replay owner-bound", async () => {
+    const body = { ...reasoningReplayRequest(), model: "gpt-5.6-terra" };
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body,
+      model: "gpt-5.6-terra",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(402);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_quota_exhausted" },
+    });
+    expect(clientCalls).toBe(0);
+  });
+
+  test("returns a typed 402 when the replay-bound account exhausted quota", async () => {
+    let clientCalls = 0;
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "strict" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () => {
+        clientCalls += 1;
+        return clientWith(async () => responseFrom([]));
+      },
+    });
+
+    expect(response.status).toBe(402);
+    expect(await errorBody(response)).toMatchObject({
+      error: {
+        type: "insufficient_quota",
+        code: "reasoning_replay_account_quota_exhausted",
+      },
+    });
+    expect(clientCalls).toBe(0);
+  });
+
   test("returns a retryable 503 when the replay-bound account is unavailable", async () => {
     let clientCalls = 0;
     const response = await runChatCompletion({
@@ -1029,7 +1291,7 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       body: reasoningReplayRequest(),
       model: "gpt-5.6-sol",
       stream: false,
-      config: config(),
+      config: config({ reasoning_replay_account_failover: "strict" }),
       accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
@@ -1075,13 +1337,13 @@ describe("runChatCompletion signed reasoning replay lock", () => {
     });
   });
 
-  test("does not switch accounts after a replay-locked 429", async () => {
+  test("waits the replay-bound account then returns a typed 429 without switching", async () => {
     const selectedAccountIds: Array<string | undefined> = [];
     const response = await runChatCompletion({
       body: reasoningReplayRequest(),
       model: "gpt-5.6-sol",
       stream: false,
-      config: config(),
+      config: config({ reasoning_replay_account_failover: "strict" }),
       accountManager: new PreferredAccountManager([account("account-b"), account("account-a")]),
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
@@ -1094,11 +1356,71 @@ describe("runChatCompletion signed reasoning replay lock", () => {
       },
     });
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(429);
     expect(await errorBody(response)).toMatchObject({
-      error: { code: "reasoning_replay_account_unavailable" },
+      error: { code: "reasoning_replay_account_rate_limited" },
     });
-    expect(selectedAccountIds).toEqual(["account-a"]);
+    expect(new Set(selectedAccountIds)).toEqual(new Set(["account-a"]));
+  });
+
+  test("returns typed authentication failure when replay owner rejects a forced refresh", async () => {
+    const manager = new PreferredAccountManager([account("account-b"), account("account-a")]);
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "strict" }),
+      accountManager: manager,
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () => {
+          throw sdkError(401, "expired bearer token");
+        });
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_auth_required" },
+    });
+    expect(new Set(selectedAccountIds)).toEqual(new Set(["account-a"]));
+    expect(manager.unhealthy).toEqual(["account-a"]);
+  });
+
+  test("returns typed authentication failure when replay owner forced refresh itself fails", async () => {
+    const manager = new PreferredAccountManager([account("account-b"), account("account-a")]);
+    const refresher = new FakeTokenRefresher();
+    refresher.forceHandler = async () => {
+      throw new KiroTokenRefreshError("Refresh failed: invalid_grant", "invalid_grant");
+    };
+    let sends = 0;
+    const response = await runChatCompletion({
+      body: reasoningReplayRequest(),
+      model: "gpt-5.6-sol",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "strict" }),
+      accountManager: manager,
+      tokenRefresher: refresher,
+      tenantId: "tenant-a",
+      reasoningReplayStore: reasoningReplayStore("account-a", "conversation-a"),
+      makeClient: () =>
+        clientWith(async () => {
+          sends += 1;
+          throw sdkError(401, "expired bearer token");
+        }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await errorBody(response)).toMatchObject({
+      error: { code: "reasoning_replay_account_auth_required" },
+    });
+    expect(sends).toBe(1);
+    expect(refresher.forceSignals).toHaveLength(1);
+    expect(manager.unhealthy).toEqual(["account-a"]);
   });
 });
 

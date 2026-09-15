@@ -10,9 +10,11 @@ import {
   type CanonicalRequest,
   type CanonicalTextPart,
   type CanonicalToolDeclaration,
+  legacyAssistantOutputFingerprint,
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { isLegacyReplayToken, isProviderReplayToken } from "../../reasoning/replay-token.js";
 import {
   allowedKeysValidator,
   type ProtocolResult,
@@ -599,7 +601,7 @@ function replayGroupAt(items: readonly ResponsesInputItem[], reasoningIndex: num
 }
 
 function replayTokenOf(item: ResponsesReasoningItem): string | undefined {
-  return typeof item.encrypted_content === "string" && item.encrypted_content.startsWith("kr1_")
+  return typeof item.encrypted_content === "string" && isProviderReplayToken(item.encrypted_content)
     ? item.encrypted_content
     : undefined;
 }
@@ -624,7 +626,7 @@ function groupOutputFingerprint(
   items: readonly ResponsesInputItem[],
   group: ReplayGroup,
   reasoningIndex: number,
-): ProtocolResult<string> {
+): ProtocolResult<{ readonly current: string; readonly legacy: string }> {
   let text = "";
   const toolCalls: Array<{ id: string; name: string; input: string }> = [];
   let outputSeen = false;
@@ -663,7 +665,14 @@ function groupOutputFingerprint(
       `input.${reasoningIndex}`,
     );
   }
-  return { ok: true, value: assistantOutputFingerprint({ text, toolCalls }) };
+  const output = { text, toolCalls };
+  return {
+    ok: true,
+    value: {
+      current: assistantOutputFingerprint(output),
+      legacy: legacyAssistantOutputFingerprint(output),
+    },
+  };
 }
 
 export function validateToolDeclarations(request: ResponsesRequest): ProtocolResult<undefined> {
@@ -1025,17 +1034,17 @@ export function adaptResponsesRequest(
           }
           return protocolFailure(
             "invalid_reasoning_replay",
-            "Reasoning replay requires a kiro-provider kr1_ encrypted_content token",
+            "Reasoning replay requires a kiro-provider encrypted_content replay token",
             `${path}.encrypted_content`,
           );
         }
         if (
           typeof item.encrypted_content !== "string" ||
-          !item.encrypted_content.startsWith("kr1_")
+          !isProviderReplayToken(item.encrypted_content)
         ) {
           return protocolFailure(
             "invalid_reasoning_replay",
-            "Reasoning replay requires a kiro-provider kr1_ encrypted_content token",
+            "Reasoning replay requires a kiro-provider encrypted_content replay token",
             `${path}.encrypted_content`,
           );
         }
@@ -1062,7 +1071,11 @@ export function adaptResponsesRequest(
             kind: "responses-token",
             encryptedContent: item.encrypted_content,
           },
-          outputFingerprint: fingerprint.value,
+          outputFingerprint: fingerprint.value.current,
+          ...(isLegacyReplayToken(item.encrypted_content) &&
+          fingerprint.value.legacy !== fingerprint.value.current
+            ? { compatibleOutputFingerprints: [fingerprint.value.legacy] }
+            : {}),
           insertBeforeMessage,
           ...canonicalSource(item, path),
         });

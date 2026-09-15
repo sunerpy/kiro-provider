@@ -10,6 +10,13 @@ import { auditHash, auditLog } from "../core/audit-log.js";
 import type { KiroReasoningContent, ResolvedReasoningReplay } from "../protocol/canonical.js";
 import type { AccountsDatabase, ReasoningReplayRecord } from "../storage/accounts-db.js";
 import { loadReasoningReplayKeyring, type ReasoningReplayKeyring } from "./keyring.js";
+import {
+  decodePortableReplayToken,
+  encodePortableReplayToken,
+  isLegacyReplayToken,
+  isPortableReplayToken,
+  PortableReplayTokenError,
+} from "./replay-token.js";
 
 interface StoredEnvelope {
   readonly version: 1;
@@ -37,6 +44,7 @@ export interface ReasoningReplayContext {
   readonly tenantId: string;
   readonly model: string;
   readonly outputFingerprint: string;
+  readonly compatibleOutputFingerprints?: readonly string[];
   readonly accountId?: string;
   readonly conversationId?: string;
   readonly now?: number;
@@ -45,6 +53,8 @@ export interface ReasoningReplayContext {
 export interface ReasoningReplayResolution {
   readonly accountId: string;
   readonly conversationId: string;
+  /** Portable replay may be routed to another verified account/conversation. */
+  readonly portable?: true;
   readonly replay: ResolvedReasoningReplay;
 }
 
@@ -52,6 +62,12 @@ export interface ReasoningReplayReadiness {
   readonly writable: boolean;
   readonly keyringAvailable: boolean;
   readonly missingKeyIds: readonly string[];
+}
+
+/** Sanitized evidence returned by the local recovery utility. */
+export interface LegacyReplayRecovery {
+  readonly record: ReasoningReplayRecord;
+  readonly outputFingerprint: string;
 }
 
 export class ReasoningReplayError extends Error {
@@ -173,6 +189,7 @@ export class ReasoningReplayStore {
   readonly #keyring: ReasoningReplayKeyring;
   readonly #ttlMs: number;
   readonly #maxEntries: number;
+  readonly #tokenFormat: Config["reasoning_replay_token_format"];
 
   constructor(
     database: AccountsDatabase,
@@ -183,6 +200,7 @@ export class ReasoningReplayStore {
     this.#keyring = keyring;
     this.#ttlMs = config.reasoning_replay_ttl_ms;
     this.#maxEntries = config.reasoning_replay_max_entries;
+    this.#tokenFormat = config.reasoning_replay_token_format;
     const missing = this.readiness().missingKeyIds;
     if (missing.length > 0) {
       throw new TypeError(
@@ -200,19 +218,60 @@ export class ReasoningReplayStore {
     };
   }
 
+  recoverLegacyRecord(
+    record: ReasoningReplayRecord,
+    now: number = Date.now(),
+  ): LegacyReplayRecovery {
+    const envelope = this.decryptLegacyEnvelope(record);
+    if (!constantEqual(record.fingerprintHash, fingerprintHash(envelope.outputFingerprint))) {
+      throw new ReasoningReplayError(
+        "Reasoning replay backup output fingerprint does not authenticate",
+        "reasoning_replay_context_mismatch",
+      );
+    }
+    return {
+      record: this.renewLegacyRecord(record, envelope, now),
+      outputFingerprint: envelope.outputFingerprint,
+    };
+  }
+
   store(
     capture: ReasoningCapture,
     context: ReasoningCaptureContext,
     now: number = Date.now(),
   ): string | undefined {
     const hasRedacted = capture.redactedContent !== undefined;
-    const hasSignedText = capture.text.length > 0 && capture.signature !== undefined;
+    const hasSignedText = capture.signature !== undefined && capture.signature.length > 0;
     if (!hasRedacted && !hasSignedText) return undefined;
     if (hasRedacted && (capture.text.length > 0 || capture.signature !== undefined)) {
       throw new ReasoningReplayError(
         "Upstream returned both signed text and redacted reasoning payloads",
         "reasoning_replay_ambiguous",
       );
+    }
+
+    if (this.#tokenFormat === "portable-v2") {
+      try {
+        return encodePortableReplayToken(
+          capture,
+          {
+            tenantId: context.tenantId,
+            model: context.model,
+            outputFingerprint: context.outputFingerprint,
+          },
+          { accountId: context.accountId, conversationId: context.conversationId },
+          this.#keyring.active,
+        );
+      } catch (error) {
+        if (error instanceof PortableReplayTokenError) {
+          throw new ReasoningReplayError(
+            error.message,
+            error.code,
+            error.code.endsWith("unavailable"),
+          );
+        }
+        throw error;
+      }
     }
 
     const token = `kr1_${randomBytes(32).toString("base64url")}`;
@@ -273,36 +332,110 @@ export class ReasoningReplayStore {
     context: ReasoningReplayContext,
     insertBeforeMessage: number,
   ): ReasoningReplayResolution {
-    if (!token.startsWith("kr1_")) {
-      throw new ReasoningReplayError(
-        "Reasoning encrypted_content token has an invalid format",
-        "invalid_reasoning_replay",
-      );
-    }
-    const now = context.now ?? Date.now();
-    const digest = tokenHash(token);
-    const record = this.#database.getReasoningReplayRecord(digest);
-    if (!record) {
-      auditLog("info", "reasoning_replay_miss", {
-        lookup: "responses-token",
-        token_hash: digest.slice(0, 16),
-      });
-      throw new ReasoningReplayError(
-        "Reasoning replay token was not found",
-        "reasoning_replay_not_found",
-      );
-    }
-    if (record.expiresAt <= now) {
-      auditLog("info", "reasoning_replay_expired", {
-        lookup: "responses-token",
-        token_hash: digest.slice(0, 16),
-      });
-      throw new ReasoningReplayError(
-        "Reasoning replay token has expired",
-        "reasoning_replay_expired",
-      );
-    }
-    return this.resolveRecord(record, context, insertBeforeMessage, now);
+    return this.resolveResponsesBatch([
+      { token, context, insertBeforeMessage },
+    ])[0] as ReasoningReplayResolution;
+  }
+
+  resolveResponsesBatch(
+    items: readonly {
+      readonly token: string;
+      readonly context: ReasoningReplayContext;
+      readonly insertBeforeMessage: number;
+    }[],
+  ): ReasoningReplayResolution[] {
+    if (items.length === 0) return [];
+    const legacyDigests = items
+      .filter(({ token }) => isLegacyReplayToken(token))
+      .map(({ token }) => tokenHash(token));
+    const legacyByHash = new Map(
+      this.#database
+        .getReasoningReplayRecords(legacyDigests)
+        .map((record) => [record.tokenHash, record]),
+    );
+    const maintained: ReasoningReplayRecord[] = [];
+    const keyIds = new Set<string>();
+    let portableCount = 0;
+    let legacyCount = 0;
+    const resolutions = items.map(({ token, context, insertBeforeMessage }) => {
+      if (isPortableReplayToken(token)) {
+        try {
+          const decoded = decodePortableReplayToken(
+            token,
+            {
+              tenantId: context.tenantId,
+              model: context.model,
+              outputFingerprint: context.outputFingerprint,
+            },
+            this.#keyring,
+          );
+          portableCount += 1;
+          keyIds.add(decoded.keyId);
+          return {
+            accountId: decoded.accountId,
+            conversationId: decoded.conversationId,
+            portable: true as const,
+            replay: { insertBeforeMessage, content: decoded.content },
+          };
+        } catch (error) {
+          if (error instanceof PortableReplayTokenError) {
+            throw new ReasoningReplayError(
+              error.message,
+              error.code,
+              error.code.endsWith("unavailable"),
+            );
+          }
+          throw error;
+        }
+      }
+      if (!isLegacyReplayToken(token)) {
+        throw new ReasoningReplayError(
+          "Reasoning encrypted_content token has an invalid format",
+          "invalid_reasoning_replay",
+        );
+      }
+      const now = context.now ?? Date.now();
+      const digest = tokenHash(token);
+      const record = legacyByHash.get(digest);
+      if (!record) {
+        auditLog("info", "reasoning_replay_miss", {
+          lookup: "responses-token",
+          token_hash: digest.slice(0, 16),
+        });
+        throw new ReasoningReplayError(
+          "Reasoning replay token was not found",
+          "reasoning_replay_not_found",
+        );
+      }
+      if (record.expiresAt <= now) {
+        auditLog("info", "reasoning_replay_expired", {
+          lookup: "responses-token",
+          token_hash: digest.slice(0, 16),
+        });
+        throw new ReasoningReplayError(
+          "Reasoning replay token has expired",
+          "reasoning_replay_expired",
+        );
+      }
+      const envelope = this.decryptLegacyRecord(record, context);
+      const renewed = this.renewLegacyRecord(record, envelope, now);
+      maintained.push(renewed);
+      legacyCount += 1;
+      keyIds.add(renewed.keyId);
+      return {
+        accountId: record.accountId,
+        conversationId: record.conversationId,
+        replay: { insertBeforeMessage, content: replayContent(envelope) },
+      };
+    });
+    this.#database.updateReasoningReplayRecords(maintained);
+    auditLog("info", "reasoning_replay_resolved", {
+      replay_count: resolutions.length,
+      portable_count: portableCount,
+      legacy_count: legacyCount,
+      key_count: keyIds.size,
+    });
+    return resolutions;
   }
 
   resolveChat(
@@ -346,21 +479,38 @@ export class ReasoningReplayStore {
         "reasoning_replay_not_found",
       );
     }
-    return this.resolveRecord(record, context, insertBeforeMessage, now);
+    const envelope = this.decryptLegacyRecord(record, context);
+    const renewed = this.renewLegacyRecord(record, envelope, now);
+    this.#database.updateReasoningReplayRecords([renewed]);
+    auditLog("info", "reasoning_replay_resolved", {
+      replay_count: 1,
+      portable_count: 0,
+      legacy_count: 1,
+      key_count: 1,
+    });
+    return {
+      accountId: record.accountId,
+      conversationId: record.conversationId,
+      replay: { insertBeforeMessage, content: replayContent(envelope) },
+    };
   }
 
-  private resolveRecord(
+  private decryptLegacyRecord(
     record: ReasoningReplayRecord,
     context: ReasoningReplayContext,
-    insertBeforeMessage: number,
-    now: number,
-  ): ReasoningReplayResolution {
-    const expectedFingerprint = fingerprintHash(context.outputFingerprint);
+  ): StoredEnvelope {
+    const outputFingerprints = [
+      context.outputFingerprint,
+      ...(context.compatibleOutputFingerprints ?? []),
+    ];
+    const outputMatches = outputFingerprints.some((outputFingerprint) =>
+      constantEqual(record.fingerprintHash, fingerprintHash(outputFingerprint)),
+    );
     const mismatches = (
       [
         ["tenant", !constantEqual(record.tenantId, context.tenantId)],
         ["model", record.model !== context.model],
-        ["output", !constantEqual(record.fingerprintHash, expectedFingerprint)],
+        ["output", !outputMatches],
         ["account", context.accountId !== undefined && record.accountId !== context.accountId],
         [
           "conversation",
@@ -380,11 +530,27 @@ export class ReasoningReplayStore {
         "reasoning_replay_context_mismatch",
       );
     }
+    const envelope = this.decryptLegacyEnvelope(record);
+    if (
+      !outputFingerprints.some((outputFingerprint) =>
+        constantEqual(envelope.outputFingerprint, outputFingerprint),
+      )
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay output fingerprint does not match",
+        "reasoning_replay_context_mismatch",
+      );
+    }
+    return envelope;
+  }
+
+  private decryptLegacyEnvelope(record: ReasoningReplayRecord): StoredEnvelope {
     const key = this.#keyring.byId.get(record.keyId);
     if (!key) {
       throw new ReasoningReplayError(
         "Reasoning replay decryption key is unavailable",
         "reasoning_replay_key_unavailable",
+        true,
       );
     }
     let envelope: StoredEnvelope;
@@ -414,23 +580,41 @@ export class ReasoningReplayStore {
         "reasoning_replay_decryption_failed",
       );
     }
-    if (envelope.outputFingerprint !== context.outputFingerprint) {
-      throw new ReasoningReplayError(
-        "Reasoning replay output fingerprint does not match",
-        "reasoning_replay_context_mismatch",
-      );
-    }
-    this.#database.touchReasoningReplay(record.tokenHash, now);
-    auditLog("info", "reasoning_replay_hit", {
-      key_id: record.keyId,
-      account_hash: auditHash(record.accountId),
-      conversation_hash: auditHash(record.conversationId),
-      model: record.model,
-    });
+    return envelope;
+  }
+
+  private renewLegacyRecord(
+    record: ReasoningReplayRecord,
+    envelope: StoredEnvelope,
+    now: number,
+  ): ReasoningReplayRecord {
+    const key = this.#keyring.active;
+    const expiresAt = now + this.#ttlMs;
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key.key, nonce);
+    cipher.setAAD(
+      aad({
+        tenantId: record.tenantId,
+        model: record.model,
+        accountId: record.accountId,
+        conversationId: record.conversationId,
+        fingerprintHash: record.fingerprintHash,
+        expiresAt,
+        keyId: key.id,
+      }),
+    );
+    const ciphertext = Buffer.concat([
+      cipher.update(JSON.stringify(envelope), "utf8"),
+      cipher.final(),
+    ]);
     return {
-      accountId: record.accountId,
-      conversationId: record.conversationId,
-      replay: { insertBeforeMessage, content: replayContent(envelope) },
+      ...record,
+      keyId: key.id,
+      nonce: Uint8Array.from(nonce),
+      ciphertext: Uint8Array.from(ciphertext),
+      authTag: Uint8Array.from(cipher.getAuthTag()),
+      lastSeen: now,
+      expiresAt,
     };
   }
 }

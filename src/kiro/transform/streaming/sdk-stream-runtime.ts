@@ -262,10 +262,7 @@ export function resolveReasoningCapture(state: SdkReasoningCaptureState): SdkRea
   }
   const mixedTextAndRedacted = state.text.length > 0 && redactedContent !== undefined;
   const completeSignedText =
-    state.text.length > 0 &&
-    state.signature.length > 0 &&
-    !state.signatureConflict &&
-    redactedContent === undefined;
+    state.signature.length > 0 && !state.signatureConflict && redactedContent === undefined;
   const completeRedacted = state.text.length === 0 && redactedContent !== undefined;
   return {
     text: state.text,

@@ -17,14 +17,14 @@
 - **`kiro-provider accounts list --details`**（或 `--json`）。`AVAILABILITY`
   列是每个账号在选择器眼中的状态：
 
-  | 取值 | 含义 |
-  | --- | --- |
-  | `available` | 健康、未限流、额度未耗尽。 |
-  | `rate-limited` | `429`/退避窗口生效中，持续到 `RECHECK_AT`。 |
-  | `quota-exhausted` | Kiro 报告额度已用完；到期探测确认新周期后自动回池。 |
+  | 取值              | 含义                                                                                  |
+  | ----------------- | ------------------------------------------------------------------------------------- |
+  | `available`       | 健康、未限流、额度未耗尽。                                                            |
+  | `rate-limited`    | `429`/退避窗口生效中，持续到 `RECHECK_AT`。                                           |
+  | `quota-exhausted` | Kiro 报告额度已用完；到期探测确认新周期后自动回池。                                   |
   | `overage-blocked` | 健康且额度未耗尽，但付费超额次数超过 `overage_threshold`，被 `stop_on_overage` 排除。 |
-  | `unhealthy` | 因临时原因被标记不健康（`HEALTH` 为 `unhealthy`）。 |
-  | `needs-relogin` | refresh token 或 OIDC 客户端已永久失效；只有 `accounts relogin` 能恢复。 |
+  | `unhealthy`       | 因临时原因被标记不健康（`HEALTH` 为 `unhealthy`）。                                   |
+  | `needs-relogin`   | refresh token 或 OIDC 客户端已永久失效；只有 `accounts relogin` 能恢复。              |
 
 - **HTTP 状态码与 `error.code`。** OpenAI 形态的路由返回
   `{ "error": { "type", "code", "message" } }`；`/v1/messages` 返回 Anthropic
@@ -90,7 +90,7 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 
 - **查看：** `accounts list` 的 `EMAIL` 列；`login` 命令曾打印
   `Warning: Kiro usage did not include an account email; storing the
-  placeholder ...`。
+placeholder ...`。
 - **原因：** IAM Identity Center / Builder ID 的设备码流程不返回邮箱；Provider
   从 Kiro `getUsageLimits` 的响应中补齐。若该查询失败或响应不含 `email`，
   就会保存占位符。
@@ -156,12 +156,12 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   `sdk_stream_idle_timeout`（`warn`，`idle_timeout_ms`）。围绕它，流韧性层
   会输出：
 
-  | 事件 | 级别 | 字段 | 含义 |
-  | --- | --- | --- | --- |
-  | `sdk_stream_attempt_retry` | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 非流式收集在形成可用结果前失败；尚未发布，允许有界替代。 |
-  | `sdk_stream_attempts_exhausted` | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash` | 非流式收集预算已用尽，最后失败成为 HTTP `502`。 |
-  | `sdk_stream_empty_completion_retry` | `warn` | `attempt`、`max_attempts`、`account_hash` | 非流式收集得到有凭证的空完成，预算内允许同账户替代一次。 |
-  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`、`account_hash`、`completion_witnessed` | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
+  | 事件                                          | 级别   | 字段                                                                    | 含义                                                                                                             |
+  | --------------------------------------------- | ------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 非流式收集在形成可用结果前失败；尚未发布，允许有界替代。                                                         |
+  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash`                 | 非流式收集预算已用尽，最后失败成为 HTTP `502`。                                                                  |
+  | `sdk_stream_empty_completion_retry`           | `warn` | `attempt`、`max_attempts`、`account_hash`                               | 非流式收集得到有凭证的空完成，预算内允许同账户替代一次。                                                         |
+  | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`、`account_hash`、`completion_witnessed`                    | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
 
 - **原因：** `upstream_stream_error` 是读取器、解码器、传输或内嵌上游错误；
   `upstream_stream_incomplete` 是没有完成见证的干净 EOF。按契约两者都是
@@ -180,13 +180,13 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 `reasoning_chars`、`visible_chars`、`tool_count`、`tool_intent_open`、
 `finish_reason_synthesized`，以及 `account_hash` 和 `conversation_hash`。
 
-| `terminal_provenance` | 发生了什么 | 责任方 |
-| --- | --- | --- |
-| `normal_complete` | Kiro 发送了完成见证，流干净地关闭。 | 无：这是 Kiro 结束本轮。 |
-| `idle_timeout` | 超过 `stream_idle_timeout_ms` 没有上游事件。 | 传输 / 上游停滞。 |
-| `upstream_error` | SDK 读取器或 Kiro 在流中报告错误。 | 传输 / 上游。 |
-| `consumer_cancel` | 客户端在流结束前关闭了响应。 | 客户端（自身超时或用户取消）。 |
-| `external_abort` | Provider 主动中止上游：`request_timeout_ms` 到期、关停或锁被破坏。 | Provider 配置或生命周期。 |
+| `terminal_provenance` | 发生了什么                                                         | 责任方                         |
+| --------------------- | ------------------------------------------------------------------ | ------------------------------ |
+| `normal_complete`     | Kiro 发送了完成见证，流干净地关闭。                                | 无：这是 Kiro 结束本轮。       |
+| `idle_timeout`        | 超过 `stream_idle_timeout_ms` 没有上游事件。                       | 传输 / 上游停滞。              |
+| `upstream_error`      | SDK 读取器或 Kiro 在流中报告错误。                                 | 传输 / 上游。                  |
+| `consumer_cancel`     | 客户端在流结束前关闭了响应。                                       | 客户端（自身超时或用户取消）。 |
+| `external_abort`      | Provider 主动中止上游：`request_timeout_ms` 到期、关停或锁被破坏。 | Provider 配置或生命周期。      |
 
 当用户反馈"模型说了*接下来我会运行测试*然后就停了"：
 
@@ -225,12 +225,12 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 
 - **查看：** HTTP `400`，`error.code` 为 `unsupported_reasoning_plaintext_replay`，
   `param` 指向 `input[i]` 的 reasoning 条目；`invalid_reasoning_replay` 是
-  `encrypted_content` 格式错误或不是 `kr1_` 前缀时的同类错误码。
+  `encrypted_content` 格式错误或不是 Provider `kr1_` / `kr2_` token时的同类错误码。
 - **原因：** 客户端回放的 `reasoning` 条目只带明文 `summary`/`content`，而
   该轮次里任何位置都没有 `encrypted_content`。Provider 从不把明文推理转成
   提示词，因此无法投影。
 - **处置：** 请求时带上 `include: ["reasoning.encrypted_content"]`，回放该
-  轮次时把返回的 `encrypted_content`（`kr1_...`）原样放回 reasoning 条目。
+  轮次时把返回的 `encrypted_content`（默认 `kr2_...`，兼容历史 `kr1_...`）原样放回 reasoning 条目。
   每轮恰好一个 reasoning 条目携带令牌；同一轮次的其他 reasoning 条目可以
   保留明文摘要。无法保存令牌的客户端应从历史中省略 reasoning 条目，而不是
   只发摘要。
@@ -240,20 +240,20 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 - **查看：** `info` 事件 `upstream_affinity_selected`（每次尝试一条），含
   `affinity_kind`、`affinity_bound`、`account_hash`、`conversation_hash` 与
   `reasoning_replay_locked`。
-- **含义：** `reasoning_replay_locked: true` 表示请求回放的加密推理绑定到
+- **含义：** `reasoning_replay_locked: true` 表示请求回放的加密推理仍绑定到
   铸造它的账号，因此本次请求禁用账号故障切换（失败时返回
-  `reasoning_replay_*` 而不是换账号）。`false` 表示客户端没有回放绑定账号的
-  推理：历史中没有 reasoning 条目，或回放类型不带绑定（Anthropic `thinking`
-  签名由 Kiro 校验，不在本地绑定）。`false` 是大多数流量的正常取值，不是
-  错误。
+  `reasoning_replay_*` 而不是换账号）。`false` 表示没有 replay、本地不绑定的原生
+  Anthropic `thinking` signature，或经过认证的 Provider token 命中了精确验证的
+  迁移单元。真实迁移还会输出只含哈希的 `reasoning_replay_account_migrated`。
+  `false` 是正常值，不是错误。
 
 ## 进程与配置
 
 ### 启动失败 `service_instance_already_running`；日志出现 `single_instance_lock_busy` 或 `single_instance_lock_compromised`
 
 - **查看：** 启动错误 `Another kiro-provider instance already holds the
-  service lock at <path> (gave up after N attempt(s) ...; a lock left behind
-  by a dead process becomes stale after 15000 ms)`，错误码
+service lock at <path> (gave up after N attempt(s) ...; a lock left behind
+by a dead process becomes stale after 15000 ms)`，错误码
   `service_instance_already_running`；审计事件 `single_instance_lock_busy`
   （`warn`，首次重试：`retry_attempts`、`retry_delay_ms`、`stale_ms`）、
   `single_instance_lock_acquired`（`info`，`attempts`）、
@@ -267,7 +267,7 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   会失败关闭：停止接受请求，最多排空 10 s，然后以退出码 `1` 退出，交由
   服务管理器重启。
 - **处置：** 对于 `already_running`，用 `systemctl --user is-active
-  kiro-provider.service` 确认只定义了一个服务，且同一用户没有前台运行的
+kiro-provider.service` 确认只定义了一个服务，且同一用户没有前台运行的
   `serve`；为另一个系统用户运行第二份会选择不同的配置根目录和锁。对于锁
   被破坏，保持配置目录完整，并排查主机休眠/恢复或超过 15 s 的 I/O 停顿。
   关闭锁（`enforce_single_instance: false`，会记录
@@ -295,8 +295,8 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 ### 启动失败 `auth_source "opencode-shared" was removed in kiro-provider 0.7.0`
 
 - **查看：** 启动消息本身：`Copy the OpenCode accounts once with
-  "kiro-provider accounts import [--from <path>]", then set auth_source to
-  "local" or delete the key`。
+"kiro-provider accounts import [--from <path>]", then set auth_source to
+"local" or delete the key`。
 - **原因：** 实时读取 OpenCode 数据库的兼容模式在 0.7.0 中移除，因为它重新
   引入了跨进程凭据所有权，并可能在共享 SQLite 锁上阻塞事件循环。
 - **处置：** 以运行服务的同一系统用户执行一次性导入，然后把 `auth_source`
@@ -337,7 +337,7 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   代理会产生 `HTTP_<status>` 刷新错误，这类错误被有意视为临时性，因此账号
   停留在 `rate-limited` 而不是 `needs-relogin`。
 - **处置：** 在服务用户的 shell 中验证代理（`curl -x "$PROXY"
-  https://oidc.us-east-1.amazonaws.com/`）；在配置文件或
+https://oidc.us-east-1.amazonaws.com/`）；在配置文件或
   `KIRO_PROVIDER_PROXY_URL` 中设置 `proxy_url`（`serve --proxy` 优先级高于
   两者）；重启服务。`kiro-provider accounts refresh --all` 是最快的端到端
   检查，因为它通过同一套代理解析同时访问令牌端点和用量端点。
@@ -348,23 +348,23 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 Responses、Messages、Chat 请求都会在构造出规范请求之后、账号选择之前输出一条
 `request_shape` 事件。它只包含计数、布尔值、一个哈希和两个标签：
 
-| 字段 | 含义 |
-| --- | --- |
-| `request_id` | 每个公开请求随机生成的关联 ID，与投影、SDK dispatch 和终止事件共用。 |
-| `protocol` | `responses`、`anthropic-messages` 或 `chat-completions`。 |
-| `projection_mode` | `v3-auto`、`safe`、`native-context-safe` 或 `legacy-user-prefix`。 |
-| `model` | 请求的公开模型名。 |
-| `message_count` | 适配后的规范消息数。 |
-| `user_message_count`、`assistant_message_count`、`tool_message_count`、`instruction_message_count` | 角色计数（`instruction_message_count` 为 `system` 加 `developer`）。 |
-| `tool_declaration_count` | 声明的工具数。 |
-| `tool_call_count` | 历史中的工具调用数（assistant 的 `toolCalls` 加 `tool_use` 内容块，同一消息内按 id 去重）。 |
-| `tool_result_count` | 历史中的工具结果数。 |
-| `orphan_tool_result_count` | 调用 id 在更早消息中找不到对应调用的结果数。 |
-| `image_count`、`document_count` | 内联附件数。 |
-| `has_reasoning_replay`、`reasoning_replay_count` | 请求是否携带加密推理回放，以及数量。 |
-| `system_instruction_present` | 存在顶层 `instructions`/`system` 或 system/developer 消息。 |
-| `input_text_chars` | 消息文本、工具结果文本与 instructions 的长度之和。只是大小，不是内容。 |
-| `tool_set_hash` | 排序后工具名的 `auditHash`，用于在不记录工具名的前提下关联相同工具集的请求。 |
+| 字段                                                                                               | 含义                                                                                        |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `request_id`                                                                                       | 每个公开请求随机生成的关联 ID，与投影、SDK dispatch 和终止事件共用。                        |
+| `protocol`                                                                                         | `responses`、`anthropic-messages` 或 `chat-completions`。                                   |
+| `projection_mode`                                                                                  | `v3-auto`、`safe`、`native-context-safe` 或 `legacy-user-prefix`。                          |
+| `model`                                                                                            | 请求的公开模型名。                                                                          |
+| `message_count`                                                                                    | 适配后的规范消息数。                                                                        |
+| `user_message_count`、`assistant_message_count`、`tool_message_count`、`instruction_message_count` | 角色计数（`instruction_message_count` 为 `system` 加 `developer`）。                        |
+| `tool_declaration_count`                                                                           | 声明的工具数。                                                                              |
+| `tool_call_count`                                                                                  | 历史中的工具调用数（assistant 的 `toolCalls` 加 `tool_use` 内容块，同一消息内按 id 去重）。 |
+| `tool_result_count`                                                                                | 历史中的工具结果数。                                                                        |
+| `orphan_tool_result_count`                                                                         | 调用 id 在更早消息中找不到对应调用的结果数。                                                |
+| `image_count`、`document_count`                                                                    | 内联附件数。                                                                                |
+| `has_reasoning_replay`、`reasoning_replay_count`                                                   | 请求是否携带加密推理回放，以及数量。                                                        |
+| `system_instruction_present`                                                                       | 存在顶层 `instructions`/`system` 或 system/developer 消息。                                 |
+| `input_text_chars`                                                                                 | 消息文本、工具结果文本与 instructions 的长度之和。只是大小，不是内容。                      |
+| `tool_set_hash`                                                                                    | 排序后工具名的 `auditHash`，用于在不记录工具名的前提下关联相同工具集的请求。                |
 
 用它来回答"客户端是否发送了完整历史？"、"是否有工具结果没有对应的调用？"、
 "这段会话有多大？"，而无需开启请求体日志（Provider 也不提供这种日志）。

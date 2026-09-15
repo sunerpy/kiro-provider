@@ -174,7 +174,6 @@ export async function* transformSdkOutputStream(
         }
         if (
           assistantOutputStarted &&
-          reasoningStarted &&
           event.reasoningContentEvent?.signature !== undefined &&
           event.reasoningContentEvent.signature.length > 0
         ) {
@@ -199,6 +198,14 @@ export async function* transformSdkOutputStream(
       if (assistantText) {
         if (options.emitAnthropicReasoningMetadata) {
           const capturedBeforeText = resolveReasoningCapture(reasoning);
+          if (!reasoningStarted && capturedBeforeText.signature !== undefined) {
+            reasoningStarted = true;
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_delta",
+              text: "",
+            };
+          }
           if (
             reasoningStarted &&
             !anthropicSignatureEmitted &&
@@ -234,6 +241,30 @@ export async function* transformSdkOutputStream(
       }
 
       if (event.toolUseEvent) {
+        if (options.emitAnthropicReasoningMetadata) {
+          const capturedBeforeTool = resolveReasoningCapture(reasoning);
+          if (!reasoningStarted && capturedBeforeTool.signature !== undefined) {
+            reasoningStarted = true;
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_delta",
+              text: "",
+            };
+          }
+          if (
+            reasoningStarted &&
+            !anthropicSignatureEmitted &&
+            capturedBeforeTool.signature !== undefined
+          ) {
+            anthropicSignatureEmitted = true;
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_signature",
+              signature: capturedBeforeTool.signature,
+            };
+          }
+        }
+        assistantOutputStarted = true;
         const fragment = event.toolUseEvent;
         const previous = fragment.toolUseId ? toolCalls.get(fragment.toolUseId) : undefined;
         toolArgumentBytes += Buffer.byteLength(fragment.input ?? "", "utf8");
@@ -305,6 +336,14 @@ export async function* transformSdkOutputStream(
 
   const captured = resolveReasoningCapture(reasoning);
   if (options.emitAnthropicReasoningMetadata) {
+    if (!reasoningStarted && captured.signature !== undefined) {
+      reasoningStarted = true;
+      yield {
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "reasoning_delta",
+        text: "",
+      };
+    }
     if (reasoningStarted && !anthropicSignatureEmitted && captured.signature !== undefined) {
       yield {
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
@@ -366,6 +405,13 @@ export async function* transformSdkOutputStream(
         : {}),
     },
   });
+  const cacheRead = tokenUsage.reported?.cacheReadInputTokens;
+  const cacheWrite = tokenUsage.reported?.cacheWriteInputTokens;
+  const measuredInput = tokenUsage.reported?.inputTokens;
+  const cacheHitRatio =
+    measuredInput !== undefined && measuredInput > 0 && cacheRead !== undefined
+      ? cacheRead / measuredInput
+      : undefined;
   auditLog("info", "sdk_usage_resolved", {
     request_id: options.diagnostics?.requestId,
     model,
@@ -380,6 +426,9 @@ export async function* transformSdkOutputStream(
     percentage_saturated: tokenUsage.accounting?.percentageSaturated,
     metering_value: tokenUsage.accounting?.metering?.value,
     metering_unit: tokenUsage.accounting?.metering?.unit,
+    cache_read_input_tokens: cacheRead,
+    cache_write_input_tokens: cacheWrite,
+    cache_hit_ratio: cacheHitRatio,
   });
   yield {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,

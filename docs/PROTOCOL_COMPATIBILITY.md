@@ -28,18 +28,18 @@ not silently discarded.
 
 ## 1. Public HTTP surface
 
-| Method and path | V3 behavior |
-| --- | --- |
-| `POST /v1/responses` | Streaming and non-streaming Responses creation. |
-| `GET /v1/responses/{id}` | Retrieves the tenant-isolated local response mirror. |
-| `DELETE /v1/responses/{id}` | Deletes the local mirror and blocks later gateway continuation. |
-| `GET /v1/responses/{id}/input_items` | Cursor pagination with `after`, `limit` 1–100, and `order` defaulting to `desc`. |
-| `POST /v1/responses/{id}/cancel` | Returns `response_not_cancellable` for mirrored terminal responses; background execution is not supported. |
-| `POST /v1/responses/input_tokens` | Recognized route; returns HTTP 501 `unsupported_endpoint`. |
-| `POST /v1/responses/compact` | Recognized route; returns HTTP 501 `unsupported_endpoint`. |
-| `POST /v1/messages` | Anthropic Messages compatibility surface. |
-| `POST /v1/messages/count_tokens` | Anthropic-compatible estimate with `x-kiro-token-count-mode: estimate`. |
-| `POST /v1/chat/completions` | Legacy route, disabled unless `enable_legacy_chat_completions` is true. |
+| Method and path                      | V3 behavior                                                                                                |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `POST /v1/responses`                 | Streaming and non-streaming Responses creation.                                                            |
+| `GET /v1/responses/{id}`             | Retrieves the tenant-isolated local response mirror.                                                       |
+| `DELETE /v1/responses/{id}`          | Deletes the local mirror and blocks later gateway continuation.                                            |
+| `GET /v1/responses/{id}/input_items` | Cursor pagination with `after`, `limit` 1–100, and `order` defaulting to `desc`.                           |
+| `POST /v1/responses/{id}/cancel`     | Returns `response_not_cancellable` for mirrored terminal responses; background execution is not supported. |
+| `POST /v1/responses/input_tokens`    | Recognized route; returns HTTP 501 `unsupported_endpoint`.                                                 |
+| `POST /v1/responses/compact`         | Recognized route; returns HTTP 501 `unsupported_endpoint`.                                                 |
+| `POST /v1/messages`                  | Anthropic Messages compatibility surface.                                                                  |
+| `POST /v1/messages/count_tokens`     | Anthropic-compatible estimate with `x-kiro-token-count-mode: estimate`.                                    |
+| `POST /v1/chat/completions`          | Legacy route, disabled unless `enable_legacy_chat_completions` is true.                                    |
 
 The official OpenAI Responses resource also defines create, retrieve, delete,
 cancel, and input-item methods. V3 implements those core lifecycle shapes
@@ -48,15 +48,18 @@ continuation.
 
 ### Anthropic Messages / Claude Code boundary
 
-Claude Code 2.1.263 is validated against the stateless canonical lane. The
+Claude Code 2.1.270 is validated against the stateless canonical lane. The
 adapter accepts current text, image, standard tool/result, mid-conversation
 system, adaptive thinking, effort, temperature, cache-hint, and lossless
-context-management shapes. `thinking.display: "omitted"` uses a tenant-bound
-`kr1_` token as the opaque Anthropic signature so the original signed Kiro
-reasoning can be restored without exposing its text. Cache markers are not an
-Anthropic cache implementation: successful responses say
-`x-kiro-prompt-cache-mode: unsupported`, report zero cache-token buckets, and
-preserve only model-visible content.
+context-management shapes. `thinking.display: "omitted"` uses a tenant/model/output-bound
+`kr2_` token as the opaque Anthropic signature so the original signed Kiro
+reasoning can be restored without exposing its text; legacy `kr1_` remains
+readable. Empty signed Claude thinking is preserved. Cache markers remain
+performance hints: `x-kiro-prompt-cache-mode` reports `server-auto`,
+`explicit-checkpoints`, or `off`; measured cache read/write buckets are mapped
+and unknown buckets are `null`, never fabricated as zero. The same verified
+account-failover gate used by Responses applies to omitted Messages thinking;
+currently only Claude Sonnet 5 signed text in `us-east-1` is enabled.
 
 Only `clear_thinking_20251015` with `keep: "all"` is accepted for
 `context_management`; it returns `applied_edits: []`. Destructive edits,
@@ -96,7 +99,7 @@ The stateless lane is selected for:
 - custom grammar tools and unverified native bridge combinations;
 - Codex `additional_tools` and `agent_message`;
 - `parallel_tool_calls: false` with callable tools;
-- `include: ["reasoning.encrypted_content"]` or input containing a provider `kr1_` token.
+- `include: ["reasoning.encrypted_content"]` or input containing a provider `kr1_` or `kr2_` token.
 
 If a request references a native stored response, it stays on the native lane.
 A later request that would require switching that native lineage to the
@@ -116,19 +119,19 @@ server-side; the CLI does not call a separate public Mantle endpoint.
 
 Verified native capabilities:
 
-| Capability | GPT-5.6 Sol | Claude Opus 5 |
-| --- | --- | --- |
-| `instructions` | Supported | Forwarded; priority remains unverified in us-east-1 |
-| Standard Responses JSON and SSE | Supported | Supported |
-| Function tools | Supported | Supported |
-| `previous_response_id` | Durable owner binding; exact replay for affected opaque reasoning history | Full stored history replay into CreateResponse in us-east-1 |
-| `max_output_tokens` | Supported | Supported |
-| `reasoning.effort: xhigh` | Supported | Supported |
-| `truncation: disabled` | Supported | Supported |
-| `truncation: auto` | Supported | Rejected locally |
-| `temperature` | Rejected locally | Supported |
-| `top_p` | Rejected locally | Rejected locally |
-| `max` effort | Routed to stateless lane | Routed to stateless lane |
+| Capability                      | GPT-5.6 Sol                                                               | Claude Opus 5                                               |
+| ------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `instructions`                  | Supported                                                                 | Forwarded; priority remains unverified in us-east-1         |
+| Standard Responses JSON and SSE | Supported                                                                 | Supported                                                   |
+| Function tools                  | Supported                                                                 | Supported                                                   |
+| `previous_response_id`          | Durable owner binding; exact replay for affected opaque reasoning history | Full stored history replay into CreateResponse in us-east-1 |
+| `max_output_tokens`             | Supported                                                                 | Supported                                                   |
+| `reasoning.effort: xhigh`       | Supported                                                                 | Supported                                                   |
+| `truncation: disabled`          | Supported                                                                 | Supported                                                   |
+| `truncation: auto`              | Supported                                                                 | Rejected locally                                            |
+| `temperature`                   | Rejected locally                                                          | Supported                                                   |
+| `top_p`                         | Rejected locally                                                          | Rejected locally                                            |
+| `max` effort                    | Routed to stateless lane                                                  | Routed to stateless lane                                    |
 
 Private upstream fields such as `billing` are removed. The public response
 retains the requested model variant and normalized OpenAI fields.
@@ -146,7 +149,7 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
 - function tools, custom grammar tools, and namespace identity through
   request-local private aliases;
 - Codex collaboration `agent_message` content and author/recipient metadata;
-- signed or redacted Kiro reasoning replay through tenant-bound `kr1_` tokens.
+- signed or redacted Kiro reasoning replay through tenant/model/output-bound `kr2_` tokens with legacy `kr1_` reads.
 
 In `v3-auto`, this lane uses the explicit legacy instruction prefix only when
 the native Responses lane cannot represent the request. It never moves a
@@ -188,27 +191,27 @@ request physical deletion of Kiro's server-side response state.
 
 ## 6. Request capability matrix
 
-| Request feature | V3 contract |
-| --- | --- |
-| Text, message arrays, images, inline documents | Supported within documented Kiro format limits; a function/custom tool result may carry one inline data-URL image block. |
-| `instructions`, `system`, `developer` | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback. |
-| Function tools | Native where possible; stateless fallback otherwise. |
-| Namespace and free-form custom tools | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path. |
-| `agent_message` | Stateless fallback; visible content is preserved, encrypted child metadata is not injected into the parent model. |
-| `tool_choice: auto` / `none` | Supported where the request has no conflicting unfinished tool state. |
-| Required, named, or constrained tool choice | Rejected. |
-| `strict: true` | Rejected because Kiro cannot guarantee strict schema enforcement. |
-| `store: true` / omitted | Supported with local mirroring. |
-| `store: false` | Stateless lane; no local response mirror is written. |
-| `previous_response_id` | Supported for locally mirrored native or stateless responses. |
-| Responses `conversation` objects | Rejected with `unsupported_stateful_responses`. |
-| Structured Outputs / JSON schema | Rejected with `unsupported_structured_output`. |
-| Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations. |
-| Remote image URLs and OpenAI `file_id` references | Rejected; send data URLs or inline file data. |
-| `background: true` | Rejected. |
-| Prompt templates, moderation config, context management | Rejected. |
-| `metadata`, `client_metadata`, `prompt_cache_key` | Accepted for response echo, tenant/session routing, or compatibility metadata; not presented as a Kiro cache guarantee. |
-| `text.verbosity` | Accepted as compatibility metadata; Kiro exposes no verified verbosity control. |
+| Request feature                                            | V3 contract                                                                                                                                 |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text, message arrays, images, inline documents             | Supported within documented Kiro format limits; a function/custom tool result may carry one inline data-URL image block.                    |
+| `instructions`, `system`, `developer`                      | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback.                                                     |
+| Function tools                                             | Native where possible; stateless fallback otherwise.                                                                                        |
+| Namespace and free-form custom tools                       | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path. |
+| `agent_message`                                            | Stateless fallback; visible content is preserved, encrypted child metadata is not injected into the parent model.                           |
+| `tool_choice: auto` / `none`                               | Supported where the request has no conflicting unfinished tool state.                                                                       |
+| Required, named, or constrained tool choice                | Rejected.                                                                                                                                   |
+| `strict: true`                                             | Rejected because Kiro cannot guarantee strict schema enforcement.                                                                           |
+| `store: true` / omitted                                    | Supported with local mirroring.                                                                                                             |
+| `store: false`                                             | Stateless lane; no local response mirror is written.                                                                                        |
+| `previous_response_id`                                     | Supported for locally mirrored native or stateless responses.                                                                               |
+| Responses `conversation` objects                           | Rejected with `unsupported_stateful_responses`.                                                                                             |
+| Structured Outputs / JSON schema                           | Rejected with `unsupported_structured_output`.                                                                                              |
+| Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                            |
+| Remote image URLs and OpenAI `file_id` references          | Rejected; send data URLs or inline file data.                                                                                               |
+| `background: true`                                         | Rejected.                                                                                                                                   |
+| Prompt templates, moderation config, context management    | Rejected.                                                                                                                                   |
+| `metadata`, `client_metadata`, `prompt_cache_key`          | Accepted for response echo, tenant/session routing, or compatibility metadata; not presented as a Kiro cache guarantee.                     |
+| `text.verbosity`                                           | Accepted as compatibility metadata; Kiro exposes no verified verbosity control.                                                             |
 
 ## 7. Native-context decision
 

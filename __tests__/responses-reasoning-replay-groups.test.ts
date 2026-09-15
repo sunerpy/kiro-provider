@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { RequestTransformError } from "../src/kiro/transform/errors.js";
 import { buildHistory } from "../src/kiro/transform/history-builder.js";
-import { assistantOutputFingerprint } from "../src/protocol/canonical.js";
+import {
+  assistantOutputFingerprint,
+  legacyAssistantOutputFingerprint,
+} from "../src/protocol/canonical.js";
 import { adaptResponsesRequest } from "../src/server/responses/request-adapter.js";
 import { message, parsedResponses, TEST_MODEL } from "./canonical-test-helpers.js";
 
@@ -75,6 +78,12 @@ describe("Responses reasoning replay turn groups (A8)", () => {
       {
         lookup: { kind: "responses-token", encryptedContent: "kr1_turn" },
         outputFingerprint: TURN_FINGERPRINT,
+        compatibleOutputFingerprints: [
+          legacyAssistantOutputFingerprint({
+            text: "answer",
+            toolCalls: [{ id: "call_1", name: "lookup", input: '{"q":"status"}' }],
+          }),
+        ],
         insertBeforeMessage: 0,
         sourceId: "rs_first",
         path: "input.0",
@@ -222,6 +231,12 @@ describe("Responses reasoning replay turn groups (A8)", () => {
           text: "",
           toolCalls: [{ id: "call_1", name: "lookup", input: '{"q":"status"}' }],
         }),
+        compatibleOutputFingerprints: [
+          legacyAssistantOutputFingerprint({
+            text: "",
+            toolCalls: [{ id: "call_1", name: "lookup", input: '{"q":"status"}' }],
+          }),
+        ],
         insertBeforeMessage: 1,
         path: "input.2",
       },

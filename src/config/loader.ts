@@ -74,6 +74,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_PROMPT_CACHE_MODE",
+    field: "kiro_prompt_cache_mode",
+    kind: "string",
+  },
+  {
     env: "KIRO_PROVIDER_RESPONSES_FIDELITY_MODE",
     field: "responses_fidelity_mode",
     kind: "string",
@@ -247,6 +252,16 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     env: "KIRO_PROVIDER_REASONING_REPLAY_KEYS",
     field: "reasoning_replay_keys",
     kind: "list",
+  },
+  {
+    env: "KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT",
+    field: "reasoning_replay_token_format",
+    kind: "string",
+  },
+  {
+    env: "KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER",
+    field: "reasoning_replay_account_failover",
+    kind: "string",
   },
   {
     env: "KIRO_PROVIDER_REASONING_REPLAY_TTL_MS",

@@ -12,6 +12,12 @@ export interface EffortConfig {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
+  readonly promptCaching?: {
+    readonly mode: "server-auto" | "explicit-checkpoints" | "off";
+    readonly supported: boolean;
+    readonly maximumCheckpoints?: number;
+    readonly minimumTokens?: number;
+  };
 }
 
 export function transformToSdkRequest(
@@ -30,6 +36,7 @@ export function transformToSdkRequest(
       conversationId: effortConfig?.conversationId,
       nativeSystemPromptEnabled: effortConfig?.nativeSystemPromptEnabled,
       resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays,
+      promptCaching: effortConfig?.promptCaching,
     },
   );
   const effort = resolveEffectiveEffort({

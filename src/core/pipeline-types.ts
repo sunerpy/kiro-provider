@@ -122,7 +122,8 @@ export interface PipelineLineageAffinity {
 export type PipelineReasoningReplayStore = Pick<
   ReasoningReplayStore,
   "readiness" | "store" | "resolveResponses" | "resolveChat"
->;
+> &
+  Partial<Pick<ReasoningReplayStore, "resolveResponsesBatch">>;
 
 export interface RunChatCompletionOptions {
   readonly diagnostics?: RequestDiagnostics;

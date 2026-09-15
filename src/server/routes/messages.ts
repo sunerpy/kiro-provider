@@ -143,6 +143,9 @@ export async function handleMessages(
   );
   const compatibility = {
     ...(adapted.value.cacheControlCount > 0 ? { cacheControlObserved: true } : {}),
+    ...(adapted.value.cacheControlCount > 0
+      ? { promptCacheMode: config.kiro_prompt_cache_mode }
+      : {}),
     ...(adapted.value.contextManagementRequested ? { contextManagementRequested: true } : {}),
     ...(adapted.value.thinkingDisplay !== undefined
       ? { thinkingDisplay: adapted.value.thinkingDisplay }
@@ -152,9 +155,10 @@ export async function handleMessages(
       : {}),
   };
   if (adapted.value.cacheControlCount > 0) {
-    auditLog("info", "anthropic_cache_control_ignored", {
+    auditLog("info", "anthropic_cache_control_observed", {
       request_id: ingress.requestId,
       marker_count: adapted.value.cacheControlCount,
+      mode: config.kiro_prompt_cache_mode,
     });
   }
   if (adapted.value.outputTokenLimitMode === "advisory") {
@@ -253,7 +257,7 @@ export async function handleMessageTokenCount(request: Request, config: Config):
         headers: {
           "x-kiro-token-count-mode": "estimate",
           ...(adapted.value.cacheControlCount > 0
-            ? { "x-kiro-prompt-cache-mode": "unsupported" }
+            ? { "x-kiro-prompt-cache-mode": config.kiro_prompt_cache_mode }
             : {}),
           ...(adapted.value.outputTokenLimitMode === "advisory"
             ? { "x-kiro-output-token-limit-mode": "advisory-unenforced" }

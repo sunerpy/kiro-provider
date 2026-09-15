@@ -251,7 +251,7 @@ describe("Anthropic omitted thinking replay", () => {
       cacheControlObserved: true,
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("server-auto");
     expect(await response.json()).toMatchObject({
       content: [
         { type: "thinking", thinking: "", signature: "kr1_replay-token" },
@@ -280,7 +280,7 @@ describe("Anthropic omitted thinking replay", () => {
     const wire = await response.text();
     expect(wire).not.toContain("private reasoning");
     expect(wire).not.toContain("native-signature");
-    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("server-auto");
     const frames = parseFrames(wire);
     const blocks = assertLegalBlockSequence(frames);
     expect(blocks.map((entry) => [entry.type, entry.deltas])).toEqual([
@@ -423,6 +423,7 @@ describe("GPT opaque reasoning placeholders", () => {
           reasoning("."),
           signature("opaque-gpt-signature"),
           text("answer"),
+          encrypted("kr1_gpt-replay"),
           completed(),
         ],
         "gpt-5.6-terra",
@@ -449,7 +450,7 @@ describe("GPT opaque reasoning placeholders", () => {
           isRecord(frame.delta) &&
           frame.delta.type === "signature_delta",
       ),
-    ).toMatchObject({ delta: { signature: "opaque-gpt-signature" } });
+    ).toMatchObject({ delta: { signature: "kr1_gpt-replay" } });
   });
 
   test("fails closed when placeholder thinking reaches text without a signature", async () => {
@@ -580,15 +581,20 @@ describe("GPT opaque reasoning placeholders", () => {
       model,
       "conversation-tool-placeholder",
       undefined,
-      { emitAnthropicReasoningMetadata: true },
+      {
+        emitAnthropicReasoningMetadata: true,
+        emitEncryptedReasoning: true,
+        captureReasoning: () => "kr2_tool-replay",
+      },
     )) {
       canonicalLines.push(JSON.stringify(event));
     }
     expect(canonicalLines.map((line) => JSON.parse(line).type)).toEqual([
       "started",
       "reasoning_delta",
-      "tool_call_delta",
       "reasoning_signature",
+      "tool_call_delta",
+      "reasoning_encrypted",
       "completed",
     ]);
 
@@ -610,73 +616,38 @@ describe("GPT opaque reasoning placeholders", () => {
       ["tool_use", ["input_json_delta"]],
     ]);
     expect(JSON.stringify(frames)).not.toContain('"thinking":"..."');
-    expect(JSON.stringify(frames)).toContain("tool-signature");
+    expect(JSON.stringify(frames)).toContain("kr2_tool-replay");
     expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
   });
 
-  test("streams GPT text before upstream completion once placeholder thinking is signed", async () => {
-    const model = "gpt-5.6-sol";
-    const streamStart = canonical({
-      type: "started",
-      conversationId: "conversation-gpt",
-      model,
-      createdAt: 1_700_000_000,
-    });
-    let releaseCompletion = (): void => undefined;
-    const completionGate = new Promise<void>((resolve) => {
-      releaseCompletion = resolve;
-    });
-    const upstream = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(
-            encoder.encode(
-              `${[streamStart, reasoning("..."), signature("gpt-signature"), text("answer")].join("\n")}\n`,
-            ),
-          );
-          void completionGate.then(() => {
-            controller.enqueue(encoder.encode(`${completed()}\n`));
-            controller.close();
-          });
-        },
-      }),
-      { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+  test("defers GPT text until the provider replay token is available", async () => {
+    const response = anthropicSseAdapter(
+      pipelineResponse(
+        [
+          reasoning("..."),
+          signature("gpt-signature"),
+          text("answer"),
+          encrypted("kr2_gpt-replay"),
+          completed(),
+        ],
+        "gpt-5.6-sol",
+      ),
+      {
+        model: "gpt-5.6-sol",
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+        thinkingDisplay: "omitted",
+      },
     );
-    const response = anthropicSseAdapter(upstream, {
-      model,
-      inputTokens: 3,
-      signals: signals(),
-      finalize: () => undefined,
-      thinkingDisplay: "omitted",
-      pingIntervalMs: 10_000,
-    });
-    const reader = response.body?.getReader();
-    if (!reader) throw new TypeError("adapter response has no body");
-
-    const textBeforeCompletion = Promise.race([
-      (async () => {
-        for (;;) {
-          const next = await reader.read();
-          if (next.done) return false;
-          const frames = parseFrames(new TextDecoder().decode(next.value));
-          if (
-            frames.some(
-              (frame) =>
-                frame.type === "content_block_delta" &&
-                isRecord(frame.delta) &&
-                frame.delta.type === "text_delta",
-            )
-          ) {
-            return true;
-          }
-        }
-      })(),
-      Bun.sleep(250).then(() => false),
+    const frames = parseFrames(await response.text());
+    const blocks = assertLegalBlockSequence(frames);
+    expect(blocks.map((block) => [block.type, block.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["text", ["text_delta"]],
     ]);
-    const streamed = await textBeforeCompletion;
-    releaseCompletion();
-    expect(streamed).toBe(true);
-    await reader.cancel("done");
+    expect(JSON.stringify(frames)).toContain("kr2_gpt-replay");
+    expect(JSON.stringify(frames)).not.toContain("gpt-signature");
   });
 
   test("fails text-first GPT reasoning without opening an overlapping block", async () => {
@@ -810,13 +781,42 @@ describe("Anthropic message_delta usage (B27)", () => {
       usage: {
         input_tokens: 41,
         output_tokens: 9,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
       },
     });
     expect(frames[0]).toMatchObject({
       type: "message_start",
       message: { usage: { input_tokens: 3, output_tokens: 0 } },
+    });
+  });
+
+  test("maps measured cache read/write buckets instead of fabricating zeros", async () => {
+    const frames = await adapt([
+      text("answer"),
+      canonical({
+        type: "completed",
+        finishReason: "stop",
+        usage: {
+          inputTokens: 41,
+          outputTokens: 9,
+          totalTokens: 50,
+          reported: {
+            inputTokens: 41,
+            uncachedInputTokens: 31,
+            cacheReadInputTokens: 7,
+            cacheWriteInputTokens: 3,
+            outputTokens: 9,
+            totalTokens: 50,
+          },
+        },
+      }),
+    ]);
+    expect(frames.find((frame) => frame.type === "message_delta")).toMatchObject({
+      usage: {
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 7,
+      },
     });
   });
 });

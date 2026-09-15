@@ -128,7 +128,7 @@ export function estimateSdkInputTokens(
       for (const image of user.images ?? []) total += imageTokens(image);
       const context = user.userInputMessageContext;
       for (const tool of context?.tools ?? []) {
-        if (tool.toolSpecification)
+        if ("toolSpecification" in tool && tool.toolSpecification)
           total += estimateTextTokens(JSON.stringify(tool.toolSpecification));
       }
       for (const result of context?.toolResults ?? []) total += 4 + contentTokens(result.content);

@@ -756,6 +756,30 @@ describe("Anthropic request adapter", () => {
     });
   });
 
+  test("rejects a fifth cache marker instead of silently adding or dropping one", () => {
+    const result = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [
+          {
+            role: "user",
+            content: Array.from({ length: 5 }, (_, index) => ({
+              type: "text",
+              text: `stable-${index}`,
+              cache_control: { type: "ephemeral" },
+            })),
+          },
+        ],
+      }),
+      {},
+      "v3-auto",
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      code: "too_many_cache_checkpoints",
+      param: "cache_control",
+    });
+  });
+
   test("maps mid-conversation system text and provider replay signatures", () => {
     const result = adaptAnthropicMessagesRequest(
       validRequest({
@@ -1063,20 +1087,6 @@ describe("Anthropic request adapter", () => {
       {
         request: validRequest({
           messages: [
-            { role: "user", content: "first" },
-            {
-              role: "assistant",
-              content: [{ type: "thinking", thinking: "", signature: "native-signature" }],
-            },
-            { role: "user", content: "again" },
-          ],
-        }),
-        code: "invalid_reasoning_replay",
-        param: "messages.1.content.0.thinking",
-      },
-      {
-        request: validRequest({
-          messages: [
             { role: "system", content: [{ type: "image", source: { type: "base64" } }] },
             { role: "user", content: "hello" },
           ],
@@ -1129,6 +1139,34 @@ describe("Anthropic request adapter", () => {
         param: testCase.param,
       });
     }
+
+    const emptySignedThinking = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "", signature: "native-signature" }],
+          },
+          { role: "user", content: "again" },
+        ],
+      }),
+    );
+    expect(emptySignedThinking).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          reasoningReplays: [
+            {
+              lookup: {
+                kind: "anthropic-direct",
+                content: { kind: "reasoning_text", text: "", signature: "native-signature" },
+              },
+            },
+          ],
+        },
+      },
+    });
 
     const redacted = adaptAnthropicMessagesRequest(
       validRequest({
@@ -1247,7 +1285,7 @@ describe("POST /v1/messages", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("server-auto");
     expect(await response.json()).toMatchObject({
       content: [
         { type: "thinking", thinking: "", signature: "kr1_replay-token" },
@@ -1580,7 +1618,7 @@ describe("Claude Code HTTP surface", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-kiro-token-count-mode")).toBe("estimate");
-    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("unsupported");
+    expect(response.headers.get("x-kiro-prompt-cache-mode")).toBe("server-auto");
     expect(body).toMatchObject({ input_tokens: expect.any(Number) });
   });
 

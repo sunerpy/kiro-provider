@@ -61,6 +61,11 @@ describe("Kiro management model catalog client", () => {
               maxOutputTokens: 20_000,
             },
             rateMultiplier: 0.5,
+            promptCaching: {
+              supportsPromptCaching: true,
+              maximumCacheCheckpointsPerRequest: 4,
+              minimumTokensPerCacheCheckpoint: 1024,
+            },
             additionalModelRequestFieldsSchema: {
               type: "object",
             },
@@ -94,6 +99,11 @@ describe("Kiro management model catalog client", () => {
             maxOutputTokens: 20_000,
           },
           rateMultiplier: 0.5,
+          promptCaching: {
+            supportsPromptCaching: true,
+            maximumCacheCheckpointsPerRequest: 4,
+            minimumTokensPerCacheCheckpoint: 1024,
+          },
           additionalModelRequestFieldsSchema: {
             type: "object",
           },

@@ -124,6 +124,11 @@ describe("ModelCapabilityService", () => {
           modelName: "Future Model",
           supportedInputTypes: ["TEXT", "IMAGE"],
           rateMultiplier: 0.5,
+          promptCaching: {
+            supportsPromptCaching: true,
+            maximumCacheCheckpointsPerRequest: 4,
+            minimumTokensPerCacheCheckpoint: 1024,
+          },
         }),
       ],
     }));
@@ -151,7 +156,17 @@ describe("ModelCapabilityService", () => {
       contextLimit: 123_000,
       outputLimit: 45_000,
       rateMultiplier: 0.5,
+      promptCaching: {
+        supportsPromptCaching: true,
+        maximumCacheCheckpointsPerRequest: 4,
+        minimumTokensPerCacheCheckpoint: 1024,
+      },
       modalities: { input: ["text", "image"], output: ["text"] },
+    });
+    expect(capabilities.promptCaching("a", "future-model-1")).toEqual({
+      supportsPromptCaching: true,
+      maximumCacheCheckpointsPerRequest: 4,
+      minimumTokensPerCacheCheckpoint: 1024,
     });
   });
 

@@ -646,6 +646,49 @@ export class AccountsDatabase {
     return row === null ? undefined : rowToReasoningReplay(row);
   }
 
+  getReasoningReplayRecords(tokenHashes: readonly string[]): ReasoningReplayRecord[] {
+    if (tokenHashes.length === 0) return [];
+    const unique = [...new Set(tokenHashes)];
+    const records: ReasoningReplayRecord[] = [];
+    // Stay below SQLite's common 999-variable limit and bound generated SQL.
+    for (let offset = 0; offset < unique.length; offset += 400) {
+      const chunk = unique.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => "?").join(",");
+      records.push(
+        ...this.db
+          .query<ReasoningReplayRow, string[]>(
+            `SELECT * FROM reasoning_replay WHERE token_hash IN (${placeholders})`,
+          )
+          .all(...chunk)
+          .map(rowToReasoningReplay),
+      );
+    }
+    return records;
+  }
+
+  updateReasoningReplayRecords(records: readonly ReasoningReplayRecord[]): void {
+    if (records.length === 0) return;
+    this.withImmediateTransaction(() => {
+      const update = this.db.query(`
+        UPDATE reasoning_replay SET
+          key_id = ?, nonce = ?, ciphertext = ?, auth_tag = ?,
+          last_seen = ?, expires_at = ?
+        WHERE token_hash = ?
+      `);
+      for (const record of records) {
+        update.run(
+          record.keyId,
+          record.nonce,
+          record.ciphertext,
+          record.authTag,
+          record.lastSeen,
+          record.expiresAt,
+          record.tokenHash,
+        );
+      }
+    });
+  }
+
   findReasoningReplayByChatHash(
     tenantId: string,
     model: string,

@@ -11,6 +11,7 @@ import {
   type CanonicalOutputUsage,
   parseCanonicalOutputEventLine,
 } from "../../protocol/output.js";
+import { isProviderReplayToken } from "../../reasoning/replay-token.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import {
   couldStillBeGpt56ReasoningPlaceholder,
@@ -23,6 +24,7 @@ export type AnthropicCompatibilityOptions = {
   readonly thinkingDisplay?: "omitted";
   readonly contextManagementRequested?: boolean;
   readonly cacheControlObserved?: boolean;
+  readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";
   readonly outputTokenLimitMode?: "advisory";
 };
 
@@ -67,12 +69,12 @@ function formatEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, number>> {
+function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, number | null>> {
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: usage.reported?.cacheWriteInputTokens ?? null,
+    cache_read_input_tokens: usage.reported?.cacheReadInputTokens ?? null,
   };
 }
 
@@ -81,7 +83,7 @@ function compatibilityHeaders(
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
   if (options.cacheControlObserved) {
-    headers["x-kiro-prompt-cache-mode"] = "unsupported";
+    headers["x-kiro-prompt-cache-mode"] = options.promptCacheMode ?? "server-auto";
   }
   if (options.outputTokenLimitMode === "advisory") {
     headers["x-kiro-output-token-limit-mode"] = "advisory-unenforced";
@@ -131,16 +133,26 @@ export function anthropicMessageResponse(
     const opaquePlaceholder =
       reasoning.text !== undefined && isGpt56ReasoningPlaceholder(model, reasoning.text);
     if (opaquePlaceholder) {
-      if (!reasoning.signature) {
+      const replaySignature =
+        options.thinkingDisplay === "omitted" &&
+        reasoning.encryptedContent &&
+        isProviderReplayToken(reasoning.encryptedContent)
+          ? reasoning.encryptedContent
+          : reasoning.signature;
+      if (!replaySignature) {
         return anthropicError(
           502,
           "Upstream placeholder thinking is missing its native signature",
           "api_error",
         );
       }
-      content.push({ type: "thinking", thinking: "", signature: reasoning.signature });
+      content.push({ type: "thinking", thinking: "", signature: replaySignature });
     } else if (options.thinkingDisplay === "omitted") {
-      if (!reasoning.signature || !reasoning.encryptedContent?.startsWith("kr1_")) {
+      if (
+        !reasoning.signature ||
+        !reasoning.encryptedContent ||
+        !isProviderReplayToken(reasoning.encryptedContent)
+      ) {
         return anthropicError(
           502,
           "Upstream omitted thinking cannot be replayed without a provider token",
@@ -153,7 +165,7 @@ export function anthropicMessageResponse(
         signature: reasoning.encryptedContent,
       });
     } else {
-      if (!reasoning.text || !reasoning.signature) {
+      if (reasoning.text === undefined || !reasoning.signature) {
         return anthropicError(
           502,
           "Upstream returned incomplete signed reasoning metadata",
@@ -561,7 +573,13 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         }
         if (pendingReasoningText.length > 0) {
           if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
-            emitOpaquePlaceholderSignature(event.signature);
+            if (options.thinkingDisplay === "omitted") {
+              pendingReasoningText = "";
+              opaquePlaceholderSeen = true;
+              omittedReasoningSeen = true;
+            } else {
+              emitOpaquePlaceholderSignature(event.signature);
+            }
             return;
           }
           if (options.thinkingDisplay === "omitted") {
@@ -601,7 +619,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       case "reasoning_encrypted":
         if (options.thinkingDisplay !== "omitted") return;
         if (redactedEmitted || deferredRedacted.length > 0) return;
-        if (!event.encryptedContent.startsWith("kr1_")) {
+        if (!isProviderReplayToken(event.encryptedContent)) {
           failReasoning("Upstream returned an invalid provider replay token");
           return;
         }
@@ -756,8 +774,8 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
             usage: {
               input_tokens: options.inputTokens,
               output_tokens: 0,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: null,
+              cache_read_input_tokens: null,
             },
           },
         });
