@@ -21,7 +21,7 @@ keep their original language because they are immutable, dated evidence.
 | --- | --- | --- |
 | Zuno | [English](ZUNO.md) · [简体中文](readme/ZUNO.zh-CN.md) | Native OpenAI Responses configuration, session metadata, transport routing, and isolated validation. |
 | Codex CLI | [English](CODEX.md) · [简体中文](readme/CODEX.zh-CN.md) | Isolated profile, supported Responses shapes, tool/compaction smoke, and version boundary. |
-| Claude Code | [English](CLAUDE_CODE.md) · [简体中文](readme/CLAUDE_CODE.zh-CN.md) | Anthropic Messages endpoint, isolated `kiroclaude` profile, model picker, and fallback boundary. |
+| Claude Code | [English](CLAUDE_CODE.md) · [简体中文](readme/CLAUDE_CODE.zh-CN.md) | Anthropic Messages endpoint, shared-state `kiroclaude` launcher, model picker, and fallback boundary. |
 
 ## Protocol and operations
 

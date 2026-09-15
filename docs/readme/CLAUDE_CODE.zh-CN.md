@@ -2,7 +2,7 @@
 
 简体中文 · [English](../CLAUDE_CODE.md)
 
-**最近验证的客户端：**Claude Code 2.1.263。后续版本可能增加 beta header 或请求
+**最近验证的客户端：**Claude Code 2.1.270。后续版本可能增加 beta header 或请求
 字段；要扩大兼容声明，需先重新验证真实请求形态。
 
 kiro-provider 提供 Claude Code 所需的两个 Anthropic 兼容端点：
@@ -11,7 +11,7 @@ kiro-provider 提供 Claude Code 所需的两个 Anthropic 兼容端点：
 - `POST /v1/messages/count_tokens`——返回估算值，并带有
   `x-kiro-token-count-mode: estimate`
 
-## 启动隔离的 Kiro 会话
+## 使用共享 Claude 状态启动 Kiro 会话
 
 先确认本地网关正常且已有可用账号：
 
@@ -27,10 +27,17 @@ curl -fsS -H "Authorization: Bearer $(scripts/kiroclaude-token)" \
 PATH="$PWD/scripts:$PATH" kiroclaude -p 'Reply with exactly: KIROCLAUDE_OK'
 ```
 
-`kiroclaude` 将 `CLAUDE_CONFIG_DIR` 设为 `~/.kiroclaude`，不会修改
-`~/.claude/settings.json`。因此普通 `claude` 命令仍使用原有 provider，包括原生
-Amazon Bedrock。独立目录也避免 Kiro 凭据、signed thinking 和会话历史进入普通
-Claude 配置。
+默认情况下，`kiroclaude` 不改变 Claude 原生配置解析，通常仍使用 `~/.claude`
+和 `~/.claude.json`。原有 settings、skills、commands、plugins、MCP、CLAUDE.md、
+历史和会话因此可同时用于 `claude` 与 `kiroclaude`。
+
+启动器只为当前进程传入高优先级 `--settings` overlay。Kiro 模式会明确关闭继承的
+Bedrock、Vertex、Foundry 和 Mantle 路由，清空继承的 Anthropic 凭据，再选择本地
+网关与模型别名。它不会修改原生 settings 文件，所以普通 `claude` 进程仍使用原有
+provider。
+
+共享历史不代表 provider 专用签名可以互通。如果旧续轮包含另一个 provider 无法
+回放的 signed thinking，在原生 Bedrock 与 Kiro 之间切换时应新建会话。
 
 Release installer 目前不安装这些辅助脚本。临时测试可直接从 checkout 运行；确定
 长期使用后再自行复制或建立链接。
@@ -40,14 +47,16 @@ Release installer 目前不安装这些辅助脚本。临时测试可直接从 c
 | 设置 | 默认值 |
 | --- | --- |
 | 网关根地址 | `http://127.0.0.1:8787`，不能带 `/v1` |
-| 配置目录 | `~/.kiroclaude` |
+| Claude 状态 | 共享原生 `~/.claude` 与 `~/.claude.json` |
 | 模型 | Opus 5 |
-| 推理模式 | Ultra，即 `effortLevel: "xhigh"`、`ultracode: true` |
+| 推理模式 | Ultra，即 `effortLevel: "max"`、`ultracode: true` |
+| 权限模式 | 继承 Claude 原生设置；启动器默认不覆盖 |
 | 离开后的 recap | 关闭 |
 | 标题、分类等非必要流量 | 关闭 |
 | Experimental betas | 开启 |
 
-需要调整时，只覆盖本次隔离进程：
+需要调整时，只覆盖当前进程。仅在明确需要隔离 Claude home 时设置
+`KIROCLAUDE_CONFIG_DIR`：
 
 ```bash
 KIROCLAUDE_BASE_URL=http://127.0.0.1:18787 \
@@ -57,9 +66,17 @@ KIROCLAUDE_EFFORT=high \
 PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-`KIROCLAUDE_EFFORT=ultra` 是默认值，会启用 Ultracode 并发送 `xhigh`。设置为
-`low`、`medium`、`high`、`xhigh` 或 `max` 时，则使用对应的普通 effort 档位并
-关闭 Ultracode。
+`KIROCLAUDE_EFFORT=ultra` 是默认值，会设置 `effortLevel: "max"` 并启用
+Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
+`output_config.effort: "xhigh"`。设置为 `low`、`medium`、`high`、`xhigh` 或
+`max` 时，则使用对应的普通 effort 档位并关闭 Ultracode。
+
+启动器默认不提升权限，而是继承 Claude 原生权限策略。只有显式设置
+`KIROCLAUDE_PERMISSION_MODE` 时才覆盖，可选 `acceptEdits`、`auto`、
+`bypassPermissions`、`manual`、`dontAsk` 或 `plan`。只有显式选择
+`bypassPermissions` 才会跳过危险模式确认。该模式会移除 Claude 审批提示，但不会
+创建操作系统沙箱，只应在可信工作区或已有外部隔离时使用。Claude CLI 的
+`--permission-mode plan` 等参数仍可覆盖单次启动。
 
 启动器将 `kiroclaude-token` 注册为 Claude Code 的 `apiKeyHelper`。该 helper 从
 `${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json` 读取第一个非空
@@ -98,24 +115,27 @@ GPT 请求仍会 fail closed。它也不会改变 OpenAI Responses、Chat Comple
 ### 通过原生 Bedrock 使用 Fable 5.1
 
 Fable 不能直接成为 Kiro picker 的一行，因为 Claude Code 会在进程启动时固定
-provider 和 base URL。请使用另一个 profile 启动 Bedrock 备用后端：
+provider 和 base URL。请使用独立进程启动 Bedrock 备用后端：
 
 ```bash
 PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
 ```
 
-该模式使用 `~/.kiroclaude-fable`、`model: "fable"`、max effort、
+该模式使用同一个共享 Claude home、`model: "fable"`、max effort、
 `AWS_PROFILE=us-claude`、`AWS_REGION=us-east-2` 和
 `ANTHROPIC_DEFAULT_FABLE_MODEL=us.anthropic.claude-fable-5-1`，不会设置 Kiro token
 helper 或 `ANTHROPIC_BASE_URL`。对应覆盖项为 `KIROCLAUDE_AWS_PROFILE`、
 `KIROCLAUDE_AWS_REGION`、`KIROCLAUDE_FABLE_MODEL` 和
 `KIROCLAUDE_FABLE_EFFORT`。
+进程 overlay 会先清除继承的自定义 Anthropic、Vertex、Foundry 和 Mantle 路由，
+再启用 Bedrock；skills 等其他原生设置仍然共享。
 
-Kiro 与 Bedrock 之间的切换需要启动新进程，不能在已有会话中当作普通模型切换。
+Kiro 与 Bedrock 之间的切换需要启动新进程；如果之前的 signed thinking 属于特定
+provider，还应新建会话，不能在已有会话中当作普通模型切换。
 
 ## 兼容边界
 
-适配器接受 Claude Code 2.1.263 中已经观察到的请求形态：
+适配器接受 Claude Code 2.1.270 中已经观察到的请求形态：
 
 - 文本、base64 图片、标准工具、`tool_use`、`tool_result` 和 `is_error`；
 - 每条 user message 中一个带图片的 `tool_result`，并保留工具身份、状态、文本和
@@ -151,7 +171,10 @@ caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。
 | `capability_rejected:context_management` | 客户端请求了支持范围外的 destructive edit。不要用未经审计的删字段代理隐藏错误。 |
 | Picker 中没有 Kiro GPT 模型 | 通过 `kiroclaude` 启动；单靠 gateway discovery 会过滤这些 ID。 |
 | 普通 `claude` 使用了错误后端 | 检查普通 `~/.claude` 配置；`kiroclaude` 不会修改它。 |
+| 恢复会话时报 provider 签名无效 | 在 Kiro 与原生 Bedrock 之间切换后新建会话。 |
 
 参考资料：[Messages API](https://platform.claude.com/docs/en/api/messages/create)、
+[Claude Code settings](https://code.claude.com/docs/en/settings)、
+[Claude Code permissions](https://code.claude.com/docs/en/permissions)、
 [Claude Code gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol) 和
 [Claude Code 环境变量](https://code.claude.com/docs/en/env-vars)。
