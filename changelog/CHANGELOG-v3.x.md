@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.3](https://github.com/sunerpy/kiro-provider/compare/v3.4.2...v3.4.3) (2026-09-16)
+
+
+### Bug Fixes
+
+* **pipeline:** 卡死会话连续停滞后允许重新选路 ([5b07440](https://github.com/sunerpy/kiro-provider/commit/5b07440dec5e31e5a8af72cc8720f1a4d9eb72a3))
+* **pipeline:** 卡死会话连续停滞后允许重新选路 ([f681223](https://github.com/sunerpy/kiro-provider/commit/f6812231691766b3bf6fda933f4ad92bcc3b297c))
+
 ## [3.4.2](https://github.com/sunerpy/kiro-provider/compare/v3.4.1...v3.4.2) (2026-09-16)
 
 
