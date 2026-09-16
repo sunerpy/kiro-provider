@@ -103,9 +103,13 @@ kiro-provider self-update --tag 3.3.1      # pin a release, including a downgrad
 npm installs are upgraded with the package manager instead
 (`bun add -g @sunerpy/kiro-provider@latest`); `self-update` refuses them and
 says so. Both commands accept `--proxy <url>` and otherwise honour
-`KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`. Neither loads the
-gateway config, so a broken `config.json` cannot block an upgrade. Restart the
-service after updating a service install.
+`KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`; `--proxy ""` selects
+no proxy instead of falling through to those variables. Bun's `fetch` reads
+`HTTPS_PROXY`/`HTTP_PROXY` itself, so unset them for a fully direct connection.
+Replacing the binary needs write access to the install directory, not to the
+binary itself, so a hardened read-only install still updates. Neither command
+loads the gateway config, so a broken `config.json` cannot block an upgrade.
+Restart the service after updating a service install.
 
 ## Quickstart
 

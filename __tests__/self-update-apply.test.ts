@@ -8,6 +8,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -198,6 +199,7 @@ describe("runSelfUpdate", () => {
       currentVersion: "3.3.1",
       latestVersion: "3.3.1",
       releaseUrl: "https://github.com/sunerpy/kiro-provider/releases/tag/v3.3.1",
+      localIsNewer: false,
     });
     expect(urls).toEqual([LATEST_URL]);
     expect(readFileSync(binary, "utf8")).toBe(OLD_BYTES);
@@ -303,6 +305,70 @@ describe("runSelfUpdate", () => {
     );
     expect(downgradePrompts[0]).toContain("with the OLDER release 3.2.0");
   });
+
+  test("reports a locally newer build instead of calling it the latest", async () => {
+    const binary = installRoot();
+    const { fetch: fetchImpl, urls } = releaseFetch({ tag: "v3.2.0" });
+    const result = await update(binary, fetchImpl, { check: true, assumeYes: false });
+    expect(result).toEqual({
+      status: "up-to-date",
+      currentVersion: "3.3.1",
+      latestVersion: "3.2.0",
+      releaseUrl: "https://github.com/sunerpy/kiro-provider/releases/tag/v3.2.0",
+      localIsNewer: true,
+    });
+    expect(urls).toEqual([LATEST_URL]);
+    expect(readFileSync(binary, "utf8")).toBe(OLD_BYTES);
+  });
+
+  test("refuses an asset that declares more than the size cap", async () => {
+    const binary = installRoot();
+    const fetchImpl: FetchLike = async (url) => {
+      if (url === LATEST_URL) return new Response(JSON.stringify({ tag_name: "v3.4.0" }));
+      if (url === `${DOWNLOAD_BASE}/v3.4.0/SHA256SUMS`) {
+        return new Response(`${sha256(NEW_BYTES)}  ${ASSET}\n`);
+      }
+      return new Response(NEW_BYTES, {
+        status: 200,
+        headers: { "content-length": String(500 * 1024 * 1024) },
+      });
+    };
+    await expect(update(binary, fetchImpl)).rejects.toThrow("Refusing to read 524288000 bytes");
+    expect(readFileSync(binary, "utf8")).toBe(OLD_BYTES);
+  });
+
+  // Windows has no symlinks in the POSIX sense and its chmod is a no-op here.
+  test.skipIf(process.platform === "win32")(
+    "updates a hardened read-only binary in a directory the user owns",
+    async () => {
+      const binary = installRoot();
+      chmodSync(binary, 0o555);
+      const result = await update(binary, releaseFetch().fetch);
+      expect(result.status).toBe("updated");
+      expect(readFileSync(binary, "utf8")).toBe(NEW_BYTES);
+      // The tightened mode survives the upgrade.
+      expect(statSync(binary).mode & 0o777).toBe(0o555);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "does not write through a symlink planted at the staging path",
+    async () => {
+      const binary = installRoot();
+      const directory = join(binary, "..");
+      const victim = join(directory, "victim");
+      writeFileSync(victim, "victim payload", { mode: 0o600 });
+      // The pre-hardening staging name was derived from the pid, so an observer
+      // could pre-create it. The name is now random and opened with O_EXCL.
+      symlinkSync(victim, join(directory, `.kiro-provider.self-update-${process.pid}`));
+
+      const result = await update(binary, releaseFetch().fetch);
+      expect(result.status).toBe("updated");
+      expect(readFileSync(binary, "utf8")).toBe(NEW_BYTES);
+      expect(readFileSync(victim, "utf8")).toBe("victim payload");
+      expect(statSync(victim).mode & 0o777).toBe(0o600);
+    },
+  );
 
   // Windows ignores directory permission bits, so the guard cannot be provoked there.
   test.skipIf(process.platform === "win32")(

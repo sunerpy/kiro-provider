@@ -67,6 +67,34 @@ describe("compareVersionStrings", () => {
     expect(compareVersionStrings("3.3.1", "latest")).toBeUndefined();
     expect(compareVersionStrings("dev", "3.3.1")).toBeUndefined();
   });
+
+  test("never reports two distinct versions as equal", () => {
+    // Past MAX_SAFE_INTEGER a float cannot tell these apart, and enough digits
+    // collapse to Infinity, so such a value is refused rather than compared.
+    for (const candidate of [
+      "9007199254740992.0.0",
+      "9007199254740993.0.0",
+      `${"9".repeat(400)}.0.0`,
+      `1.${"9".repeat(400)}.0`,
+      "1.0.9007199254740993",
+    ]) {
+      expect(parseSemanticVersion(candidate)).toBeUndefined();
+      expect(normalizeReleaseTag(candidate)).toBeUndefined();
+      expect(compareVersionStrings(candidate, "3.4.0")).toBeUndefined();
+    }
+    expect(parseSemanticVersion("9007199254740991.0.0")?.major).toBe(9007199254740991);
+  });
+
+  test("orders long numeric prerelease identifiers exactly", () => {
+    expect(compareVersionStrings("1.0.0-rc.9007199254740993", "1.0.0-rc.9007199254740994")).toBe(
+      -1,
+    );
+    expect(compareVersionStrings("1.0.0-rc.9007199254740994", "1.0.0-rc.9007199254740993")).toBe(1);
+    expect(compareVersionStrings(`1.0.0-rc.${"9".repeat(40)}`, `1.0.0-rc.${"9".repeat(41)}`)).toBe(
+      -1,
+    );
+    expect(compareVersionStrings("1.0.0-rc.007", "1.0.0-rc.7")).toBe(0);
+  });
 });
 
 describe("release tags", () => {

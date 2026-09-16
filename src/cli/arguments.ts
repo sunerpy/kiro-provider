@@ -338,7 +338,9 @@ function parseVersion(args: readonly string[]): VersionCommand | HelpCommand {
     kind: "version",
     check: parsed.values.check ?? false,
     json: parsed.values.json ?? false,
-    ...(parsed.values.proxy ? { proxy: parsed.values.proxy } : {}),
+    // Preserved even when empty: `--proxy ""` suppresses the environment
+    // fallback instead of being dropped, exactly as it does for `serve`.
+    ...(parsed.values.proxy === undefined ? {} : { proxy: parsed.values.proxy }),
   };
 }
 
@@ -374,7 +376,7 @@ function parseSelfUpdate(args: readonly string[]): SelfUpdateCommand | HelpComma
     yes: parsed.values.yes ?? false,
     force: parsed.values.force ?? false,
     ...(tag ? { tag } : {}),
-    ...(parsed.values.proxy ? { proxy: parsed.values.proxy } : {}),
+    ...(parsed.values.proxy === undefined ? {} : { proxy: parsed.values.proxy }),
   };
 }
 

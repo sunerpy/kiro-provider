@@ -13,7 +13,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。`--version` 与 `self-update` 既不加载配置也不打开账号库，代理依次取自 `--proxy`、`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`，因此配置文件有问题也不会阻塞升级。
+配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。`--version` 与 `self-update` 既不加载配置也不打开账号库，代理依次取自 `--proxy`、`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`，因此配置文件有问题也不会阻塞升级；与 `serve` 一致，显式传入空值 `--proxy ""` 表示不选择任何代理，而不是继续回退到上述变量。注意 Bun 的 `fetch` 自身也会读取 `HTTPS_PROXY`/`HTTP_PROXY`，若需要完全直连，请取消这两个变量（`env -u HTTPS_PROXY -u HTTP_PROXY kiro-provider self-update`）；单独使用 `--proxy ""` 仍可屏蔽 `KIRO_PROVIDER_PROXY_URL`。
 
 ## 校验规则
 

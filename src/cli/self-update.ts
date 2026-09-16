@@ -11,24 +11,28 @@
  * - The replacement is a same-directory temp file plus `rename`, which is
  *   atomic on POSIX and safe to perform on the running image: the kernel keeps
  *   the old inode alive for this process while new invocations pick up the new
- *   one. Windows cannot replace a mapped image, so the old file is parked
- *   aside first and the rename is rolled back if the swap fails.
+ *   one. The temp file is created with an unpredictable name and `O_EXCL`, so
+ *   a planted symlink in the install directory cannot redirect the write.
+ *   Windows alone cannot replace a mapped image, so there the old file is
+ *   parked aside first and the rename is rolled back if the swap fails.
  *
  * No gateway configuration is loaded here on purpose — updating must keep
  * working when `config.json` is broken, which is one of the reasons to update.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   accessSync,
-  chmodSync,
+  closeSync,
   existsSync,
+  fchmodSync,
   constants as fsConstants,
+  openSync,
   realpathSync,
   renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
@@ -48,8 +52,14 @@ import {
   releaseVersionFromTag,
 } from "./release-version.js";
 
-/** Refuses absurd payloads before buffering them; the binaries are ~100 MB. */
+/** Refuses absurd payloads while buffering them; the binaries are ~100 MB. */
 const MAX_ASSET_BYTES = 400 * 1024 * 1024;
+
+/**
+ * Release JSON and `SHA256SUMS` are kilobytes. Capping them keeps a proxy that
+ * answers with an endless body from exhausting memory before parsing.
+ */
+const MAX_METADATA_BYTES = 2 * 1024 * 1024;
 
 const METADATA_TIMEOUT_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -150,29 +160,51 @@ function resolveSignal(options: {
 }
 
 /**
+ * Replaces `user:password@` in a proxy value with `***@`. Proxy URLs routinely
+ * carry credentials and the rejected value is reported on stderr, which CI logs
+ * and terminal recorders keep, so the userinfo never reaches a message.
+ */
+export function redactProxyUrl(value: string): string {
+  const schemeEnd = value.indexOf("//");
+  const authorityStart = schemeEnd < 0 ? 0 : schemeEnd + 2;
+  const rest = value.slice(authorityStart);
+  const authorityEnd = rest.search(/[/?#]/);
+  const authority = authorityEnd < 0 ? rest : rest.slice(0, authorityEnd);
+  const at = authority.lastIndexOf("@");
+  if (at < 0) return value;
+  return `${value.slice(0, authorityStart)}***@${value.slice(authorityStart + at + 1)}`;
+}
+
+/**
  * Proxy precedence for update traffic: explicit flag, then the provider's own
  * variable, then the conventional shell variables. Deliberately independent of
- * `config.json` so a broken config cannot block an upgrade.
+ * `config.json` so a broken config cannot block an upgrade. An explicitly empty
+ * `--proxy ""` selects no proxy, matching `serve`, so it does not fall through to
+ * the environment. Bun's `fetch` reads `HTTPS_PROXY`/`HTTP_PROXY` itself and no
+ * `proxy` value disables that, so `--proxy ""` suppresses this resolution rather
+ * than guaranteeing a direct socket; the documentation says so.
  */
 export function resolveUpdateProxyUrl(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | undefined {
   const candidate =
-    explicit ||
-    env.KIRO_PROVIDER_PROXY_URL ||
-    env.HTTPS_PROXY ||
-    env.https_proxy ||
-    env.HTTP_PROXY ||
-    env.http_proxy;
+    explicit === undefined
+      ? env.KIRO_PROVIDER_PROXY_URL ||
+        env.HTTPS_PROXY ||
+        env.https_proxy ||
+        env.HTTP_PROXY ||
+        env.http_proxy
+      : explicit;
   if (!candidate) return undefined;
   let parsed: URL;
   try {
     parsed = new URL(candidate);
   } catch (error) {
-    throw new SelfUpdateError(`Invalid proxy URL for the update download: ${candidate}`, {
-      cause: error,
-    });
+    throw new SelfUpdateError(
+      `Invalid proxy URL for the update download: ${redactProxyUrl(candidate)}`,
+      { cause: error },
+    );
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new SelfUpdateError(
@@ -216,7 +248,57 @@ async function fetchText(
   if (!response.ok) {
     throw new SelfUpdateError(describeHttpFailure(options.what, url, response.status));
   }
-  return { body: await response.text(), status: response.status };
+  const bytes = await readBounded(response, {
+    limit: MAX_METADATA_BYTES,
+    url,
+    what: options.what,
+  });
+  return { body: new TextDecoder().decode(bytes), status: response.status };
+}
+
+/**
+ * Buffers a response body while enforcing a byte ceiling. `content-length` is
+ * only a hint — a hostile or misconfigured proxy can omit it and stream
+ * endlessly — so the running total is what actually stops the read.
+ */
+async function readBounded(
+  response: Response,
+  options: { readonly limit: number; readonly url: string; readonly what: string },
+): Promise<Uint8Array> {
+  const declared = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > options.limit) {
+    throw new SelfUpdateError(
+      `Refusing to read ${declared} bytes of ${options.what} from ${options.url}; the limit is ${options.limit} bytes.`,
+    );
+  }
+  const body = response.body;
+  if (body === null) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > options.limit) {
+        throw new SelfUpdateError(
+          `${options.what} from ${options.url} exceeded ${options.limit} bytes; the download was discarded.`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 function describeHttpFailure(what: string, url: string, status: number): string {
@@ -279,9 +361,17 @@ async function resolveRelease(
   return { tag, version, releaseUrl: parsed.data.html_url ?? releasePageUrl(tag) };
 }
 
-/** Compares the running build against the newest (or pinned) release. */
+/**
+ * Compares the running build against the newest (or pinned) release. Proxy
+ * resolution happens here rather than at the call site so `--version --check`
+ * and `self-update` honour the same documented precedence.
+ */
 export async function checkForUpdate(options: UpdateCheckOptions): Promise<UpdateCheck> {
-  const release = await resolveRelease(options);
+  const proxyUrl = resolveUpdateProxyUrl(options.proxyUrl, options.env ?? process.env);
+  const release = await resolveRelease({
+    ...options,
+    ...(proxyUrl === undefined ? {} : { proxyUrl }),
+  });
   const compared = compareVersionStrings(options.currentVersion, release.version);
   if (compared === undefined) {
     throw new SelfUpdateError(
@@ -371,6 +461,8 @@ export type SelfUpdateResult =
       readonly currentVersion: string;
       readonly latestVersion: string;
       readonly releaseUrl: string;
+      /** True when this build is ahead of the newest release, not equal to it. */
+      readonly localIsNewer: boolean;
     }
   | {
       readonly status: "available";
@@ -407,13 +499,20 @@ function resolveExecutablePath(runtime: SelfUpdateRuntime): string {
   return realpathSync(candidate);
 }
 
+/**
+ * Replacing a file through a same-directory rename needs write and search
+ * access on the parent directory, not write access to the old file, so this
+ * checks the directory only: a deliberately hardened `0555` binary in a
+ * directory the user owns updates fine, and the atomic replacement itself
+ * reports anything more specific.
+ */
 function assertWritable(targetPath: string): void {
+  const directory = dirname(targetPath);
   try {
-    accessSync(dirname(targetPath), fsConstants.W_OK);
-    accessSync(targetPath, fsConstants.W_OK);
+    accessSync(directory, fsConstants.W_OK | fsConstants.X_OK);
   } catch (error) {
     throw new SelfUpdateError(
-      `No write permission for ${targetPath}. Re-run with an account that owns the install directory, or reinstall with scripts/install.sh. Nothing was changed.`,
+      `No write permission for the install directory ${directory} holding ${basename(targetPath)}. Re-run with an account that owns that directory, or reinstall with scripts/install.sh. Nothing was changed.`,
       { cause: error },
     );
   }
@@ -444,45 +543,76 @@ async function downloadAsset(
   if (!response.ok) {
     throw new SelfUpdateError(describeHttpFailure("the release asset", url, response.status));
   }
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
-    throw new SelfUpdateError(
-      `Refusing to download ${declared} bytes from ${url}; the release binaries are far smaller.`,
-    );
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readBounded(response, {
+    limit: MAX_ASSET_BYTES,
+    url,
+    what: "the release asset",
+  });
   if (bytes.byteLength === 0) {
     throw new SelfUpdateError(`The release asset download was empty: ${url}`);
   }
-  if (bytes.byteLength > MAX_ASSET_BYTES) {
-    throw new SelfUpdateError(`The release asset download exceeded ${MAX_ASSET_BYTES} bytes`);
-  }
   return bytes;
+}
+
+/**
+ * Rename failures that mean the destination file itself is held open rather
+ * than that the path is wrong. Only Windows needs the park-aside dance: POSIX
+ * renames over a running executable, so treating a POSIX failure as "locked"
+ * would move an unrelated path (a directory that appeared at the target, say)
+ * out of the way instead of reporting the real error.
+ */
+const LOCKED_TARGET_CODES: ReadonlySet<string> = new Set([
+  "EACCES",
+  "EBUSY",
+  "EEXIST",
+  "EPERM",
+  "ETXTBSY",
+  "UNKNOWN",
+]);
+
+export function shouldParkOldImage(error: unknown, platform: string): boolean {
+  if (platform !== "win32") return false;
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  return typeof code === "string" && LOCKED_TARGET_CODES.has(code);
 }
 
 /**
  * Writes the verified bytes next to the target and renames them over it. The
  * staged file inherits the current binary's permission bits (plus owner
  * execute) so a deliberately tightened install is not loosened by an upgrade.
+ *
+ * The staging path is unpredictable and opened with `O_CREAT | O_EXCL`, so an
+ * existing file or symlink at that path fails the open instead of being
+ * followed, and the mode is applied to the descriptor rather than to the name.
  */
-function replaceExecutable(targetPath: string, bytes: Uint8Array): void {
+function replaceExecutable(targetPath: string, bytes: Uint8Array, platform: string): void {
   const mode = (statSync(targetPath).mode & 0o777) | 0o100;
-  const staged = join(dirname(targetPath), `.${basename(targetPath)}.self-update-${process.pid}`);
+  const staged = join(
+    dirname(targetPath),
+    `.${basename(targetPath)}.self-update-${randomBytes(12).toString("hex")}`,
+  );
   try {
-    writeFileSync(staged, bytes, { mode });
-    chmodSync(staged, mode);
+    writeStagedFile(staged, bytes, mode);
     try {
       renameSync(staged, targetPath);
     } catch (error) {
+      if (!shouldParkOldImage(error, platform)) throw error;
       // Windows refuses to replace a mapped image; park the old file aside.
       const parked = `${targetPath}.old-${process.pid}`;
       renameSync(targetPath, parked);
       try {
         renameSync(staged, targetPath);
       } catch (nested) {
-        renameSync(parked, targetPath);
+        let restored = true;
+        try {
+          renameSync(parked, targetPath);
+        } catch {
+          restored = false;
+        }
         throw new SelfUpdateError(
-          `Failed to install the new binary at ${targetPath}. The previous binary was restored.`,
+          restored
+            ? `Failed to install the new binary at ${targetPath}. The previous binary was restored.`
+            : `Failed to install the new binary at ${targetPath}, and the previous binary could not be restored automatically. It is intact at ${parked}; move it back to ${targetPath} to recover.`,
           { cause: nested instanceof Error ? nested : error },
         );
       }
@@ -494,6 +624,21 @@ function replaceExecutable(targetPath: string, bytes: Uint8Array): void {
     }
   } finally {
     if (existsSync(staged)) unlinkSync(staged);
+  }
+}
+
+function writeStagedFile(staged: string, bytes: Uint8Array, mode: number): void {
+  const handle = openSync(staged, "wx", mode);
+  try {
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      offset += writeSync(handle, bytes, offset, bytes.byteLength - offset);
+    }
+    // Force the exact mode: `open` honours the process umask, and applying it to
+    // the descriptor cannot be redirected to another path.
+    fchmodSync(handle, mode);
+  } finally {
+    closeSync(handle);
   }
 }
 
@@ -511,6 +656,9 @@ export async function runSelfUpdate(
   if (asset === undefined) throw new UnsupportedPlatformError(platform, arch);
 
   const executablePath = resolveExecutablePath(runtime);
+  // Resolved once, before any request, so an unusable proxy fails fast and the
+  // metadata request and the download cannot disagree about routing. `env: {}`
+  // stops `checkForUpdate` from consulting the environment a second time.
   const proxyUrl = resolveUpdateProxyUrl(options.proxyUrl, dependencies.env ?? process.env);
   const fetchImpl = dependencies.fetch ?? (fetch as FetchLike);
   const check = await checkForUpdate({
@@ -520,6 +668,7 @@ export async function runSelfUpdate(
     ...(options.signal ? { signal: options.signal } : {}),
     ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     fetch: fetchImpl,
+    env: {},
   });
 
   // An explicit --tag is an instruction, so it may reinstall or roll back.
@@ -530,6 +679,7 @@ export async function runSelfUpdate(
       currentVersion: check.currentVersion,
       latestVersion: check.latestVersion,
       releaseUrl: check.releaseUrl,
+      localIsNewer: check.localIsNewer,
     };
   }
   if (options.check) {
@@ -592,7 +742,7 @@ export async function runSelfUpdate(
   const actual = createHash("sha256").update(bytes).digest("hex");
   if (actual !== expected) throw new ChecksumMismatchError(asset, expected, actual);
 
-  replaceExecutable(executablePath, bytes);
+  replaceExecutable(executablePath, bytes, platform);
   return {
     status: "updated",
     currentVersion: check.currentVersion,
@@ -608,7 +758,11 @@ export function formatSelfUpdateResult(result: SelfUpdateResult, json: boolean):
   if (json) return [JSON.stringify(selfUpdateJson(result), null, 2)];
   switch (result.status) {
     case "up-to-date":
-      return [`kiro-provider ${result.currentVersion} is already the latest release.`];
+      return result.localIsNewer
+        ? [
+            `kiro-provider ${result.currentVersion} is newer than the latest release ${result.latestVersion}. Use --force to reinstall it, or --tag to pin a release.`,
+          ]
+        : [`kiro-provider ${result.currentVersion} is already the latest release.`];
     case "available":
       return [
         `Update available: ${result.currentVersion} → ${result.latestVersion}`,
@@ -633,6 +787,7 @@ function selfUpdateJson(result: SelfUpdateResult): Readonly<Record<string, unkno
     status: result.status,
     version: result.currentVersion,
     latest_version: result.latestVersion,
+    ...("localIsNewer" in result ? { local_is_newer: result.localIsNewer } : {}),
     ...("asset" in result ? { asset: result.asset } : {}),
     ...("executablePath" in result ? { binary: result.executablePath } : {}),
     ...("sha256" in result ? { sha256: result.sha256 } : {}),
