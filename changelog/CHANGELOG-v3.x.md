@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.5.0](https://github.com/sunerpy/kiro-provider/compare/v3.4.3...v3.5.0) (2026-09-16)
+
+
+### Features
+
+* **claude:** 支持 GPT 晚签名与 Fable 5.1 ([a23f0fd](https://github.com/sunerpy/kiro-provider/commit/a23f0fd797e46c85044593ec545ecd0ceadc4368))
+* **claude:** 支持 GPT 晚签名与 Fable 5.1 ([f5185a3](https://github.com/sunerpy/kiro-provider/commit/f5185a33c571f2e3ac5febfbf07cf6663fcbf857))
+
 ## [3.4.3](https://github.com/sunerpy/kiro-provider/compare/v3.4.2...v3.4.3) (2026-09-16)
 
 
