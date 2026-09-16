@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.4.1](https://github.com/sunerpy/kiro-provider/compare/v3.4.0...v3.4.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **cli:** 加固自更新替换与版本比较 ([91514cf](https://github.com/sunerpy/kiro-provider/commit/91514cf58f072ed4e67a106298d70bc0629b9e74))
+* **cli:** 加固自更新替换与版本比较 ([081992c](https://github.com/sunerpy/kiro-provider/commit/081992c89d2ec91cb073846cc1dc5221e792f631))
+
 ## [3.4.0](https://github.com/sunerpy/kiro-provider/compare/v3.3.1...v3.4.0) (2026-09-15)
 
 
