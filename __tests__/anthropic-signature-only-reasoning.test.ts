@@ -120,6 +120,21 @@ describe("Anthropic non-stream signature-only reasoning", () => {
     expect(
       parseCanonicalOutputEvent({
         canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "reasoning_delta",
+        text: 0,
+      }),
+    ).toBeUndefined();
+    expect(
+      parseCanonicalOutputEvent({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+        type: "reasoning_delta",
+        text: "",
+        extra: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      parseCanonicalOutputEvent({
+        canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
         type: "text_delta",
         text: "",
       }),
