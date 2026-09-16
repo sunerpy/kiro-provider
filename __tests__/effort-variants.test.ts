@@ -115,6 +115,20 @@ describe("effort capability", () => {
     expect(resolveEffort("claude-sonnet-5", "xhigh")).toBe("xhigh");
   });
 
+  test("claude-fable-5-1 resolves to its dotted wire id and supports xhigh", () => {
+    expect(resolveModelVariant("claude-fable-5-1")).toEqual({
+      wireId: "claude-fable-5.1",
+      effort: undefined,
+    });
+    expect(resolveModelVariant("claude-fable-5-1-xhigh")).toEqual({
+      wireId: "claude-fable-5.1",
+      effort: "xhigh",
+    });
+    expect(supportsEffort("claude-fable-5.1")).toBe(true);
+    expect(supportsXHighEffort("claude-fable-5.1")).toBe(true);
+    expect(resolveEffort("claude-fable-5.1", "xhigh")).toBe("xhigh");
+  });
+
   test("gpt-5.6 models support effort and xhigh (probe-confirmed, credits scale)", () => {
     for (const wire of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(supportsEffort(wire)).toBe(true);

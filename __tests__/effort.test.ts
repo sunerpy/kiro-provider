@@ -10,6 +10,7 @@ import {
 describe("effort module", () => {
   describe("supportsEffort", () => {
     test("returns true for supported models", () => {
+      expect(supportsEffort("claude-fable-5.1")).toBe(true);
       expect(supportsEffort("claude-opus-5")).toBe(true);
       expect(supportsEffort("claude-opus-4.8")).toBe(true);
       expect(supportsEffort("claude-opus-4.7")).toBe(true);
@@ -24,7 +25,8 @@ describe("effort module", () => {
   });
 
   describe("supportsXHighEffort", () => {
-    test("returns true for opus 4.7, 4.8, and 5", () => {
+    test("returns true for Fable 5.1, Opus 4.7, 4.8, and 5", () => {
+      expect(supportsXHighEffort("claude-fable-5.1")).toBe(true);
       expect(supportsXHighEffort("claude-opus-5")).toBe(true);
       expect(supportsXHighEffort("claude-opus-4.8")).toBe(true);
       expect(supportsXHighEffort("claude-opus-4.7")).toBe(true);

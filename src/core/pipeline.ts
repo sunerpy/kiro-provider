@@ -17,7 +17,8 @@ import {
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
-import { buildEffortRequestFields } from "../kiro/effort.js";
+import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
+import { isGpt56Model } from "../kiro/models.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   isAccessTokenError,
@@ -121,6 +122,7 @@ type CompletionResult =
       readonly captureReasoning?: SdkReasoningCaptureHandler;
       readonly emitEncryptedReasoning: boolean;
       readonly emitAnthropicReasoningMetadata: boolean;
+      readonly bufferLateGptReasoning: boolean;
       readonly fingerprintOutput?: SdkOutputFingerprint;
       readonly captureOutput?: SdkOutputCaptureHandler;
       readonly releaseAccount: () => void;
@@ -726,6 +728,7 @@ function reasoningCaptureOptions(
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning: boolean;
   readonly emitAnthropicReasoningMetadata: boolean;
+  readonly bufferLateGptReasoning: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
 } {
@@ -735,6 +738,10 @@ function reasoningCaptureOptions(
     (canonical.protocol === "responses" && canonical.store !== false) ||
     canonical.protocol === "anthropic-messages";
   const emitAnthropicReasoningMetadata = canonical.protocol === "anthropic-messages";
+  const bufferLateGptReasoning =
+    emitAnthropicReasoningMetadata &&
+    canonical.thinking?.enabled === true &&
+    isGpt56Model(canonical.model);
   const captureOutput =
     options.lineage && options.affinityStore
       ? (output: CanonicalAssistantOutput): void => {
@@ -763,6 +770,7 @@ function reasoningCaptureOptions(
     return {
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
+      bufferLateGptReasoning,
       fingerprintOutput: canonicalOutputFingerprint(canonical),
       ...(captureOutput ? { captureOutput } : {}),
     };
@@ -783,6 +791,7 @@ function reasoningCaptureOptions(
       }),
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
+    bufferLateGptReasoning,
     fingerprintOutput: canonicalOutputFingerprint(canonical),
     ...(captureOutput ? { captureOutput } : {}),
   };
@@ -1705,12 +1714,23 @@ async function runAttempt(
     const wireModel =
       prepared.conversationState.currentMessage.userInputMessage?.modelId ??
       prepared.effectiveModel;
-    const additionalModelRequestFields = prepared.effort
+    let additionalModelRequestFields = prepared.effort
       ? mergeModelRequestFields(
           prepared.additionalModelRequestFields,
           buildEffortRequestFields(wireModel, prepared.effort),
         )
       : prepared.additionalModelRequestFields;
+    const thinkingRequestFields = buildThinkingRequestFields(
+      wireModel,
+      options.body.thinking?.enabled === true,
+      options.body.thinking?.display,
+    );
+    if (thinkingRequestFields !== undefined) {
+      additionalModelRequestFields = mergeModelRequestFields(
+        additionalModelRequestFields,
+        thinkingRequestFields,
+      );
+    }
     const commandInput: unknown = {
       conversationState: prepared.conversationState,
       ...(prepared.profileArn ? { profileArn: prepared.profileArn } : {}),

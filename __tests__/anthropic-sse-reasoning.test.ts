@@ -620,6 +620,255 @@ describe("GPT opaque reasoning placeholders", () => {
     expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
   });
 
+  test.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "reorders %s signature-only reasoning ahead of buffered assistant text",
+    async (model) => {
+      const canonicalLines: string[] = [];
+      for await (const event of transformSdkOutputStream(
+        makeSdkResponse([
+          { assistantResponseEvent: { content: "answer " } },
+          { assistantResponseEvent: { content: "after thinking" } },
+          { reasoningContentEvent: { signature: "late-gpt-signature" } },
+        ]),
+        model,
+        "conversation-late-gpt-text",
+        undefined,
+        {
+          emitAnthropicReasoningMetadata: true,
+          emitEncryptedReasoning: true,
+          bufferLateGptReasoning: true,
+          captureReasoning: () => "kr2_late-gpt-replay",
+        },
+      )) {
+        canonicalLines.push(JSON.stringify(event));
+      }
+
+      expect(canonicalLines.map((line) => JSON.parse(line).type)).toEqual([
+        "started",
+        "reasoning_delta",
+        "reasoning_signature",
+        "text_delta",
+        "text_delta",
+        "reasoning_encrypted",
+        "completed",
+      ]);
+      const response = anthropicSseAdapter(
+        new Response(`${canonicalLines.join("\n")}\n`, {
+          headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
+        }),
+        {
+          model,
+          inputTokens: 3,
+          signals: signals(),
+          finalize: () => undefined,
+          thinkingDisplay: "omitted",
+        },
+      );
+      const frames = parseFrames(await response.text());
+      expect(assertLegalBlockSequence(frames).map((block) => [block.type, block.deltas])).toEqual([
+        ["thinking", ["signature_delta"]],
+        ["text", ["text_delta"]],
+      ]);
+      expect(JSON.stringify(frames)).toContain("kr2_late-gpt-replay");
+      expect(JSON.stringify(frames)).toContain("answer after thinking");
+      expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+    },
+  );
+
+  test("keeps an explicit empty GPT thinking marker distinct from no reasoning", async () => {
+    const response = anthropicSseAdapter(
+      pipelineResponse(
+        [reasoning(""), signature("late-empty-signature"), text("answer"), completed()],
+        "gpt-5.6-sol",
+      ),
+      {
+        model: "gpt-5.6-sol",
+        inputTokens: 3,
+        signals: signals(),
+        finalize: () => undefined,
+      },
+    );
+
+    const frames = parseFrames(await response.text());
+    expect(assertLegalBlockSequence(frames).map((block) => [block.type, block.deltas])).toEqual([
+      ["thinking", ["signature_delta"]],
+      ["text", ["text_delta"]],
+    ]);
+    expect(JSON.stringify(frames)).toContain("late-empty-signature");
+    expect(frames.at(-1)).toMatchObject({ type: "message_stop" });
+  });
+
+  test("reorders late GPT signature-only reasoning ahead of a buffered tool call", async () => {
+    const canonicalLines: string[] = [];
+    for await (const event of transformSdkOutputStream(
+      makeSdkResponse([
+        {
+          toolUseEvent: {
+            name: "read",
+            toolUseId: "tool-late",
+            input: '{"path":"a.txt"}',
+            stop: true,
+          },
+        },
+        { reasoningContentEvent: { signature: "late-tool-signature" } },
+      ]),
+      "gpt-5.6-sol",
+      "conversation-late-gpt-tool",
+      undefined,
+      {
+        emitAnthropicReasoningMetadata: true,
+        bufferLateGptReasoning: true,
+      },
+    )) {
+      canonicalLines.push(JSON.stringify(event));
+    }
+
+    expect(canonicalLines.map((line) => JSON.parse(line).type)).toEqual([
+      "started",
+      "reasoning_delta",
+      "reasoning_signature",
+      "tool_call_delta",
+      "completed",
+    ]);
+  });
+
+  test("keeps assistant output buffered when GPT reasoning text precedes its late signature", async () => {
+    const types: string[] = [];
+    for await (const event of transformSdkOutputStream(
+      makeSdkResponse([
+        { reasoningContentEvent: { text: "brief reasoning" } },
+        { assistantResponseEvent: { content: "answer" } },
+        { reasoningContentEvent: { signature: "final-signature" } },
+      ]),
+      "gpt-5.6-sol",
+      "conversation-reasoning-first-signature-late",
+      undefined,
+      { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+    )) {
+      types.push(event.type);
+    }
+    expect(types).toEqual([
+      "started",
+      "reasoning_delta",
+      "reasoning_signature",
+      "text_delta",
+      "completed",
+    ]);
+  });
+
+  test.each([
+    [[{ reasoningContentEvent: { text: "...", signature: "late-placeholder-signature" } }]],
+    [
+      [
+        { reasoningContentEvent: { text: "." } },
+        { reasoningContentEvent: { text: "." } },
+        { reasoningContentEvent: { text: ".", signature: "late-placeholder-signature" } },
+      ],
+    ],
+  ])(
+    "reorders a late GPT placeholder and signature without exposing the placeholder",
+    async (tail) => {
+      const events = [];
+      for await (const event of transformSdkOutputStream(
+        makeSdkResponse([{ assistantResponseEvent: { content: "answer" } }, ...tail]),
+        "gpt-5.6-sol",
+        "conversation-late-placeholder",
+        undefined,
+        { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+      )) {
+        events.push(event);
+      }
+      expect(events.map(({ type }) => type)).toEqual([
+        "started",
+        "reasoning_delta",
+        "reasoning_signature",
+        "text_delta",
+        "completed",
+      ]);
+      expect(events.some((event) => event.type === "reasoning_delta" && event.text === "...")).toBe(
+        false,
+      );
+    },
+  );
+
+  test("does not release buffered assistant output when GPT reasoning never receives a signature", async () => {
+    const types: string[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const event of transformSdkOutputStream(
+        makeSdkResponse([
+          { reasoningContentEvent: { text: "unsigned reasoning" } },
+          { assistantResponseEvent: { content: "must-not-release" } },
+        ]),
+        "gpt-5.6-sol",
+        "conversation-missing-gpt-signature",
+        undefined,
+        { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+      )) {
+        types.push(event.type);
+      }
+    };
+    expect(consume()).rejects.toMatchObject({ code: "invalid_upstream_reasoning" });
+    expect(types).not.toContain("text_delta");
+  });
+
+  test("keeps visible reasoning after buffered GPT output fail closed", async () => {
+    const consume = async (): Promise<void> => {
+      for await (const _event of transformSdkOutputStream(
+        makeSdkResponse([
+          { assistantResponseEvent: { content: "answer" } },
+          {
+            reasoningContentEvent: { text: "late visible reasoning", signature: "late-signature" },
+          },
+        ]),
+        "gpt-5.6-sol",
+        "conversation-late-visible-gpt",
+        undefined,
+        { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+      )) {
+        // Consume the generator to surface the protocol error.
+      }
+    };
+    expect(consume()).rejects.toMatchObject({ code: "invalid_upstream_reasoning" });
+  });
+
+  test("does not enable late-signature reordering for Claude models", async () => {
+    const consume = async (): Promise<void> => {
+      for await (const _event of transformSdkOutputStream(
+        makeSdkResponse([
+          { assistantResponseEvent: { content: "answer" } },
+          { reasoningContentEvent: { signature: "late-claude-signature" } },
+        ]),
+        "claude-opus-5",
+        "conversation-late-claude",
+        undefined,
+        { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+      )) {
+        // Consume the generator to surface the protocol error.
+      }
+    };
+    expect(consume()).rejects.toMatchObject({ code: "invalid_upstream_reasoning" });
+  });
+
+  test("fails closed when the ambiguous GPT assistant preface exceeds its event bound", async () => {
+    const consume = async (): Promise<void> => {
+      for await (const _event of transformSdkOutputStream(
+        makeSdkResponse([
+          ...Array.from({ length: 129 }, () => ({
+            assistantResponseEvent: { content: "x" },
+          })),
+          { reasoningContentEvent: { signature: "too-late-signature" } },
+        ]),
+        "gpt-5.6-sol",
+        "conversation-overlong-gpt-preface",
+        undefined,
+        { emitAnthropicReasoningMetadata: true, bufferLateGptReasoning: true },
+      )) {
+        // Consume the generator to surface the protocol error.
+      }
+    };
+    expect(consume()).rejects.toMatchObject({ code: "invalid_upstream_reasoning" });
+  });
+
   test("defers GPT text until the provider replay token is available", async () => {
     const response = anthropicSseAdapter(
       pipelineResponse(

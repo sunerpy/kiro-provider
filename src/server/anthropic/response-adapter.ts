@@ -238,6 +238,8 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   let reasoningStopped = false;
   let reasoningSigned = false;
   let pendingReasoningText = "";
+  // Distinguishes an explicit empty canonical thinking marker from no reasoning.
+  let pendingReasoningSeen = false;
   let opaquePlaceholderSeen = false;
   let omittedReasoningSeen = false;
   let hiddenReplayToken: string | undefined;
@@ -470,6 +472,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   const emitOpaquePlaceholderSignature = (signature: string): void => {
     opaquePlaceholderSeen = true;
     pendingReasoningText = "";
+    pendingReasoningSeen = false;
     emitVisibleReasoning("");
     if (reasoningIndex === undefined) {
       failReasoning("Upstream placeholder thinking could not allocate a block");
@@ -483,14 +486,16 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     reasoningSigned = true;
   };
   const flushPendingReasoning = (): boolean => {
-    if (pendingReasoningText.length === 0) return true;
+    if (!pendingReasoningSeen) return true;
     if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
       pendingReasoningText = "";
+      pendingReasoningSeen = false;
       failReasoning("Upstream placeholder thinking is missing its native signature");
       return false;
     }
     const text = pendingReasoningText;
     pendingReasoningText = "";
+    pendingReasoningSeen = false;
     emitVisibleReasoning(text);
     return true;
   };
@@ -511,7 +516,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   };
   const visibleReasoningSeen = (): boolean =>
     reasoningStarted ||
-    pendingReasoningText.length > 0 ||
+    pendingReasoningSeen ||
     opaquePlaceholderSeen ||
     omittedReasoningSeen ||
     pendingSignature !== undefined ||
@@ -543,9 +548,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           return;
         }
         if (options.thinkingDisplay === "omitted" && isGpt56Model(options.model)) {
+          pendingReasoningSeen = true;
           pendingReasoningText += event.text;
           if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
           pendingReasoningText = "";
+          pendingReasoningSeen = false;
           omittedReasoningSeen = true;
           return;
         }
@@ -558,6 +565,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           return;
         }
         if (!reasoningStarted && isGpt56Model(options.model)) {
+          pendingReasoningSeen = true;
           pendingReasoningText += event.text;
           if (couldStillBeGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) return;
           if (!flushPendingReasoning()) return;
@@ -571,10 +579,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           if (!reasoningSigned) emitOpaquePlaceholderSignature(event.signature);
           return;
         }
-        if (pendingReasoningText.length > 0) {
+        if (pendingReasoningSeen) {
           if (isGpt56ReasoningPlaceholder(options.model, pendingReasoningText)) {
             if (options.thinkingDisplay === "omitted") {
               pendingReasoningText = "";
+              pendingReasoningSeen = false;
               opaquePlaceholderSeen = true;
               omittedReasoningSeen = true;
             } else {
@@ -584,6 +593,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
           }
           if (options.thinkingDisplay === "omitted") {
             pendingReasoningText = "";
+            pendingReasoningSeen = false;
             omittedReasoningSeen = true;
             return;
           }

@@ -61,6 +61,55 @@ describe("MODEL_CATALOG", () => {
     }
   });
 
+  test("advertises the probe-backed Fable 5.1 preview with exact Kiro metadata", () => {
+    expect(MODEL_CATALOG.find(({ id }) => id === "claude-fable-5-1")).toEqual({
+      id: "claude-fable-5-1",
+      wireId: "claude-fable-5.1",
+      name: "Claude Fable 5.1 (6.0x)",
+      description:
+        "Experimental preview of Claude Fable 5.1 with 1M context window - AWS will retain inputs and outputs for automated abuse detection, and may perform human review of traffic flagged by our abuse detection mechanisms",
+      contextLimit: 1_000_000,
+      outputLimit: 128_000,
+      rateMultiplier: 6,
+      modalities: { input: ["text", "image"], output: ["text"] },
+    });
+    expect(resolveModelVariant("claude-fable-5-1")).toEqual({
+      wireId: "claude-fable-5.1",
+      effort: undefined,
+    });
+  });
+
+  test("maps the live dotted Fable wire model back to the stable public id", () => {
+    const [fable] = modelCatalogFromAvailableModels([
+      {
+        modelId: "claude-fable-5.1",
+        modelName: "Claude Fable 5.1",
+        description: "live preview notice",
+        supportedInputTypes: ["TEXT", "IMAGE"],
+        tokenLimits: { maxInputTokens: 1_000_000, maxOutputTokens: 128_000 },
+        rateMultiplier: 6,
+        promptCaching: { supportsPromptCaching: true },
+        additionalModelRequestFieldsSchema: {
+          type: "object",
+          properties: { max_tokens: { type: "integer", minimum: 1024, maximum: 128000 } },
+        },
+      },
+    ]);
+    expect(fable).toMatchObject({
+      id: "claude-fable-5-1",
+      wireId: "claude-fable-5.1",
+      name: "Claude Fable 5.1 (6.0x)",
+      description: "live preview notice",
+      contextLimit: 1_000_000,
+      outputLimit: 128_000,
+      rateMultiplier: 6,
+      promptCaching: { supportsPromptCaching: true },
+    });
+    expect(fable?.additionalModelRequestFieldsSchema).toMatchObject({
+      properties: { max_tokens: { minimum: 1024, maximum: 128000 } },
+    });
+  });
+
   test("advertises every GPT 5.6 family with an 872k prompt limit", () => {
     for (const family of ["sol", "terra", "luna"]) {
       const wireId = `gpt-5.6-${family}`;

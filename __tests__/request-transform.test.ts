@@ -966,6 +966,16 @@ describe("transformToSdkRequest profile, region, effort, and output limits", () 
     );
     expect(supported.additionalModelRequestFields).toEqual({ max_tokens: 4_096 });
 
+    const fable = transformToSdkRequest(
+      canonicalRequest([message("user", "q")], {
+        model: "claude-fable-5-1",
+        outputTokenLimit: 4_096,
+      }),
+      "claude-fable-5-1",
+      auth,
+    );
+    expect(fable.additionalModelRequestFields).toEqual({ max_tokens: 4_096 });
+
     expect(() =>
       transformToSdkRequest(
         canonicalRequest([message("user", "q")], {

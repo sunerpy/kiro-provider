@@ -971,7 +971,7 @@ describe("Responses fail-closed capability validation", () => {
   });
 
   test("maps only the probe-confirmed Claude output-token range", () => {
-    for (const model of ["claude-sonnet-5", "claude-opus-5-max"]) {
+    for (const model of ["claude-fable-5-1", "claude-sonnet-5", "claude-opus-5-max"]) {
       const supported = adapt({
         model,
         input: "q",

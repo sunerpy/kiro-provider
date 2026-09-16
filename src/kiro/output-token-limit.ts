@@ -3,7 +3,11 @@ import { resolveModelVariant } from "./models.js";
 export const KIRO_OUTPUT_TOKEN_LIMIT_MIN = 1_024;
 export const KIRO_OUTPUT_TOKEN_LIMIT_MAX = 128_000;
 
-const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set(["claude-sonnet-5", "claude-opus-5"]);
+const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set([
+  "claude-fable-5.1",
+  "claude-sonnet-5",
+  "claude-opus-5",
+]);
 const ADVISORY_ONLY_MAX_TOKENS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 
 export type OutputTokenLimitResult =
@@ -33,9 +37,9 @@ export function supportsAdvisoryOutputTokenLimit(model: string): boolean {
 
 /**
  * Return the exact Kiro-native projection proven by live probes.
- * Claude Sonnet 5 (2026-08-26) and Claude Opus 5 (2026-08-27) accept
- * max_tokens from 1,024 through 128,000. GPT 5.6 rejected every tested
- * standard spelling, so it remains fail-closed.
+ * Claude Sonnet 5 (2026-08-26), Claude Opus 5 (2026-08-27), and Claude
+ * Fable 5.1 (2026-09-16) accept max_tokens from 1,024 through 128,000.
+ * GPT 5.6 rejected every tested standard spelling, so it remains fail-closed.
  */
 export function resolveOutputTokenLimit(model: string, limit: number): OutputTokenLimitResult {
   let wireModel: string;

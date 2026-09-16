@@ -51,6 +51,7 @@ function correctedGpt56Description(modelName: string): string {
 
 export const EXPECTED_PUBLIC_MODEL_IDS = Object.freeze([
   "auto",
+  "claude-fable-5-1",
   "claude-sonnet-4",
   "claude-sonnet-4-5",
   "claude-sonnet-4-6",
@@ -119,6 +120,17 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = Object.freeze([
     contextLimit: getModelContextLimit("auto"),
     outputLimit: 64000,
     modalities: PDF_MODALITIES,
+  },
+  {
+    id: "claude-fable-5-1",
+    wireId: "claude-fable-5.1",
+    name: "Claude Fable 5.1 (6.0x)",
+    description:
+      "Experimental preview of Claude Fable 5.1 with 1M context window - AWS will retain inputs and outputs for automated abuse detection, and may perform human review of traffic flagged by our abuse detection mechanisms",
+    contextLimit: getModelContextLimit("claude-fable-5-1"),
+    outputLimit: 128000,
+    rateMultiplier: 6,
+    modalities: IMAGE_MODALITIES,
   },
   {
     id: "claude-sonnet-4",

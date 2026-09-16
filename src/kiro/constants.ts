@@ -48,6 +48,8 @@ export const KIRO_CONSTANTS = {
 };
 
 export const MODEL_MAPPING: Record<string, string> = {
+  // Claude Fable
+  "claude-fable-5-1": "claude-fable-5.1",
   // Claude Haiku
   "claude-haiku-4-5": "claude-haiku-4.5",
   "claude-haiku-4-5-thinking": "claude-haiku-4.5",
@@ -118,6 +120,7 @@ export const GPT_56_TOTAL_CONTEXT_LIMIT = GPT_56_PROMPT_TOKEN_LIMIT + GPT_56_OUT
 
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   auto: 200000,
+  "claude-fable-5-1": 1000000,
   "claude-haiku-4-5": 200000,
   "claude-sonnet-4": 200000,
   "claude-sonnet-4-5": 200000,

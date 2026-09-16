@@ -32,6 +32,7 @@ export interface PipelineStreamResult {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
+  readonly bufferLateGptReasoning?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
   /**
@@ -467,6 +468,7 @@ export function prepareCanonicalStream(
       ...(result.captureReasoning ? { captureReasoning: result.captureReasoning } : {}),
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
+      bufferLateGptReasoning: result.bufferLateGptReasoning,
       ...(result.fingerprintOutput ? { fingerprintOutput: result.fingerprintOutput } : {}),
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
       onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
