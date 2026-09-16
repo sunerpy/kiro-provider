@@ -102,6 +102,14 @@ export const ConfigSchema = z.object({
   token_expiry_buffer_ms: z.number().int().min(1).max(2_147_483_647).default(300000),
   session_affinity_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
+  // Consecutive abnormal published-stream terminals on one binding key (the
+  // explicit session-affinity key, else the history-lineage key) before the
+  // next independent request stops honouring the stored binding and picks a
+  // fresh account/conversation. `0` keeps a wedged binding sticky forever.
+  // Never overrides a reasoning replay owner lock, and never replays a stream.
+  session_affinity_stall_failover_threshold: z.number().int().min(0).max(100).default(2),
+  // How long a stall counts toward that streak. A longer gap starts over.
+  session_affinity_stall_window_ms: z.number().int().min(1).max(2_147_483_647).default(600_000),
   reasoning_replay_key_path: OptionalPathSchema,
   reasoning_replay_keys: z.array(z.string().trim().min(1)).default([]),
   reasoning_replay_token_format: z.enum(["portable-v2", "database-v1"]).default("portable-v2"),

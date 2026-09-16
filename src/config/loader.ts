@@ -244,6 +244,16 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "integer",
   },
   {
+    env: "KIRO_PROVIDER_SESSION_AFFINITY_STALL_FAILOVER_THRESHOLD",
+    field: "session_affinity_stall_failover_threshold",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_SESSION_AFFINITY_STALL_WINDOW_MS",
+    field: "session_affinity_stall_window_ms",
+    kind: "integer",
+  },
+  {
     env: "KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH",
     field: "reasoning_replay_key_path",
     kind: "string",

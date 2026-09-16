@@ -162,6 +162,18 @@ const numericFields: NumericField[] = [
     max: 1_000_000,
   },
   {
+    field: "session_affinity_stall_failover_threshold",
+    envName: "KIRO_PROVIDER_SESSION_AFFINITY_STALL_FAILOVER_THRESHOLD",
+    min: 0,
+    max: 100,
+  },
+  {
+    field: "session_affinity_stall_window_ms",
+    envName: "KIRO_PROVIDER_SESSION_AFFINITY_STALL_WINDOW_MS",
+    min: 1,
+    max: 2_147_483_647,
+  },
+  {
     field: "reasoning_replay_ttl_ms",
     envName: "KIRO_PROVIDER_REASONING_REPLAY_TTL_MS",
     min: 1,

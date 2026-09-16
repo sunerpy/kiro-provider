@@ -2,11 +2,12 @@ import {
   type ToolCallProgress,
   transformSdkOutputStream,
 } from "../kiro/transform/streaming/sdk-output-transformer.js";
-import type {
-  SdkOutputCaptureHandler,
-  SdkOutputFingerprint,
-  SdkReasoningCaptureHandler,
-  SdkStreamResponse,
+import {
+  OutputPersistenceError,
+  type SdkOutputCaptureHandler,
+  type SdkOutputFingerprint,
+  type SdkReasoningCaptureHandler,
+  type SdkStreamResponse,
 } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort } from "../kiro/types.js";
 import {
@@ -39,6 +40,13 @@ export interface PipelineStreamResult {
    */
   readonly abortUpstream?: (reason?: unknown) => void;
   /**
+   * Fires once for the published stream, right after the terminal audit event.
+   * Used to keep short-term per-affinity health state; receives provenance and
+   * frame-timing verdicts only, never content. Throwing is contained by the
+   * cleanup runner and cannot break stream teardown.
+   */
+  readonly onTerminal?: (report: StreamTerminalReport) => void;
+  /**
    * Canonical stream primed at its started event after upstream acceptance.
    * When absent the response
    * opens the stream itself.
@@ -62,6 +70,26 @@ export type StreamTerminalProvenance =
   | "consumer_cancel"
   | "external_abort";
 
+/** How a published stream ended, in the terms a health tracker needs. */
+export interface StreamTerminalReport {
+  readonly provenance: StreamTerminalProvenance;
+  /**
+   * The terminal was this request's own deadline rather than a client-driven
+   * abort. Both surface as `external_abort`, but only the deadline can be
+   * upstream evidence.
+   */
+  readonly requestDeadline: boolean;
+  /** `StreamTelemetry.upstreamWentQuiet` at the moment of the terminal. */
+  readonly upstreamQuiet: boolean;
+  /**
+   * The stream ended on a provider-local write failing (reasoning replay or the
+   * output-lineage row), not on anything the upstream did. The client still sees
+   * the same retryable upstream-family error, but the terminal is not evidence
+   * about the account and must not count toward its health.
+   */
+  readonly localPersistence: boolean;
+}
+
 export type StreamTelemetryMode = "stream" | "non-stream";
 
 export type CompletionWitnessKind = "token-usage-metadata" | "metering-clean-eof";
@@ -74,6 +102,8 @@ export interface StreamTelemetryContext {
   readonly attempt?: number;
   readonly effort?: Effort;
   readonly accountHash?: string;
+  /** Injectable clock for frame-age assertions. Defaults to `Date.now`. */
+  readonly now?: () => number;
 }
 
 const SEMANTIC_EVENT_TYPES: ReadonlySet<CanonicalOutputEvent["type"]> = new Set<
@@ -90,6 +120,16 @@ export function isSemanticOutputEvent(event: CanonicalOutputEvent): boolean {
 }
 
 /**
+ * Shortest outstanding upstream read that can count as a wedged conversation.
+ *
+ * Below a second, silence is indistinguishable from ordinary upstream latency,
+ * and a stream that published a single frame has no productive span to compare
+ * against. Any deadline short enough to make this unreachable is also too short
+ * to publish a stream worth failing over.
+ */
+const MIN_UPSTREAM_QUIET_MS = 1_000;
+
+/**
  * Per attempt-stream counters shared by the prefetch phase, the streaming
  * response, and the non-stream collector. Counts only, never content.
  */
@@ -97,7 +137,19 @@ export class StreamTelemetry {
   readonly #activityListeners = new Set<() => void>();
   readonly #toolIndexes = new Set<number>();
 
+  /**
+   * Arms the idle watchdog for one outstanding read of the canonical stream, and
+   * stamps when that read began so `upstreamWentQuiet` can tell real upstream
+   * silence from a consumer that stopped pulling.
+   *
+   * Paired with `onUpstreamReadSettled`, which the caller invokes when that read
+   * resolves. A raw frame is deliberately not the pairing signal: one frame can
+   * carry several canonical events, so a read can resolve out of the
+   * transformer's own buffer with no frame behind it, and a frame can arrive
+   * while the read it belongs to is still pending.
+   */
   watchIdle(timeoutMs: number, onTimeout: () => void): () => void {
+    this.upstreamReadStartedAt = this.#now();
     let timer: ReturnType<typeof setTimeout>;
     const reset = (): void => {
       clearTimeout(timer);
@@ -113,6 +165,10 @@ export class StreamTelemetry {
   private readonly eventTypeCounts = new Map<string, number>();
   private rawEventCount = 0;
   private lastEventType: string | undefined;
+  private firstFrameAt: number | undefined;
+  private lastFrameAt: number | undefined;
+  /** When the currently outstanding read began; `undefined` between pulls. */
+  private upstreamReadStartedAt: number | undefined;
   private canonicalEventCount = 0;
   private reasoningChars = 0;
   private visibleChars = 0;
@@ -194,10 +250,20 @@ export class StreamTelemetry {
     this.context.diagnostics?.rawFrame();
     for (const listener of this.#activityListeners) listener();
     this.rawEventCount += 1;
+    this.lastFrameAt = this.#now();
+    this.firstFrameAt ??= this.lastFrameAt;
     this.lastEventType = eventTypes.join("+");
     for (const eventType of eventTypes) {
       this.eventTypeCounts.set(eventType, (this.eventTypeCounts.get(eventType) ?? 0) + 1);
     }
+  }
+
+  /**
+   * The read armed by `watchIdle` resolved, so nothing is outstanding until the
+   * consumer pulls again and there is no evidence either way about the upstream.
+   */
+  onUpstreamReadSettled(): void {
+    this.upstreamReadStartedAt = undefined;
   }
 
   onCompletionWitness(kind: CompletionWitnessKind): void {
@@ -235,6 +301,78 @@ export class StreamTelemetry {
       !this.reasoningSigned &&
       !this.reasoningEncrypted
     );
+  }
+
+  #now(): number {
+    return (this.context.now ?? Date.now)();
+  }
+
+  /**
+   * Whether the upstream had abandoned this stream by now: a read has been
+   * outstanding against it long enough to outlast the time it spent producing.
+   *
+   * The point is to tell a wedged conversation, which stops emitting and stays
+   * stopped, apart from a stream that was still flowing when something outside
+   * it (a request deadline, a client) ended it.
+   *
+   * Silence is only measured while a read is outstanding. This stream is pulled
+   * by the consumer, so a client that stops reading also stops `iterator.next()`
+   * from being called: the last-frame age then grows without the upstream having
+   * been asked for anything, and downstream backpressure would read as an
+   * upstream stall. Between pulls there is no outstanding read and therefore no
+   * evidence either way.
+   *
+   * Within an outstanding read, silence runs from the later of the read's start
+   * and the last frame, because a frame can arrive while the read that will
+   * consume it is still pending — a live upstream must not look quiet, and a
+   * frame that arrived before this read started must not make it look live.
+   *
+   * The comparison against productive time is a ratio rather than an absolute
+   * threshold because the request deadline can be shorter than the idle
+   * watchdog, and in that configuration no absolute silence is ever reached.
+   * `MIN_UPSTREAM_QUIET_MS` only rules out the degenerate end of that ratio,
+   * where a stream that published a single frame would otherwise make any
+   * silence at all look decisive.
+   */
+  upstreamWentQuiet(): boolean {
+    if (this.upstreamReadStartedAt === undefined) return false;
+    const quietSince = Math.max(this.upstreamReadStartedAt, this.lastFrameAt ?? 0);
+    const silenceMs = Math.max(0, this.#now() - quietSince);
+    if (silenceMs < MIN_UPSTREAM_QUIET_MS) return false;
+    const productiveMs =
+      this.firstFrameAt === undefined || this.lastFrameAt === undefined
+        ? 0
+        : Math.max(0, this.lastFrameAt - this.firstFrameAt);
+    return silenceMs >= productiveMs;
+  }
+
+  /**
+   * Frame-level shape of a stall, for the idle-timeout log: how long the
+   * upstream has been silent and how much tool structure it left unfinished.
+   *
+   * `sdk_stream_terminal` already carries these counts, but the timeout log is
+   * what an operator reads first, and a stall that dies on an unterminated tool
+   * call looks nothing like one that dies after a clean `stop`. Durations and
+   * counts only; tool names and arguments never cross this boundary.
+   */
+  stallFields(): AuditFields {
+    return {
+      last_frame_age_ms:
+        this.lastFrameAt === undefined ? undefined : Math.max(0, this.#now() - this.lastFrameAt),
+      canonical_event_count: this.canonicalEventCount,
+      reasoning_chars: this.reasoningChars,
+      visible_chars: this.visibleChars,
+      tool_count: this.toolCount,
+      tool_delta_count: this.toolDeltaCount,
+      tool_intent_count: this.openToolIntents + this.stoppedToolIntents,
+      tool_intent_open_count: this.openToolIntents,
+      tool_intent_stopped_count: this.stoppedToolIntents,
+      tool_intent_open: this.openToolIntents > 0,
+      // Kiro's per-fragment `stop` marker, aggregated: true only when every
+      // tool intent seen on this stream carried it and the stream still stalled.
+      tool_intent_all_stopped: this.openToolIntents === 0 && this.stoppedToolIntents > 0,
+      completion_witnessed: this.completionWitnessed,
+    };
   }
 
   auditFields(): AuditFields {
@@ -408,9 +546,22 @@ export function createPipelineStreamResponse(
   const removeAbortListener = (): void => {
     composedSignal.removeEventListener("abort", onExternalAbort);
   };
-  const beginTerminal = (outcome: PipelineOutcome, reason?: unknown): void => {
+  const beginTerminal = (
+    outcome: PipelineOutcome,
+    reason?: unknown,
+    requestDeadline = false,
+  ): void => {
     if (!claimTerminal(outcome)) return;
+    // Read before the cleanup steps run, so the silence verdict describes the
+    // stream as the terminal found it.
+    const report: StreamTerminalReport = {
+      provenance: TERMINAL_PROVENANCE[outcome],
+      requestDeadline,
+      upstreamQuiet: telemetry.upstreamWentQuiet(),
+      localPersistence: reason instanceof OutputPersistenceError,
+    };
     runCleanupSteps(() => telemetry.emitTerminal(TERMINAL_PROVENANCE[outcome]));
+    runCleanupSteps(() => result.onTerminal?.(report));
     runCleanupSteps(
       removeAbortListener,
       clearIdleTimer,
@@ -433,12 +584,12 @@ export function createPipelineStreamResponse(
     void boundedCleanup(() => iterator.return?.(undefined));
   };
   const onExternalAbort = (): void => {
+    const requestDeadline =
+      composedSignal.reason instanceof Error && composedSignal.reason.name === "TimeoutError";
     result.telemetryContext?.diagnostics?.cancel(
-      composedSignal.reason instanceof Error && composedSignal.reason.name === "TimeoutError"
-        ? "request_deadline"
-        : "external_abort",
+      requestDeadline ? "request_deadline" : "external_abort",
     );
-    beginTerminal("external-abort", abortReason(composedSignal));
+    beginTerminal("external-abort", abortReason(composedSignal), requestDeadline);
   };
 
   return new Response(
@@ -461,6 +612,7 @@ export function createPipelineStreamResponse(
           result.telemetryContext?.diagnostics?.failure(error, "upstream_stream");
           auditLog("warn", "sdk_stream_idle_timeout", {
             ...telemetry.auditFields(),
+            ...telemetry.stallFields(),
             ...streamErrorAuditFields(error, result.telemetryContext?.diagnostics),
             idle_timeout_ms: idleTimeoutMs,
           });
@@ -470,6 +622,9 @@ export function createPipelineStreamResponse(
           const nextPromise = initialNext ?? iterator.next();
           initialNext = undefined;
           const next = await nextPromise;
+          // Paired with the `watchIdle` above: this read is over whether it was
+          // served by a fresh frame or out of the transformer's buffer.
+          telemetry.onUpstreamReadSettled();
           if (terminalOutcome !== undefined) return;
           clearIdleTimer();
           if (next.done) {
@@ -480,6 +635,7 @@ export function createPipelineStreamResponse(
           telemetry.observeCanonicalEvent(next.value);
           controller.enqueue(encode(next.value));
         } catch (error) {
+          telemetry.onUpstreamReadSettled();
           if (terminalOutcome !== undefined) return;
           const streamError =
             error instanceof Error
