@@ -20,10 +20,10 @@ const REASONING_SUFFIX = /-(low|medium|high|xhigh|max)$/;
 
 type CodexReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
-// Match Codex's Sol/Terra orchestration presets. Ultra is resolved by Codex
-// to max for inference and proactive multi-agent mode, not sent to Kiro.
+// Match Codex's Fable/Sol/Terra orchestration presets. Ultra is resolved by
+// Codex to max for inference and proactive multi-agent mode, not sent to Kiro.
 function codexSupportsUltra(wireId: string): boolean {
-  return wireId === "gpt-5.6-sol" || wireId === "gpt-5.6-terra";
+  return wireId === "claude-fable-5.1" || wireId === "gpt-5.6-sol" || wireId === "gpt-5.6-terra";
 }
 
 function codexReasoningLevels(wireId: string): Array<{
