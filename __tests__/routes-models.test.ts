@@ -90,7 +90,10 @@ describe("GET /v1/models", () => {
         { effort: "high" },
         { effort: "xhigh" },
         { effort: "max" },
+        { effort: "ultra" },
       ],
+      multi_agent_version: "v2",
+      multi_agent_reasoning_effort: "max",
     });
 
     for (const family of ["sol", "terra", "luna"]) {
@@ -121,7 +124,7 @@ describe("GET /v1/models", () => {
     }
   });
 
-  test("advertises Codex Ultra only for Sol/Terra, including effort aliases", async () => {
+  test("advertises Codex Ultra only for Sol/Terra/Fable, including effort aliases", async () => {
     const body = (await (await handleModels()).json()) as {
       models: Array<{
         slug: string;
@@ -132,7 +135,8 @@ describe("GET /v1/models", () => {
       data: Array<{ id: string }>;
     };
     for (const model of body.models) {
-      const supportsUltra = /^gpt-5\.6-(sol|terra)(-|$)/.test(model.slug);
+      const supportsUltra =
+        model.slug === "claude-fable-5-1" || /^gpt-5\.6-(sol|terra)(-|$)/.test(model.slug);
       expect(model.supported_reasoning_levels.some((level) => level.effort === "ultra")).toBe(
         supportsUltra,
       );

@@ -72,6 +72,7 @@ Apply these coverage expectations:
 - Storage/auth changes: cover migrations, restart persistence, concurrent writers/refresh, tenant isolation, file permissions, and backward-compatible reads.
 - Logging/diagnostic changes: assert that no model-visible or secret payload crosses the audit boundary.
 - Documentation/config changes: run the config/docs parity tests and verify all linked English/Chinese references remain consistent.
+- Model catalog or launcher changes: verify both client projections, not only the OpenAI `data` list. `kiroclaude` must display and switch the model with its expected effort settings; `kirocodex /model` consumes `models[].supported_reasoning_levels`, so it must also display and switch the model in a real Responses request. For `claude-fable-5.1`, `gpt-5.6-sol`, and `gpt-5.6-terra`, Codex Ultra requires `ultra`, `multi_agent_version: "v2"`, and `multi_agent_reasoning_effort: "max"` in the catalog. Ultra is a Codex orchestration preset that resolves inference effort to `max`; never add a Kiro `-ultra` model alias or send upstream `reasoning.effort: "ultra"`.
 
 Coverage is a release policy, not an informational report:
 
