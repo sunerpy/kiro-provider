@@ -99,6 +99,7 @@ Do not claim live client, platform, release, or packaged-binary support from uni
 - Use Conventional Commits and semantic PR titles. Normal project subjects use concise Chinese imperative wording with a lowercase scope, for example `fix(responses): 修复续接回放`; release automation uses `chore: release x.y.z`. Do not add AI attribution trailers.
 - Keep feature/fix PRs focused. Release Please owns the package version, release manifest, changelog entry, tag, and draft release unless a specifically authorized recovery requires otherwise.
 - A green workflow is not release proof. Bind acceptance to the exact PR/head SHA and required jobs, then to the exact tag/release assets and checksums; smoke-test downloaded public bytes before declaring publication complete.
+- For standalone-binary releases and local cutovers, the verified GitHub Release is authoritative. After the exact release run's `Publish to npm` job succeeds, a temporary npm `E404` is registry-index propagation delay: do not block the GitHub Release verification or local binary cutover, and never rerun or republish merely to clear that `E404`. When npm verification is explicitly required, poll it separately with a bound and verify the eventual metadata, tarball integrity, contents, and provenance.
 - Before merging any feature or generated release PR, verify all three required
   contexts (`CI Success`, `codecov/project`, and `codecov/patch`) on the exact
   current head. Do not publish from a commit whose Codecov gate failed or never
