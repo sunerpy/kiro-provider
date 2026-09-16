@@ -7,7 +7,7 @@
     "DEFAULT_BRANCH": "main",
     "PACKAGE_MANAGER": "bun",
     "BINARY": "kiro-provider",
-    "CURRENT_VERSION": "3.4.0"
+    "CURRENT_VERSION": "3.4.1"
   },
   "drift_allow": [
     ".github/dependabot.yml",
