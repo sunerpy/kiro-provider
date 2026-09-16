@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.5.1](https://github.com/sunerpy/kiro-provider/compare/v3.5.0...v3.5.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **models:** 为 Fable 开放 Codex Ultra ([6c0240a](https://github.com/sunerpy/kiro-provider/commit/6c0240aca681738080759ab02ec290380f0cbaf2))
+* **models:** 为 Fable 开放 Codex Ultra ([8e97e80](https://github.com/sunerpy/kiro-provider/commit/8e97e80f2f7427c219ea8e0bafabf823c957d327))
+
 ## [3.5.0](https://github.com/sunerpy/kiro-provider/compare/v3.4.3...v3.5.0) (2026-09-16)
 
 
