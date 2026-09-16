@@ -85,11 +85,12 @@ if [ "$backend" = kiro ]; then
   opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5}
   sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5}
   haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-haiku-4-5}
+  kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-1}
   sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol}
   terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra}
   luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna}
 
-  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$sonnet_model" "$haiku_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
+  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
 import json
 import shlex
 import sys
@@ -106,6 +107,7 @@ from urllib.parse import urlsplit
     opus,
     sonnet,
     haiku,
+    fable,
     sol,
     terra,
     luna,
@@ -115,7 +117,7 @@ if parsed.scheme not in {"http", "https"} or not parsed.netloc:
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be an absolute http(s) URL")
 if parsed.query or parsed.fragment or parsed.path.rstrip("/"):
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be the gateway root, without /v1 or another path")
-if not all(value.strip() for value in (model, effort, opus, sonnet, haiku, sol, terra, luna)):
+if not all(value.strip() for value in (model, effort, opus, sonnet, haiku, fable, sol, terra, luna)):
     raise SystemExit("kiroclaude: model and effort settings must not be empty")
 settings = {
     "apiKeyHelper": shlex.quote(helper),
@@ -145,7 +147,7 @@ settings = {
         "ANTHROPIC_VERTEX_BASE_URL": "",
         "ANTHROPIC_FOUNDRY_BASE_URL": "",
         "ANTHROPIC_AWS_BASE_URL": "",
-        "ANTHROPIC_DEFAULT_FABLE_MODEL": "",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": fable,
         "ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES": "",
         "ANTHROPIC_BASE_URL": base_url.rstrip("/"),
         "ANTHROPIC_DEFAULT_OPUS_MODEL": opus,

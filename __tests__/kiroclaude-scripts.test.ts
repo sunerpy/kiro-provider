@@ -214,6 +214,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5",
       ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1",
       ANTHROPIC_CUSTOM_HEADERS: "X-Kiro-Output-Token-Limit-Mode: advisory",
       CLAUDE_CODE_USE_BEDROCK: "0",
       CLAUDE_CODE_USE_VERTEX: "0",
@@ -222,11 +223,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_ENABLE_AWAY_SUMMARY: "0",
     });
-    for (const key of [
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_AUTH_TOKEN",
-      "ANTHROPIC_DEFAULT_FABLE_MODEL",
-    ]) {
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
       expect(settings.env[key]).toBe("");
     }
     expect(capture.effectiveSettings.enabledPlugins).toEqual({
@@ -267,6 +264,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       KIROCLAUDE_OPUS_MODEL: "opus-custom",
       KIROCLAUDE_SONNET_MODEL: "sonnet-custom",
       KIROCLAUDE_HAIKU_MODEL: "haiku-custom",
+      KIROCLAUDE_KIRO_FABLE_MODEL: "fable-custom",
     };
     const result = Bun.spawnSync(["sh", launcher, "--model", "claude-sonnet-5", "task"], {
       env,
@@ -292,6 +290,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
     expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://gateway.example.test");
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("opus-custom");
+    expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("fable-custom");
     expect(capture.arguments.slice(-3)).toEqual(["--model", "claude-sonnet-5", "task"]);
   });
 

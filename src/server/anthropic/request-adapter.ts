@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isFable51Model } from "../../kiro/models.js";
 import {
   resolveOutputTokenLimit,
   supportsAdvisoryOutputTokenLimit,
@@ -857,7 +858,13 @@ export function adaptAnthropicMessagesRequest(
         "thinking.display",
       );
     }
-    if (request.thinking.display !== undefined && request.thinking.display !== "omitted") {
+    const fableSummarized =
+      request.thinking.display === "summarized" && isFable51Model(request.model);
+    if (
+      request.thinking.display !== undefined &&
+      request.thinking.display !== "omitted" &&
+      !fableSummarized
+    ) {
       return failure(
         `capability_rejected:thinking.display: ${request.thinking.display} cannot be represented by Kiro`,
         "unsupported_reasoning_display",

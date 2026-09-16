@@ -3,6 +3,11 @@ import { streamErrorAuditFields } from "../../../core/stream-error.js";
 import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
 import { CANONICAL_OUTPUT_VERSION, type CanonicalOutputEvent } from "../../../protocol/output.js";
 import {
+  couldStillBeGpt56ReasoningPlaceholder,
+  isGpt56Model,
+  isGpt56ReasoningPlaceholder,
+} from "../../models.js";
+import {
   appendReasoningCapture,
   appendToolFragment,
   assertSupportedSdkEvent,
@@ -46,6 +51,7 @@ export interface TransformSdkOutputOptions {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
+  readonly bufferLateGptReasoning?: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
   readonly onCompletionWitness?: (kind: "token-usage-metadata" | "metering-clean-eof") => void;
@@ -53,6 +59,14 @@ export interface TransformSdkOutputOptions {
   /** Fires after every raw tool fragment; counts only, never arguments. */
   readonly onToolCallProgress?: (progress: ToolCallProgress) => void;
 }
+
+const GPT_ANTHROPIC_PREFACE_MAX_EVENTS = 128;
+const GPT_ANTHROPIC_PREFACE_MAX_BYTES = 1 << 20;
+
+type BufferedAssistantEvent = Extract<
+  CanonicalOutputEvent,
+  { readonly type: "text_delta" | "tool_call_delta" }
+>;
 
 export class MissingSdkOutputStreamError extends Error {
   readonly name = "MissingSdkOutputStreamError";
@@ -103,6 +117,34 @@ export async function* transformSdkOutputStream(
   let iteratorClosed = false;
   let completionWitness: "token-usage-metadata" | "metering-clean-eof" | undefined;
   let toolArgumentBytes = 0;
+  const bufferLateGptReasoning =
+    options.bufferLateGptReasoning === true &&
+    options.emitAnthropicReasoningMetadata === true &&
+    isGpt56Model(model);
+  const bufferedAssistantEvents: BufferedAssistantEvent[] = [];
+  let bufferedAssistantBytes = 0;
+  let lateGptReasoningResolved = !bufferLateGptReasoning;
+
+  const bufferAssistantEvent = (event: BufferedAssistantEvent): void => {
+    const bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
+    if (
+      bufferedAssistantEvents.length >= GPT_ANTHROPIC_PREFACE_MAX_EVENTS ||
+      bufferedAssistantBytes + bytes > GPT_ANTHROPIC_PREFACE_MAX_BYTES
+    ) {
+      throw new SdkStreamProtocolError(
+        "Kiro delayed GPT reasoning metadata beyond the bounded assistant preface",
+        "invalid_upstream_reasoning",
+      );
+    }
+    bufferedAssistantEvents.push(event);
+    bufferedAssistantBytes += bytes;
+  };
+
+  const takeBufferedAssistantEvents = (): BufferedAssistantEvent[] => {
+    const events = bufferedAssistantEvents.splice(0);
+    bufferedAssistantBytes = 0;
+    return events;
+  };
 
   try {
     yield {
@@ -148,6 +190,13 @@ export async function* transformSdkOutputStream(
       assertSupportedSdkEvent(event);
       updateUsageState(usage, event);
       appendReasoningCapture(reasoning, event.reasoningContentEvent);
+      const eventReasoningText = event.reasoningContentEvent?.text ?? "";
+      const suppressLateGptPlaceholder =
+        bufferLateGptReasoning &&
+        assistantOutputStarted &&
+        !lateGptReasoningResolved &&
+        eventReasoningText.length > 0 &&
+        couldStillBeGpt56ReasoningPlaceholder(model, reasoning.text);
 
       if (isCompletionMetadataEvent(event)) {
         completionWitness = "token-usage-metadata";
@@ -173,20 +222,59 @@ export async function* transformSdkOutputStream(
             "invalid_upstream_reasoning",
           );
         }
-        if (
+        const lateSignature =
           assistantOutputStarted &&
           event.reasoningContentEvent?.signature !== undefined &&
-          event.reasoningContentEvent.signature.length > 0
-        ) {
+          event.reasoningContentEvent.signature.length > 0;
+        const acceptsBufferedLateSignature =
+          lateSignature &&
+          bufferLateGptReasoning &&
+          !lateGptReasoningResolved &&
+          bufferedAssistantEvents.length > 0 &&
+          (reasoningStarted ||
+            reasoning.text.length === 0 ||
+            isGpt56ReasoningPlaceholder(model, reasoning.text)) &&
+          reasoning.redactedChunks.length === 0;
+        if (lateSignature && !acceptsBufferedLateSignature) {
           throw new SdkStreamProtocolError(
             "Kiro emitted a reasoning signature after assistant output began",
             "invalid_upstream_reasoning",
           );
         }
+        if (
+          bufferLateGptReasoning &&
+          assistantOutputStarted &&
+          !lateGptReasoningResolved &&
+          ((!suppressLateGptPlaceholder && eventReasoningText.length > 0) ||
+            (event.reasoningContentEvent?.redactedContent?.byteLength ?? 0) > 0)
+        ) {
+          throw new SdkStreamProtocolError(
+            "Kiro emitted visible GPT reasoning after assistant output began",
+            "invalid_upstream_reasoning",
+          );
+        }
+        if (acceptsBufferedLateSignature) {
+          lateGptReasoningResolved = true;
+          if (!reasoningStarted) {
+            reasoningStarted = true;
+            yield {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "reasoning_delta",
+              text: "",
+            };
+          }
+          anthropicSignatureEmitted = true;
+          yield {
+            canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+            type: "reasoning_signature",
+            signature: event.reasoningContentEvent?.signature as string,
+          };
+          for (const buffered of takeBufferedAssistantEvents()) yield buffered;
+        }
       }
 
       const reasoningText = event.reasoningContentEvent?.text;
-      if (reasoningText) {
+      if (reasoningText && !suppressLateGptPlaceholder) {
         reasoningStarted = true;
         yield {
           canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
@@ -231,14 +319,25 @@ export async function* transformSdkOutputStream(
               data: Buffer.from(capturedBeforeText.redactedContent).toString("base64"),
             };
           }
+          if (
+            capturedBeforeText.signature !== undefined ||
+            capturedBeforeText.redactedContent !== undefined
+          ) {
+            lateGptReasoningResolved = true;
+          }
         }
         assistantOutputStarted = true;
         textOnlyContent += assistantText;
-        yield {
+        const outputEvent: BufferedAssistantEvent = {
           canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
           type: "text_delta",
           text: assistantText,
         };
+        if (bufferLateGptReasoning && !lateGptReasoningResolved) {
+          bufferAssistantEvent(outputEvent);
+        } else {
+          yield outputEvent;
+        }
       }
 
       if (event.toolUseEvent) {
@@ -264,6 +363,7 @@ export async function* transformSdkOutputStream(
               signature: capturedBeforeTool.signature,
             };
           }
+          if (capturedBeforeTool.signature !== undefined) lateGptReasoningResolved = true;
         }
         assistantOutputStarted = true;
         const fragment = event.toolUseEvent;
@@ -313,13 +413,18 @@ export async function* transformSdkOutputStream(
             );
         }
         if (first || delta.length > 0) {
-          yield {
+          const outputEvent: BufferedAssistantEvent = {
             canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
             type: "tool_call_delta",
             index: toolIndexes.get(id) as number,
             ...(first ? { id, name: event.toolUseEvent.name } : {}),
             arguments: delta,
           };
+          if (bufferLateGptReasoning && !lateGptReasoningResolved) {
+            bufferAssistantEvent(outputEvent);
+          } else {
+            yield outputEvent;
+          }
         }
       }
     }
@@ -360,6 +465,20 @@ export async function* transformSdkOutputStream(
       };
     }
   }
+
+  if (
+    bufferLateGptReasoning &&
+    bufferedAssistantEvents.length > 0 &&
+    (reasoningStarted || captured.text.length > 0) &&
+    captured.signature === undefined
+  ) {
+    throw new SdkStreamProtocolError(
+      "Kiro completed GPT reasoning without a signature before buffered assistant output",
+      "invalid_upstream_reasoning",
+    );
+  }
+
+  for (const buffered of takeBufferedAssistantEvents()) yield buffered;
 
   for (const toolCall of toolCalls.values()) {
     // Only the established no-input + stop + completion shape receives "{}".

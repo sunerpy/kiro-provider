@@ -159,6 +159,28 @@ describe("effort request fields in the command input (B7)", () => {
     });
   });
 
+  test("projects Fable adaptive thinking, effort, display, and max_tokens together", async () => {
+    const input = await capturedInput(
+      "claude-fable-5-1",
+      {},
+      {
+        protocol: "anthropic-messages",
+        thinking: { enabled: true, display: "omitted" },
+        reasoningEffort: "xhigh",
+        outputTokenLimit: 4096,
+      },
+    );
+
+    expect(input.conversationState?.currentMessage?.userInputMessage?.modelId).toBe(
+      "claude-fable-5.1",
+    );
+    expect(input.additionalModelRequestFields).toEqual({
+      max_tokens: 4096,
+      output_config: { effort: "xhigh" },
+      thinking: { type: "adaptive", display: "omitted" },
+    });
+  });
+
   test("merges Claude temperature with max_tokens and effort", async () => {
     const input = await capturedInput(
       "claude-opus-5",

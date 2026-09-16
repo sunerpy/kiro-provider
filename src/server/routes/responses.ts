@@ -3,7 +3,7 @@ import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
-import { resolveModelVariant } from "../../kiro/models.js";
+import { isFable51Model, resolveModelVariant } from "../../kiro/models.js";
 import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
@@ -82,7 +82,8 @@ type StatelessV3Reason =
   | "custom_or_namespace_tool"
   | "encrypted_reasoning"
   | "collaboration_input"
-  | "native_instruction_role_unsupported";
+  | "native_instruction_role_unsupported"
+  | "native_model_unsupported";
 
 type StatelessV3Requirement = {
   readonly reason: StatelessV3Reason;
@@ -113,6 +114,11 @@ function nativeInstructionRolesSupported(model: unknown): boolean | undefined {
   }
 }
 
+function unsupportedNativeModel(model: unknown): StatelessV3Requirement | undefined {
+  if (typeof model !== "string" || !isFable51Model(model)) return undefined;
+  return { reason: "native_model_unsupported", param: "model" };
+}
+
 function unsupportedNativeInstructionRole(
   body: Readonly<Record<string, unknown>>,
 ): StatelessV3Requirement | undefined {
@@ -138,6 +144,8 @@ function requiresStatelessV3(
   body: Readonly<Record<string, unknown>>,
 ): StatelessV3Requirement | undefined {
   if (body.store === false) return { reason: "store_false", param: "store" };
+  const modelRequirement = unsupportedNativeModel(body.model);
+  if (modelRequirement !== undefined) return modelRequirement;
   const reasoning = body.reasoning;
   if (isRecord(reasoning) && reasoning.effort === "max") {
     return { reason: "max_effort", param: "reasoning.effort" };

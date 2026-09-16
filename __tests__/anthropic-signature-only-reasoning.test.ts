@@ -12,6 +12,43 @@ import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 const MODEL = "claude-sonnet-5";
 
 describe("Anthropic non-stream signature-only reasoning", () => {
+  test("collects late GPT signature-only reasoning before buffered text", async () => {
+    const completion = await collectSdkResponse(
+      makeSdkResponse([
+        { assistantResponseEvent: { content: "answer" } },
+        { reasoningContentEvent: { signature: "late-native-signature" } },
+      ]),
+      "gpt-5.6-sol",
+      "late-gpt-non-stream",
+      undefined,
+      {
+        emitAnthropicReasoningMetadata: true,
+        emitEncryptedReasoning: true,
+        bufferLateGptReasoning: true,
+        captureReasoning: () => "kr2_late-non-stream-replay",
+      },
+    );
+
+    expect(completion).toMatchObject({
+      text: "answer",
+      reasoning: {
+        text: "",
+        signature: "late-native-signature",
+        encryptedContent: "kr2_late-non-stream-replay",
+      },
+    });
+    const response = anthropicMessageResponse(completion, "gpt-5.6-sol", {
+      thinkingDisplay: "omitted",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "", signature: "kr2_late-non-stream-replay" },
+        { type: "text", text: "answer" },
+      ],
+    });
+  });
+
   test("preserves signed empty thinking for a parallel tool turn", async () => {
     const captures: Array<{ text: string; signature?: string }> = [];
     const completion = await collectSdkResponse(

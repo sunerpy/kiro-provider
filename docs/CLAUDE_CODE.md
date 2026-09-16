@@ -95,8 +95,9 @@ subprocesses.
 ## Choose a model
 
 The built-in Claude rows map to `claude-opus-5`, `claude-sonnet-5`, and
-`claude-haiku-4-5`. The launcher also adds `gpt-5.6-sol`, `gpt-5.6-terra`, and
-`gpt-5.6-luna` to the picker.
+`claude-haiku-4-5`. The built-in Fable row maps to `claude-fable-5-1`, whose
+Kiro wire id is `claude-fable-5.1`. The launcher also adds `gpt-5.6-sol`,
+`gpt-5.6-terra`, and `gpt-5.6-luna` to the picker.
 
 Claude Code's gateway discovery filters out model IDs without `claude` or
 `anthropic`, so the GPT rows must be declared explicitly. Each uses
@@ -124,11 +125,24 @@ OpenAI Responses, Chat Completions, another Anthropic client, or the ordinary
 
 Private catalogs may override the three IDs with `KIROCLAUDE_SOL_MODEL`,
 `KIROCLAUDE_TERRA_MODEL`, and `KIROCLAUDE_LUNA_MODEL`.
+`KIROCLAUDE_KIRO_FABLE_MODEL` overrides the Fable mapping without changing the
+separate native Bedrock fallback.
 
 ### Use Fable 5.1 through native Bedrock
 
-Fable cannot be another Kiro picker row because Claude Code chooses its provider
-and base URL once per process. Start the Bedrock fallback as a separate process:
+Kiro now exposes Fable 5.1 directly through both `/v1/responses` and
+`/v1/messages`. Its live catalog advertises a 1M input window, 128K output,
+image input, prompt caching, a 6x rate multiplier, adaptive thinking, and the
+five effort levels. Inputs and outputs are subject to the retention and abuse
+review notice included in Kiro's model description.
+
+Fable uses the stateless Responses projection because Kiro's native
+`CreateResponse` operation currently rejects it. Stored Responses continue to
+use the provider-owned continuation and replay state rather than the native
+upstream continuation id.
+
+The native Bedrock fallback remains available as a separate process when Kiro
+is unavailable or an AWS-native route is required:
 
 ```bash
 PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
@@ -145,8 +159,8 @@ Mantle routes before enabling Bedrock; native skills and other settings remain
 shared.
 
 Changing between Kiro and Bedrock requires a new process and, when prior signed
-thinking is provider-specific, a new session. It is not a model switch inside
-an existing conversation.
+thinking is provider-specific, a new session. Within the Kiro process, select
+the built-in `fable` alias or set `KIROCLAUDE_MODEL=fable`.
 
 ## Compatibility boundary
 

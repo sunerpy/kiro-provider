@@ -23,6 +23,7 @@ const GPT_REASONING_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-l
  * These models support up to 128k thinking tokens with max effort.
  */
 const XHIGH_CAPABLE_MODELS = new Set([
+  "claude-fable-5.1",
   "claude-opus-5",
   "claude-opus-4.7",
   "claude-opus-4.8",
@@ -75,6 +76,21 @@ export function buildEffortRequestFields(
     return { reasoning: { effort } };
   }
   return { output_config: { effort } };
+}
+
+/** Probe-backed adaptive-thinking controls for models whose schema requires them. */
+export function buildThinkingRequestFields(
+  kiroModel: string,
+  enabled: boolean,
+  display?: "omitted",
+): Record<string, unknown> | undefined {
+  if (kiroModel !== "claude-fable-5.1" || !enabled) return undefined;
+  return {
+    thinking: {
+      type: "adaptive",
+      display: display ?? "summarized",
+    },
+  };
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { GenerateAssistantResponseCommand } from "@aws/codewhisperer-streaming-client";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type {
   PipelineAccountManager,
@@ -673,6 +674,34 @@ describe("Anthropic request adapter", () => {
         },
       },
     });
+  });
+
+  test("accepts summarized adaptive thinking only for Fable 5.1", () => {
+    const fable = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "claude-fable-5-1",
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      }),
+    );
+    expect(fable).toMatchObject({
+      ok: true,
+      value: {
+        body: {
+          model: "claude-fable-5-1",
+          thinking: { enabled: true },
+          reasoningEffort: "high",
+        },
+      },
+    });
+    expect(
+      adaptAnthropicMessagesRequest(
+        validRequest({
+          model: "claude-opus-5",
+          thinking: { type: "adaptive", display: "summarized" },
+        }),
+      ),
+    ).toMatchObject({ ok: false, code: "unsupported_reasoning_display" });
   });
 
   test("accepts Claude Code cache hints and no-op context management without changing input", () => {
@@ -1634,6 +1663,105 @@ describe("Claude Code HTTP surface", () => {
       stop_reason: "tool_use",
     });
   });
+
+  test.each([false, true])(
+    "reorders late GPT reasoning metadata through the Messages route (stream=%s)",
+    async (stream) => {
+      const client: PipelineSdkClient = {
+        async send() {
+          return makeSdkResponse([
+            { assistantResponseEvent: { content: "LATE_GPT_OK" } },
+            { reasoningContentEvent: { signature: "late-native-signature" } },
+          ]);
+        },
+      };
+      const app = createApp(config(), {
+        accountManager: new FakeAccountManager(),
+        tokenRefresher: new FakeTokenRefresher(),
+        makeClient: () => client,
+      });
+
+      const response = await app(
+        request(
+          validRequest({
+            model: "gpt-5.6-sol",
+            stream,
+            thinking: { type: "adaptive" },
+          }),
+          "/v1/messages",
+          {
+            Authorization: `Bearer ${API_KEY}`,
+            "x-kiro-output-token-limit-mode": "advisory",
+          },
+        ),
+      );
+
+      expect(response.status).toBe(200);
+      if (stream) {
+        const wire = await response.text();
+        expect(wire).toContain('"type":"thinking"');
+        expect(wire).toContain('"type":"signature_delta","signature":"late-native-signature"');
+        expect(wire).toContain('"type":"text_delta","text":"LATE_GPT_OK"');
+        expect(wire).toContain("event: message_stop");
+        expect(wire.indexOf('"type":"signature_delta"')).toBeLessThan(
+          wire.indexOf('"type":"text_delta"'),
+        );
+      } else {
+        expect(await response.json()).toMatchObject({
+          content: [
+            { type: "thinking", thinking: "", signature: "late-native-signature" },
+            { type: "text", text: "LATE_GPT_OK" },
+          ],
+          stop_reason: "end_turn",
+        });
+      }
+    },
+  );
+
+  test.each([false, true])(
+    "routes Fable 5.1 through Messages with native thinking and output controls (stream=%s)",
+    async (stream) => {
+      let captured: GenerateAssistantResponseCommand["input"] | undefined;
+      const client: PipelineSdkClient = {
+        async send(command) {
+          captured = command.input;
+          return makeSdkResponse([
+            { reasoningContentEvent: { text: "brief thought", signature: "fable-signature" } },
+            { assistantResponseEvent: { content: "FABLE_MESSAGES_OK" } },
+          ]);
+        },
+      };
+      const app = createApp(config(), {
+        accountManager: new FakeAccountManager(),
+        tokenRefresher: new FakeTokenRefresher(),
+        makeClient: () => client,
+      });
+
+      const response = await app(
+        request(
+          validRequest({
+            model: "claude-fable-5-1",
+            stream,
+            thinking: { type: "adaptive" },
+            output_config: { effort: "xhigh" },
+          }),
+        ),
+      );
+
+      expect(response.status).toBe(200);
+      expect(captured?.conversationState?.currentMessage?.userInputMessage?.modelId).toBe(
+        "claude-fable-5.1",
+      );
+      expect(captured?.additionalModelRequestFields).toEqual({
+        max_tokens: 1024,
+        output_config: { effort: "xhigh" },
+        thinking: { type: "adaptive", display: "summarized" },
+      });
+      const wire = await response.text();
+      expect(wire).toContain("FABLE_MESSAGES_OK");
+      expect(wire).toContain("fable-signature");
+    },
+  );
 
   test("uses an Anthropic auth envelope for /v1/messages", async () => {
     const app = createApp(config(), {

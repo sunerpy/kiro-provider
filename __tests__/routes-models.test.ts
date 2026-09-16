@@ -77,6 +77,22 @@ describe("GET /v1/models", () => {
       ],
     });
 
+    const fable = entries.find((entry) => entry.id === "claude-fable-5-1") as
+      | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
+      | undefined;
+    const fableCodex = body.models.find((entry) => entry.slug === "claude-fable-5-1");
+    expect(fable).toMatchObject({ context_limit: 1_000_000, output_limit: 128_000 });
+    expect(fableCodex).toMatchObject({
+      context_window: 1_000_000,
+      supported_reasoning_levels: [
+        { effort: "low" },
+        { effort: "medium" },
+        { effort: "high" },
+        { effort: "xhigh" },
+        { effort: "max" },
+      ],
+    });
+
     for (const family of ["sol", "terra", "luna"]) {
       const id = `gpt-5.6-${family}`;
       const model = entries.find((entry) => entry.id === id) as

@@ -141,6 +141,9 @@ async function runCase(
   attachKiroRuntimeRequest(command);
   const startedAt = performance.now();
   let text = "";
+  let reasoningChars = 0;
+  let reasoningSignatures = 0;
+  let reasoningRedacted = 0;
   let eventCount = 0;
   let witnessed = false;
   try {
@@ -148,6 +151,10 @@ async function runCase(
     for await (const event of response.generateAssistantResponseResponse ?? []) {
       eventCount += 1;
       text += event.assistantResponseEvent?.content ?? "";
+      reasoningChars += event.reasoningContentEvent?.text?.length ?? 0;
+      if ((event.reasoningContentEvent?.signature?.length ?? 0) > 0) reasoningSignatures += 1;
+      if ((event.reasoningContentEvent?.redactedContent?.byteLength ?? 0) > 0)
+        reasoningRedacted += 1;
       if (event.metadataEvent?.tokenUsage !== undefined) witnessed = true;
     }
     return {
@@ -159,6 +166,9 @@ async function runCase(
       completion_witnessed: witnessed,
       text_chars: text.length,
       text_hash: hash16(text),
+      reasoning_chars: reasoningChars,
+      reasoning_signatures: reasoningSignatures,
+      reasoning_redacted: reasoningRedacted,
     };
   } catch (error) {
     return {
@@ -188,6 +198,29 @@ async function main(): Promise<void> {
   const probes: readonly ProbeCase[] = [
     { name: "control", prompt: "Reply with exactly FIELD_PROBE_OK." },
     {
+      name: "effort_xhigh",
+      fields: { output_config: { effort: "xhigh" } },
+      prompt: "Think briefly, then reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      name: "thinking_summarized",
+      fields: {
+        max_tokens: 1024,
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      },
+      prompt: "Think briefly, then reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      name: "thinking_omitted",
+      fields: {
+        max_tokens: 1024,
+        thinking: { type: "adaptive", display: "omitted" },
+        output_config: { effort: "xhigh" },
+      },
+      prompt: "Think briefly, then reply with exactly FIELD_PROBE_OK.",
+    },
+    {
       name: "temperature",
       fields: { temperature: 0 },
       prompt: "Reply with exactly FIELD_PROBE_OK.",
@@ -195,6 +228,11 @@ async function main(): Promise<void> {
     {
       name: "top_p",
       fields: { top_p: 0.9 },
+      prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      name: "max_tokens",
+      fields: { max_tokens: 1024 },
       prompt: "Reply with exactly FIELD_PROBE_OK.",
     },
     {

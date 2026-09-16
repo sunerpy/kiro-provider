@@ -8,6 +8,7 @@ import {
 
 describe("probe-backed Kiro output-token limits", () => {
   test.each([
+    ["claude-fable-5-1", "claude-fable-5.1"],
     ["claude-sonnet-5", "claude-sonnet-5"],
     ["claude-sonnet-5-thinking", "claude-sonnet-5"],
     ["claude-sonnet-5-high", "claude-sonnet-5"],
@@ -22,7 +23,7 @@ describe("probe-backed Kiro output-token limits", () => {
     });
   });
 
-  test.each(["claude-sonnet-5", "claude-opus-5"])(
+  test.each(["claude-fable-5-1", "claude-sonnet-5", "claude-opus-5"])(
     "rejects out-of-range %s max_tokens values before Kiro",
     (model) => {
       for (const limit of [KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1]) {

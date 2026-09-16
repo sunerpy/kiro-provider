@@ -2,6 +2,7 @@ import { getModelContextLimit, MODEL_MAPPING, SUPPORTED_MODELS } from "./constan
 import type { Effort } from "./types.js";
 
 const dynamicModelMapping = new Map<string, string>();
+const GPT_56_MODEL = /^gpt-5\.6-(?:sol|terra|luna)(?:-|$)/;
 
 function modelMapping(model: string): string | undefined {
   return MODEL_MAPPING[model] ?? dynamicModelMapping.get(model);
@@ -17,6 +18,36 @@ export function registerDynamicWireModels(modelIds: Iterable<string>): void {
 
 export function clearDynamicModelRegistry(): void {
   dynamicModelMapping.clear();
+}
+
+export function isGpt56Model(model: string): boolean {
+  return GPT_56_MODEL.test(model);
+}
+
+export function isGpt56ReasoningPlaceholder(model: string, text: string): boolean {
+  if (!isGpt56Model(model)) return false;
+  const normalized = text.trim();
+  return normalized === "..." || normalized === "…";
+}
+
+export function couldStillBeGpt56ReasoningPlaceholder(model: string, text: string): boolean {
+  if (!isGpt56Model(model)) return false;
+  const normalized = text.trim();
+  return (
+    normalized === "" ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized === "..." ||
+    normalized === "…"
+  );
+}
+
+export function isFable51Model(model: string): boolean {
+  try {
+    return resolveModelVariant(model).wireId === "claude-fable-5.1";
+  } catch {
+    return false;
+  }
 }
 
 export function isKnownModel(model: string): boolean {
@@ -38,6 +69,7 @@ export function resolveKiroModel(model: string): string {
 }
 
 export const VARIANT_BASE_ALLOWLIST = new Set<string>([
+  "claude-fable-5-1",
   "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",

@@ -416,6 +416,64 @@ describe("native KiroRuntime Responses transport", () => {
     expect(body.store).toBe(false);
   });
 
+  test("routes Fable through stateless Responses because native CreateResponse is unavailable", async () => {
+    let nativeCalls = 0;
+    let pipelineOptions: RunChatCompletionOptions | undefined;
+    const audit = captureAuditEvents();
+    const dependencies: ResponsesDependencies = {
+      accountManager: new StubAccountManager(),
+      tokenRefresher,
+      nativeResponsesFetch: async () => {
+        nativeCalls += 1;
+        return Response.json(nativeResponse("unexpected"));
+      },
+      runPipeline: async (options) => {
+        pipelineOptions = options;
+        return new Response(
+          JSON.stringify({
+            canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+            conversationId: "fable-stateless",
+            model: "claude-fable-5-1",
+            createdAt: Date.now(),
+            text: "FABLE_RESPONSES_OK",
+            toolCalls: [],
+            finishReason: "stop",
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          }),
+          { headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE } },
+        );
+      },
+    };
+
+    try {
+      const response = await handleResponses(
+        request({
+          model: "claude-fable-5-1",
+          input: "hello",
+          max_output_tokens: 1024,
+        }),
+        config(),
+        dependencies,
+      );
+      const body = (await response.json()) as Record<string, unknown>;
+
+      expect(response.status).toBe(200);
+      expect(nativeCalls).toBe(0);
+      expect(pipelineOptions?.body.model).toBe("claude-fable-5-1");
+      expect(pipelineOptions?.body.outputTokenLimit).toBe(1024);
+      expect(body.model).toBe("claude-fable-5-1");
+      expect(audit.events("responses_route_selected")).toEqual([
+        expect.objectContaining({
+          transport: "stateless",
+          reason: "native_model_unsupported",
+          model: "claude-fable-5-1",
+        }),
+      ]);
+    } finally {
+      audit.restore();
+    }
+  });
+
   test("routes custom and namespace tool extensions through the stateless pipeline", async () => {
     let nativeCalls = 0;
     const pipelineBodies: RunChatCompletionOptions["body"][] = [];
