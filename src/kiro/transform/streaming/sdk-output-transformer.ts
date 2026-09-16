@@ -11,6 +11,7 @@ import {
   isCompletionMeteringEvent,
   type NextSdkEvent,
   nextSdkEvent,
+  OutputPersistenceError,
   resolveReasoningCapture,
   resolveUsage,
   type SdkOutputCaptureHandler,
@@ -382,8 +383,17 @@ export async function* transformSdkOutputStream(
     })),
   };
   const outputFingerprint = (options.fingerprintOutput ?? assistantOutputFingerprint)(output);
-  const encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
-  options.captureOutput?.(output, outputFingerprint);
+  // Both captures are provider-local writes (replay keyring, lineage row) that run
+  // after the upstream already delivered this output. Tagging their failures keeps
+  // a local fault from being read as upstream silence and moving the next request
+  // off an account that is demonstrably healthy.
+  let encryptedContent: string | undefined;
+  try {
+    encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
+    options.captureOutput?.(output, outputFingerprint);
+  } catch (error) {
+    throw new OutputPersistenceError({ cause: error });
+  }
   if (options.emitEncryptedReasoning && encryptedContent !== undefined) {
     yield {
       canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,

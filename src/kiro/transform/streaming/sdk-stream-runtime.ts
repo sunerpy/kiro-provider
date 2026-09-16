@@ -85,6 +85,27 @@ export class SemanticStreamTruncationError extends Error {
   }
 }
 
+/**
+ * A provider-local side effect of finishing a stream failed: encrypting and
+ * storing reasoning for replay, or recording the output-lineage row. The
+ * upstream had already delivered its output by then, so this failure says
+ * nothing about upstream or account health and moving the next request to
+ * another account cannot repair it.
+ *
+ * The client contract is unchanged — the code is deliberately outside the
+ * stream-failure table, so it normalizes to the same retryable
+ * `upstream_stream_error` the transport reports — but the class is what keeps
+ * local faults out of health accounting.
+ */
+export class OutputPersistenceError extends Error {
+  readonly name = "OutputPersistenceError";
+  readonly code = "local_output_persistence_failed";
+
+  constructor(options?: ErrorOptions) {
+    super("Recording provider-local stream output failed", options);
+  }
+}
+
 export class SdkStreamProtocolError extends Error {
   readonly name = "SdkStreamProtocolError";
 

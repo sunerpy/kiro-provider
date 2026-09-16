@@ -7,6 +7,7 @@ import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-r
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
 import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
+import type { AffinityStallTracker } from "./affinity-stall.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 import type { RequestDiagnostics } from "./request-diagnostics.js";
@@ -142,6 +143,8 @@ export interface RunChatCompletionOptions {
   readonly affinity?: PipelineSessionAffinity;
   readonly lineage?: PipelineLineageAffinity;
   readonly affinityStore?: PipelineAffinityStore;
+  /** Short-term affinity health. Defaults to the process-wide tracker. */
+  readonly affinityStalls?: AffinityStallTracker;
   readonly tenantId?: string;
   readonly reasoningReplayStore?: PipelineReasoningReplayStore;
   readonly modelCapabilities?: PipelineModelCapabilities;

@@ -168,6 +168,8 @@ describe("ConfigSchema", () => {
       token_expiry_buffer_ms: 300000,
       session_affinity_ttl_ms: 86400000,
       session_affinity_max_entries: 10000,
+      session_affinity_stall_failover_threshold: 2,
+      session_affinity_stall_window_ms: 600000,
       reasoning_replay_key_path: null,
       reasoning_replay_keys: [],
       reasoning_replay_token_format: "portable-v2",
@@ -459,6 +461,8 @@ describe("loadConfig", () => {
         KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS: "240000",
         KIRO_PROVIDER_SESSION_AFFINITY_TTL_MS: "3600000",
         KIRO_PROVIDER_SESSION_AFFINITY_MAX_ENTRIES: "20000",
+        KIRO_PROVIDER_SESSION_AFFINITY_STALL_FAILOVER_THRESHOLD: "5",
+        KIRO_PROVIDER_SESSION_AFFINITY_STALL_WINDOW_MS: "300000",
         KIRO_PROVIDER_REASONING_REPLAY_KEY_PATH: " /tmp/reasoning.key ",
         KIRO_PROVIDER_REASONING_REPLAY_KEYS:
           "active:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,old:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -519,6 +523,8 @@ describe("loadConfig", () => {
       token_expiry_buffer_ms: 240000,
       session_affinity_ttl_ms: 3600000,
       session_affinity_max_entries: 20000,
+      session_affinity_stall_failover_threshold: 5,
+      session_affinity_stall_window_ms: 300000,
       reasoning_replay_key_path: "/tmp/reasoning.key",
       reasoning_replay_keys: [
         "active:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

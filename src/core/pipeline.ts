@@ -50,6 +50,7 @@ import {
   type NormalizedSdkError,
   isQuotaExhaustionClassification,
 } from "./error-classifier.js";
+import { type AffinityStallSnapshot, affinityStallTracker } from "./affinity-stall.js";
 import { auditHash, auditLog } from "./audit-log.js";
 import {
   abortable,
@@ -67,6 +68,7 @@ import {
   prepareCanonicalStream,
   StreamIdleTimeoutError,
   type StreamTelemetry,
+  type StreamTerminalReport,
 } from "./pipeline-stream.js";
 import { resolveProxyUrl } from "./proxy.js";
 import type {
@@ -807,6 +809,43 @@ interface LoopState {
   readonly lineageBinding: PipelineAffinityBinding | undefined;
   readonly replayState: ReplayState;
   readonly replayLocked: boolean;
+  /**
+   * The stored affinity binding was dropped for repeated stalls, so the first
+   * claim must overwrite it instead of re-adopting it. Cleared once that
+   * overwrite happens, so later attempts in this request extend the replacement.
+   * This is per-request state; the cross-request stall streak is independent.
+   */
+  affinityQuarantined: boolean;
+  /**
+   * Accounts the streak was actually recorded against. Held out of selection for
+   * the rest of the request, because dropping the preference alone does not stop
+   * a strategy from ranking the stalled account best again.
+   *
+   * Taken from the streak rather than from the stored binding: a failover rebinds
+   * storage to its replacement before that replacement serves anything, so after
+   * a failover that died late the stored account is the unproven replacement and
+   * excluding it would re-select the wedged account.
+   */
+  readonly quarantinedAccountIds: ReadonlySet<string>;
+  /**
+   * The cell the stored history-lineage row names, when that row is what keys
+   * this request's stall streak.
+   *
+   * A healthy answer retires the streak only when it came from that exact
+   * account and conversation. The lineage row is keyed by the *previous*
+   * assistant output and is never rewritten by this request — a new answer
+   * records a new key — so whenever the request is served elsewhere the wedged
+   * row survives intact and the client re-sending that same history resolves
+   * straight back to it. That happens on a threshold quarantine, and equally
+   * when the bound account was merely unselectable this time (rate limited,
+   * unhealthy, model-ineligible) while the streak was still below the
+   * threshold; clearing on either would strand the history with no protection.
+   *
+   * `undefined` when no such row keys the streak: an explicit affinity binding
+   * keys it on a row `bindAttemptAffinity` rewrites to whatever account served,
+   * so there a healthy answer does prove the stored row healthy.
+   */
+  readonly lineageStallRow: PipelineAffinityBinding | undefined;
   /** Account the request is bound to before selection (replay lock or affinity). */
   readonly boundAccountId: string | undefined;
   preferredAccountId: string | undefined;
@@ -875,21 +914,106 @@ function returning(result: CompletionResult): LoopDirective {
   return { kind: "return", result };
 }
 
+/**
+ * The binding key this request's stall streak is counted against.
+ *
+ * An explicit session affinity key when the client supplied one, otherwise the
+ * history-lineage lookup key. Under the default `explicit-only` affinity mode a
+ * multi-turn client that sends no session header still resolves a stored
+ * binding through lineage, so counting only against `affinity` would leave
+ * exactly that path permanently below the threshold and its wedged binding
+ * sticky forever.
+ */
+function affinityStallKey(
+  options: RunChatCompletionOptions,
+): { readonly keyHash: string; readonly source: string } | undefined {
+  if (options.affinity) return options.affinity;
+  if (options.lineage?.lookupKeyHash !== undefined) {
+    return { keyHash: options.lineage.lookupKeyHash, source: options.lineage.source };
+  }
+  return undefined;
+}
+
+/**
+ * Reads the short-term stall streak for this request's binding key and decides
+ * whether the stored binding has earned a quarantine.
+ *
+ * This is a routing decision for a *new* request, taken before any upstream
+ * call: it never replays a committed stream, and the caller only consults it
+ * once the reasoning replay envelope is known to carry no owner lock.
+ */
+function resolveAffinityStall(
+  options: RunChatCompletionOptions,
+  key: { readonly keyHash: string } | undefined,
+  now: number,
+): AffinityStallSnapshot | undefined {
+  const threshold = options.config.session_affinity_stall_failover_threshold;
+  if (threshold <= 0 || key === undefined || !options.affinityStore) return undefined;
+  const stall = (options.affinityStalls ?? affinityStallTracker).peek(
+    key.keyHash,
+    now,
+    options.config.session_affinity_stall_window_ms,
+  );
+  return stall !== undefined && stall.count >= threshold ? stall : undefined;
+}
+
 /** Phase 1: resolve affinity/lineage/replay bindings into the initial loop state. */
 function resolveBinding(options: RunChatCompletionOptions): LoopState {
   const startedAt = Date.now();
-  const binding =
+  const storedBinding =
     options.affinity && options.affinityStore
       ? options.affinityStore.getSessionAffinity(options.affinity.keyHash)
       : undefined;
-  const lineageBinding =
-    binding === undefined && options.lineage?.lookupKeyHash !== undefined && options.affinityStore
+  const storedLineage =
+    storedBinding === undefined &&
+    options.lineage?.lookupKeyHash !== undefined &&
+    options.affinityStore
       ? options.affinityStore.resolveOutputLineage(options.lineage.lookupKeyHash)
       : undefined;
+  // Resolved from the stored bindings so replay ownership and portability are
+  // decided exactly as they are without a quarantine; the bindings only seed
+  // soft preferences here.
+  const replayState = resolveReplayState(options, storedBinding ?? storedLineage);
+  const replayLocked = replayState.accountId !== undefined;
+  // A wedged Kiro conversation keeps answering with partial output and then
+  // going silent, so every request that re-resolves the same binding reproduces
+  // the stall. After enough consecutive failures the binding stops being a
+  // useful preference and this request selects from scratch. An owner-locked
+  // replay is exempt: its account and conversation are authorization, not
+  // preference, and bindAttemptAffinity would reject a conflicting claim.
+  const stallKey = affinityStallKey(options);
+  const stall = replayLocked ? undefined : resolveAffinityStall(options, stallKey, startedAt);
+  const binding = stall === undefined ? storedBinding : undefined;
+  const lineageBinding = stall === undefined ? storedLineage : undefined;
   const effectiveBinding = binding ?? lineageBinding;
-  const replayState = resolveReplayState(options, effectiveBinding);
   const boundAccountId = replayState.accountId ?? effectiveBinding?.accountId;
-  const preferredAccountId = boundAccountId ?? replayState.preferredAccountId;
+  // Quarantine also drops the soft replay preference: a portable replay is
+  // valid on any verified cell, and keeping the preference would steer the
+  // request straight back to the account that just stalled. The hard
+  // portability constraints (region, runtime protocol, profile) stay in
+  // replayState and are still enforced during selection.
+  const preferredAccountId =
+    boundAccountId ?? (stall === undefined ? replayState.preferredAccountId : undefined);
+  if (stall !== undefined && stallKey !== undefined) {
+    // Deciding the failover deliberately does not clear the streak. This request
+    // can still die before a replacement exists (no healthy account, model
+    // eligibility, deadline), so clearing here would delete the only stall
+    // evidence while storage still resolves the wedged account. The streak is
+    // therefore evidence about the binding key, retired by a healthy answer whose
+    // binding storage agrees with, or by the window elapsing.
+    auditLog("warn", "session_affinity_stall_failover", {
+      request_id: options.requestId,
+      protocol: options.body.protocol,
+      model: options.model,
+      affinity_source: stallKey.source,
+      affinity_hash: auditHash(stallKey.keyHash),
+      stall_count: stall.count,
+      stall_span_ms: Math.max(0, stall.lastAt - stall.firstAt),
+      stall_threshold: options.config.session_affinity_stall_failover_threshold,
+      quarantined_binding: storedBinding !== undefined,
+      quarantined_lineage: storedBinding === undefined && storedLineage !== undefined,
+    });
+  }
   return {
     forcedRefreshAccountIds: new Set<string>(),
     serverErrors: new Map<string, number>(),
@@ -906,14 +1030,32 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     binding,
     lineageBinding,
     replayState,
-    replayLocked: replayState.accountId !== undefined,
+    replayLocked,
+    affinityQuarantined: stall !== undefined,
+    // The recorded accounts are the evidence. The stored row's account is only a
+    // fallback for a streak recorded before any account was known, so a
+    // quarantine never degrades into excluding nothing at all.
+    quarantinedAccountIds:
+      stall === undefined
+        ? new Set<string>()
+        : stall.accountIds.size > 0
+          ? new Set(stall.accountIds)
+          : new Set(
+              [(storedBinding ?? storedLineage)?.accountId].filter(
+                (accountId): accountId is string => accountId !== undefined,
+              ),
+            ),
+    // Recorded whether or not the streak reached the threshold: a sub-threshold
+    // streak whose bound account happens to be unselectable is served elsewhere
+    // too, and the row it left behind is just as wedged.
+    lineageStallRow: options.affinity === undefined ? storedLineage : undefined,
     boundAccountId,
     preferredAccountId,
     requestAccountId: preferredAccountId,
     requestConversationId:
       replayState.conversationId ??
       effectiveBinding?.conversationId ??
-      replayState.preferredConversationId,
+      (stall === undefined ? replayState.preferredConversationId : undefined),
     streamAttempts: 0,
     sdkDispatches: 0,
     streamRetriedAccountIds: new Set<string>(),
@@ -1185,10 +1327,28 @@ function selectAttemptAccount(
           })()),
     ),
   );
-  const selected = options.accountManager.selectHealthyAccount(
-    state.preferredAccountId,
-    eligibleAccountIds,
+  // A quarantined binding has to move off the account that stalled, and
+  // dropping the preference is not enough to do it: `sticky` still points at
+  // that account, `round-robin` can land on it again, and `lowest-usage` can
+  // rank it best, after which the rebind would only change the conversation and
+  // the stall would repeat. Hold it out of the candidate set instead, and fall
+  // back to it only when nothing else can serve the request, so a
+  // single-account deployment still gets an answer.
+  const remainingAfterQuarantine = [...eligibleAccountIds].filter(
+    (id) => !state.quarantinedAccountIds.has(id),
   );
+  const withoutQuarantined =
+    remainingAfterQuarantine.length < eligibleAccountIds.size
+      ? new Set(remainingAfterQuarantine)
+      : undefined;
+  const selected =
+    (withoutQuarantined === undefined
+      ? null
+      : options.accountManager.selectHealthyAccount(
+          state.preferredAccountId,
+          withoutQuarantined,
+        )) ??
+    options.accountManager.selectHealthyAccount(state.preferredAccountId, eligibleAccountIds);
   if (
     selected &&
     (state.replayState.accountId === undefined || selected.id === state.replayState.accountId)
@@ -1281,14 +1441,34 @@ function bindAttemptAffinity(
   }
   if (options.affinity && options.affinityStore) {
     if (!state.binding) {
-      const claimed = options.affinityStore.claimSessionAffinity(
-        options.affinity.keyHash,
-        selected.id,
-        state.requestConversationId ?? randomUUID(),
-        now,
-        options.config.session_affinity_ttl_ms,
-        options.config.session_affinity_max_entries,
-      );
+      // A quarantined key still has its stalled row in storage, and
+      // claimSessionAffinity would re-adopt it: the delete only covers expired
+      // rows and the insert is OR IGNORE, so the stored account would win and
+      // the loop would bounce on "reselect". Overwrite it instead, so the
+      // selected account and a fresh conversation actually take effect.
+      // replayLocked is false whenever the quarantine is set, so this discards
+      // no owner-locked conversation.
+      const claimed = state.affinityQuarantined
+        ? options.affinityStore.rebindSessionAffinity(
+            options.affinity.keyHash,
+            selected.id,
+            randomUUID(),
+            now,
+            options.config.session_affinity_ttl_ms,
+            options.config.session_affinity_max_entries,
+          )
+        : options.affinityStore.claimSessionAffinity(
+            options.affinity.keyHash,
+            selected.id,
+            state.requestConversationId ?? randomUUID(),
+            now,
+            options.config.session_affinity_ttl_ms,
+            options.config.session_affinity_max_entries,
+          );
+      // Per-request only: a later attempt must extend the replacement binding
+      // rather than mint yet another conversation. The cross-request streak is
+      // untouched and still governs the next request.
+      state.affinityQuarantined = false;
       state.binding = claimed;
       state.preferredAccountId = claimed.accountId;
       state.requestConversationId = claimed.conversationId;
@@ -1738,6 +1918,7 @@ async function prefetchStreamStart(
     const idle = error instanceof StreamIdleTimeoutError;
     auditLog("warn", idle ? "sdk_stream_idle_timeout" : "sdk_stream_upstream_error", {
       ...telemetry.auditFields(),
+      ...(idle ? telemetry.stallFields() : {}),
       ...streamErrorAuditFields(error),
       ...(idle ? { idle_timeout_ms: idleTimeoutMs } : {}),
       phase: "prefetch",
@@ -1802,6 +1983,109 @@ function recordEmptyCompletionRetry(
 }
 
 /**
+ * Keeps the short-term stall streak for this request's binding key in step with
+ * how the published stream actually ended.
+ *
+ * Only published streams count. A pre-publication failure already gets an
+ * in-request replacement attempt and nothing reached the client, so counting it
+ * would arm the failover for a fault the pipeline healed on its own.
+ * A client-driven cancel says nothing about upstream health and is ignored. This
+ * request's own deadline is different: when it fires on an upstream that had
+ * already gone quiet, it is the same wedged-conversation signature the idle
+ * watchdog reports, and it is the only terminal available whenever the deadline
+ * is the shorter of the two. A deadline that lands while frames are still
+ * flowing is a long stream, not a stalled one.
+ *
+ * Stall *recording* stays out of the non-stream lane: `runCollectAttempt` emits
+ * its terminal before deciding whether to retry, so the same `upstream_error`
+ * covers both a healed attempt and a committed 500 and cannot be counted
+ * honestly. Its successes still clear the streak, through `clearAffinityStall`.
+ *
+ * A terminal the provider caused itself counts as health, not as a stall:
+ * `localPersistence` marks a stream that ended because storing reasoning or the
+ * lineage row failed, which happens only after a witnessed upstream answer, so
+ * it retires the streak the same way a completion does.
+ */
+/**
+ * Retires the streak on health evidence `recordAffinityTerminal` cannot see: a
+ * non-stream completion that is actually being returned to the client.
+ *
+ * The quarantine applies to both lanes, so without this a key that reached the
+ * threshold would keep re-quarantining every non-stream request — minting a new
+ * conversation each time — until the window elapsed, even though the account it
+ * moved to answers fine.
+ *
+ * A healthy answer only retires the streak when storage agrees: see
+ * `LoopState.lineageStallRow`.
+ */
+function clearAffinityStall(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  accountId: string,
+  conversationId: string,
+): void {
+  const key = affinityStallKey(options);
+  if (options.config.session_affinity_stall_failover_threshold <= 0 || key === undefined) return;
+  const row = state.lineageStallRow;
+  // Anything other than the row's own cell answering leaves the row unproven.
+  if (row !== undefined && (row.accountId !== accountId || row.conversationId !== conversationId))
+    return;
+  (options.affinityStalls ?? affinityStallTracker).clear(key.keyHash);
+}
+
+function recordAffinityTerminal(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  accountId: string,
+  conversationId: string,
+  report: StreamTerminalReport,
+): void {
+  const key = affinityStallKey(options);
+  if (options.config.session_affinity_stall_failover_threshold <= 0 || key === undefined) return;
+  // A provider-local write failing says nothing about the account: the capture
+  // only runs after a witnessed, fully validated upstream answer, and no other
+  // account can repair a local keyring or database fault. So this terminal is
+  // treated as the completion it really is — counting it would quarantine a
+  // healthy cell, and merely skipping the count would leave an already-armed
+  // streak in place, re-binding every following request for a fault failover
+  // cannot fix.
+  if (report.localPersistence) {
+    clearAffinityStall(options, state, accountId, conversationId);
+    return;
+  }
+  const tracker = options.affinityStalls ?? affinityStallTracker;
+  const keyHash = key.keyHash;
+  const provenance = report.provenance;
+  if (provenance === "normal_complete") {
+    clearAffinityStall(options, state, accountId, conversationId);
+    return;
+  }
+  if (provenance === "external_abort") {
+    if (!report.requestDeadline || !report.upstreamQuiet) return;
+  } else if (provenance !== "idle_timeout" && provenance !== "upstream_error") return;
+  const stall = tracker.record(
+    keyHash,
+    Date.now(),
+    options.config.session_affinity_stall_window_ms,
+    options.config.session_affinity_max_entries,
+    accountId,
+  );
+  auditLog("warn", "session_affinity_stall_recorded", {
+    request_id: options.requestId,
+    protocol: options.body.protocol,
+    model: options.model,
+    affinity_source: key.source,
+    affinity_hash: auditHash(keyHash),
+    terminal_provenance: provenance,
+    stall_count: stall.count,
+    stall_span_ms: Math.max(0, stall.lastAt - stall.firstAt),
+    stall_window_ms: options.config.session_affinity_stall_window_ms,
+    stall_threshold: options.config.session_affinity_stall_failover_threshold,
+    failover_armed: stall.count >= options.config.session_affinity_stall_failover_threshold,
+  });
+}
+
+/**
  * Stream attempt: upstream acceptance commits the streaming boundary.
  */
 async function runStreamAttempt(
@@ -1828,6 +2112,8 @@ async function runStreamAttempt(
     ...captureOptions,
     releaseAccount,
     abortUpstream: context.abortUpstream,
+    onTerminal: (report: StreamTerminalReport) =>
+      recordAffinityTerminal(options, context.state, account.id, conversationId, report),
   };
   const prepared = prepareCanonicalStream(streamResult, signal);
   const prefetch = await prefetchStreamStart(
@@ -1909,6 +2195,9 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
   if (shouldRetryEmptyCompletion(options, state, telemetry)) {
     return recordEmptyCompletionRetry(context, telemetry);
   }
+  // This completion is the answer, so the cell that served it is demonstrably
+  // healthy.
+  clearAffinityStall(options, state, account.id, conversationId);
   return {
     kind: "result",
     leaseTransferred: false,
