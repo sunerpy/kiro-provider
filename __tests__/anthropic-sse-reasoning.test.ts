@@ -761,6 +761,22 @@ describe("Anthropic unsigned thinking parity (B22)", () => {
     expect(frames.map((frame) => frame.type).slice(-2)).toEqual(["message_delta", "message_stop"]);
   });
 
+  test("an explicit empty thinking marker with a signature remains replayable", async () => {
+    const frames = await adapt([
+      reasoning(""),
+      signature("sig-empty"),
+      tool(0, "tool-empty", "read", '{"path":"a"}'),
+      completed("tool_calls"),
+    ]);
+
+    const blocks = assertLegalBlockSequence(frames);
+    expect(blocks).toEqual([
+      { index: 0, type: "thinking", deltas: ["signature_delta"] },
+      { index: 1, type: "tool_use", deltas: ["input_json_delta"] },
+    ]);
+    expect(frames.map((frame) => frame.type).slice(-2)).toEqual(["message_delta", "message_stop"]);
+  });
+
   test("a signature without any thinking block fails instead of completing silently", async () => {
     const frames = await adapt([signature("orphan"), text("answer"), completed()]);
 
