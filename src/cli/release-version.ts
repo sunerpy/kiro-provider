@@ -31,22 +31,52 @@ export function parseSemanticVersion(value: string): SemanticVersion | undefined
   const match = VERSION_PATTERN.exec(value.trim().replace(/^v/, ""));
   if (!match) return undefined;
   const [, major = "0", minor = "0", patch = "0", prerelease] = match;
+  const parsed = [major, minor, patch].map(safeComponent);
+  const [safeMajor, safeMinor, safePatch] = parsed;
+  if (safeMajor === undefined || safeMinor === undefined || safePatch === undefined) {
+    return undefined;
+  }
   return {
-    major: Number(major),
-    minor: Number(minor),
-    patch: Number(patch),
+    major: safeMajor,
+    minor: safeMinor,
+    patch: safePatch,
     prerelease: prerelease === undefined ? [] : prerelease.split("."),
   };
+}
+
+/**
+ * Rejects a numeric component that a `number` cannot hold exactly. Beyond
+ * `Number.MAX_SAFE_INTEGER` two distinct versions round to the same value (and
+ * enough digits collapse to `Infinity`), which would report them as equal. This
+ * project cannot have released such a version, so it is not a version.
+ */
+function safeComponent(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function compareNumbers(left: number, right: number): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/**
+ * Compares digit strings by value without going through `number`, so long
+ * prerelease counters stay ordered instead of colliding at the float precision
+ * limit.
+ */
+function compareDigitStrings(left: string, right: string): number {
+  const trimmedLeft = left.replace(/^0+(?=\d)/, "");
+  const trimmedRight = right.replace(/^0+(?=\d)/, "");
+  if (trimmedLeft.length !== trimmedRight.length) {
+    return trimmedLeft.length < trimmedRight.length ? -1 : 1;
+  }
+  return trimmedLeft < trimmedRight ? -1 : trimmedLeft > trimmedRight ? 1 : 0;
+}
+
 function comparePrereleaseIdentifier(left: string, right: string): number {
   const leftNumeric = /^\d+$/.test(left);
   const rightNumeric = /^\d+$/.test(right);
-  if (leftNumeric && rightNumeric) return compareNumbers(Number(left), Number(right));
+  if (leftNumeric && rightNumeric) return compareDigitStrings(left, right);
   // Semver orders numeric identifiers below alphanumeric ones.
   if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
   return left < right ? -1 : left > right ? 1 : 0;

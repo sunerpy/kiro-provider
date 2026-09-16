@@ -5,9 +5,11 @@ import {
   formatSelfUpdateResult,
   formatUpdateCheck,
   formatVersion,
+  redactProxyUrl,
   resolveUpdateProxyUrl,
   runSelfUpdate,
   type SelfUpdateResult,
+  shouldParkOldImage,
 } from "../src/cli/self-update.js";
 
 const LATEST_URL = "https://api.github.com/repos/sunerpy/kiro-provider/releases/latest";
@@ -108,6 +110,58 @@ describe("checkForUpdate", () => {
     expect(calls[0]?.init?.proxy).toBe("http://127.0.0.1:7890");
   });
 
+  test("resolves the documented environment proxy fallback itself", async () => {
+    const fromEnv = stubFetch({ [LATEST_URL]: { body: releaseBody("v3.4.0") } });
+    await checkForUpdate({
+      currentVersion: "3.3.1",
+      fetch: fromEnv.fetch,
+      env: { KIRO_PROVIDER_PROXY_URL: "http://env:2", HTTPS_PROXY: "http://shell:3" },
+    });
+    expect(fromEnv.calls[0]?.init?.proxy).toBe("http://env:2");
+
+    const shell = stubFetch({ [LATEST_URL]: { body: releaseBody("v3.4.0") } });
+    await checkForUpdate({
+      currentVersion: "3.3.1",
+      fetch: shell.fetch,
+      env: { HTTP_PROXY: "http://shell:5" },
+    });
+    expect(shell.calls[0]?.init?.proxy).toBe("http://shell:5");
+
+    // An explicitly empty --proxy suppresses the environment fallback rather
+    // than falling through to it; Bun's own HTTPS_PROXY handling is separate.
+    const direct = stubFetch({ [LATEST_URL]: { body: releaseBody("v3.4.0") } });
+    await checkForUpdate({
+      currentVersion: "3.3.1",
+      proxyUrl: "",
+      fetch: direct.fetch,
+      env: { KIRO_PROVIDER_PROXY_URL: "http://env:2" },
+    });
+    expect(direct.calls[0]?.init?.proxy).toBeUndefined();
+  });
+
+  test("refuses release metadata that declares or streams more than the cap", async () => {
+    const declared = stubFetch({
+      [LATEST_URL]: { body: releaseBody("v3.4.0"), headers: { "content-length": "9999999" } },
+    });
+    await expect(
+      checkForUpdate({ currentVersion: "3.3.1", fetch: declared.fetch, env: {} }),
+    ).rejects.toThrow("Refusing to read 9999999 bytes of the latest release");
+
+    // No content-length at all: the running total is what has to stop the read.
+    const chunk = new Uint8Array(64 * 1024);
+    const endless: FetchLike = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(chunk);
+          },
+        }),
+      );
+    await expect(
+      checkForUpdate({ currentVersion: "3.3.1", fetch: endless, env: {} }),
+    ).rejects.toThrow("exceeded 2097152 bytes");
+  });
+
   test("rejects a pinned value that is not a release version", async () => {
     const { fetch: fetchImpl, calls } = stubFetch({});
     await expect(
@@ -202,6 +256,83 @@ describe("resolveUpdateProxyUrl", () => {
     expect(() => resolveUpdateProxyUrl("socks5://127.0.0.1:1080", {})).toThrow(
       "Unsupported proxy protocol",
     );
+  });
+
+  test("treats an explicitly empty flag as no proxy, not a fallback", () => {
+    expect(
+      resolveUpdateProxyUrl("", {
+        KIRO_PROVIDER_PROXY_URL: "http://env:2",
+        HTTPS_PROXY: "http://shell:3",
+      }),
+    ).toBeUndefined();
+  });
+
+  test("never echoes proxy credentials when rejecting a malformed value", () => {
+    for (const candidate of [
+      "http://proxy-user:proxy-secret@",
+      "http://proxy-user:pw@host:99999999999/path@tail",
+      "://proxy-user:proxy-secret@host",
+    ]) {
+      let message = "";
+      try {
+        resolveUpdateProxyUrl(candidate, {});
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+      expect(message).toContain("Invalid proxy URL");
+      expect(message).not.toContain("proxy-secret");
+      expect(message).not.toContain(":pw@");
+    }
+
+    let fromEnv = "";
+    try {
+      resolveUpdateProxyUrl(undefined, { HTTPS_PROXY: "http://shell-user:shell-secret@" });
+    } catch (error) {
+      fromEnv = error instanceof Error ? error.message : String(error);
+    }
+    expect(fromEnv).toContain("***@");
+    expect(fromEnv).not.toContain("shell-secret");
+
+    // A parseable proxy on an unsupported scheme reports the scheme only.
+    let unsupported = "";
+    try {
+      resolveUpdateProxyUrl("socks5://proxy-user:proxy-secret@127.0.0.1:1080", {});
+    } catch (error) {
+      unsupported = error instanceof Error ? error.message : String(error);
+    }
+    expect(unsupported).toBe("Unsupported proxy protocol for the update download: socks5:");
+  });
+});
+
+describe("redactProxyUrl", () => {
+  test.each([
+    { value: "http://user:secret@proxy:8080", expected: "http://***@proxy:8080" },
+    { value: "http://user@proxy:8080/path", expected: "http://***@proxy:8080/path" },
+    { value: "user:secret@proxy:8080", expected: "***@proxy:8080" },
+    { value: "http://proxy:8080", expected: "http://proxy:8080" },
+    // An `@` past the authority is part of the path and carries no credential.
+    { value: "http://proxy:8080/a@b", expected: "http://proxy:8080/a@b" },
+    { value: "", expected: "" },
+  ])("redacts $value", ({ value, expected }) => {
+    expect(redactProxyUrl(value)).toBe(expected);
+  });
+});
+
+describe("shouldParkOldImage", () => {
+  test("parks the old image only for a locked target on Windows", () => {
+    for (const code of ["EACCES", "EBUSY", "EEXIST", "EPERM", "ETXTBSY", "UNKNOWN"]) {
+      expect(shouldParkOldImage(Object.assign(new Error(code), { code }), "win32")).toBe(true);
+      // POSIX renames over a running image, so a failure there is a real error.
+      expect(shouldParkOldImage(Object.assign(new Error(code), { code }), "linux")).toBe(false);
+    }
+  });
+
+  test("refuses to park for an unrelated failure", () => {
+    expect(
+      shouldParkOldImage(Object.assign(new Error("EISDIR"), { code: "EISDIR" }), "win32"),
+    ).toBe(false);
+    expect(shouldParkOldImage(new Error("no code"), "win32")).toBe(false);
+    expect(shouldParkOldImage(undefined, "win32")).toBe(false);
   });
 });
 
@@ -324,6 +455,7 @@ describe("output formatting", () => {
         currentVersion: "3.3.1",
         latestVersion: "3.3.1",
         releaseUrl: RELEASE_URL,
+        localIsNewer: false,
       } satisfies SelfUpdateResult,
       expected: "kiro-provider 3.3.1 is already the latest release.",
     },
@@ -385,5 +517,24 @@ describe("output formatting", () => {
     );
     expect(lines.at(-1)).toContain("systemctl --user restart kiro-provider.service");
     expect(lines.join("\n")).toContain(`Verified sha256: ${"c".repeat(64)}`);
+  });
+
+  test("does not call a locally newer build the latest release", () => {
+    const result: SelfUpdateResult = {
+      status: "up-to-date",
+      currentVersion: "3.5.0",
+      latestVersion: "3.4.0",
+      releaseUrl: RELEASE_URL,
+      localIsNewer: true,
+    };
+    expect(formatSelfUpdateResult(result, false)).toEqual([
+      "kiro-provider 3.5.0 is newer than the latest release 3.4.0. Use --force to reinstall it, or --tag to pin a release.",
+    ]);
+    expect(JSON.parse(formatSelfUpdateResult(result, true).join("\n"))).toMatchObject({
+      status: "up-to-date",
+      version: "3.5.0",
+      latest_version: "3.4.0",
+      local_is_newer: true,
+    });
   });
 });

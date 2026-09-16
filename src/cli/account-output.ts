@@ -144,7 +144,23 @@ function usageRatio(account: StoredAccount): number | undefined {
   return (account.usedCount ?? 0) / limit;
 }
 
+/**
+ * A non-finite numeric key would break the comparator: `NaN` compares equal to
+ * every value, which makes the ordering intransitive and the result dependent on
+ * row order. Upstream quota JSON can carry `1e9999`, which parses to `Infinity`,
+ * so such a key is treated as "no value" and sorts last like any other gap.
+ */
 function sortKey(
+  account: StoredAccount,
+  field: AccountSortField,
+  policy: OveragePolicy,
+  now: number,
+): SortKey {
+  const key = rawSortKey(account, field, policy, now);
+  return typeof key === "number" && !Number.isFinite(key) ? undefined : key;
+}
+
+function rawSortKey(
   account: StoredAccount,
   field: AccountSortField,
   policy: OveragePolicy,

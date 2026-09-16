@@ -164,6 +164,31 @@ describe("sortAccounts", () => {
       }
     }
   });
+
+  test("treats a non-finite quota as no value instead of poisoning the order", () => {
+    // Upstream quota JSON can carry `1e9999`, which parses to Infinity, and
+    // Infinity/Infinity is NaN. A NaN key compares equal to everything, which
+    // used to make the comparator intransitive and the result order-dependent.
+    const nonFinite = [
+      stored("a", { usedCount: 2, limitCount: 1 }),
+      stored("b", { usedCount: Number.POSITIVE_INFINITY, limitCount: Number.POSITIVE_INFINITY }),
+      stored("c", { usedCount: 1, limitCount: 1 }),
+    ];
+    expect(sortedIds(nonFinite, "usage")).toEqual(["c", "a", "b"]);
+    expect(sortedIds(nonFinite, "usage", "desc")).toEqual(["a", "c", "b"]);
+    // The result must not depend on the order rows arrive in.
+    expect(sortedIds([...nonFinite].reverse(), "usage")).toEqual(["c", "a", "b"]);
+
+    const infiniteCounters = [
+      stored("finite", { overageCount: 3, generation: 3 }),
+      stored("infinite", {
+        overageCount: Number.POSITIVE_INFINITY,
+        generation: Number.POSITIVE_INFINITY,
+      }),
+    ];
+    expect(sortedIds(infiniteCounters, "overage", "desc")).toEqual(["finite", "infinite"]);
+    expect(sortedIds(infiniteCounters, "generation", "desc")).toEqual(["finite", "infinite"]);
+  });
 });
 
 describe("formatAccountList sorting", () => {

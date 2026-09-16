@@ -96,8 +96,12 @@ kiro-provider self-update --tag 3.3.1      # 指定版本，也可用于回退
 
 npm 安装请改用包管理器升级（`bun add -g @sunerpy/kiro-provider@latest`），
 `self-update` 会拒绝并给出提示。两个命令都支持 `--proxy <url>`，否则依次读取
-`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`。它们都不加载网关配置，因此
-`config.json` 有问题也不会阻塞升级。以服务方式部署时，请在更新后重启服务。
+`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`；`--proxy ""` 表示不选择任何
+代理，而不是继续回退到这些变量。Bun 的 `fetch` 自身也会读取
+`HTTPS_PROXY`/`HTTP_PROXY`，需要完全直连时请取消这两个变量。替换二进制只需要安装
+目录的写权限，不需要对二进制本身可写，因此刻意设为只读的安装同样可以升级。它们都不
+加载网关配置，因此 `config.json` 有问题也不会阻塞升级。以服务方式部署时，请在更新后
+重启服务。
 
 ## 快速开始
 

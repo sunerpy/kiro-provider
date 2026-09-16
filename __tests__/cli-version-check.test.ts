@@ -95,6 +95,23 @@ describe("version flags", () => {
     expect(parseCliArgs(["--version", "--help"])).toEqual({ kind: "help" });
   });
 
+  test("keeps an empty --proxy instead of silently dropping it", () => {
+    expect(parseCliArgs(["-V", "--check", "--proxy", ""])).toEqual({
+      kind: "version",
+      check: true,
+      json: false,
+      proxy: "",
+    });
+    expect(parseCliArgs(["self-update", "--proxy", ""])).toEqual({
+      kind: "self-update",
+      check: false,
+      json: false,
+      yes: false,
+      force: false,
+      proxy: "",
+    });
+  });
+
   test("rejects unknown version flags", () => {
     expect(() => parseCliArgs(["--version", "--latest"])).toThrow("--latest");
   });
@@ -132,6 +149,20 @@ describe("version flags", () => {
     expect(harness.checks).toEqual([
       { currentVersion: CLI_VERSION, proxyUrl: "http://127.0.0.1:7890" },
     ]);
+  });
+
+  test("--check leaves the documented environment fallback to the checker", async () => {
+    const harness = createHarness();
+    expect(await main(["-V", "--check"], harness.deps)).toBe(0);
+    // No proxyUrl key at all, so checkForUpdate applies KIRO_PROVIDER_PROXY_URL
+    // and the shell variables exactly as the documentation promises.
+    expect(harness.checks).toEqual([{ currentVersion: CLI_VERSION }]);
+  });
+
+  test("--check forwards an explicitly empty --proxy so it suppresses the fallback", async () => {
+    const harness = createHarness();
+    expect(await main(["-V", "--check", "--proxy", ""], harness.deps)).toBe(0);
+    expect(harness.checks).toEqual([{ currentVersion: CLI_VERSION, proxyUrl: "" }]);
   });
 
   test("--check --json emits one JSON document", async () => {
@@ -246,6 +277,20 @@ describe("self-update", () => {
     expect(harness.stdout[0]).toBe(`Update available: ${CLI_VERSION} → 9.9.9`);
   });
 
+  test("keeps an explicitly empty --proxy so it suppresses the fallback", async () => {
+    const harness = createHarness({
+      update: async (options) => ({
+        status: "up-to-date",
+        currentVersion: options.currentVersion,
+        latestVersion: options.currentVersion,
+        releaseUrl: RELEASE_URL,
+        localIsNewer: false,
+      }),
+    });
+    expect(await main(["self-update", "--proxy", ""], harness.deps)).toBe(0);
+    expect(harness.updates[0]?.proxyUrl).toBe("");
+  });
+
   test("reports an up-to-date install as success", async () => {
     const harness = createHarness({
       update: async (options) => ({
@@ -253,6 +298,7 @@ describe("self-update", () => {
         currentVersion: options.currentVersion,
         latestVersion: options.currentVersion,
         releaseUrl: RELEASE_URL,
+        localIsNewer: false,
       }),
     });
     expect(await main(["self-update"], harness.deps)).toBe(0);
@@ -289,6 +335,7 @@ describe("self-update", () => {
           currentVersion: options.currentVersion,
           latestVersion: options.currentVersion,
           releaseUrl: RELEASE_URL,
+          localIsNewer: false,
         };
       },
     };

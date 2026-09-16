@@ -109,9 +109,12 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
         for (const line of formatVersion(CLI_VERSION, command.json)) dependencies.stdout(line);
         return 0;
       }
+      // `checkForUpdate` resolves the documented KIRO_PROVIDER_PROXY_URL /
+      // HTTPS_PROXY fallback itself; an explicitly empty --proxy stays empty so
+      // it suppresses that fallback instead of being dropped as falsy.
       const check = await dependencies.checkForUpdate({
         currentVersion: CLI_VERSION,
-        ...(command.proxy ? { proxyUrl: command.proxy } : {}),
+        ...(command.proxy === undefined ? {} : { proxyUrl: command.proxy }),
       });
       for (const line of formatUpdateCheck(check, command.json)) dependencies.stdout(line);
       return 0;
@@ -124,7 +127,7 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
           force: command.force,
           assumeYes: command.yes,
           ...(command.tag ? { tag: command.tag } : {}),
-          ...(command.proxy ? { proxyUrl: command.proxy } : {}),
+          ...(command.proxy === undefined ? {} : { proxyUrl: command.proxy }),
         },
         { confirm: dependencies.confirm },
       );
