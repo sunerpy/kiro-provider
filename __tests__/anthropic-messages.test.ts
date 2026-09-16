@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { type Config, ConfigSchema } from "../src/config/schema.js";
 import type {
   PipelineAccountManager,
+  PipelineSdkClient,
   PipelineTokenRefresher,
   RunChatCompletionOptions,
 } from "../src/core/pipeline.js";
@@ -20,6 +21,7 @@ import {
   handleMessageTokenCount,
   type MessagesDependencies,
 } from "../src/server/routes/messages.js";
+import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 
 const API_KEY = "sk-anthropic-test";
 const MODEL = "claude-sonnet-5";
@@ -1573,6 +1575,66 @@ describe("POST /v1/messages", () => {
 });
 
 describe("Claude Code HTTP surface", () => {
+  test("preserves signature-only thinking through a non-stream subagent tool turn", async () => {
+    const client: PipelineSdkClient = {
+      async send() {
+        return makeSdkResponse([
+          { reasoningContentEvent: { signature: "native-signature" } },
+          {
+            toolUseEvent: {
+              name: "first_task",
+              toolUseId: "tool-a",
+              input: '{"task":"a"}',
+              stop: true,
+            },
+          },
+          {
+            toolUseEvent: {
+              name: "second_task",
+              toolUseId: "tool-b",
+              input: '{"task":"b"}',
+              stop: true,
+            },
+          },
+        ]);
+      },
+    };
+    const app = createApp(config(), {
+      accountManager: new FakeAccountManager(),
+      tokenRefresher: new FakeTokenRefresher(),
+      makeClient: () => client,
+    });
+
+    const response = await app(
+      request(
+        validRequest({
+          tools: [
+            {
+              name: "first_task",
+              description: "Run the first subtask",
+              input_schema: { type: "object" },
+            },
+            {
+              name: "second_task",
+              description: "Run the second subtask",
+              input_schema: { type: "object" },
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      content: [
+        { type: "thinking", thinking: "", signature: "native-signature" },
+        { type: "tool_use", id: "tool-a", name: "first_task", input: { task: "a" } },
+        { type: "tool_use", id: "tool-b", name: "second_task", input: { task: "b" } },
+      ],
+      stop_reason: "tool_use",
+    });
+  });
+
   test("uses an Anthropic auth envelope for /v1/messages", async () => {
     const app = createApp(config(), {
       accountManager: new FakeAccountManager(),

@@ -143,11 +143,15 @@ function parseReasoning(value: unknown): CanonicalOutputReasoning | undefined {
   ) {
     return undefined;
   }
-  for (const key of ["text", "signature", "redactedContent", "encryptedContent"] as const) {
+  if (value.text !== undefined && typeof value.text !== "string") return undefined;
+  for (const key of ["signature", "redactedContent", "encryptedContent"] as const) {
     if (value[key] !== undefined && !isNonEmptyString(value[key])) {
       return undefined;
     }
   }
+  // The transformer uses text:"" to preserve Kiro's signature-only thinking
+  // marker. It is complete only when paired with the native signature.
+  if (value.text === "" && !isNonEmptyString(value.signature)) return undefined;
   return {
     ...(typeof value.text === "string" ? { text: value.text } : {}),
     ...(typeof value.signature === "string" ? { signature: value.signature } : {}),
@@ -257,6 +261,13 @@ export function parseCanonicalOutputEvent(value: unknown): CanonicalOutputEvent 
         createdAt: value.createdAt,
       };
     case "reasoning_delta":
+      if (
+        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "text"])) ||
+        typeof value.text !== "string"
+      ) {
+        return undefined;
+      }
+      return { ...base, type: "reasoning_delta", text: value.text };
     case "text_delta":
       if (
         !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "text"])) ||
@@ -264,7 +275,7 @@ export function parseCanonicalOutputEvent(value: unknown): CanonicalOutputEvent 
       ) {
         return undefined;
       }
-      return { ...base, type: value.type, text: value.text };
+      return { ...base, type: "text_delta", text: value.text };
     case "reasoning_signature":
       if (
         !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "signature"])) ||

@@ -61,6 +61,9 @@ export async function collectSdkResponse(
   let createdAt: number | undefined;
   let text = "";
   let reasoningText = "";
+  // An empty Anthropic reasoning delta is deliberate when Kiro returns a
+  // replayable signature without visible thinking; preserve its presence.
+  let reasoningTextSeen = false;
   let signature: string | undefined;
   let redactedContent: string | undefined;
   let encryptedContent: string | undefined;
@@ -82,6 +85,7 @@ export async function collectSdkResponse(
           createdAt = event.createdAt;
           break;
         case "reasoning_delta":
+          reasoningTextSeen = true;
           reasoningText += event.text;
           break;
         case "reasoning_signature":
@@ -139,7 +143,7 @@ export async function collectSdkResponse(
   }
 
   const reasoning: CanonicalOutputReasoning = {
-    ...(reasoningText ? { text: reasoningText } : {}),
+    ...(reasoningTextSeen ? { text: reasoningText } : {}),
     ...(signature !== undefined ? { signature } : {}),
     ...(redactedContent !== undefined ? { redactedContent } : {}),
     ...(encryptedContent !== undefined ? { encryptedContent } : {}),
