@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.2](https://github.com/sunerpy/kiro-provider/compare/v3.4.1...v3.4.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **anthropic:** 保留仅含签名的空思考块 ([7a6aaa3](https://github.com/sunerpy/kiro-provider/commit/7a6aaa37936701c8ddfdec3f97bc7aeea33ea262))
+
 ## [3.4.1](https://github.com/sunerpy/kiro-provider/compare/v3.4.0...v3.4.1) (2026-09-16)
 
 
