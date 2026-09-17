@@ -213,7 +213,7 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
     expect(prepared.systemPrompt).toBe(" \t");
   });
 
-  test("v3-auto uses the KAS forced-role fallback when native context is unavailable", () => {
+  test("v3-auto projects the leading instruction without fabricating assistant history", () => {
     const prepared = transformToSdkRequest(
       request([message("system", "SYSTEM", "messages.0"), message("user", "hello", "messages.1")], {
         projectionMode: "v3-auto",
@@ -224,16 +224,12 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
 
     expect(prepared.runtimeProtocol).toBe("kiro-runtime");
     expect(prepared.systemPrompt).toBeUndefined();
-    expect(
-      prepared.conversationState.history?.map(
-        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
-      ),
-    ).toEqual(["SYSTEM", "I will follow these instructions."]);
-    expect(currentUserInput(prepared).content).toBe("hello");
+    expect(prepared.conversationState.history).toBeUndefined();
+    expect(currentUserInput(prepared).content).toBe("SYSTEM\n\nhello");
     expect(prepared.diagnostics.projection).toMatchObject({
       projectionMode: "v3-auto",
-      instructionChannel: "kiro-cli-forced-role",
-      prefixAction: "kiro_cli_forced_role",
+      instructionChannel: "legacy-user-prefix",
+      prefixAction: "prepend_first_user",
     });
   });
 
@@ -270,9 +266,14 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
       auth,
     );
 
-    expect(currentUserInput(prepared).content).toBe("Now follow the instruction.");
+    expect(currentUserInput(prepared).content).toBe("RECONCILE");
+    expect(
+      prepared.conversationState.history?.map(
+        (entry) => entry.userInputMessage?.content ?? entry.assistantResponseMessage?.content,
+      ),
+    ).toEqual(["question", "answer"]);
     expect(prepared.diagnostics.projection).toMatchObject({
-      instructionChannel: "kiro-cli-forced-role",
+      instructionChannel: "legacy-user-prefix",
       trailingInstructionCount: 1,
       suffixAction: "synthetic_user",
     });

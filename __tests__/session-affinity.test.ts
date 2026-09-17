@@ -135,6 +135,32 @@ describe("standard-field session affinity", () => {
     expect(first?.keyHash).not.toBe(other?.keyHash);
   });
 
+  test("keeps Claude branches stable while separating parent, siblings and tenants", () => {
+    const adapted = adaptAnthropicMessagesRequest({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "synthetic first turn" }],
+    });
+    if (!adapted.ok) throw new TypeError("fixture must adapt");
+    const source = adapted.value.source;
+    const branch = (session: string, agent?: string, tenant = TENANT) =>
+      anthropicSessionAffinity(source, tenant, "explicit-only", session, agent);
+    const child = branch("fixture-family", "fixture-child-a");
+    expect(child?.source).toBe("anthropic.header.x-claude-code-agent-id");
+    expect(child).toEqual(branch("fixture-family", "fixture-child-a"));
+    expect(child?.keyHash).not.toBe(branch("fixture-family")?.keyHash);
+    expect(child?.keyHash).not.toBe(branch("fixture-family", "fixture-child-b")?.keyHash);
+    expect(child?.keyHash).not.toBe(branch("other-family", "fixture-child-a")?.keyHash);
+    expect(child?.keyHash).not.toBe(
+      branch("fixture-family", "fixture-child-a", "other-tenant")?.keyHash,
+    );
+    expect(
+      anthropicSessionAffinity(source, undefined, "explicit-only", "fixture-family", "child"),
+    ).toBeUndefined();
+    expect(
+      anthropicSessionAffinity(source, TENANT, "explicit-only", undefined, "child"),
+    ).toBeUndefined();
+  });
+
   test("keeps Chat fallback affinity stable only in legacy mode", () => {
     const first = ChatCompletionRequestSchema.parse({
       model: "gpt-5.6-sol",

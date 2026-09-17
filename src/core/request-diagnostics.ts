@@ -69,6 +69,9 @@ export class RequestDiagnostics {
   #firstRawAt: number | undefined;
   #lastRawAt: number | undefined;
   #firstProjectedAt: number | undefined;
+  #accountReadyAt: number | undefined;
+  #attemptStartedAt: number | undefined;
+  #attemptFrameSeen = false;
 
   constructor(
     readonly requestId: string,
@@ -151,17 +154,53 @@ export class RequestDiagnostics {
     this.#phase = value;
   }
 
+  async waitForQueue<T>(
+    queue: "session" | "account" | "capacity",
+    acquire: () => Promise<T>,
+    isAcquired: (value: T) => boolean = () => true,
+  ): Promise<T> {
+    this.phase(queue === "session" ? "session_queue" : "account_queue");
+    const started = performance.now();
+    let outcome: "acquired" | "unavailable" | "aborted" = "aborted";
+    try {
+      // Invoke synchronously: reservation must precede the first yield after
+      // account selection so concurrent selectors observe the updated depth.
+      const value = await acquire();
+      const acquired = isAcquired(value);
+      outcome = acquired ? "acquired" : "unavailable";
+      if (queue === "account" && acquired) this.#accountReadyAt = performance.now();
+      return value;
+    } finally {
+      auditLog("info", "request_queue_wait", {
+        request_id: this.requestId,
+        queue,
+        duration_ms: Math.max(0, Math.round(performance.now() - started)),
+        outcome,
+      });
+    }
+  }
+
   dispatch(attempt: number): void {
     this.#attempt = attempt;
     this.#phase = "upstream_headers";
     this.#upstreamRequestId = undefined;
     this.#upstreamRetryAfterMs = undefined;
+    this.#attemptStartedAt = performance.now();
+    this.#attemptFrameSeen = false;
     auditLog("info", "upstream_attempt_started", {
       request_id: this.requestId,
       attempt,
       attempt_id: this.attemptId(),
       elapsed_ms: this.elapsed(),
+      ...(this.#accountReadyAt === undefined
+        ? {}
+        : {
+            preparation_ms: Math.max(0, Math.round(this.#attemptStartedAt - this.#accountReadyAt)),
+          }),
     });
+    // A retry within the same lease includes upstream time/backoff, not just
+    // preparation. Report this interval only for the first dispatch per lease.
+    this.#accountReadyAt = undefined;
   }
 
   headers(status: number, headers: Readonly<Record<string, string>>): void {
@@ -178,6 +217,9 @@ export class RequestDiagnostics {
       upstream_status: status,
       upstream_request_id: this.#upstreamRequestId,
       elapsed_ms: this.elapsed(),
+      ...(this.#attemptStartedAt === undefined
+        ? {}
+        : { wait_ms: Math.max(0, Math.round(performance.now() - this.#attemptStartedAt)) }),
     });
   }
 
@@ -205,6 +247,14 @@ export class RequestDiagnostics {
     this.#rawFrames += 1;
     this.#lastRawAt = this.elapsed();
     this.#firstRawAt ??= this.#lastRawAt;
+    if (!this.#attemptFrameSeen && this.#attemptStartedAt !== undefined) {
+      this.#attemptFrameSeen = true;
+      auditLog("info", "upstream_first_frame", {
+        request_id: this.requestId,
+        attempt_id: this.attemptId(),
+        wait_ms: Math.max(0, Math.round(performance.now() - this.#attemptStartedAt)),
+      });
+    }
   }
 
   projectedFrame(): void {

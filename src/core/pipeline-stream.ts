@@ -654,6 +654,10 @@ export function createPipelineStreamResponse(
         }
       },
       cancel(reason) {
+        // Web Streams closes the stream before invoking its underlying cancel
+        // callback. Terminal attribution still needs to run, but the controller
+        // is no longer writable even when we already observed `completed`.
+        streamController = undefined;
         if (telemetry.completedSeen) {
           beginTerminal("normal-complete");
           return;

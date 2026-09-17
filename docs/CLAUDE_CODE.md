@@ -52,7 +52,7 @@ checkout for tests, or copy/link them after deciding to keep this launcher.
 | ------------------------------------- | ---------------------------------------------------- |
 | Gateway root                          | `http://127.0.0.1:8787` (no `/v1` suffix)            |
 | Claude state                          | Shared native `~/.claude` and `~/.claude.json`       |
-| Model                                 | Opus 5                                               |
+| Model                                 | Opus 5, 1M client context window                     |
 | Reasoning                             | Ultra: `effortLevel: "max"`, `ultracode: true`       |
 | Permission mode                       | Inherit native Claude settings; no launcher override |
 | Away recap                            | Disabled                                             |
@@ -94,18 +94,65 @@ subprocesses.
 
 ## Choose a model
 
-The built-in Claude rows map to `claude-opus-5`, `claude-sonnet-5`, and
-`claude-haiku-4-5`. The built-in Fable row maps to `claude-fable-5-1`, whose
-Kiro wire id is `claude-fable-5.1`. The launcher also adds `gpt-5.6-sol`,
-`gpt-5.6-terra`, and `gpt-5.6-luna` to the picker.
+The built-in Claude rows map to `claude-opus-5[1m]`,
+`claude-sonnet-5[1m]`, and `claude-haiku-4-5`. The built-in Fable row maps
+to `claude-fable-5-1[1m]`, whose Kiro wire id is `claude-fable-5.1`.
+The launcher also adds `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
+`gpt-5.6-luna[1m]` to the picker.
 
 Claude Code's gateway discovery filters out model IDs without `claude` or
 `anthropic`, so the GPT rows must be declared explicitly. Each uses
 `behavesAs: "claude-opus-5"` as the client-side capability template. This
 exposes adaptive thinking and the left/right effort control without duplicating
-each model at every effort level. Claude Code reports a conservative 200K
-context window for these custom rows; it does not enforce Kiro's larger GPT
-limits from this declaration.
+each model at every effort level. The `[1m]` suffix makes Claude Code use
+the advertised 1M context window; Claude strips it before sending the model
+ID. The actual installed client was checked for all six 1M entries. Haiku
+keeps its 200K window. A provider catalog alone does not change the client
+window, and output reserves still reduce the available input budget.
+
+The Kiro overlay also sets `autoCompactWindow: 1000000` so these gateway
+models compact proactively. Claude caps it at the selected model's window
+and reserves space for output and compaction. `--autocompact` and
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` remain per-launch overrides. Native settings
+files and the separate Bedrock overlay are not changed.
+
+Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
+`[1m]` yourself when pinning a custom ID that supports the larger window.
+This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
+
+Run the optional installed-client regression probe from a checkout:
+
+```bash
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude \
+  --thresholds --cases 1m-old-threshold,1m-above
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --tool-loop
+```
+
+It uses a loopback fake API, dummy credentials, and temporary Claude state.
+The probe checks model IDs, effective windows, complete large-input delivery,
+and auto-compaction events without calling a real model. Its output contains
+only metadata and counts; real upstream capacity still needs a separate probe.
+The tool-loop check runs two harmless `Bash` commands (`true`) and compares
+the submitted prefix with the next request's history.
+
+The Kiro overlay disables Claude Code 2.1.270's ephemeral batching and secondary
+reminders with `CLAUDE_CODE_TOASTY_THIMBLE=0` and
+`CLAUDE_CODE_GENTLE_PARASOL=0`. Those reminders disappear from later client
+history. Projecting them into Kiro user text would therefore invalidate
+prefix-bound Fable thinking. These are process-local compatibility settings;
+validate them again with `--tool-loop` when upgrading Claude Code.
+
+The launcher also declares `claude-code-bash-v1` client normalization and sends
+a SHA-256 hash of its working directory. Both are authenticated in provider
+replay records. Claude's Bash tool removes a leading literal `cd` to that same
+directory before storing tool history; the gateway compares that documented
+normal form while still binding the command remainder, every other argument,
+the tool name/ID, tenant, model, and replay owner. The directory itself is not
+sent in the header. Commands changing to another directory, expansions, and
+unrecognized rewrites remain strict. A client running tools in a different
+working directory must supply the corresponding context; the gateway does not
+infer it from prompts.
 
 Claude Code also sends a positive `max_tokens` (64,000 in the validated GPT
 request), while Kiro's GPT stateless schema rejects every tested upstream
@@ -140,6 +187,13 @@ Fable uses the stateless Responses projection because Kiro's native
 `CreateResponse` operation currently rejects it. Stored Responses continue to
 use the provider-owned continuation and replay state rather than the native
 upstream continuation id.
+
+Messages requests with adaptive thinking use Fable's native `omitted` display
+by default. Signed reasoning is still retained and replayed through the opaque
+signature. An explicit `thinking.display: "summarized"` is preserved. Kiro can
+return multiple independently signed summary segments; the gateway rejects
+that unsupported shape rather than concatenating signatures or discarding
+reasoning.
 
 The native Bedrock fallback remains available as a separate process when Kiro
 is unavailable or an AWS-native route is required:

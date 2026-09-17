@@ -82,16 +82,21 @@ if [ "$backend" = kiro ]; then
   base_url=${KIROCLAUDE_BASE_URL:-http://127.0.0.1:8787}
   model=${KIROCLAUDE_MODEL:-opus}
   resolve_effort "${KIROCLAUDE_EFFORT:-ultra}"
-  opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5}
-  sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5}
+  # Claude Code uses a conservative window behind custom gateways unless the
+  # client model explicitly declares [1m]. Claude strips this client-only suffix
+  # before sending the model ID. Custom pins remain exactly as supplied.
+  opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5[1m]}
+  sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5[1m]}
   haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-haiku-4-5}
-  kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-1}
-  sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol}
-  terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra}
-  luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna}
+  kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-1[1m]}
+  sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol[1m]}
+  terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra[1m]}
+  luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna[1m]}
 
   settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
 import json
+import hashlib
+import os
 import shlex
 import sys
 from urllib.parse import urlsplit
@@ -122,6 +127,10 @@ if not all(value.strip() for value in (model, effort, opus, sonnet, haiku, fable
 settings = {
     "apiKeyHelper": shlex.quote(helper),
     "model": model,
+    # Keep proactive compaction enabled for gateway models whose [1m] window
+    # would otherwise use reactive overflow handling. Claude clamps this to
+    # each model's window; --autocompact and the native environment override win.
+    "autoCompactWindow": 1000000,
     "effortLevel": effort,
     "ultracode": ultracode == "true",
     "awaySummaryEnabled": False,
@@ -141,6 +150,10 @@ settings = {
         "CLAUDE_CODE_USE_VERTEX": "0",
         "CLAUDE_CODE_USE_FOUNDRY": "0",
         "CLAUDE_CODE_USE_MANTLE": "0",
+        # These native per-tool reminders disappear from later client history.
+        # Kiro's inline system projection would make that a signed-prefix edit.
+        "CLAUDE_CODE_TOASTY_THIMBLE": "0",
+        "CLAUDE_CODE_GENTLE_PARASOL": "0",
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_AUTH_TOKEN": "",
         "ANTHROPIC_BEDROCK_BASE_URL": "",
@@ -153,7 +166,13 @@ settings = {
         "ANTHROPIC_DEFAULT_OPUS_MODEL": opus,
         "ANTHROPIC_DEFAULT_SONNET_MODEL": sonnet,
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": haiku,
-        "ANTHROPIC_CUSTOM_HEADERS": "X-Kiro-Output-Token-Limit-Mode: advisory",
+        "ANTHROPIC_CUSTOM_HEADERS": "\n".join([
+            "X-Kiro-Output-Token-Limit-Mode: advisory",
+            "X-Kiro-Client-Normalization: claude-code-bash-v1",
+            "X-Kiro-Working-Directory-Hash: " + hashlib.sha256(
+                b"kiro-provider-working-directory-v1\0" + os.getcwd().encode("utf-8")
+            ).hexdigest(),
+        ]),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ENABLE_AWAY_SUMMARY": "0",
     },

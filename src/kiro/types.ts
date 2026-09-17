@@ -153,10 +153,14 @@ export interface RequestProjectionDiagnostics {
     | "none"
     | "kiro-cli-forced-role"
     | "kiro-runtime-system-prompt"
+    | "kiro-runtime-system-prompt+inline-user"
+    | "legacy-replay-prefix+inline-user"
     | "legacy-user-prefix";
   readonly inputMessageCount: number;
   readonly outputMessageCount: number;
   readonly prefixInstructionCount: number;
+  readonly intermediateInstructionCount?: number;
+  readonly legacyPrefixMessages?: number;
   readonly trailingInstructionCount: number;
   readonly prefixAction: InstructionPrefixAction;
   readonly suffixAction: InstructionSuffixAction;

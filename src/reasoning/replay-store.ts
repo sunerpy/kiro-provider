@@ -7,7 +7,16 @@ import {
 } from "node:crypto";
 import type { Config } from "../config/schema.js";
 import { auditHash, auditLog } from "../core/audit-log.js";
-import type { KiroReasoningContent, ResolvedReasoningReplay } from "../protocol/canonical.js";
+import {
+  type InstructionReplayProjection,
+  isInstructionReplayProjection,
+  type KiroReasoningContent,
+  type ResolvedReasoningReplay,
+} from "../protocol/canonical.js";
+import {
+  type ClientNormalization,
+  isClientNormalization,
+} from "../protocol/client-normalization.js";
 import type { AccountsDatabase, ReasoningReplayRecord } from "../storage/accounts-db.js";
 import { loadReasoningReplayKeyring, type ReasoningReplayKeyring } from "./keyring.js";
 import {
@@ -21,6 +30,8 @@ import {
 
 interface StoredEnvelope {
   readonly version: 1;
+  readonly instructionProjection?: InstructionReplayProjection;
+  readonly clientNormalization?: ClientNormalization;
   readonly outputFingerprint: string;
   readonly text?: string;
   readonly signature?: string;
@@ -44,6 +55,8 @@ export interface ReasoningCaptureContext {
   readonly profileArn?: string;
   readonly runtimeProtocol: PortableReplayMintProvenance["runtimeProtocol"];
   readonly upstreamOperation: PortableReplayMintProvenance["upstreamOperation"];
+  readonly instructionProjection?: InstructionReplayProjection;
+  readonly clientNormalization?: ClientNormalization;
 }
 
 export interface ReasoningReplayContext {
@@ -51,6 +64,8 @@ export interface ReasoningReplayContext {
   readonly model: string;
   readonly outputFingerprint: string;
   readonly compatibleOutputFingerprints?: readonly string[];
+  readonly normalizedOutputFingerprint?: string;
+  readonly clientNormalization?: ClientNormalization;
   readonly accountId?: string;
   readonly conversationId?: string;
   readonly now?: number;
@@ -149,7 +164,10 @@ function parseEnvelope(value: string): StoredEnvelope {
     !("version" in parsed) ||
     parsed.version !== 1 ||
     !("outputFingerprint" in parsed) ||
-    typeof parsed.outputFingerprint !== "string"
+    typeof parsed.outputFingerprint !== "string" ||
+    ("instructionProjection" in parsed &&
+      !isInstructionReplayProjection(parsed.instructionProjection)) ||
+    ("clientNormalization" in parsed && !isClientNormalization(parsed.clientNormalization))
   ) {
     throw new TypeError("Invalid reasoning replay envelope");
   }
@@ -166,6 +184,12 @@ function parseEnvelope(value: string): StoredEnvelope {
     ...(text !== undefined ? { text } : {}),
     ...(signature !== undefined ? { signature } : {}),
     ...(redactedContent !== undefined ? { redactedContent } : {}),
+    ...("instructionProjection" in parsed
+      ? { instructionProjection: parsed.instructionProjection as InstructionReplayProjection }
+      : {}),
+    ...("clientNormalization" in parsed
+      ? { clientNormalization: parsed.clientNormalization as ClientNormalization }
+      : {}),
   };
 }
 
@@ -252,6 +276,24 @@ export class ReasoningReplayStore {
     context: ReasoningCaptureContext,
     now: number = Date.now(),
   ): string | undefined {
+    if (
+      context.clientNormalization !== undefined &&
+      !isClientNormalization(context.clientNormalization)
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay normalization is invalid",
+        "invalid_reasoning_replay",
+      );
+    }
+    if (
+      context.instructionProjection !== undefined &&
+      !isInstructionReplayProjection(context.instructionProjection)
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay instruction projection is invalid",
+        "invalid_reasoning_replay",
+      );
+    }
     const hasRedacted = capture.redactedContent !== undefined;
     const hasSignedText = capture.signature !== undefined && capture.signature.length > 0;
     if (!hasRedacted && !hasSignedText) return undefined;
@@ -281,6 +323,12 @@ export class ReasoningReplayStore {
             upstreamOperation: context.upstreamOperation,
             issuedAt: now,
             expiresAt,
+            ...(context.instructionProjection !== undefined
+              ? { instructionProjection: context.instructionProjection }
+              : {}),
+            ...(context.clientNormalization !== undefined
+              ? { clientNormalization: context.clientNormalization }
+              : {}),
           },
           this.#keyring.active,
         );
@@ -304,6 +352,12 @@ export class ReasoningReplayStore {
     const nonce = randomBytes(12);
     const envelope: StoredEnvelope = {
       version: 1,
+      ...(context.instructionProjection !== undefined
+        ? { instructionProjection: context.instructionProjection }
+        : {}),
+      ...(context.clientNormalization !== undefined
+        ? { clientNormalization: context.clientNormalization }
+        : {}),
       outputFingerprint: context.outputFingerprint,
       ...(hasSignedText ? { text: capture.text, signature: capture.signature } : {}),
       ...(hasRedacted
@@ -382,16 +436,7 @@ export class ReasoningReplayStore {
     const resolutions = items.map(({ token, context, insertBeforeMessage }) => {
       if (isPortableReplayToken(token)) {
         try {
-          const decoded = decodePortableReplayToken(
-            token,
-            {
-              tenantId: context.tenantId,
-              model: context.model,
-              outputFingerprint: context.outputFingerprint,
-            },
-            this.#keyring,
-            context.now ?? Date.now(),
-          );
+          const decoded = this.decodePortableForContext(token, context);
           if (decoded.legacy) {
             const now = context.now ?? Date.now();
             const acceptedUntil = this.#database.acceptLegacyPortableReplay(
@@ -423,7 +468,13 @@ export class ReasoningReplayStore {
             conversationId: decoded.conversationId,
             portable: true as const,
             provenance: decoded.provenance,
-            replay: { insertBeforeMessage, content: decoded.content },
+            replay: {
+              insertBeforeMessage,
+              content: decoded.content,
+              ...(decoded.provenance.instructionProjection !== undefined
+                ? { instructionProjection: decoded.provenance.instructionProjection }
+                : {}),
+            },
           };
         } catch (error) {
           if (error instanceof PortableReplayTokenError) {
@@ -474,7 +525,13 @@ export class ReasoningReplayStore {
         accountId: record.accountId,
         conversationId: record.conversationId,
         databaseLegacy: true as const,
-        replay: { insertBeforeMessage, content: replayContent(envelope) },
+        replay: {
+          insertBeforeMessage,
+          content: replayContent(envelope),
+          ...(envelope.instructionProjection !== undefined
+            ? { instructionProjection: envelope.instructionProjection }
+            : {}),
+        },
       };
     });
     this.#database.updateReasoningReplayRecords(maintained);
@@ -540,7 +597,13 @@ export class ReasoningReplayStore {
     return {
       accountId: record.accountId,
       conversationId: record.conversationId,
-      replay: { insertBeforeMessage, content: replayContent(envelope) },
+      replay: {
+        insertBeforeMessage,
+        content: replayContent(envelope),
+        ...(envelope.instructionProjection !== undefined
+          ? { instructionProjection: envelope.instructionProjection }
+          : {}),
+      },
     };
   }
 
@@ -551,6 +614,9 @@ export class ReasoningReplayStore {
     const outputFingerprints = [
       context.outputFingerprint,
       ...(context.compatibleOutputFingerprints ?? []),
+      ...(context.clientNormalization && context.normalizedOutputFingerprint
+        ? [context.normalizedOutputFingerprint]
+        : []),
     ];
     const outputMatches = outputFingerprints.some((outputFingerprint) =>
       constantEqual(record.fingerprintHash, fingerprintHash(outputFingerprint)),
@@ -580,6 +646,16 @@ export class ReasoningReplayStore {
       );
     }
     const envelope = this.decryptLegacyEnvelope(record);
+    this.verifyNormalization(envelope.clientNormalization, context);
+    if (
+      envelope.clientNormalization &&
+      envelope.outputFingerprint !== context.normalizedOutputFingerprint
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay normalized output does not match",
+        "reasoning_replay_context_mismatch",
+      );
+    }
     if (
       !outputFingerprints.some((outputFingerprint) =>
         constantEqual(envelope.outputFingerprint, outputFingerprint),
@@ -591,6 +667,64 @@ export class ReasoningReplayStore {
       );
     }
     return envelope;
+  }
+
+  private verifyNormalization(
+    actual: ClientNormalization | undefined,
+    context: ReasoningReplayContext,
+  ): void {
+    if (actual === undefined) return;
+    if (
+      !isClientNormalization(context.clientNormalization) ||
+      actual.kind !== context.clientNormalization.kind ||
+      actual.workingDirectoryHash !== context.clientNormalization.workingDirectoryHash
+    ) {
+      throw new ReasoningReplayError(
+        "Reasoning replay normalization context does not match",
+        "reasoning_replay_context_mismatch",
+      );
+    }
+  }
+
+  private decodePortableForContext(
+    token: string,
+    context: ReasoningReplayContext,
+  ): ReturnType<typeof decodePortableReplayToken> {
+    const decode = (outputFingerprint: string) =>
+      decodePortableReplayToken(
+        token,
+        {
+          tenantId: context.tenantId,
+          model: context.model,
+          outputFingerprint,
+        },
+        this.#keyring,
+        context.now ?? Date.now(),
+      );
+    let decoded: ReturnType<typeof decodePortableReplayToken>;
+    let normalized = false;
+    try {
+      decoded = decode(context.outputFingerprint);
+    } catch (error) {
+      if (
+        !(error instanceof PortableReplayTokenError) ||
+        error.code !== "reasoning_replay_context_mismatch" ||
+        !isClientNormalization(context.clientNormalization) ||
+        context.normalizedOutputFingerprint === undefined
+      )
+        throw error;
+      decoded = decode(context.normalizedOutputFingerprint);
+      normalized = true;
+    }
+    const provenance = decoded.legacy ? undefined : decoded.provenance;
+    if (normalized && provenance?.clientNormalization === undefined) {
+      throw new ReasoningReplayError(
+        "Reasoning replay did not authenticate client normalization",
+        "reasoning_replay_context_mismatch",
+      );
+    }
+    this.verifyNormalization(provenance?.clientNormalization, context);
+    return decoded;
   }
 
   private decryptLegacyEnvelope(record: ReasoningReplayRecord): StoredEnvelope {

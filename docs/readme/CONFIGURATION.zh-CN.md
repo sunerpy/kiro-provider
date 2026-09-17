@@ -241,12 +241,16 @@ KiroRuntime CreateResponse，包括原生 `instructions` 字段。需要
 `unsupported_instruction_projection`。更严格的 `native-context-safe` 只有在
 Kiro 公开私有 feature 后才使用 `systemPrompt`；当前测试账号没有启用。
 
-`legacy-user-prefix` 只会用精确的 `\n\n` 连接原始指令文本。开头和中间的
-指令块仍前置到首个 user 回合；若可执行历史之后存在连续的尾部指令块，则
-它们会保留在当前边界：当前消息是 user/tool 时附加文本且不移动工具结果或
-附件，历史以 assistant 结果结束时才新建当前合成 user 回合。这样可避免把
-新的调和/续跑指令错误移到先前 assistant 结果之前。服务启动时输出不含正文
-的结构化警告；该模式不会恢复消息合并、重复内容折叠、尾部字符删除、合成
+在 stateless 路径中，`v3-auto` 仅在账号能力和指令形状均支持时使用已验证的
+原生 `systemPrompt`。其他情况采用与 `legacy-user-prefix` 相同的按位置文本
+投影：开头或中途指令加在紧随其后的 user/tool 回合，后面是 assistant 时则
+保留为该位置的独立 user 回合。尾部指令留在当前 user/tool 输入，不移动工具
+结果或附件；历史以 assistant 结束时，使用原始尾部指令作为当前输入。
+只使用原始指令文字和 `\n\n` 分隔，不补合成 assistant 确认或通用追问。
+这种回退保留生效时序，但不能保证原生角色优先级；`safe` 和
+`native-context-safe` 的严格拒绝边界保持不变。
+
+显式 `legacy-user-prefix` 在启动时输出不含正文的结构化警告；该模式不会恢复消息合并、重复内容折叠、尾部字符删除、合成
 工具说明或其他改写。该模式仍处于弃用状态，但不再绑定固定删除版本；只有 Kiro
 具备协议保真的原生指令通道，或受影响客户端完成迁移后才会移除。
 
@@ -286,13 +290,35 @@ clean EOF 时才完成。旧 SDK `q` 端点可能两者都不提供。因此 `le
   `client_metadata.thread_id|session_id|conversation_id`，最后是
   `prompt_cache_key`。
 - Chat Completions 只使用 `prompt_cache_key`。
-- Anthropic Messages 暂无经过验证的显式字段，因此本模式不建立亲和绑定。
+- Anthropic Messages 使用 `x-claude-code-session-id`；同时提供
+  `x-claude-code-agent-id` 时，将子 Agent 执行分支与主会话、兄弟分支分开。
+  agent ID 始终包含在认证租户和 session 家族的作用域内，不作为 reasoning
+  replay 的授权依据。身份 header 去除首尾空白后最多接受 256 个字符；没有有效
+  agent header 的客户端保留 session 级绑定。
 
 存在显式键时，Provider SQLite 只保存按租户隔离的键哈希、选中的账号 ID、
-Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同一逻辑会话在
+Kiro `conversationId` 和时间戳，不保存原始会话值或提示词。同一执行分支在
 单进程内串行；不同账号可并行；共享同一账号的请求经过账号队列。transport
 对象按账号缓存；SDK 客户端只在该账号 access token 未变化时缓存。token 刷新
 后会用新的不可变凭据重建 SDK 客户端，同时保留 transport。
+
+没有硬 replay owner 的请求，会先从合格账号中选择空闲容量，再用配置策略和
+软亲和性打破平局。选择与预留之间没有异步间隙。整个合格池繁忙时，请求等待
+任一合格账号释放，不会预先挂到某个繁忙账号后继续空等。等待者在自身资格允许
+时按到达顺序准入；只能使用繁忙 owner 的请求不会阻塞可用其他账号的请求。
+Messages、无状态 Responses 和 native Responses 共享这一容量池。
+软亲和性账号繁忙时，可以改用其他合格账号和新 conversation，
+以部分缓存命中率换取并行能力。native continuation 和绑定 owner 的 reasoning
+仍受原 account/region/profile 限制。单账号并发仍为 1；整个池繁忙时仍需排队，
+不能迁移或重放已经开始输出的流。
+
+`request_queue_wait` 分别记录 `queue: "session" | "capacity" | "account"`、
+`duration_ms` 及 acquired／unavailable／aborted 状态。capacity 耗时包含等待合格
+空闲账号及选择器开销，`account_selection_completed` 单独记录账号选择耗时；
+`upstream_attempt_started.preparation_ms` 只记录每次账号租约首次 dispatch 前的
+准备耗时。`upstream_headers_received.wait_ms` 和
+`upstream_first_frame.wait_ms` 从该次 dispatch 起算；流时长结合对应终态计算。
+这些指标均不能直接称为纯模型推理时间。
 
 `overage_count > 0`，或已知正数上限且 `used_count >= limit_count` 的账号，会在
 刷新 token 和创建 SDK 前直接排除。上游 HTTP 402 会把账号标记为额度耗尽，并
@@ -351,12 +377,13 @@ payload 保留，按 1 KiB 桶随机填充，并以 4 MiB 为 fail-closed wire �
 `reasoning_text` 在下列实测单元中迁移。所有单元均要求 `GenerateAssistantResponse`、
 profile 和有效区域 `us-east-1`：
 
-| 公开协议           | 模型            | 上游 runtime  |
-| ------------------ | --------------- | ------------- |
-| Responses          | GPT-5.6 Sol     | KiroRuntime   |
-| Responses          | GPT-5.6 Sol     | CodeWhisperer |
-| Anthropic Messages | Claude Sonnet 5 | KiroRuntime   |
-| Anthropic Messages | Claude Opus 5   | KiroRuntime   |
+| 公开协议           | 模型             | 上游 runtime                     |
+| ------------------ | ---------------- | -------------------------------- |
+| Responses          | GPT-5.6 Sol      | KiroRuntime                      |
+| Responses          | GPT-5.6 Sol      | CodeWhisperer                    |
+| Anthropic Messages | Claude Sonnet 5  | KiroRuntime                      |
+| Anthropic Messages | Claude Opus 5    | KiroRuntime                      |
+| Anthropic Messages | Claude Fable 5.1 | KiroRuntime；限相同 mint profile |
 
 当前请求协议和投影 runtime operation 仍须与 mint envelope 一致，目标账号也须
 解析到同一有效区域并带 profile。CodeWhisperer 单元覆盖无状态 Responses 路径：
@@ -364,12 +391,33 @@ profile 和有效区域 `us-east-1`：
 未启用下述恢复开关的旧 token、Terra、Luna、其他区域及所有未列组合仍绑定
 原 owner；`strict` 禁用所有迁移。
 
+Fable 还要求目标账号的 profile ARN 与认证 mint envelope 完全一致。签名仍要求
+历史 system／tools／messages 前缀不变；允许换账号不表示可以改写前缀、删除
+签名推理，或假定多个账号共享缓存。
+
+新回放记录会认证指令投影版本。修复前的 Fable `kr2_` 记录证明来源为
+Messages／KiroRuntime 时，网关可保留旧 Provider 版本实际使用的历史强制前缀；
+只保留已签名的历史部分，后续 system／developer 输入仍在原回合生效。
+之后生成的记录会携带冻结前缀边界，即使客户端移除最早的 thinking 块也能保留。
+`reasoning_replay_projection_compatibility` 只记录模型、协议和前缀消息数；
+新会话不会增加合成确认。portable 和 database 写端均可在重启后保留投影信息；
+缺少 mint provenance 的旧数据库 token 不用于猜测来源。
+
+显式声明的 Claude Bash 归一上下文也可以绑定在加密记录中。
+`x-kiro-client-normalization: claude-code-bash-v1` 必须同时提供 64 字符的
+`x-kiro-working-directory-hash`：对 `kiro-provider-working-directory-v1\0`
+与目录 UTF-8 字节拼接后计算 SHA-256。只识别开头指向该精确目录的字面量 `cd`
+及随后的 `&&`；命令后缀、其他参数和工具身份仍绑定。portable 与 database
+记录回放时都要求相同上下文；旧记录保留原严格指纹规则。
+该元数据不改变账号资格或当前工具授权。
+
 `reasoning_replay_legacy_account_failover: "verified-current-cell"` 是同一部署
 生成的数据库 `kr1_` 与预发布 `kr2_` 的显式恢复开关。两者仍须通过租户、模型、
 完整输出、owner、内容、key 和有效期校验：`kr1_` 使用数据库 idle TTL，预发布
 `kr2_` 使用持久化过渡截止时间。它们不认证 mint 协议/区域/profile/operation；
 启用即表示运维确认这些缺失维度与当前 owner 行和请求一致，网关无法重建原始
-mint provenance。准入仍只限上文已验证的 runtime/profile 单元，且须配置
+mint provenance。准入仍只限上文已验证的 runtime/profile 单元，但不包括必须
+具有认证 mint provenance 的 Fable；同时须配置
 `reasoning_replay_account_failover: "verified"`。redacted reasoning、Chat 哈希回放、
 `safe` 投影与未列单元继续 owner-bound。默认值为 `strict`；全局 `strict`
 也会禁用此恢复开关。符合条件的历史在 owner 额度耗尽后可切换到健康账号，并保留

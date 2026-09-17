@@ -18,6 +18,7 @@ export interface SessionAffinityHint {
     | "chat.user_and_initial_input"
     | "chat.initial_input"
     | "anthropic.header.x-claude-code-session-id"
+    | "anthropic.header.x-claude-code-agent-id"
     | "anthropic.user_and_initial_input"
     | "anthropic.initial_input";
 }
@@ -202,9 +203,19 @@ export function anthropicSessionAffinity(
   tenantId: string | undefined,
   mode: SessionAffinityMode = "explicit-only",
   claudeCodeSessionId?: string,
+  claudeCodeAgentId?: string,
 ): SessionAffinityHint | undefined {
   if (!tenantId) return undefined;
   if (claudeCodeSessionId !== undefined && claudeCodeSessionId.length > 0) {
+    // Claude's main thread and subagents share the family session header.
+    // The agent header is stable across a subagent's turns; keep its execution
+    // queue separate without treating either header as replay authorization.
+    if (claudeCodeAgentId !== undefined && claudeCodeAgentId.length > 0) {
+      return affinityHash(tenantId, "anthropic", "anthropic.header.x-claude-code-agent-id", {
+        session: claudeCodeSessionId,
+        agent: claudeCodeAgentId,
+      });
+    }
     return affinityHash(
       tenantId,
       "anthropic",

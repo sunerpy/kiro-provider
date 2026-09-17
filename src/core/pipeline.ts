@@ -3,13 +3,19 @@ import {
   type GenerateAssistantResponseCommandInput,
 } from "@aws/codewhisperer-streaming-client";
 import { randomUUID } from "node:crypto";
+import { leastQueuedAccountIds, reserveAccountCapacity } from "./account-capacity.js";
 import {
   assistantLineageFingerprint,
   assistantOutputFingerprint,
   type CanonicalAssistantOutput,
   type CanonicalRequest,
   type ResolvedReasoningReplay,
+  textFromParts,
 } from "../protocol/canonical.js";
+import {
+  type ClientNormalization,
+  normalizedAssistantOutputFingerprint,
+} from "../protocol/client-normalization.js";
 import {
   CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
   type CanonicalOutputEvent,
@@ -57,7 +63,7 @@ import {
   abortable,
   abortableSleep,
   abortReason,
-  acquireAccountQueue,
+  accountQueueDepth,
   acquireSessionQueue,
   createPipelineDeadline,
 } from "./pipeline-runtime.js";
@@ -143,6 +149,7 @@ interface ReplayState {
   readonly portableRegion?: string;
   readonly portableRuntimeProtocol?: "codewhisperer" | "kiro-runtime";
   readonly portableProfileRequired?: true;
+  readonly portableProfileArn?: string;
   readonly replays: readonly ResolvedReasoningReplay[];
 }
 
@@ -308,10 +315,13 @@ function runtimeEndpoint(options: RunChatCompletionOptions, region: string): str
     : undefined;
 }
 
-function canonicalOutputFingerprint(request: CanonicalRequest): SdkOutputFingerprint {
+function canonicalOutputFingerprint(
+  request: CanonicalRequest,
+  normalization?: ClientNormalization,
+): SdkOutputFingerprint {
   const toolsByWireName = new Map(request.tools.map((tool) => [tool.wireName, tool] as const));
-  return (output: CanonicalAssistantOutput): string =>
-    assistantOutputFingerprint({
+  return (output: CanonicalAssistantOutput): string => {
+    const restored = {
       text: output.text,
       toolCalls: output.toolCalls.map((call) => {
         const declaration = toolsByWireName.get(call.name);
@@ -334,7 +344,39 @@ function canonicalOutputFingerprint(request: CanonicalRequest): SdkOutputFingerp
         }
         return { ...call, name: declaration.name, input };
       }),
-    });
+    };
+    return normalization
+      ? normalizedAssistantOutputFingerprint(restored, normalization)
+      : assistantOutputFingerprint(restored);
+  };
+}
+
+function replayNormalization(
+  options: RunChatCompletionOptions,
+  messageIndex: number,
+): { clientNormalization?: ClientNormalization; normalizedOutputFingerprint?: string } {
+  if (!options.clientNormalization) return {};
+  const message = options.body.messages[messageIndex];
+  if (!message || message.role !== "assistant") {
+    throw new ReasoningReplayError(
+      "Reasoning replay does not reference assistant output",
+      "invalid_reasoning_replay",
+    );
+  }
+  return {
+    clientNormalization: options.clientNormalization,
+    normalizedOutputFingerprint: normalizedAssistantOutputFingerprint(
+      {
+        text: textFromParts(message.content),
+        toolCalls: message.toolCalls.map((call) => ({
+          id: call.id,
+          name: call.name,
+          input: JSON.stringify(call.input),
+        })),
+      },
+      options.clientNormalization,
+    ),
+  };
 }
 
 function replayAccountError(
@@ -461,6 +503,7 @@ function verifiedPortableReplay(
       readonly region: string;
       readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
       readonly profileRequired: true;
+      readonly profileArn?: string;
       readonly legacyCurrentCell?: true;
     }
   | undefined {
@@ -477,11 +520,13 @@ function verifiedPortableReplay(
     // Every dimension comes from the authenticated mint envelope; mutable account
     // rows and the protocol used to present a token are never provenance.
     const key = `${provenance.protocol}:${options.model}:${provenance.region}:${provenance.runtimeProtocol}:profile:${resolved.replay.content.kind}`;
-    return VERIFIED_PORTABLE_REPLAY_CELLS.has(key)
+    const sameProfile = VERIFIED_SAME_PROFILE_REPLAY_CELLS.has(key);
+    return VERIFIED_PORTABLE_REPLAY_CELLS.has(key) || sameProfile
       ? {
           region: provenance.region,
           runtimeProtocol: provenance.runtimeProtocol,
           profileRequired: true,
+          ...(sameProfile ? { profileArn: provenance.profileArn } : {}),
         }
       : undefined;
   }
@@ -528,6 +573,14 @@ const VERIFIED_PORTABLE_REPLAY_CELLS = new Set([
   "anthropic-messages:claude-opus-5:us-east-1:kiro-runtime:profile:reasoning_text",
 ]);
 
+const VERIFIED_SAME_PROFILE_REPLAY_CELLS = new Set([
+  // 2026-09-17: Fable 5.1, max/xhigh, stable system/tools/message prefix:
+  // A -> B/new-conversation plus another tool-history turn passed; tampering
+  // with the signature was rejected. The probe covered one shared profile.
+  // Legacy records lack the authenticated mint profile and are not admitted.
+  "anthropic-messages:claude-fable-5-1:us-east-1:kiro-runtime:profile:reasoning_text",
+]);
+
 function resolveReplayState(
   options: RunChatCompletionOptions,
   binding:
@@ -552,6 +605,7 @@ function resolveReplayState(
   let portableRegion: string | undefined;
   let portableRuntimeProtocol: "codewhisperer" | "kiro-runtime" | undefined;
   let portableProfileRequired: true | undefined;
+  let portableProfileArn: string | undefined;
   const legacyOrigins =
     options.config.reasoning_replay_legacy_account_failover === "verified-current-cell"
       ? new Map(options.accountManager.reconcileFromDb().map((account) => [account.id, account]))
@@ -579,6 +633,7 @@ function resolveReplayState(
           tenantId: options.tenantId,
           model: options.body.model,
           outputFingerprint: replay.outputFingerprint,
+          ...replayNormalization(options, replay.insertBeforeMessage),
           ...(replay.compatibleOutputFingerprints !== undefined
             ? { compatibleOutputFingerprints: replay.compatibleOutputFingerprints }
             : {}),
@@ -641,6 +696,7 @@ function resolveReplayState(
       tenantId: options.tenantId,
       model: options.body.model,
       outputFingerprint: replay.outputFingerprint,
+      ...replayNormalization(options, replay.insertBeforeMessage),
       ...(replay.compatibleOutputFingerprints !== undefined
         ? { compatibleOutputFingerprints: replay.compatibleOutputFingerprints }
         : {}),
@@ -662,7 +718,10 @@ function resolveReplayState(
       if (
         (portableRegion !== undefined && portableRegion !== verified.region) ||
         (portableRuntimeProtocol !== undefined &&
-          portableRuntimeProtocol !== verified.runtimeProtocol)
+          portableRuntimeProtocol !== verified.runtimeProtocol) ||
+        (portableProfileArn !== undefined &&
+          verified.profileArn !== undefined &&
+          portableProfileArn !== verified.profileArn)
       ) {
         throw new ReasoningReplayError(
           "Portable reasoning replay items resolve to different verified mint cells",
@@ -672,6 +731,7 @@ function resolveReplayState(
       portableRegion = verified.region;
       portableRuntimeProtocol = verified.runtimeProtocol;
       portableProfileRequired = verified.profileRequired;
+      portableProfileArn ??= verified.profileArn;
       portableCount += 1;
       if (verified.legacyCurrentCell) legacyPortableCount += 1;
       preferredAccountId ??= resolved.accountId;
@@ -691,7 +751,27 @@ function resolveReplayState(
       preferredAccountId = resolved.accountId;
       preferredConversationId = resolved.conversationId;
     }
-    replays.push(resolved.replay);
+    const legacyInstructionProjection =
+      resolved.replay.instructionProjection === undefined &&
+      resolved.portable === true &&
+      resolved.provenance?.protocol === "anthropic-messages" &&
+      resolved.provenance.runtimeProtocol === "kiro-runtime" &&
+      options.body.protocol === "anthropic-messages" &&
+      options.model === "claude-fable-5-1" &&
+      options.body.projectionMode === "v3-auto" &&
+      replay.insertBeforeMessage > 0;
+    replays.push(
+      legacyInstructionProjection
+        ? {
+            ...resolved.replay,
+            instructionProjection: {
+              version: 1,
+              legacyPrefixMessages: replay.insertBeforeMessage,
+            },
+            legacyProjectionUnversioned: true,
+          }
+        : resolved.replay,
+    );
   }
   if (legacyPortableCount > 0) {
     auditLog("warn", "reasoning_replay_legacy_failover_admitted", {
@@ -709,6 +789,7 @@ function resolveReplayState(
     ...(portableRegion !== undefined ? { portableRegion } : {}),
     ...(portableRuntimeProtocol !== undefined ? { portableRuntimeProtocol } : {}),
     ...(portableProfileRequired ? { portableProfileRequired } : {}),
+    ...(portableProfileArn !== undefined ? { portableProfileArn } : {}),
     portableCount,
     legacyPortableCount,
     replays,
@@ -723,6 +804,7 @@ function reasoningCaptureOptions(
     readonly region: string;
     readonly profileArn?: string;
     readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
+    readonly legacyPrefixMessages?: number;
   },
 ): {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
@@ -771,7 +853,7 @@ function reasoningCaptureOptions(
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
       bufferLateGptReasoning,
-      fingerprintOutput: canonicalOutputFingerprint(canonical),
+      fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
       ...(captureOutput ? { captureOutput } : {}),
     };
   }
@@ -783,16 +865,25 @@ function reasoningCaptureOptions(
         accountId,
         conversationId,
         outputFingerprint,
+        ...(options.clientNormalization
+          ? { clientNormalization: options.clientNormalization }
+          : {}),
         protocol: canonical.protocol,
         region: mint.region,
         ...(mint.profileArn !== undefined ? { profileArn: mint.profileArn } : {}),
         runtimeProtocol: mint.runtimeProtocol,
         upstreamOperation: "GenerateAssistantResponse",
+        instructionProjection: {
+          version: 1,
+          ...(mint.legacyPrefixMessages !== undefined
+            ? { legacyPrefixMessages: mint.legacyPrefixMessages }
+            : {}),
+        },
       }),
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
     bufferLateGptReasoning,
-    fingerprintOutput: canonicalOutputFingerprint(canonical),
+    fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
     ...(captureOutput ? { captureOutput } : {}),
   };
 }
@@ -880,8 +971,11 @@ interface AttemptSelection {
 
 type SelectionOutcome =
   | { readonly kind: "selected"; readonly selection: AttemptSelection }
+  | { readonly kind: "capacity-wait"; readonly accountIds: ReadonlySet<string> }
   | { readonly kind: "wait"; readonly waitMs: number }
   | { readonly kind: "result"; readonly result: CompletionResult };
+
+type ReadySelectionOutcome = Exclude<SelectionOutcome, { readonly kind: "capacity-wait" }>;
 
 type AttemptOutcome =
   | {
@@ -1331,7 +1425,9 @@ function selectAttemptAccount(
             const region = extractRegionFromArn(account.profileArn) ?? account.region;
             return (
               region === state.replayState.portableRegion &&
-              (!state.replayState.portableProfileRequired || account.profileArn !== undefined)
+              (!state.replayState.portableProfileRequired || account.profileArn !== undefined) &&
+              (state.replayState.portableProfileArn === undefined ||
+                account.profileArn === state.replayState.portableProfileArn)
             );
           })()),
     ),
@@ -1343,21 +1439,25 @@ function selectAttemptAccount(
   // the stall would repeat. Hold it out of the candidate set instead, and fall
   // back to it only when nothing else can serve the request, so a
   // single-account deployment still gets an answer.
-  const remainingAfterQuarantine = [...eligibleAccountIds].filter(
-    (id) => !state.quarantinedAccountIds.has(id),
+  const selectionNow = Date.now();
+  const selectable = accounts.filter(
+    (account) =>
+      eligibleAccountIds.has(account.id) &&
+      isSelectableAccount(account, selectionNow, policy) &&
+      (!state.replayLocked || account.id === state.replayState.accountId),
   );
-  const withoutQuarantined =
-    remainingAfterQuarantine.length < eligibleAccountIds.size
-      ? new Set(remainingAfterQuarantine)
-      : undefined;
-  const selected =
-    (withoutQuarantined === undefined
-      ? null
-      : options.accountManager.selectHealthyAccount(
-          state.preferredAccountId,
-          withoutQuarantined,
-        )) ??
-    options.accountManager.selectHealthyAccount(state.preferredAccountId, eligibleAccountIds);
+  const notQuarantined = selectable.filter(
+    (account) => !state.quarantinedAccountIds.has(account.id),
+  );
+  const candidates = !state.replayLocked && notQuarantined.length > 0 ? notQuarantined : selectable;
+  const candidateIds = new Set(candidates.map((account) => account.id));
+  const available = leastQueuedAccountIds(candidates, candidateIds, policy);
+  if (available.size > 0 && [...available].every((id) => accountQueueDepth(id) > 0)) {
+    // Do not bind an unaccepted request behind one arbitrarily selected busy
+    // account. Any of these already-qualified accounts may become free first.
+    return { kind: "capacity-wait", accountIds: candidateIds };
+  }
+  const selected = options.accountManager.selectHealthyAccount(state.preferredAccountId, available);
   if (
     selected &&
     (state.replayState.accountId === undefined || selected.id === state.replayState.accountId)
@@ -1667,6 +1767,13 @@ async function runAttempt(
       );
     }
     options.onProjection?.(prepared.diagnostics);
+    if (prepared.diagnostics.projection.legacyPrefixMessages !== undefined) {
+      auditLog("info", "reasoning_replay_projection_compatibility", {
+        protocol: options.body.protocol,
+        model: options.model,
+        prefix_message_count: prepared.diagnostics.projection.legacyPrefixMessages,
+      });
+    }
     const plannedAttempt = state.sdkDispatches + 1;
     const conversationHash = auditHash(prepared.conversationId);
     const accountHash = auditHash(account.id);
@@ -1800,6 +1907,9 @@ async function runAttempt(
       region: prepared.region,
       ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
       runtimeProtocol: prepared.runtimeProtocol,
+      ...(prepared.diagnostics.projection.legacyPrefixMessages !== undefined
+        ? { legacyPrefixMessages: prepared.diagnostics.projection.legacyPrefixMessages }
+        : {}),
     });
     const attemptContext: AttemptStreamContext = {
       options,
@@ -2472,19 +2582,45 @@ async function executeLoop(
       return iterationsExhaustedResult(options, state);
     }
 
-    const selectionOutcome = selectAttemptAccount(options, state);
+    const acquireCapacity = () =>
+      reserveAccountCapacity<ReadySelectionOutcome>(() => {
+        const selectionStarted = performance.now();
+        const outcome = selectAttemptAccount(options, state);
+        auditLog("info", "account_selection_completed", {
+          request_id: options.requestId,
+          duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
+          outcome: outcome.kind,
+          replay_locked: state.replayLocked,
+        });
+        return outcome.kind === "capacity-wait"
+          ? { kind: "wait", accountIds: outcome.accountIds }
+          : {
+              kind: "ready",
+              value: outcome,
+              ...(outcome.kind === "selected" ? { accountId: outcome.selection.selected.id } : {}),
+            };
+      }, signal);
+    const reservation = await (options.diagnostics?.waitForQueue(
+      "capacity",
+      acquireCapacity,
+      (value) => value.lease !== undefined,
+    ) ?? acquireCapacity());
+    const selectionOutcome = reservation.value;
     if (selectionOutcome.kind === "result") return selectionOutcome.result;
     if (selectionOutcome.kind === "wait") {
       await abortableSleep(selectionOutcome.waitMs + 1, signal);
       continue;
     }
     const { selection } = selectionOutcome;
-    if (bindAttemptAffinity(options, state, selection.selected) === "reselect") continue;
-
-    options.diagnostics?.phase("account_queue");
-    const releaseAccount = await acquireAccountQueue(selection.selected.id, signal);
+    const lease = reservation.lease;
+    if (!lease) throw new TypeError("Selected account has no capacity reservation");
+    const acquire = () => lease;
+    const releaseAccount = await (options.diagnostics?.waitForQueue("account", acquire) ??
+      acquire());
     let accountLeaseOwned = true;
     try {
+      if (signal.aborted) throw abortReason(signal);
+      if (bindAttemptAffinity(options, state, selection.selected) === "reselect") continue;
       const outcome = await runAttempt(options, signal, state, selection.selected, releaseAccount);
       if (outcome.kind === "result") {
         accountLeaseOwned = !outcome.leaseTransferred;
@@ -2533,14 +2669,10 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
   let releaseAccount: (() => void) | undefined;
   let streamOwnsResources = false;
   try {
-    if (tracedOptions.affinity) {
-      diagnostics.phase("session_queue");
-      releaseSession = await acquireSessionQueue(tracedOptions.affinity.keyHash, deadline.signal);
-    } else if (tracedOptions.lineage?.lookupKeyHash !== undefined) {
-      diagnostics.phase("session_queue");
-      releaseSession = await acquireSessionQueue(
-        tracedOptions.lineage.lookupKeyHash,
-        deadline.signal,
+    const sessionKey = tracedOptions.affinity?.keyHash ?? tracedOptions.lineage?.lookupKeyHash;
+    if (sessionKey !== undefined) {
+      releaseSession = await diagnostics.waitForQueue("session", () =>
+        acquireSessionQueue(sessionKey, deadline.signal),
       );
     }
     diagnostics.phase("request_validation");

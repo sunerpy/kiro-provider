@@ -5,7 +5,16 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import type { CanonicalProtocol, KiroReasoningContent } from "../protocol/canonical.js";
+import {
+  type CanonicalProtocol,
+  type InstructionReplayProjection,
+  isInstructionReplayProjection,
+  type KiroReasoningContent,
+} from "../protocol/canonical.js";
+import {
+  type ClientNormalization,
+  isClientNormalization,
+} from "../protocol/client-normalization.js";
 import type { ReasoningReplayKey, ReasoningReplayKeyring } from "./keyring.js";
 
 export const PORTABLE_REPLAY_PREFIX = "kr2_";
@@ -48,6 +57,8 @@ export interface PortableReplayMintProvenance {
   readonly upstreamOperation: "GenerateAssistantResponse";
   readonly issuedAt: number;
   readonly expiresAt: number;
+  readonly instructionProjection?: InstructionReplayProjection;
+  readonly clientNormalization?: ClientNormalization;
 }
 
 type ReplayMaterial = {
@@ -170,7 +181,11 @@ function envelopeFor(
     provenance.issuedAt <= 0 ||
     provenance.expiresAt <= provenance.issuedAt ||
     provenance.region.length === 0 ||
-    (provenance.profileArn !== undefined && provenance.profileArn.length === 0)
+    (provenance.profileArn !== undefined && provenance.profileArn.length === 0) ||
+    (provenance.instructionProjection !== undefined &&
+      !isInstructionReplayProjection(provenance.instructionProjection)) ||
+    (provenance.clientNormalization !== undefined &&
+      !isClientNormalization(provenance.clientNormalization))
   ) {
     throw new PortableReplayTokenError(
       "Reasoning replay mint provenance is invalid",
@@ -323,7 +338,10 @@ function replayEnvelope(value: unknown): LegacyPortableReplayEnvelope | Portable
     !("expiresAt" in value) ||
     typeof value.expiresAt !== "number" ||
     !Number.isSafeInteger(value.expiresAt) ||
-    value.expiresAt <= value.issuedAt
+    value.expiresAt <= value.issuedAt ||
+    ("instructionProjection" in value &&
+      !isInstructionReplayProjection(value.instructionProjection)) ||
+    ("clientNormalization" in value && !isClientNormalization(value.clientNormalization))
   ) {
     throw new PortableReplayTokenError(
       "Reasoning replay plaintext has invalid mint provenance",
@@ -488,6 +506,12 @@ export function decodePortableReplayToken(
       upstreamOperation: envelope.upstreamOperation,
       issuedAt: envelope.issuedAt,
       expiresAt: envelope.expiresAt,
+      ...(envelope.instructionProjection !== undefined
+        ? { instructionProjection: envelope.instructionProjection }
+        : {}),
+      ...(envelope.clientNormalization !== undefined
+        ? { clientNormalization: envelope.clientNormalization }
+        : {}),
     },
   };
 }

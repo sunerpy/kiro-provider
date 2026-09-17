@@ -48,7 +48,7 @@ Release installer 目前不安装这些辅助脚本。临时测试可直接从 c
 | ---------------------- | ------------------------------------------------- |
 | 网关根地址             | `http://127.0.0.1:8787`，不能带 `/v1`             |
 | Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`          |
-| 模型                   | Opus 5                                            |
+| 模型                   | Opus 5，客户端上下文窗口 1M                       |
 | 推理模式               | Ultra，即 `effortLevel: "max"`、`ultracode: true` |
 | 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖            |
 | 离开后的 recap         | 关闭                                              |
@@ -86,15 +86,53 @@ Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
 
 ## 选择模型
 
-内置 Claude 行分别映射到 `claude-opus-5`、`claude-sonnet-5` 和
-`claude-haiku-4-5`。启动器还会在 picker 中加入 `gpt-5.6-sol`、
-`gpt-5.6-terra` 和 `gpt-5.6-luna`。
+内置 Claude 行分别映射到 `claude-opus-5[1m]`、`claude-sonnet-5[1m]` 和
+`claude-haiku-4-5`。Fable 行映射到 `claude-fable-5-1[1m]`，实际 Kiro wire ID
+为 `claude-fable-5.1`。启动器还会在 picker 中加入 `gpt-5.6-sol[1m]`、
+`gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
 
 Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthropic`
 的模型，所以这三个 GPT 行需要显式声明。它们以 `behavesAs: "claude-opus-5"`
 作为客户端能力模板，从而获得 adaptive thinking 和左右切换 effort 的能力，无需
-为每个 effort 档位重复模型。Claude Code 对这些自定义行只显示保守的 200K context
-window；这项声明不会让客户端强制执行 Kiro 侧更大的 GPT 上限。
+为每个 effort 档位重复模型。`[1m]` 后缀让 Claude Code 使用声明的 1M 窗口，
+客户端发请求前会去掉后缀。已用实际安装的客户端核对六个 1M 选项；Haiku
+保留 200K。仅有服务端模型目录不会自动改变客户端窗口，输出预留仍会减少可用
+输入预算。
+
+Kiro overlay 同时设置 `autoCompactWindow: 1000000`，让网关模型主动压缩；
+Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。仍可使用
+`--autocompact` 或 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 覆盖单次启动。
+原生设置文件与独立 Bedrock overlay 不受影响。
+
+显式 `KIROCLAUDE_*_MODEL` 覆盖值会原样保留；自定义 ID 确实支持更大窗口时，
+请在覆盖值中带上 `[1m]`。这一变化仅适用于 Kiro 启动器，独立 Bedrock 模式不变。
+
+可在 checkout 中运行实际客户端回归探测：
+
+```bash
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude \
+  --thresholds --cases 1m-old-threshold,1m-above
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --tool-loop
+```
+
+脚本使用本地假 API、假凭据和临时 Claude 状态，不调用真实模型；检查模型 ID、
+有效窗口、大输入是否完整发出，以及自动压缩事件。输出仅含元数据和计数；
+上游实际容量仍需独立实测。
+`--tool-loop` 会执行两次无副作用的 `Bash true`，比较已发送前缀与下一轮历史。
+
+Kiro overlay 使用 `CLAUDE_CODE_TOASTY_THIMBLE=0` 和
+`CLAUDE_CODE_GENTLE_PARASOL=0`，关闭 Claude Code 2.1.270 中不保留在后续历史里的
+临时批处理提醒和次级提醒。若把它们投影为 Kiro user 文本，后续缺失就会破坏
+Fable 的签名前缀。这些设置仅作用于当前进程；升级 Claude Code 时，应重新运行
+`--tool-loop` 验证。
+
+启动器还会声明 `claude-code-bash-v1` 兼容模式，并发送工作目录的 SHA-256 哈希，
+二者绑定在 provider 的加密回放记录中。Claude 的 Bash 工具会在存储历史前移除
+指向相同目录的字面量 `cd` 前缀；网关只比较这个已验证的归一形式，仍绑定命令
+后缀、其余参数、工具名称／ID、租户、模型和 replay owner。Header 不发送目录
+原文。切换到其他目录、变量展开和未识别的改写仍严格校验；工具执行目录改变时，
+客户端须提供对应上下文，网关不会从提示词猜测目录。
 
 Claude Code 还会发送正整数 `max_tokens`（验证过的 GPT 请求为 64,000），但 Kiro
 GPT stateless schema 会拒绝已测试的所有上游 output-token 字段。启动器因此发送：
@@ -110,12 +148,21 @@ GPT 请求仍会 fail closed。它也不会改变 OpenAI Responses、Chat Comple
 其他 Anthropic 客户端或普通 `claude` 命令的行为。
 
 私有模型目录可通过 `KIROCLAUDE_SOL_MODEL`、`KIROCLAUDE_TERRA_MODEL` 和
-`KIROCLAUDE_LUNA_MODEL` 覆盖这三个 ID。
+`KIROCLAUDE_LUNA_MODEL` 覆盖这三个 ID。`KIROCLAUDE_KIRO_FABLE_MODEL` 可覆盖
+Kiro Fable 映射，不影响独立的原生 Bedrock 备用后端。
 
 ### 通过原生 Bedrock 使用 Fable 5.1
 
-Fable 不能直接成为 Kiro picker 的一行，因为 Claude Code 会在进程启动时固定
-provider 和 base URL。请使用独立进程启动 Bedrock 备用后端：
+Kiro 已通过 `/v1/responses` 和 `/v1/messages` 提供 Fable 5.1。它使用无状态
+Responses 投影，因为 Kiro 原生 `CreateResponse` 当前拒绝该模型；已存储续轮
+仍由 Provider 自有 continuation 和 replay 状态支持。
+
+Messages 的 adaptive thinking 默认采用 Fable 原生的 `omitted` 显示方式，
+仍保留并通过 opaque signature 回放签名推理。显式
+`thinking.display: "summarized"` 会原样保留。Kiro 可能返回多段分别签名的摘要；
+网关会拒绝这个尚不支持的形态，不会拼接签名或丢弃推理来绕过错误。
+
+Kiro 不可用或明确需要 AWS 原生通道时，可使用独立进程启动 Bedrock 备用后端：
 
 ```bash
 PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
@@ -131,7 +178,8 @@ helper 或 `ANTHROPIC_BASE_URL`。对应覆盖项为 `KIROCLAUDE_AWS_PROFILE`、
 再启用 Bedrock；skills 等其他原生设置仍然共享。
 
 Kiro 与 Bedrock 之间的切换需要启动新进程；如果之前的 signed thinking 属于特定
-provider，还应新建会话，不能在已有会话中当作普通模型切换。
+provider，还应新建会话，不能在已有会话中当作普通模型切换。Kiro 进程内可以
+直接选择内置 `fable` 别名，或设置 `KIROCLAUDE_MODEL=fable`。
 
 ## 兼容边界
 

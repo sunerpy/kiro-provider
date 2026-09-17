@@ -5,6 +5,7 @@ interface QueueEntry {
 
 const sessionQueues = new Map<string, QueueEntry>();
 const accountQueues = new Map<string, QueueEntry>();
+const accountCapacityListeners = new Set<() => void>();
 
 export interface PipelineDeadline {
   readonly signal: AbortSignal;
@@ -83,6 +84,9 @@ async function acquireKeyedQueue(
         queues.delete(key);
       }
     });
+    if (queues === accountQueues) {
+      for (const listener of accountCapacityListeners) listener();
+    }
   };
   try {
     await abortable(previous, signal);
@@ -106,6 +110,17 @@ export function acquireSessionQueue(key: string, signal: AbortSignal): Promise<(
 
 export function acquireAccountQueue(accountId: string, signal: AbortSignal): Promise<() => void> {
   return acquireKeyedQueue(accountQueues, accountId, signal);
+}
+
+/** Includes the active lease and queued reservations, even before their first await resolves. */
+export function accountQueueDepth(accountId: string): number {
+  return accountQueues.get(accountId)?.waiters ?? 0;
+}
+
+/** Internal admission wake-up, synchronous with releasing the last reservation. */
+export function onAccountCapacityAvailable(listener: () => void): () => void {
+  accountCapacityListeners.add(listener);
+  return () => accountCapacityListeners.delete(listener);
 }
 
 export function createPipelineDeadline(

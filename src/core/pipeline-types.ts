@@ -6,6 +6,7 @@ import type { PipelineNativeContextCapabilities } from "../kiro/native-context-c
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
+import type { ClientNormalization } from "../protocol/client-normalization.js";
 import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import type { AffinityStallTracker } from "./affinity-stall.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
@@ -128,6 +129,7 @@ export type PipelineReasoningReplayStore = Pick<
 
 export interface RunChatCompletionOptions {
   readonly diagnostics?: RequestDiagnostics;
+  readonly clientNormalization?: ClientNormalization;
   readonly validateToolArguments?: ValidateToolArguments;
   readonly onProjection?: (
     diagnostics: import("../kiro/types.js").RequestTransformDiagnostics,
