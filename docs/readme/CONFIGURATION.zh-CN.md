@@ -172,7 +172,9 @@ kiro-provider accounts remove <id|email>
 `accounts relogin` 会先解析目标，再打开设备授权；旧记录缺少 profile 时会自行
 发现，显式传入 `--profile-arn` 时会验证该 profile，最后在写入凭证前通过 Kiro
 usage 邮箱校验实际登录身份。它保留所选内部账号 ID，因此已有会话亲和仍可继续引用
-同一账号。`accounts remove` 默认要求确认；非交互删除必须使用 `--yes`，且会
+同一账号。已经绑定 profile 的账号 ID 不允许在 relogin 时换到另一 profile；应使用
+新的 `login` 添加该 profile。`accounts remove` 默认要求确认；非交互删除必须使用
+`--yes`，且会
 一并删除该账号的持久化亲和、输出 lineage 与 reasoning replay 记录。
 
 一个会轮换的 refresh token 只应由一个认证所有者维护。导入后继续让独立运行

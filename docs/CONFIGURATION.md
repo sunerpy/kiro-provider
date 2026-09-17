@@ -191,7 +191,9 @@ discovers a profile when the legacy row has none (or validates an explicit
 `--profile-arn`), then verifies the authenticated Kiro usage email before
 writing credentials.
 It preserves the selected internal account ID so existing session affinity can
-continue to reference the same account. `accounts remove` prompts by default;
+continue to reference the same account. An account ID already bound to a profile
+cannot be re-logged into a different profile; add that profile with a fresh
+`login` instead. `accounts remove` prompts by default;
 `--yes` is required for non-interactive deletion, which also removes that
 account's persisted affinity, output-lineage, and reasoning-replay rows.
 

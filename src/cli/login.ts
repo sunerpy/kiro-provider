@@ -182,6 +182,15 @@ export async function runLogin(
   const stdout = dependencies.stdout ?? console.log;
   const stderr = dependencies.stderr ?? console.error;
   const replaceAccount = options.replaceAccount;
+  if (
+    options.profileArn !== undefined &&
+    replaceAccount?.profileArn !== undefined &&
+    options.profileArn !== replaceAccount.profileArn
+  ) {
+    throw new Error(
+      "Re-login cannot change the Kiro profile bound to an existing account; add the other profile with a new login",
+    );
+  }
   const startUrl = normalizeStartUrl(options.startUrl ?? replaceAccount?.startUrl);
   const oidcRegion = RegionSchema.parse(
     options.region ?? replaceAccount?.oidcRegion ?? replaceAccount?.region ?? config.default_region,

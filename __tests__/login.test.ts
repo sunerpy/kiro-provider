@@ -336,6 +336,30 @@ describe("runLogin profile discovery", () => {
       profileArn,
     });
   });
+
+  test("rejects changing the profile of an existing account ID", async () => {
+    const selected = stored();
+    const replacementArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/OTHER_PROFILE";
+    const harness = createHarness(
+      [selected],
+      async () => ({
+        email: selected.email,
+        usedCount: 0,
+        limitCount: 1,
+        overageCount: 0,
+      }),
+      "fresh-client",
+      [{ arn: PROFILE_ARN }, { arn: replacementArn }],
+    );
+
+    await expect(
+      runLogin(config, { replaceAccount: selected, profileArn: replacementArn }, harness.deps),
+    ).rejects.toThrow(/cannot change the Kiro profile bound to an existing account/);
+
+    expect(harness.profileCalls).toEqual([]);
+    expect(harness.usageCalls).toEqual([]);
+    expect(harness.inserted).toEqual([]);
+  });
 });
 
 describe("runLogin fresh login identity", () => {
