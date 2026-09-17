@@ -140,6 +140,7 @@ CodeWhisperer/Kiro 流式管道。它保留：
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
 - 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
+- 修复旧版 Claude Code 历史中同一 assistant 轮次含多个不同空 direct `thinking` 块的情况：省略全部歧义 replay 信封，但保留可见 assistant/tool 历史；兼容损失通过 `x-kiro-reasoning-replay-mode: conflict-omitted` 与脱敏审计事件明确暴露。
 
 在 `v3-auto` 中，只有原生 Responses 通道不能承载请求时，该通道才使用显式
 legacy 指令前缀。它不会把尾部指令移入更早历史，也不会构造空 current user。

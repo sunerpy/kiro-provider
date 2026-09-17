@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type LoginDependencies, runLogin } from "../src/cli/login.js";
 import { ConfigSchema } from "../src/config/schema.js";
+import type { KiroAvailableProfile } from "../src/kiro/management-client.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import type { StoredAccount } from "../src/storage/accounts-db.js";
 
@@ -11,6 +12,7 @@ const config = ConfigSchema.parse({
 });
 
 const PLACEHOLDER = "builder-id@aws.amazon.com";
+const PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1";
 
 function stored(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -21,6 +23,7 @@ function stored(overrides: Partial<StoredAccount> = {}): StoredAccount {
     oidcRegion: "us-east-1",
     clientId: "old-client",
     clientSecret: "old-secret",
+    profileArn: PROFILE_ARN,
     refreshToken: "old-refresh",
     accessToken: "old-access",
     expiresAt: 1,
@@ -43,6 +46,7 @@ type Harness = {
   readonly removed: string[];
   readonly stdout: string[];
   readonly stderr: string[];
+  readonly profileCalls: Array<{ auth: KiroAuthDetails; region: string }>;
   readonly usageCalls: KiroAuthDetails[];
   readonly usageOptions: Array<{ proxyUrl?: string; timeoutMs?: number } | undefined>;
 };
@@ -51,11 +55,20 @@ function createHarness(
   existing: readonly StoredAccount[],
   fetchUsage: LoginDependencies["fetchUsage"],
   clientId = "fresh-client",
+  profiles: readonly KiroAvailableProfile[] = [
+    {
+      arn: PROFILE_ARN,
+      profileName: "Primary",
+      startUrl: "https://view.awsapps.com/start",
+      status: "ACTIVE",
+    },
+  ],
 ): Harness {
   const inserted: ManagedAccount[] = [];
   const removed: string[] = [];
   const stdout: string[] = [];
   const stderr: string[] = [];
+  const profileCalls: Harness["profileCalls"] = [];
   const usageCalls: KiroAuthDetails[] = [];
   const usageOptions: Harness["usageOptions"] = [];
   const deps: LoginDependencies = {
@@ -81,6 +94,10 @@ function createHarness(
       region: "us-east-1",
       authMethod: "idc",
     }),
+    listProfiles: async (auth, region) => {
+      profileCalls.push({ auth, region });
+      return profiles.filter((profile) => profile.arn.split(":")[3] === region);
+    },
     fetchUsage: async (auth, options) => {
       usageCalls.push(auth);
       usageOptions.push(options);
@@ -101,8 +118,225 @@ function createHarness(
     stdout: (message) => stdout.push(message),
     stderr: (message) => stderr.push(message),
   };
-  return { deps, inserted, removed, stdout, stderr, usageCalls, usageOptions };
+  return {
+    deps,
+    inserted,
+    removed,
+    stdout,
+    stderr,
+    profileCalls,
+    usageCalls,
+    usageOptions,
+  };
 }
+
+describe("runLogin profile discovery", () => {
+  test("discovers and persists a profile before requesting usage", async () => {
+    const harness = createHarness([], async () => ({
+      email: "dev@example.com",
+      usedCount: 1,
+      limitCount: 100,
+      overageCount: 0,
+    }));
+
+    const result = await runLogin(config, {}, harness.deps);
+
+    expect(harness.profileCalls.map(({ region }) => region)).toEqual(["us-east-1", "eu-central-1"]);
+    for (const call of harness.profileCalls) {
+      expect(call.auth).toMatchObject({ access: "fresh-access", oidcRegion: "us-east-1" });
+      expect(call.auth).not.toHaveProperty("profileArn");
+    }
+    expect(harness.usageCalls[0]?.profileArn).toBe(PROFILE_ARN);
+    expect(harness.inserted[0]?.profileArn).toBe(PROFILE_ARN);
+    expect(result.account.profileArn).toBe(PROFILE_ARN);
+  });
+
+  test("selects an explicitly requested profile from multiple available profiles", async () => {
+    const secondArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE2";
+    const harness = createHarness(
+      [],
+      async () => ({ email: "dev@example.com", usedCount: 0, limitCount: 1, overageCount: 0 }),
+      "fresh-client",
+      [
+        { arn: PROFILE_ARN, profileName: "Primary" },
+        { arn: secondArn, profileName: "Secondary" },
+      ],
+    );
+
+    const result = await runLogin(config, { profileArn: secondArn }, harness.deps);
+
+    expect(result.account.profileArn).toBe(secondArn);
+    expect(harness.usageCalls[0]?.profileArn).toBe(secondArn);
+    expect(harness.profileCalls.map(({ region }) => region)).toEqual(["us-east-1"]);
+  });
+
+  test("keeps the OIDC region separate from a profile in another region", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-central-1:123456789012:profile/EU_PROFILE";
+    const harness = createHarness(
+      [],
+      async () => ({ email: "dev@example.com", usedCount: 0, limitCount: 1, overageCount: 0 }),
+      "fresh-client",
+      [{ arn: profileArn, profileName: "Europe" }],
+    );
+
+    const result = await runLogin(config, {}, harness.deps);
+
+    expect(harness.profileCalls.map(({ region }) => region)).toEqual(["us-east-1", "eu-central-1"]);
+    expect(harness.usageCalls[0]).toMatchObject({
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+    expect(harness.inserted[0]).toMatchObject({
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+    expect(result.account).toMatchObject({
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+  });
+
+  test("queries only the requested profile region when an ARN is explicit", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-central-1:123456789012:profile/EU_PROFILE";
+    const harness = createHarness(
+      [],
+      async () => ({ email: "dev@example.com", usedCount: 0, limitCount: 1, overageCount: 0 }),
+      "fresh-client",
+      [{ arn: profileArn }],
+    );
+
+    const result = await runLogin(config, { profileArn }, harness.deps);
+
+    expect(harness.profileCalls.map(({ region }) => region)).toEqual(["eu-central-1"]);
+    expect(result.account).toMatchObject({
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+  });
+
+  test("rejects an explicit profile ARN outside the supported control-plane regions", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-west-1:123456789012:profile/OTHER_PROFILE";
+    const harness = createHarness([], async () => ({
+      email: "dev@example.com",
+      usedCount: 0,
+      limitCount: 1,
+      overageCount: 0,
+    }));
+
+    await expect(runLogin(config, { profileArn }, harness.deps)).rejects.toThrow(
+      /unsupported region or invalid format/,
+    );
+
+    expect(harness.profileCalls).toEqual([]);
+    expect(harness.usageCalls).toEqual([]);
+    expect(harness.inserted).toEqual([]);
+  });
+
+  test("uses a unique start URL match and rejects an ambiguous profile list", async () => {
+    const secondArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE2";
+    const profiles = [
+      { arn: PROFILE_ARN, startUrl: "https://first.awsapps.com/start" },
+      { arn: secondArn, startUrl: "https://second.awsapps.com/start" },
+    ];
+    const usage = async () => ({
+      email: "dev@example.com",
+      usedCount: 0,
+      limitCount: 1,
+      overageCount: 0,
+    });
+    const matched = createHarness([], usage, "fresh-client", profiles);
+    const selected = await runLogin(
+      config,
+      { startUrl: "https://second.awsapps.com/" },
+      matched.deps,
+    );
+    expect(selected.account.profileArn).toBe(secondArn);
+
+    const ambiguous = createHarness([], usage, "fresh-client", profiles);
+    await expect(runLogin(config, {}, ambiguous.deps)).rejects.toThrow(
+      /returned 2 available profiles.*--profile-arn/,
+    );
+    expect(ambiguous.inserted).toEqual([]);
+  });
+
+  test("derives distinct account IDs for distinct profiles of the same identity", async () => {
+    const secondArn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE2";
+    const profiles = [{ arn: PROFILE_ARN }, { arn: secondArn }];
+    const usage = async () => ({
+      email: "dev@example.com",
+      usedCount: 0,
+      limitCount: 1,
+      overageCount: 0,
+    });
+    const first = createHarness([], usage, "fresh-client", profiles);
+    const second = createHarness([], usage, "fresh-client", profiles);
+
+    const [a, b] = await Promise.all([
+      runLogin(config, { profileArn: PROFILE_ARN }, first.deps),
+      runLogin(config, { profileArn: secondArn }, second.deps),
+    ]);
+
+    expect(a.account.id).not.toBe(b.account.id);
+  });
+
+  test("fails before usage or persistence when no usable profile is available", async () => {
+    const harness = createHarness(
+      [],
+      async () => ({ email: "dev@example.com", usedCount: 0, limitCount: 1, overageCount: 0 }),
+      "fresh-client",
+      [],
+    );
+
+    await expect(runLogin(config, {}, harness.deps)).rejects.toThrow(/no available Kiro profile/i);
+    expect(harness.usageCalls).toEqual([]);
+    expect(harness.inserted).toEqual([]);
+  });
+
+  test("keeps a known profile during re-login without rediscovery", async () => {
+    const selected = stored();
+    const harness = createHarness([selected], async () => ({
+      email: selected.email,
+      usedCount: 0,
+      limitCount: 1,
+      overageCount: 0,
+    }));
+
+    await runLogin(config, { replaceAccount: selected }, harness.deps);
+
+    expect(harness.profileCalls).toEqual([]);
+    expect(harness.usageCalls[0]?.profileArn).toBe(PROFILE_ARN);
+  });
+
+  test("keeps a known cross-region profile during re-login", async () => {
+    const profileArn = "arn:aws:codewhisperer:eu-central-1:123456789012:profile/EU_PROFILE";
+    const selected = stored({ region: "eu-central-1", profileArn });
+    const harness = createHarness([selected], async () => ({
+      email: selected.email,
+      usedCount: 0,
+      limitCount: 1,
+      overageCount: 0,
+    }));
+
+    const result = await runLogin(config, { replaceAccount: selected }, harness.deps);
+
+    expect(harness.profileCalls).toEqual([]);
+    expect(harness.usageCalls[0]).toMatchObject({
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+    expect(result.account).toMatchObject({
+      id: selected.id,
+      region: "eu-central-1",
+      oidcRegion: "us-east-1",
+      profileArn,
+    });
+  });
+});
 
 describe("runLogin fresh login identity", () => {
   test("fetches usage before deriving the account ID and stores the real email", async () => {

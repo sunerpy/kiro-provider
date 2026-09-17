@@ -26,6 +26,7 @@ export type AnthropicCompatibilityOptions = {
   readonly cacheControlObserved?: boolean;
   readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";
   readonly outputTokenLimitMode?: "advisory";
+  readonly reasoningReplayMode?: "conflict-omitted";
 };
 
 type AdapterOptions = AnthropicCompatibilityOptions & {
@@ -87,6 +88,9 @@ function compatibilityHeaders(
   }
   if (options.outputTokenLimitMode === "advisory") {
     headers["x-kiro-output-token-limit-mode"] = "advisory-unenforced";
+  }
+  if (options.reasoningReplayMode === "conflict-omitted") {
+    headers["x-kiro-reasoning-replay-mode"] = "conflict-omitted";
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
 }

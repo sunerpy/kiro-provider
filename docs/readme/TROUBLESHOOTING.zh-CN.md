@@ -89,6 +89,16 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   因此 `refresh_token_dead: false` 的含义是"去查网络或代理"，而不是
   "重新登录"。
 
+### IAM Identity Center 登录后报 `profileArn is required for this request`
+
+- **原因：** 账号行缺少 `profile_arn`。旧版直接登录可能只保存 OIDC token 与
+  start URL，却没有发现 Kiro profile，导致运行时请求未携带必需的 profile 绑定。
+- **处置：** 执行 `kiro-provider accounts relogin <id|email>`。当前版本会由
+  Provider 直接调用 Kiro `List-Available-Profiles`，在查询用量或推理前持久化选中的
+  ARN，全程不需要安装 Kiro CLI。身份存在多个 profile 时传入
+  `--profile-arn <arn>`；ARN 不可用或候选仍有歧义时，会在写入凭证前失败。Provider
+  会把 token 的 OIDC 区域与该 ARN 编码的运行区域分别保存。
+
 ### 某行的邮箱是占位符 `builder-id@aws.amazon.com`
 
 - **查看：** `accounts list` 的 `EMAIL` 列；`login` 命令曾打印
@@ -223,6 +233,19 @@ placeholder ...`。
 - **处置：** 原样回放 `thinking` 块（文本与签名都不改动），或从历史中删除
   `thinking` 块；Kiro 接受不含它们的历史。Provider 遇到该错误不会重试、
   不换账号、不静默降级，也不会把账号标记为不健康。
+
+### `400 ... is not a valid single assistant reasoning block`（Claude Code）
+
+- **查看：** `/v1/messages` 返回 HTTP `400`，审计 code 为
+  `invalid_reasoning_replay`，路径类似 `messages.11.content.1`。
+- **原因：** 某些旧版网关响应会在同一个 Claude Code assistant 工具轮次中留下
+  两个不同的、仅含签名的空 `thinking` 块。Kiro 历史只有一个 reasoning slot，
+  不能同时回放两个签名，猜测任意一个也不安全。
+- **处置：** 当前版本保留可见 assistant/tool 历史，省略该消息中全部冲突的空
+  direct-reasoning 信封；响应头返回
+  `x-kiro-reasoning-replay-mode: conflict-omitted`，并记录只含消息/块数量的
+  `anthropic_reasoning_replay_conflict_omitted` warn 审计。兼容范围刻意收窄：非空
+  reasoning、Provider `kr1_` / `kr2_` token、redacted 块或混合类型冲突仍 fail closed。
 
 ### `400 unsupported_reasoning_plaintext_replay`（Responses）
 

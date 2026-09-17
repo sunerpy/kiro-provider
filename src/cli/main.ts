@@ -170,6 +170,7 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
       await dependencies.runLogin(config, {
         ...(command.startUrl ? { startUrl: command.startUrl } : {}),
         ...(command.region ? { region: command.region } : {}),
+        ...(command.profileArn ? { profileArn: command.profileArn } : {}),
       });
       return 0;
     }
@@ -219,6 +220,7 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
         replaceAccount: selected,
         ...(command.startUrl ? { startUrl: command.startUrl } : {}),
         ...(command.region ? { region: command.region } : {}),
+        ...(command.profileArn ? { profileArn: command.profileArn } : {}),
       });
       return 0;
     }

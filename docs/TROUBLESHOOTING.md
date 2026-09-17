@@ -96,6 +96,18 @@ true` and an `error_code` such as `invalid_grant`, `InvalidGrantException`,
   later. `refresh_token_dead: false` therefore means "look at the network or
   proxy", not "re-login".
 
+### `profileArn is required for this request` after an IAM Identity Center login
+
+- **Cause:** The account row has no `profile_arn`. Older direct-login builds could
+  store the OIDC token and start URL without discovering the Kiro profile, so
+  runtime requests reached Kiro without the required profile binding.
+- **Remedy:** Run `kiro-provider accounts relogin <id|email>`. Current builds call
+  Kiro `List-Available-Profiles` directly and persist the selected ARN before
+  usage or inference. No Kiro CLI installation is involved. If the identity has
+  multiple profiles, pass `--profile-arn <arn>`; an unavailable ARN or ambiguous
+  profile list fails before credentials are written. The provider keeps the
+  token's OIDC region separate from the runtime region encoded by that ARN.
+
 ### A row shows the placeholder email `builder-id@aws.amazon.com`
 
 - **Look at:** `accounts list` → `EMAIL` column; the `login` command printed
@@ -254,6 +266,21 @@ Invalid signature in thinking block`.
   accepts a history without them. The provider does not retry, switch
   accounts, or degrade silently on this error, and does not mark the account
   unhealthy.
+
+### `400 ... is not a valid single assistant reasoning block` (Claude Code)
+
+- **Look at:** HTTP `400` from `/v1/messages`, audit code
+  `invalid_reasoning_replay`, and a path such as `messages.11.content.1`.
+- **Cause:** Some earlier gateway responses could leave two different
+  signature-only `thinking` blocks in one Claude Code assistant tool turn. Kiro
+  history has only one reasoning slot, so replaying either signature would be a
+  guess and replaying both is impossible.
+- **Remedy:** Current builds preserve the visible assistant/tool history, omit
+  all conflicting empty direct-reasoning envelopes, emit the response header
+  `x-kiro-reasoning-replay-mode: conflict-omitted`, and write the sanitized warn
+  event `anthropic_reasoning_replay_conflict_omitted` with message/block counts.
+  This repair is deliberately narrow: non-empty reasoning, provider `kr1_` /
+  `kr2_` tokens, redacted blocks, or mixed conflict types still fail closed.
 
 ### `400 unsupported_reasoning_plaintext_replay` (Responses)
 
