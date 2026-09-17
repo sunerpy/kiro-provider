@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.5.2](https://github.com/sunerpy/kiro-provider/compare/v3.5.1...v3.5.2) (2026-09-17)
+
+
+### Bug Fixes
+
+* **auth:** 修复 IDC profile 与 Claude reasoning 回放 ([b455cf6](https://github.com/sunerpy/kiro-provider/commit/b455cf6265a64cb6e1da8d64907dec6d3448c930))
+* **auth:** 修复 IDC profile 与 Claude reasoning 回放 ([3946a0b](https://github.com/sunerpy/kiro-provider/commit/3946a0b3c5cddd6b15f312136ef80f541396b4b1))
+* **auth:** 禁止 relogin 更换既有 profile ([65a4ad2](https://github.com/sunerpy/kiro-provider/commit/65a4ad2809762efb011c9f20b354512d2f29f68a))
+
 ## [3.5.1](https://github.com/sunerpy/kiro-provider/compare/v3.5.0...v3.5.1) (2026-09-16)
 
 
