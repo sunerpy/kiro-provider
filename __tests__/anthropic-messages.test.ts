@@ -484,10 +484,14 @@ describe("Anthropic request adapter", () => {
     });
   });
 
-  test("rejects ambiguous image origins across tool results or direct message content", () => {
-    const image = {
+  test("lifts multiple image-valued tool results in stable order with an explicit compatibility mode", () => {
+    const firstImage = {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "AQID" },
+    };
+    const secondImage = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "BAUG" },
     };
     const assistant = {
       role: "assistant",
@@ -500,28 +504,57 @@ describe("Anthropic request adapter", () => {
       { name: "export", description: "export an image", input_schema: { type: "object" } },
     ];
 
-    expect(
-      adaptAnthropicMessagesRequest(
-        validRequest({
-          tools,
-          messages: [
-            assistant,
-            {
-              role: "user",
-              content: [
-                { type: "tool_result", tool_use_id: "tool-a", content: [image] },
-                { type: "tool_result", tool_use_id: "tool-b", content: [image] },
-              ],
-            },
-          ],
-        }),
-        { requireMaxTokens: true },
-      ),
-    ).toMatchObject({
-      ok: false,
-      code: "unsupported_tool_result_content",
-      param: "messages.1.content.1.content.0",
+    const adapted = adaptAnthropicMessagesRequest(
+      validRequest({
+        tools,
+        messages: [
+          assistant,
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "tool-a", content: [firstImage] },
+              { type: "tool_result", tool_use_id: "tool-b", content: [secondImage] },
+            ],
+          },
+        ],
+      }),
+      { requireMaxTokens: true },
+    );
+    expect(adapted).toMatchObject({
+      ok: true,
+      value: {
+        toolResultImageMode: "multiple-lifted",
+        toolResultImageMessages: 1,
+        toolResultImageResults: 2,
+        toolResultImageBlocks: 2,
+      },
     });
+    if (!adapted.ok) return;
+    expect(adapted.value.body.messages[1]?.content).toEqual([
+      expect.objectContaining({ type: "tool_result", toolCallId: "tool-a", content: [] }),
+      expect.objectContaining({ type: "image", data: "AQID" }),
+      expect.objectContaining({ type: "tool_result", toolCallId: "tool-b", content: [] }),
+      expect.objectContaining({ type: "image", data: "BAUG" }),
+    ]);
+    const transformed = buildCodeWhispererRequest(
+      adapted.value.body,
+      MODEL,
+      new FakeAccountManager().toAuthDetails(account()),
+    );
+    expect(transformed.request.conversationState.currentMessage.userInputMessage).toMatchObject({
+      images: [
+        { format: "png", source: { bytes: Uint8Array.from([1, 2, 3]) } },
+        { format: "png", source: { bytes: Uint8Array.from([4, 5, 6]) } },
+      ],
+      userInputMessageContext: {
+        toolResults: [
+          { toolUseId: "tool-a", content: [], status: "success" },
+          { toolUseId: "tool-b", content: [], status: "success" },
+        ],
+      },
+    });
+
+    const image = firstImage;
 
     expect(
       adaptAnthropicMessagesRequest(
@@ -1517,6 +1550,67 @@ describe("POST /v1/messages", () => {
       audit.restore();
     }
   });
+
+  test.each([false, true])(
+    "marks multiple lifted tool-result images on Messages and token count (stream=%s)",
+    async (stream) => {
+      const audit = captureAuditEvents();
+      const image = (data: string) => ({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data },
+      });
+      const body = validRequest({
+        stream,
+        tools: [
+          { name: "export", description: "export an image", input_schema: { type: "object" } },
+        ],
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tool-a", name: "export", input: {} },
+              { type: "tool_use", id: "tool-b", name: "export", input: {} },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "tool-a", content: [image("AQID")] },
+              { type: "tool_result", tool_use_id: "tool-b", content: [image("BAUG")] },
+            ],
+          },
+        ],
+      });
+
+      try {
+        const response = await handleMessages(
+          request(body),
+          config(),
+          dependencies(async () =>
+            stream
+              ? ndjson([
+                  chunk({ content: "continued" }, null),
+                  chunk({}, "stop", { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 }),
+                ])
+              : canonicalResponse(completion({ text: "continued" })),
+          ),
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-kiro-tool-result-image-mode")).toBe("multiple-lifted");
+        if (stream) expect(await response.text()).toContain("message_stop");
+
+        const countResponse = await handleMessageTokenCount(request(body), config());
+        expect(countResponse.status).toBe(200);
+        expect(countResponse.headers.get("x-kiro-tool-result-image-mode")).toBe("multiple-lifted");
+        expect(audit.events("anthropic_tool_result_images_multiple_lifted")).toEqual([
+          expect.objectContaining({ message_count: 1, result_count: 2, image_count: 2 }),
+          expect.objectContaining({ message_count: 1, result_count: 2, image_count: 2 }),
+        ]);
+      } finally {
+        audit.restore();
+      }
+    },
+  );
 
   test.each([false, true])(
     "accepts GPT max_tokens as advisory only through the explicit compatibility header (stream=%s)",
