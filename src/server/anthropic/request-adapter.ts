@@ -102,6 +102,10 @@ export type AdaptedAnthropicRequest = {
   readonly reasoningReplayMode?: "conflict-omitted";
   readonly reasoningReplayConflictMessages?: number;
   readonly reasoningReplayConflictBlocks?: number;
+  readonly toolResultImageMode?: "multiple-lifted";
+  readonly toolResultImageMessages?: number;
+  readonly toolResultImageResults?: number;
+  readonly toolResultImageBlocks?: number;
 };
 
 export type AdaptAnthropicRequestResult =
@@ -529,6 +533,8 @@ function mapMessage(
       readonly message: CanonicalMessage;
       readonly replay?: CanonicalReasoningReplay["lookup"];
       readonly reasoningReplayConflictBlocks?: number;
+      readonly imageToolResultCount?: number;
+      readonly imageToolResultBlockCount?: number;
     } {
   const path = `messages.${index}`;
   for (const key of Object.keys(message)) {
@@ -560,6 +566,8 @@ function mapMessage(
   let cachePoint = false;
   let directImagePath: string | undefined;
   let imageToolResultPath: string | undefined;
+  let imageToolResultCount = 0;
+  let imageToolResultBlockCount = 0;
   for (const [blockIndex, block] of message.content.entries()) {
     const blockPath = `${path}.content.${blockIndex}`;
     if (message.role === "system" && block.type !== "text") {
@@ -665,14 +673,9 @@ function mapMessage(
               resultContent.images[0]?.path,
             );
           }
-          if (imageToolResultPath !== undefined) {
-            return failure(
-              `Invalid request: ${resultContent.images[0]?.path} belongs to a second image-valued tool result, but Kiro cannot retain both tool associations`,
-              "unsupported_tool_result_content",
-              resultContent.images[0]?.path,
-            );
-          }
-          imageToolResultPath = blockPath;
+          imageToolResultPath ??= blockPath;
+          imageToolResultCount += 1;
+          imageToolResultBlockCount += resultContent.images.length;
         }
         content.push({
           type: "tool_result",
@@ -682,9 +685,11 @@ function mapMessage(
           path: blockPath,
         });
         // Kiro's ToolResult content supports only text/JSON, while its user
-        // message supports native images. Lift one image-bearing result into
-        // that same user turn; with only one such result, the tool association
-        // remains unambiguous and the image bytes stay model-visible.
+        // message supports native images. Lift image blocks into that same user
+        // turn in stable result/block order. Kiro still receives every tool ID,
+        // result status and image byte, but its wire schema cannot bind an image
+        // to a particular tool result; multiple image-bearing results therefore
+        // carry an explicit compatibility marker at the HTTP boundary.
         content.push(...resultContent.images);
         break;
       }
@@ -755,6 +760,7 @@ function mapMessage(
     },
     ...(replay !== undefined ? { replay } : {}),
     ...(reasoningReplayConflictBlocks > 0 ? { reasoningReplayConflictBlocks } : {}),
+    ...(imageToolResultCount > 0 ? { imageToolResultCount, imageToolResultBlockCount } : {}),
   };
 }
 
@@ -982,6 +988,9 @@ export function adaptAnthropicMessagesRequest(
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
   let reasoningReplayConflictMessages = 0;
   let reasoningReplayConflictBlocks = 0;
+  let toolResultImageMessages = 0;
+  let toolResultImageResults = 0;
+  let toolResultImageBlocks = 0;
   if (system.length > 0) {
     messages.push({
       role: "system",
@@ -1000,6 +1009,11 @@ export function adaptAnthropicMessagesRequest(
     if (mapped.reasoningReplayConflictBlocks !== undefined) {
       reasoningReplayConflictMessages += 1;
       reasoningReplayConflictBlocks += mapped.reasoningReplayConflictBlocks;
+    }
+    if ((mapped.imageToolResultCount ?? 0) > 1) {
+      toolResultImageMessages += 1;
+      toolResultImageResults += mapped.imageToolResultCount ?? 0;
+      toolResultImageBlocks += mapped.imageToolResultBlockCount ?? 0;
     }
     if (mapped.replay !== undefined) {
       const output = {
@@ -1101,6 +1115,14 @@ export function adaptAnthropicMessagesRequest(
             reasoningReplayMode: "conflict-omitted" as const,
             reasoningReplayConflictMessages,
             reasoningReplayConflictBlocks,
+          }
+        : {}),
+      ...(toolResultImageMessages > 0
+        ? {
+            toolResultImageMode: "multiple-lifted" as const,
+            toolResultImageMessages,
+            toolResultImageResults,
+            toolResultImageBlocks,
           }
         : {}),
     },

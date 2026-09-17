@@ -156,6 +156,9 @@ export async function handleMessages(
     ...(adapted.value.reasoningReplayMode !== undefined
       ? { reasoningReplayMode: adapted.value.reasoningReplayMode }
       : {}),
+    ...(adapted.value.toolResultImageMode !== undefined
+      ? { toolResultImageMode: adapted.value.toolResultImageMode }
+      : {}),
   };
   if (adapted.value.cacheControlCount > 0) {
     auditLog("info", "anthropic_cache_control_observed", {
@@ -170,6 +173,15 @@ export async function handleMessages(
       model: adapted.value.body.model,
       message_count: adapted.value.reasoningReplayConflictMessages,
       block_count: adapted.value.reasoningReplayConflictBlocks,
+    });
+  }
+  if (adapted.value.toolResultImageMode === "multiple-lifted") {
+    auditLog("warn", "anthropic_tool_result_images_multiple_lifted", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      message_count: adapted.value.toolResultImageMessages,
+      result_count: adapted.value.toolResultImageResults,
+      image_count: adapted.value.toolResultImageBlocks,
     });
   }
   if (adapted.value.outputTokenLimitMode === "advisory") {
@@ -269,6 +281,15 @@ export async function handleMessageTokenCount(request: Request, config: Config):
         block_count: adapted.value.reasoningReplayConflictBlocks,
       });
     }
+    if (adapted.value.toolResultImageMode === "multiple-lifted") {
+      auditLog("warn", "anthropic_tool_result_images_multiple_lifted", {
+        request_id: ingress.requestId,
+        model: adapted.value.body.model,
+        message_count: adapted.value.toolResultImageMessages,
+        result_count: adapted.value.toolResultImageResults,
+        image_count: adapted.value.toolResultImageBlocks,
+      });
+    }
     const inputTokens = estimateInputTokens(adapted.value.body);
     return Response.json(
       { input_tokens: inputTokens },
@@ -283,6 +304,9 @@ export async function handleMessageTokenCount(request: Request, config: Config):
             : {}),
           ...(adapted.value.reasoningReplayMode === "conflict-omitted"
             ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
+            : {}),
+          ...(adapted.value.toolResultImageMode === "multiple-lifted"
+            ? { "x-kiro-tool-result-image-mode": "multiple-lifted" }
             : {}),
         },
       },

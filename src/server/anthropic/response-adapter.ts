@@ -27,6 +27,7 @@ export type AnthropicCompatibilityOptions = {
   readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";
   readonly outputTokenLimitMode?: "advisory";
   readonly reasoningReplayMode?: "conflict-omitted";
+  readonly toolResultImageMode?: "multiple-lifted";
 };
 
 type AdapterOptions = AnthropicCompatibilityOptions & {
@@ -91,6 +92,9 @@ function compatibilityHeaders(
   }
   if (options.reasoningReplayMode === "conflict-omitted") {
     headers["x-kiro-reasoning-replay-mode"] = "conflict-omitted";
+  }
+  if (options.toolResultImageMode === "multiple-lifted") {
+    headers["x-kiro-tool-result-image-mode"] = "multiple-lifted";
   }
   return Object.keys(headers).length > 0 ? headers : undefined;
 }

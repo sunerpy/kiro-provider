@@ -167,8 +167,8 @@ the built-in `fable` alias or set `KIROCLAUDE_MODEL=fable`.
 The adapter accepts the request shapes observed from Claude Code 2.1.270:
 
 - text, base64 images, standard tools, `tool_use`, `tool_result`, and `is_error`;
-- one image-bearing `tool_result` in a user message, with the tool identity,
-  status, text, and image bytes preserved;
+- one or more image-bearing `tool_result` blocks in a user message, with tool
+  identities, status, text, and image-block order preserved;
 - adjacent text blocks that form one contiguous run around an image or tool
   result;
 - top-level and mid-conversation system text through the configured projection
@@ -188,10 +188,14 @@ The adapter accepts the request shapes observed from Claude Code 2.1.270:
 - Anthropic SSE ordering, stream errors, backpressure, silence-period `ping`
   events, and `x-claude-code-session-id` affinity.
 
-A message with multiple image-bearing tool results, or direct user images mixed
-with an image-bearing tool result, is rejected because Kiro cannot preserve the
-separate image origins. A real `text → non-text → text` interleave is rejected
-for the same reason: Kiro exposes one text field.
+Kiro tool-result content carries text/JSON only, so tool-result images are lifted
+to the containing Kiro user turn. For multiple image-bearing results the wire
+keeps every tool result and image in stable order, but cannot encode a per-image
+tool association; the response explicitly reports this bounded loss as
+`x-kiro-tool-result-image-mode: multiple-lifted` and emits a count-only audit.
+Direct user images mixed with image-bearing tool results remain rejected. A real
+`text → non-text → text` interleave is also rejected because Kiro exposes one
+text field.
 
 The provider also rejects destructive context edits, Structured Outputs,
 forced tool selection, hard serial-tool requirements, and unknown beta/tool

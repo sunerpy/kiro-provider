@@ -138,8 +138,8 @@ provider，还应新建会话，不能在已有会话中当作普通模型切换
 适配器接受 Claude Code 2.1.270 中已经观察到的请求形态：
 
 - 文本、base64 图片、标准工具、`tool_use`、`tool_result` 和 `is_error`；
-- 每条 user message 中一个带图片的 `tool_result`，并保留工具身份、状态、文本和
-  图片字节；
+- 每条 user message 中一个或多个带图片的 `tool_result`，并保留工具身份、状态、
+  文本和图片块顺序；
 - 图片或 tool result 两侧构成一个连续文本簇的相邻文本块；
 - 顶层及会话中途的 system 文本，按既有 projection mode 投影；
 - adaptive thinking、`output_config.effort` 和 Claude 路径支持的 `temperature`；
@@ -155,8 +155,11 @@ provider，还应新建会话，不能在已有会话中当作普通模型切换
 - Anthropic SSE 顺序、流内错误、背压、上游静默期间的 `ping`，以及
   `x-claude-code-session-id` affinity。
 
-同一条消息包含多个图片型 tool result，或将普通 user 图片与图片型 tool result
-混用时，请求会被拒绝，因为 Kiro 无法保留不同的图片来源。真正的
+Kiro tool result 内容只支持 text/JSON，因此其中的图片会按稳定顺序提升到同一个
+Kiro user turn。多个含图结果会保留每个 tool result、状态、文本与图片字节，但 wire
+无法编码逐图对应的工具关联；响应会用
+`x-kiro-tool-result-image-mode: multiple-lifted` 显式暴露该有界损失，并记录只含数量的
+审计事件。普通 user 图片与图片型 tool result 混用仍会被拒绝。真正的
 `text → 非文本 → text` 交错输入也会被拒绝：Kiro 只有一个文本字段。
 
 Destructive context edits、Structured Outputs、强制工具、硬性串行工具要求和未知
