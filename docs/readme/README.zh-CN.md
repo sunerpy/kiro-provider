@@ -21,13 +21,13 @@
 kiro-provider 是运行在本机的 HTTP 网关，也是 Kiro 凭据的唯一所有者。它负责登录
 Kiro、按账号发现可用模型、调度请求，并向客户端提供两套主要接口：
 
-| 接口 | 路由 | 默认状态 |
-| --- | --- | --- |
-| OpenAI Responses | `POST /v1/responses` | 开启 |
-| Anthropic Messages | `POST /v1/messages` | 开启 |
-| Anthropic token 估算 | `POST /v1/messages/count_tokens` | 开启 |
-| OpenAI Chat Completions | `POST /v1/chat/completions` | 关闭；需设置 `enable_legacy_chat_completions` |
-| 模型与就绪检查 | `GET /v1/models`、`GET /health`、`GET /ready` | 开启 |
+| 接口                    | 路由                                          | 默认状态                                      |
+| ----------------------- | --------------------------------------------- | --------------------------------------------- |
+| OpenAI Responses        | `POST /v1/responses`                          | 开启                                          |
+| Anthropic Messages      | `POST /v1/messages`                           | 开启                                          |
+| Anthropic token 估算    | `POST /v1/messages/count_tokens`              | 开启                                          |
+| OpenAI Chat Completions | `POST /v1/chat/completions`                   | 关闭；需设置 `enable_legacy_chat_completions` |
+| 模型与就绪检查          | `GET /v1/models`、`GET /health`、`GET /ready` | 开启                                          |
 
 Responses 还支持本地 retrieve、delete、input-items、cancel 和续轮。网关能完整保留
 请求时会使用 KiroRuntime 原生 Responses；否则切到 stateless adapter。如果两条路径
@@ -125,8 +125,20 @@ Windows 默认目录是 `%APPDATA%\kiro-provider`。需要使用其他文件时�
 ### 2. 登录 Kiro
 
 ```bash
+# AWS Builder ID / 默认设备码流程
 kiro-provider login
+
+# IAM Identity Center
+kiro-provider login \
+  --start-url https://example.awsapps.com/start \
+  --region us-east-1
 ```
+
+直接登录会由 Provider 自行发现并持久化 Kiro profile，不依赖 Kiro CLI 或其状态。
+如果该身份有多个 profile，且 start URL 无法唯一选中，可重试并传入
+`--profile-arn <arn>`。
+登录/OIDC 区域与选中 profile 的运行区域可以不同；Provider 会枚举 Kiro 当前的商业
+profile control plane（`us-east-1` 与 `eu-central-1`），并分别保存两者。
 
 如果已经使用 `opencode-kiro-auth`，可以把账号一次性复制到 Provider 自有数据库：
 
@@ -175,12 +187,12 @@ console.log(response.output_text);
 
 ## 接入 Agent 客户端
 
-| 客户端 | 接口 | 指南 |
-| --- | --- | --- |
-| Zuno | OpenAI Responses | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md) |
-| Codex CLI | OpenAI Responses | [隔离 profile 与兼容性检查](CODEX.zh-CN.md) |
-| Claude Code | Anthropic Messages | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
-| 其他 SDK | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md) |
+| 客户端      | 接口                  | 指南                                                             |
+| ----------- | --------------------- | ---------------------------------------------------------------- |
+| Zuno        | OpenAI Responses      | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md)                    |
+| Codex CLI   | OpenAI Responses      | [隔离 profile 与兼容性检查](CODEX.zh-CN.md)                      |
+| Claude Code | Anthropic Messages    | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
+| 其他 SDK    | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)                  |
 
 Codex 使用隔离 profile；`kiroclaude` 则保留 Claude 原生状态，只为当前进程覆盖
 provider 与模型，因此普通 `claude` 命令仍保留原有 provider。指南会注明最近一次

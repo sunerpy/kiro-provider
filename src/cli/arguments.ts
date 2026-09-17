@@ -14,15 +14,15 @@ export const CLI_USAGE = `Usage: kiro-provider <command> [options]
 Commands:
   serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
       Start the Responses, Messages, and optional legacy Chat gateway.
-  login [--config <path>] [--start-url <url>] [--region <region>]
-      Sign in directly to the provider-owned local auth store.
+  login [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
+      Sign in directly and discover the Kiro profile; --region selects the OIDC issuer.
   accounts list [--details | --json] [--sort <field>] [--order asc|desc]
       List accounts without exposing credentials.
       Sort fields: email (default), id, auth, region, health, availability,
       usage, overage, last-sync, last-used, token-expires, generation.
   accounts refresh (--all | <id|email>) [--config <path>] [--json]
       Refresh authoritative usage now and renew access tokens when needed.
-  accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>]
+  accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
       Re-authenticate one account while preserving its internal account ID.
   accounts import [--from <path>] [--force]
       Copy OpenCode Kiro accounts once into the provider-owned local store.
@@ -71,6 +71,7 @@ type LoginCommand = {
   readonly configPath?: string;
   readonly startUrl?: string;
   readonly region?: string;
+  readonly profileArn?: string;
 };
 type AccountsListCommand = {
   readonly kind: "accounts-list";
@@ -89,6 +90,7 @@ type AccountsReloginCommand = {
   readonly configPath?: string;
   readonly startUrl?: string;
   readonly region?: string;
+  readonly profileArn?: string;
 };
 type AccountsImportCommand = {
   readonly kind: "accounts-import";
@@ -159,6 +161,7 @@ function parseLogin(args: readonly string[]): LoginCommand | HelpCommand {
       config: { type: "string" },
       "start-url": { type: "string" },
       region: { type: "string" },
+      "profile-arn": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -170,6 +173,7 @@ function parseLogin(args: readonly string[]): LoginCommand | HelpCommand {
     ...(parsed.values.config ? { configPath: parsed.values.config } : {}),
     ...(parsed.values["start-url"] ? { startUrl: parsed.values["start-url"] } : {}),
     ...(parsed.values.region ? { region: parsed.values.region } : {}),
+    ...(parsed.values["profile-arn"] ? { profileArn: parsed.values["profile-arn"] } : {}),
   };
 }
 
@@ -280,6 +284,7 @@ function parseAccountRelogin(args: readonly string[]): AccountsReloginCommand | 
       config: { type: "string" },
       "start-url": { type: "string" },
       region: { type: "string" },
+      "profile-arn": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
@@ -296,6 +301,7 @@ function parseAccountRelogin(args: readonly string[]): AccountsReloginCommand | 
     ...(parsed.values.config ? { configPath: parsed.values.config } : {}),
     ...(parsed.values["start-url"] ? { startUrl: parsed.values["start-url"] } : {}),
     ...(parsed.values.region ? { region: parsed.values.region } : {}),
+    ...(parsed.values["profile-arn"] ? { profileArn: parsed.values["profile-arn"] } : {}),
   };
 }
 

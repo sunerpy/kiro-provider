@@ -99,6 +99,9 @@ export type AdaptedAnthropicRequest = {
   readonly contextManagementRequested: boolean;
   readonly thinkingDisplay?: "omitted";
   readonly outputTokenLimitMode?: "advisory";
+  readonly reasoningReplayMode?: "conflict-omitted";
+  readonly reasoningReplayConflictMessages?: number;
+  readonly reasoningReplayConflictBlocks?: number;
 };
 
 export type AdaptAnthropicRequestResult =
@@ -469,6 +472,53 @@ function reasoningContent(
   return failure(`Invalid request: ${path} is not a reasoning block`, undefined, path);
 }
 
+function sameReasoningLookup(
+  left: CanonicalReasoningReplay["lookup"],
+  right: CanonicalReasoningReplay["lookup"],
+  leftSourceSignature?: string,
+  rightSourceSignature?: string,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "anthropic-token" && right.kind === "anthropic-token") {
+    return left.signature === right.signature;
+  }
+  if (left.kind === "chat-hash" && right.kind === "chat-hash") {
+    // GPT signature-only reasoning maps to the same opaque placeholder text.
+    // Preserve the source signature in this equality check so two distinct
+    // envelopes cannot be mistaken for an exact duplicate and accepted.
+    return (
+      left.reasoningText === right.reasoningText && leftSourceSignature === rightSourceSignature
+    );
+  }
+  if (left.kind === "responses-token" && right.kind === "responses-token") {
+    return left.encryptedContent === right.encryptedContent;
+  }
+  if (left.kind !== "anthropic-direct" || right.kind !== "anthropic-direct") return false;
+  const leftContent = left.content;
+  const rightContent = right.content;
+  if (leftContent.kind !== rightContent.kind) return false;
+  if (leftContent.kind === "reasoning_text" && rightContent.kind === "reasoning_text") {
+    return (
+      leftContent.text === rightContent.text && leftContent.signature === rightContent.signature
+    );
+  }
+  if (leftContent.kind === "redacted_content" && rightContent.kind === "redacted_content") {
+    return (
+      leftContent.bytes.byteLength === rightContent.bytes.byteLength &&
+      leftContent.bytes.every((byte, index) => byte === rightContent.bytes[index])
+    );
+  }
+  return false;
+}
+
+function isEmptyDirectReasoning(replay: CanonicalReasoningReplay["lookup"]): boolean {
+  return (
+    replay.kind === "anthropic-direct" &&
+    replay.content.kind === "reasoning_text" &&
+    replay.content.text.length === 0
+  );
+}
+
 function mapMessage(
   message: AnthropicMessagesRequest["messages"][number],
   index: number,
@@ -478,6 +528,7 @@ function mapMessage(
   | {
       readonly message: CanonicalMessage;
       readonly replay?: CanonicalReasoningReplay["lookup"];
+      readonly reasoningReplayConflictBlocks?: number;
     } {
   const path = `messages.${index}`;
   for (const key of Object.keys(message)) {
@@ -503,6 +554,9 @@ function mapMessage(
   const content: CanonicalContentPart[] = [];
   const toolCalls: CanonicalToolCall[] = [];
   let replay: CanonicalReasoningReplay["lookup"] | undefined;
+  let replaySourceSignature: string | undefined;
+  let reasoningBlockCount = 0;
+  let reasoningReplayConflictBlocks = 0;
   let cachePoint = false;
   let directImagePath: string | undefined;
   let imageToolResultPath: string | undefined;
@@ -636,17 +690,52 @@ function mapMessage(
       }
       case "thinking":
       case "redacted_thinking": {
-        if (message.role !== "assistant" || replay !== undefined) {
+        if (message.role !== "assistant") {
           return failure(
-            `Invalid request: ${blockPath} is not a valid single assistant reasoning block`,
+            `Invalid request: ${blockPath} is not a valid assistant reasoning block`,
             "invalid_reasoning_replay",
             blockPath,
           );
         }
         const mapped = reasoningContent(block, blockPath, model);
         if ("ok" in mapped) return mapped;
-        replay = mapped;
-        break;
+        reasoningBlockCount += 1;
+        if (reasoningReplayConflictBlocks > 0) {
+          if (!isEmptyDirectReasoning(mapped)) {
+            return failure(
+              `Invalid request: ${blockPath} cannot be combined with conflicting assistant reasoning blocks`,
+              "invalid_reasoning_replay",
+              blockPath,
+            );
+          }
+          reasoningReplayConflictBlocks = reasoningBlockCount;
+          break;
+        }
+        const sourceSignature =
+          block.type === "thinking" && typeof block.signature === "string"
+            ? block.signature
+            : undefined;
+        if (replay === undefined) {
+          replay = mapped;
+          replaySourceSignature = sourceSignature;
+          break;
+        }
+        if (sameReasoningLookup(replay, mapped, replaySourceSignature, sourceSignature)) break;
+        if (isEmptyDirectReasoning(replay) && isEmptyDirectReasoning(mapped)) {
+          // Older gateway builds could emit two distinct signature-only thinking
+          // blocks for one assistant tool turn. Kiro history has one reasoning
+          // slot, so guessing either signature would be unsafe. Preserve the
+          // visible assistant/tool output and omit both replay envelopes under
+          // an explicit compatibility marker.
+          replay = undefined;
+          reasoningReplayConflictBlocks = reasoningBlockCount;
+          break;
+        }
+        return failure(
+          `Invalid request: ${blockPath} is not a valid single assistant reasoning block`,
+          "invalid_reasoning_replay",
+          blockPath,
+        );
       }
       default:
         return failure(
@@ -665,6 +754,7 @@ function mapMessage(
       ...(cachePoint ? { cachePoint: true } : {}),
     },
     ...(replay !== undefined ? { replay } : {}),
+    ...(reasoningReplayConflictBlocks > 0 ? { reasoningReplayConflictBlocks } : {}),
   };
 }
 
@@ -890,6 +980,8 @@ export function adaptAnthropicMessagesRequest(
 
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
+  let reasoningReplayConflictMessages = 0;
+  let reasoningReplayConflictBlocks = 0;
   if (system.length > 0) {
     messages.push({
       role: "system",
@@ -905,6 +997,10 @@ export function adaptAnthropicMessagesRequest(
   for (const [index, source] of request.messages.entries()) {
     const mapped = mapMessage(source, index, request.model);
     if ("ok" in mapped) return mapped;
+    if (mapped.reasoningReplayConflictBlocks !== undefined) {
+      reasoningReplayConflictMessages += 1;
+      reasoningReplayConflictBlocks += mapped.reasoningReplayConflictBlocks;
+    }
     if (mapped.replay !== undefined) {
       const output = {
         text: textFromParts(mapped.message.content),
@@ -1000,6 +1096,13 @@ export function adaptAnthropicMessagesRequest(
       contextManagementRequested: request.context_management !== undefined,
       ...(request.thinking?.display === "omitted" ? { thinkingDisplay: "omitted" as const } : {}),
       ...(outputTokenLimitMode !== undefined ? { outputTokenLimitMode } : {}),
+      ...(reasoningReplayConflictMessages > 0
+        ? {
+            reasoningReplayMode: "conflict-omitted" as const,
+            reasoningReplayConflictMessages,
+            reasoningReplayConflictBlocks,
+          }
+        : {}),
     },
   };
 }

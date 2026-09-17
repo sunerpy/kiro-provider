@@ -22,13 +22,13 @@ kiro-provider is a loopback HTTP gateway and credential owner. It signs in to
 Kiro, discovers the models available to each account, schedules requests across
 those accounts, and presents two client-facing APIs:
 
-| API | Route | Default |
-| --- | --- | --- |
-| OpenAI Responses | `POST /v1/responses` | Enabled |
-| Anthropic Messages | `POST /v1/messages` | Enabled |
-| Anthropic token estimate | `POST /v1/messages/count_tokens` | Enabled |
-| OpenAI Chat Completions | `POST /v1/chat/completions` | Disabled; opt in with `enable_legacy_chat_completions` |
-| Models and readiness | `GET /v1/models`, `GET /health`, `GET /ready` | Enabled |
+| API                      | Route                                         | Default                                                |
+| ------------------------ | --------------------------------------------- | ------------------------------------------------------ |
+| OpenAI Responses         | `POST /v1/responses`                          | Enabled                                                |
+| Anthropic Messages       | `POST /v1/messages`                           | Enabled                                                |
+| Anthropic token estimate | `POST /v1/messages/count_tokens`              | Enabled                                                |
+| OpenAI Chat Completions  | `POST /v1/chat/completions`                   | Disabled; opt in with `enable_legacy_chat_completions` |
+| Models and readiness     | `GET /v1/models`, `GET /health`, `GET /ready` | Enabled                                                |
 
 Responses also has local retrieve, delete, input-items, cancel, and continuation
 support. The gateway chooses a native KiroRuntime Responses call when it can
@@ -134,8 +134,21 @@ On Windows the default directory is `%APPDATA%\kiro-provider`. Pass
 ### 2. Sign in to Kiro
 
 ```bash
+# AWS Builder ID / default device flow
 kiro-provider login
+
+# IAM Identity Center
+kiro-provider login \
+  --start-url https://example.awsapps.com/start \
+  --region us-east-1
 ```
+
+Direct login discovers and persists the Kiro profile itself; it does not require
+Kiro CLI or any Kiro CLI state. If the identity has multiple profiles and the
+start URL does not select one uniquely, rerun with `--profile-arn <arn>`.
+The login/OIDC region and selected profile's runtime region may differ; the
+provider discovers across Kiro's current commercial profile control planes
+(`us-east-1` and `eu-central-1`) and stores both values separately.
 
 If you already used `opencode-kiro-auth`, copy those accounts into the
 provider-owned store once:
@@ -187,12 +200,12 @@ or region.
 
 ## Use it with an agent
 
-| Client | API | Guide |
-| --- | --- | --- |
-| Zuno | OpenAI Responses | [Native provider configuration and session routing](docs/ZUNO.md) |
-| Codex CLI | OpenAI Responses | [Isolated profile and compatibility checks](docs/CODEX.md) |
-| Claude Code | Anthropic Messages | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
-| Other SDKs | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md) |
+| Client      | API                   | Guide                                                                         |
+| ----------- | --------------------- | ----------------------------------------------------------------------------- |
+| Zuno        | OpenAI Responses      | [Native provider configuration and session routing](docs/ZUNO.md)             |
+| Codex CLI   | OpenAI Responses      | [Isolated profile and compatibility checks](docs/CODEX.md)                    |
+| Claude Code | Anthropic Messages    | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
+| Other SDKs  | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md)                      |
 
 Codex uses an isolated profile. `kiroclaude` instead keeps Claude's native
 state and applies a provider/model overlay only to the launched process, so the

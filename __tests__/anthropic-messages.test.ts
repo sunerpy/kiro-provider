@@ -22,6 +22,7 @@ import {
   handleMessageTokenCount,
   type MessagesDependencies,
 } from "../src/server/routes/messages.js";
+import { captureAuditEvents } from "./audit-test-helpers.js";
 import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 
 const API_KEY = "sk-anthropic-test";
@@ -1077,6 +1078,142 @@ describe("Anthropic request adapter", () => {
     });
   });
 
+  test("repairs distinct empty reasoning blocks emitted by earlier gateway versions", () => {
+    const adapted = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "claude-opus-5",
+        tools: [
+          {
+            name: "read",
+            description: "Read a file",
+            input_schema: { type: "object" },
+          },
+        ],
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "", signature: "native-signature-a" },
+              { type: "thinking", thinking: "", signature: "native-signature-b" },
+              { type: "tool_use", id: "tool-1", name: "read", input: { path: "a.txt" } },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-1", content: "contents" }],
+          },
+        ],
+      }),
+    );
+
+    expect(adapted).toMatchObject({
+      ok: true,
+      value: {
+        reasoningReplayMode: "conflict-omitted",
+        reasoningReplayConflictMessages: 1,
+        reasoningReplayConflictBlocks: 2,
+        body: { reasoningReplays: [] },
+      },
+    });
+
+    const visibleConflict = adaptAnthropicMessagesRequest(
+      validRequest({
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "visible", signature: "native-signature-a" },
+              { type: "thinking", thinking: "", signature: "native-signature-b" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      }),
+    );
+    expect(visibleConflict).toMatchObject({
+      ok: false,
+      code: "invalid_reasoning_replay",
+      param: "messages.1.content.1",
+    });
+
+    const exactDuplicate = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "claude-opus-5",
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "", signature: "native-signature" },
+              { type: "thinking", thinking: "", signature: "native-signature" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      }),
+    );
+    expect(exactDuplicate).toMatchObject({
+      ok: true,
+      value: { body: { reasoningReplays: [expect.any(Object)] } },
+    });
+    if (exactDuplicate.ok) expect(exactDuplicate.value.reasoningReplayMode).toBeUndefined();
+
+    const distinctGptPlaceholders = adaptAnthropicMessagesRequest(
+      validRequest({
+        model: "gpt-5.6-sol",
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "", signature: "gpt-signature-a" },
+              { type: "thinking", thinking: "", signature: "gpt-signature-b" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      }),
+      { unsupportedOutputTokenLimitMode: "advisory" },
+    );
+    expect(distinctGptPlaceholders).toMatchObject({
+      ok: false,
+      code: "invalid_reasoning_replay",
+      param: "messages.1.content.1",
+    });
+
+    const rejectedConflicts = [
+      [
+        { type: "thinking", thinking: "", signature: "kr1_first" },
+        { type: "thinking", thinking: "", signature: "kr1_second" },
+      ],
+      [
+        { type: "thinking", thinking: "", signature: "native-signature" },
+        { type: "redacted_thinking", data: "YWJj" },
+      ],
+      [
+        { type: "thinking", thinking: "", signature: "native-signature-a" },
+        { type: "thinking", thinking: "", signature: "native-signature-b" },
+        { type: "thinking", thinking: "visible", signature: "native-signature-c" },
+      ],
+    ];
+    for (const content of rejectedConflicts) {
+      expect(
+        adaptAnthropicMessagesRequest(
+          validRequest({
+            model: "claude-opus-5",
+            messages: [
+              { role: "user", content: "first" },
+              { role: "assistant", content },
+              { role: "user", content: "again" },
+            ],
+          }),
+        ),
+      ).toMatchObject({ ok: false, code: "invalid_reasoning_replay" });
+    }
+  });
+
   test("covers strict Claude compatibility rejection and replay boundaries", () => {
     const failures: ReadonlyArray<{
       readonly request: unknown;
@@ -1324,6 +1461,61 @@ describe("POST /v1/messages", () => {
       ],
       context_management: { applied_edits: [] },
     });
+  });
+
+  test("marks repaired duplicate reasoning replay as an explicit compatibility loss", async () => {
+    const audit = captureAuditEvents();
+    let captured: RunChatCompletionOptions | undefined;
+    const body = validRequest({
+      model: "claude-opus-5",
+      tools: [
+        {
+          name: "read",
+          description: "Read a file",
+          input_schema: { type: "object" },
+        },
+      ],
+      messages: [
+        { role: "user", content: "first" },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "", signature: "native-signature-a" },
+            { type: "thinking", thinking: "", signature: "native-signature-b" },
+            { type: "tool_use", id: "tool-1", name: "read", input: { path: "a.txt" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-1", content: "contents" }],
+        },
+      ],
+    });
+
+    try {
+      const response = await handleMessages(
+        request(body),
+        config(),
+        dependencies(async (options) => {
+          captured = options;
+          return canonicalResponse(completion({ model: "claude-opus-5", text: "continued" }));
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBe("conflict-omitted");
+      expect(captured?.body.reasoningReplays).toEqual([]);
+
+      const countResponse = await handleMessageTokenCount(request(body), config());
+      expect(countResponse.status).toBe(200);
+      expect(countResponse.headers.get("x-kiro-reasoning-replay-mode")).toBe("conflict-omitted");
+      expect(audit.events("anthropic_reasoning_replay_conflict_omitted")).toEqual([
+        expect.objectContaining({ message_count: 1, block_count: 2 }),
+        expect.objectContaining({ message_count: 1, block_count: 2 }),
+      ]);
+    } finally {
+      audit.restore();
+    }
   });
 
   test.each([false, true])(

@@ -171,3 +171,124 @@ export async function listAvailableModels(
   }
   return parseResponse(payload);
 }
+
+export interface KiroAvailableProfile {
+  readonly arn: string;
+  readonly profileName?: string;
+  readonly startUrl?: string;
+  readonly status?: string;
+}
+
+type KiroAvailableProfilesPage = {
+  readonly profiles: readonly KiroAvailableProfile[];
+  readonly nextToken?: string;
+};
+
+const MAX_PROFILE_PAGES = 10;
+
+function parseProfile(value: unknown): KiroAvailableProfile | undefined {
+  if (!isRecord(value)) return undefined;
+  const arn = typeof value.arn === "string" ? value.arn.trim() : "";
+  if (!/^arn:[^:]+:codewhisperer:[^:]+:[^:]+:profile\/.+$/u.test(arn)) return undefined;
+  const profileName = typeof value.profileName === "string" ? value.profileName.trim() : "";
+  const startUrl = typeof value.startUrl === "string" ? value.startUrl.trim() : "";
+  const status = typeof value.status === "string" ? value.status.trim() : "";
+  return {
+    arn,
+    ...(profileName ? { profileName } : {}),
+    ...(startUrl ? { startUrl } : {}),
+    ...(status ? { status } : {}),
+  };
+}
+
+function parseProfilesPage(value: unknown): KiroAvailableProfilesPage {
+  if (!isRecord(value) || !Array.isArray(value.profiles)) {
+    throw new KiroManagementError("Kiro profile catalog response has an invalid shape");
+  }
+  const profiles: KiroAvailableProfile[] = [];
+  for (const profile of value.profiles) {
+    const parsed = parseProfile(profile);
+    if (parsed === undefined) {
+      throw new KiroManagementError("Kiro profile catalog response contains an invalid profile");
+    }
+    profiles.push(parsed);
+  }
+  if (
+    value.nextToken !== undefined &&
+    value.nextToken !== null &&
+    typeof value.nextToken !== "string"
+  ) {
+    throw new KiroManagementError("Kiro profile catalog response has an invalid next token");
+  }
+  return {
+    profiles,
+    ...(typeof value.nextToken === "string" && value.nextToken.length > 0
+      ? { nextToken: value.nextToken }
+      : {}),
+  };
+}
+
+export async function listAvailableProfiles(
+  auth: KiroAuthDetails,
+  region: string,
+  options: {
+    readonly proxyUrl?: string;
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+  } = {},
+): Promise<readonly KiroAvailableProfile[]> {
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 10_000);
+  const signal =
+    options.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout]);
+  const endpoint = new URL(`https://management.${region}.kiro.dev/List-Available-Profiles`);
+  const profiles: KiroAvailableProfile[] = [];
+  const seenTokens = new Set<string>();
+  let nextToken: string | undefined;
+
+  for (let page = 0; page < MAX_PROFILE_PAGES; page += 1) {
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        signal,
+        headers: {
+          Authorization: `Bearer ${auth.access}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "user-agent": KIRO_CONSTANTS.USER_AGENT,
+          "amz-sdk-request": "attempt=1; max=1",
+        },
+        body: JSON.stringify(nextToken === undefined ? {} : { nextToken }),
+        ...fetchProxyOption(options.proxyUrl),
+      });
+    } catch (error) {
+      throw new KiroManagementError("Unable to reach the Kiro profile catalog service", undefined, {
+        cause: error,
+      });
+    }
+    if (!response.ok) {
+      throw new KiroManagementError(
+        `Kiro profile catalog returned HTTP ${response.status}`,
+        response.status,
+      );
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      throw new KiroManagementError("Kiro profile catalog returned invalid JSON", response.status, {
+        cause: error,
+      });
+    }
+    const parsed = parseProfilesPage(payload);
+    profiles.push(...parsed.profiles);
+    if (parsed.nextToken === undefined) return profiles;
+    if (seenTokens.has(parsed.nextToken)) {
+      throw new KiroManagementError("Kiro profile catalog repeated a pagination token");
+    }
+    seenTokens.add(parsed.nextToken);
+    nextToken = parsed.nextToken;
+  }
+
+  throw new KiroManagementError(`Kiro profile catalog exceeded ${MAX_PROFILE_PAGES} pages`);
+}

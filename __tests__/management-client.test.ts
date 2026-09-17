@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { KiroManagementError, listAvailableModels } from "../src/kiro/management-client.js";
+import {
+  KiroManagementError,
+  listAvailableModels,
+  listAvailableProfiles,
+} from "../src/kiro/management-client.js";
 import type { KiroAuthDetails } from "../src/kiro/types.js";
 
 const originalFetch = globalThis.fetch;
@@ -183,6 +187,112 @@ describe("Kiro management model catalog client", () => {
     ]) {
       useFetch(async () => Response.json(payload));
       await expect(listAvailableModels(auth, "us-east-1")).rejects.toBeInstanceOf(
+        KiroManagementError,
+      );
+    }
+  });
+});
+
+describe("Kiro management profile discovery client", () => {
+  test("paginates the REST profile catalog without sending a profile ARN", async () => {
+    const requests: Array<{ url: URL; body: unknown; headers: Headers }> = [];
+    useFetch(async (input, init) => {
+      const request = {
+        url: new URL(String(input)),
+        body: JSON.parse(String(init?.body)),
+        headers: new Headers(init?.headers),
+      };
+      requests.push(request);
+      if (requests.length === 1) {
+        return Response.json({
+          profiles: [
+            {
+              arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1",
+              profileName: "Primary",
+              startUrl: "https://acme.awsapps.com/start",
+              status: "ACTIVE",
+            },
+          ],
+          nextToken: "page-2",
+        });
+      }
+      return Response.json({
+        profiles: [
+          {
+            arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE2",
+            profileName: "Secondary",
+          },
+        ],
+        nextToken: null,
+      });
+    });
+
+    const profiles = await listAvailableProfiles(
+      { ...auth, authMethod: "idc", profileArn: undefined },
+      "us-east-1",
+      { proxyUrl: "http://127.0.0.1:3128", timeoutMs: 1_000 },
+    );
+
+    expect(profiles).toEqual([
+      {
+        arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1",
+        profileName: "Primary",
+        startUrl: "https://acme.awsapps.com/start",
+        status: "ACTIVE",
+      },
+      {
+        arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE2",
+        profileName: "Secondary",
+      },
+    ]);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.url.href).toBe(
+        "https://management.us-east-1.kiro.dev/List-Available-Profiles",
+      );
+      expect(request.headers.get("authorization")).toBe("Bearer access-token");
+      expect(request.headers.get("content-type")).toBe("application/json");
+    }
+    expect(requests[0]?.body).toEqual({});
+    expect(requests[1]?.body).toEqual({ nextToken: "page-2" });
+  });
+
+  test("fails closed on transport, HTTP, JSON, and invalid response shapes", async () => {
+    useFetch(async () => {
+      throw new Error("offline");
+    });
+    await expect(listAvailableProfiles(auth, "us-east-1")).rejects.toMatchObject({
+      name: "KiroManagementError",
+      message: "Unable to reach the Kiro profile catalog service",
+      cause: expect.any(Error),
+    });
+
+    useFetch(async () => new Response("sensitive upstream body", { status: 403 }));
+    await expect(listAvailableProfiles(auth, "us-east-1")).rejects.toMatchObject({
+      name: "KiroManagementError",
+      message: "Kiro profile catalog returned HTTP 403",
+      status: 403,
+    });
+
+    useFetch(async () => new Response("{", { status: 200 }));
+    await expect(listAvailableProfiles(auth, "us-east-1")).rejects.toMatchObject({
+      name: "KiroManagementError",
+      message: "Kiro profile catalog returned invalid JSON",
+      status: 200,
+    });
+
+    for (const payload of [
+      { profiles: {} },
+      { profiles: [{ arn: "" }] },
+      {
+        profiles: [
+          { arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1" },
+          { arn: "" },
+        ],
+      },
+    ]) {
+      useFetch(async () => Response.json(payload));
+      await expect(listAvailableProfiles(auth, "us-east-1")).rejects.toBeInstanceOf(
         KiroManagementError,
       );
     }

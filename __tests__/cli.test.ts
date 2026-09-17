@@ -28,6 +28,7 @@ function account(overrides: Partial<StoredAccount> = {}): StoredAccount {
     email: "dev@example.com",
     authMethod: "idc",
     region: "us-east-1",
+    profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1",
     refreshToken: "refresh-secret",
     accessToken: "access-secret",
     expiresAt: Date.now() + 3_600_000,
@@ -85,6 +86,7 @@ function createHarness(
   readonly logins: Array<{
     readonly startUrl?: string;
     readonly region?: string;
+    readonly profileArn?: string;
     readonly replaceAccount?: StoredAccount;
   }>;
   readonly refreshes: Array<{ readonly identifier?: string }>;
@@ -103,6 +105,7 @@ function createHarness(
   const logins: Array<{
     readonly startUrl?: string;
     readonly region?: string;
+    readonly profileArn?: string;
     readonly replaceAccount?: StoredAccount;
   }> = [];
   const refreshes: Array<{ readonly identifier?: string }> = [];
@@ -234,6 +237,8 @@ describe("parseCliArgs", () => {
       "https://acme.awsapps.com/start",
       "--region",
       "eu-west-1",
+      "--profile-arn",
+      "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
     ]);
 
     expect(command).toEqual({
@@ -241,6 +246,7 @@ describe("parseCliArgs", () => {
       configPath: "/tmp/kiro.json",
       startUrl: "https://acme.awsapps.com/start",
       region: "eu-west-1",
+      profileArn: "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
     });
   });
 
@@ -274,10 +280,21 @@ describe("parseCliArgs", () => {
       identifier: "dev@example.com",
       json: false,
     });
-    expect(parseCliArgs(["accounts", "relogin", "account-1", "--region", "eu-west-1"])).toEqual({
+    expect(
+      parseCliArgs([
+        "accounts",
+        "relogin",
+        "account-1",
+        "--region",
+        "eu-west-1",
+        "--profile-arn",
+        "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
+      ]),
+    ).toEqual({
       kind: "accounts-relogin",
       identifier: "account-1",
       region: "eu-west-1",
+      profileArn: "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
     });
     expect(parseCliArgs(["accounts", "remove", "account-1", "--yes"])).toEqual({
       kind: "accounts-remove",
@@ -544,7 +561,15 @@ describe("main", () => {
     const harness = createHarness();
 
     const exitCode = await main(
-      ["login", "--start-url", "https://acme.awsapps.com/start", "--region", "eu-west-1"],
+      [
+        "login",
+        "--start-url",
+        "https://acme.awsapps.com/start",
+        "--region",
+        "eu-west-1",
+        "--profile-arn",
+        "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
+      ],
       harness.deps,
     );
 
@@ -553,6 +578,7 @@ describe("main", () => {
       {
         startUrl: "https://acme.awsapps.com/start",
         region: "eu-west-1",
+        profileArn: "arn:aws:codewhisperer:eu-west-1:123456789012:profile/PROFILE1",
       },
     ]);
   });
@@ -818,6 +844,7 @@ describe("runLogin", () => {
       // Given
       let authorizeProxyUrl: string | undefined;
       let pollProxyUrl: string | undefined;
+      let profileProxyUrl: string | undefined;
       let usageProxyUrl: string | undefined;
 
       // When
@@ -853,6 +880,16 @@ describe("runLogin", () => {
               authMethod: "idc",
             };
           },
+          listProfiles: async (_auth, region, profileOptions) => {
+            profileProxyUrl = profileOptions?.proxyUrl;
+            return region === "us-east-1"
+              ? [
+                  {
+                    arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1",
+                  },
+                ]
+              : [];
+          },
           fetchUsage: async (_auth, usageOptions) => {
             usageProxyUrl = usageOptions?.proxyUrl;
             return {
@@ -878,6 +915,7 @@ describe("runLogin", () => {
       // Then
       expect(authorizeProxyUrl).toBe(expectedProxyUrl);
       expect(pollProxyUrl).toBe(expectedProxyUrl);
+      expect(profileProxyUrl).toBe(expectedProxyUrl);
       expect(usageProxyUrl).toBe(expectedProxyUrl);
     },
   );
@@ -917,6 +955,12 @@ describe("runLogin", () => {
           region: "eu-west-1",
           authMethod: "idc",
         }),
+        listProfiles: async () => [
+          {
+            arn: "arn:aws:codewhisperer:eu-central-1:123456789012:profile/PROFILE1",
+            startUrl: "https://acme.awsapps.com/landing/start",
+          },
+        ],
         fetchUsage: async () => ({
           email: "dev@example.com",
           usedCount: 1,
@@ -944,7 +988,7 @@ describe("runLogin", () => {
     expect(inserted).toHaveLength(1);
     expect(inserted[0]).toMatchObject({
       email: "dev@example.com",
-      region: "eu-west-1",
+      region: "eu-central-1",
       oidcRegion: "eu-west-1",
       startUrl: "https://acme.awsapps.com/landing/start",
       authMethod: "idc",

@@ -153,12 +153,23 @@ export async function handleMessages(
     ...(adapted.value.outputTokenLimitMode !== undefined
       ? { outputTokenLimitMode: adapted.value.outputTokenLimitMode }
       : {}),
+    ...(adapted.value.reasoningReplayMode !== undefined
+      ? { reasoningReplayMode: adapted.value.reasoningReplayMode }
+      : {}),
   };
   if (adapted.value.cacheControlCount > 0) {
     auditLog("info", "anthropic_cache_control_observed", {
       request_id: ingress.requestId,
       marker_count: adapted.value.cacheControlCount,
       mode: config.kiro_prompt_cache_mode,
+    });
+  }
+  if (adapted.value.reasoningReplayMode === "conflict-omitted") {
+    auditLog("warn", "anthropic_reasoning_replay_conflict_omitted", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      message_count: adapted.value.reasoningReplayConflictMessages,
+      block_count: adapted.value.reasoningReplayConflictBlocks,
     });
   }
   if (adapted.value.outputTokenLimitMode === "advisory") {
@@ -250,6 +261,14 @@ export async function handleMessageTokenCount(request: Request, config: Config):
     if (!adapted.ok) {
       return anthropicError(400, adapted.message, "invalid_request_error");
     }
+    if (adapted.value.reasoningReplayMode === "conflict-omitted") {
+      auditLog("warn", "anthropic_reasoning_replay_conflict_omitted", {
+        request_id: ingress.requestId,
+        model: adapted.value.body.model,
+        message_count: adapted.value.reasoningReplayConflictMessages,
+        block_count: adapted.value.reasoningReplayConflictBlocks,
+      });
+    }
     const inputTokens = estimateInputTokens(adapted.value.body);
     return Response.json(
       { input_tokens: inputTokens },
@@ -261,6 +280,9 @@ export async function handleMessageTokenCount(request: Request, config: Config):
             : {}),
           ...(adapted.value.outputTokenLimitMode === "advisory"
             ? { "x-kiro-output-token-limit-mode": "advisory-unenforced" }
+            : {}),
+          ...(adapted.value.reasoningReplayMode === "conflict-omitted"
+            ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
             : {}),
         },
       },

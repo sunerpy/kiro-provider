@@ -152,6 +152,7 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
   request-local private aliases;
 - Codex collaboration `agent_message` content and author/recipient metadata;
 - signed or redacted Kiro reasoning replay through TTL- and mint-provenance-bound `kr2_` tokens, with owner-bound legacy `kr1_` reads.
+- recovery of legacy Claude Code turns containing multiple distinct empty direct `thinking` blocks by omitting all ambiguous replay envelopes while preserving visible assistant/tool history; the compatibility loss is explicit in `x-kiro-reasoning-replay-mode: conflict-omitted` and a sanitized audit event.
 
 In `v3-auto`, this lane uses the explicit legacy instruction prefix only when
 the native Responses lane cannot represent the request. It never moves a
