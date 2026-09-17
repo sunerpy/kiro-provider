@@ -194,8 +194,9 @@ console.log(response.output_text);
 | Claude Code | Anthropic Messages    | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
 | 其他 SDK    | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)                  |
 
-Codex 使用隔离 profile；`kiroclaude` 则保留 Claude 原生状态，只为当前进程覆盖
-provider 与模型，因此普通 `claude` 命令仍保留原有 provider。指南会注明最近一次
+长期使用独立状态的 `kirocodex`／`kiroclaude`，参见[启动器示例](CLIENT_LAUNCHERS.zh-CN.md)。
+仓库内 `kiroclaude` 默认共享原生 Claude 状态，只为当前进程覆盖 provider／模型；
+仅换命令名不代表历史也已隔离。指南会注明最近一次
 验证的客户端版本；这些版本是带日期的实测记录，不代表未来版本一定保持相同请求
 格式。
 

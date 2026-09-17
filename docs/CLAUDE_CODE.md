@@ -12,6 +12,10 @@ kiro-provider exposes the two Anthropic-compatible routes Claude Code needs:
 - `POST /v1/messages/count_tokens` — an estimate, marked by
   `x-kiro-token-count-mode: estimate`
 
+For a persistent command with a separate Claude home, see
+[separate client launchers](CLIENT_LAUNCHERS.md). The repository launcher's
+shared-state default below is a different, intentional choice.
+
 ## Start a Kiro session with shared Claude state
 
 First check that the local gateway is healthy and ready:

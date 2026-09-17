@@ -11,6 +11,9 @@ kiro-provider 提供 Claude Code 所需的两个 Anthropic 兼容端点：
 - `POST /v1/messages/count_tokens`——返回估算值，并带有
   `x-kiro-token-count-mode: estimate`
 
+希望长期使用独立 Claude home 时，参见[独立客户端入口示例](CLIENT_LAUNCHERS.zh-CN.md)。
+下面介绍的是仓库启动器有意保留的共享状态默认行为。
+
 ## 使用共享 Claude 状态启动 Kiro 会话
 
 先确认本地网关正常且已有可用账号：

@@ -7,6 +7,10 @@
 kiro-provider V3 exposes the OpenAI Responses wire API used by a Codex custom
 `model_provider`.
 
+For a persistent `kirocodex` command that leaves the native Codex home intact,
+see [separate client launchers](CLIENT_LAUNCHERS.md). It includes command-backed
+authentication, model-catalog context windows, Ultra, and per-account concurrency.
+
 ## Run with an isolated profile
 
 Do not test against a real Codex profile. Create temporary file and SQLite state,
@@ -48,7 +52,7 @@ are lifted into the same Kiro user turn. Captured output is also checked for
 leakage of the provider's private custom/namespace aliases.
 
 V3 selects its transport per request. Ordinary compatible requests use native
-KiroRuntime Responses. Requests that need custom grammar, namespace tools,
+KiroRuntime Responses. Requests using Ultra/max or needing custom grammar, namespace tools,
 `agent_message`, `additional_tools`, `parallel_tool_calls: false`, encrypted
 reasoning, or `store: false` use the canonical stateless lane.
 

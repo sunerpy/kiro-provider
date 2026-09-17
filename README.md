@@ -207,9 +207,10 @@ or region.
 | Claude Code | Anthropic Messages    | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
 | Other SDKs  | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md)                      |
 
-Codex uses an isolated profile. `kiroclaude` instead keeps Claude's native
-state and applies a provider/model overlay only to the launched process, so the
-ordinary `claude` command keeps its provider. The guides record the exact
+For persistent `kirocodex` and `kiroclaude` commands with separate state, follow
+[the launcher examples](docs/CLIENT_LAUNCHERS.md). The repository's `kiroclaude`
+shares native Claude state by default and applies a process-local provider/model
+overlay; separate command names alone do not isolate history. The guides record the exact
 client versions last tested; treat them as dated evidence, not a promise about
 future request shapes.
 
@@ -249,7 +250,7 @@ the [audit index](docs/audits/README.md) contains dated probe evidence.
   config directory. The database and its WAL/SHM files are created owner-only;
   keep the JSON config owner-only as well.
 - A single-instance lock prevents two provider processes from splitting local
-  account queues and continuation state.
+  account capacity, branch ordering, and continuation state.
 - Reasoning replay is encrypted with AES-256-GCM. Logs exclude credentials,
   prompts, tool arguments, signatures, and raw reasoning.
 - A configured `proxy_url` applies to model calls, login, token refresh, and
