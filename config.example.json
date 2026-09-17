@@ -22,6 +22,7 @@
   "opencode_auth_db_path": null,
   "default_region": "us-east-1",
   "account_selection_strategy": "lowest-usage",
+  "account_inference_concurrency": 10,
   "rate_limit_max_retries": 3,
   "rate_limit_retry_delay_ms": 5000,
   "quota_recheck_interval_ms": 900000,

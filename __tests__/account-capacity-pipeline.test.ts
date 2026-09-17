@@ -32,6 +32,8 @@ async function until(check: () => boolean): Promise<void> {
 function capacityFixture(count = 3, config: Partial<Config> = {}) {
   const f = fidelityFixture({
     config: {
+      // Retain the original single-slot saturation regressions explicitly.
+      account_inference_concurrency: 1,
       request_timeout_ms: 5000,
       stream_idle_timeout_ms: 2000,
       retry_empty_completion: false,
@@ -407,7 +409,7 @@ describe("shared account capacity admission", () => {
     const long = gate();
     const short = gate();
     const f = fidelityFixture({
-      config: { request_timeout_ms: 5000 },
+      config: { request_timeout_ms: 5000, account_inference_concurrency: 1 },
       native: async (_body, call) => {
         if (call === 1) await long.promise;
         if (call === 2) await short.promise;
@@ -485,7 +487,7 @@ describe("shared account capacity admission", () => {
   );
 
   test("keeps native continuation on its busy owner even when another account is idle", async () => {
-    const f = fidelityFixture();
+    const f = fidelityFixture({ config: { account_inference_concurrency: 1 } });
     const initial = await f.send({ model: "gpt-5.6-sol", input: "fixture" });
     const previous = (await initial.json()) as { id: string };
     const releaseBusy = await acquireAccountQueue(f.primary.id, new AbortController().signal);

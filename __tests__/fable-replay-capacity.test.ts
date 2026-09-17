@@ -23,6 +23,7 @@ function fixture(model: string, targetProfile = PROFILE, requireLegacyPrefix = f
       request_timeout_ms: 1000,
       stream_idle_timeout_ms: 500,
       reasoning_replay_account_failover: "verified",
+      account_inference_concurrency: 1,
       reasoning_replay_keys: [`fixture:${Buffer.alloc(32, 8).toString("base64url")}`],
     },
   });

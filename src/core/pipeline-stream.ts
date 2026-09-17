@@ -442,6 +442,7 @@ export interface PreparedCanonicalStream {
   readonly telemetry: StreamTelemetry;
   /** Canonical events already consumed, in order; served before the live iterator. */
   readonly prefetched: CanonicalOutputEvent[];
+  readonly upstreamCleanup?: () => Promise<void>;
 }
 
 /** Opens the canonical event stream for one SDK response without reading from it. */
@@ -457,6 +458,7 @@ export function prepareCanonicalStream(
   );
   const streamAbort = new AbortController();
   const composedSignal = AbortSignal.any([signal, streamAbort.signal]);
+  let upstreamCleanup = Promise.resolve();
   const iterator = transformSdkOutputStream(
     result.sdkResponse,
     result.model,
@@ -473,13 +475,33 @@ export function prepareCanonicalStream(
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
       onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
       onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
+      onIteratorCleanup: (cleanup) => {
+        upstreamCleanup = cleanup;
+      },
       onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
       maxToolArgumentsBytes: result.maxToolArgumentsBytes,
       validateToolArguments: result.validateToolArguments,
       diagnostics: result.telemetryContext?.diagnostics,
     },
   )[Symbol.asyncIterator]();
-  return { iterator, streamAbort, composedSignal, telemetry, prefetched: [] };
+  return {
+    iterator,
+    streamAbort,
+    composedSignal,
+    telemetry,
+    prefetched: [],
+    upstreamCleanup: () => upstreamCleanup,
+  };
+}
+
+function cleanupPreparedStream(prepared: PreparedCanonicalStream): Promise<void> {
+  return boundedCleanup(async () => {
+    try {
+      await prepared.iterator.return?.(undefined);
+    } finally {
+      await prepared.upstreamCleanup?.();
+    }
+  });
 }
 
 /**
@@ -491,14 +513,14 @@ export function abandonPreparedStream(
   prepared: PreparedCanonicalStream,
   abortUpstream: ((reason?: unknown) => void) | undefined,
   reason: unknown,
-): void {
+): Promise<void> {
   runCleanupSteps(
     () => {
       if (!prepared.streamAbort.signal.aborted) prepared.streamAbort.abort(reason);
     },
     () => abortUpstream?.(reason),
   );
-  void boundedCleanup(() => prepared.iterator.return?.(undefined));
+  return cleanupPreparedStream(prepared);
 }
 
 type PipelineOutcome =
@@ -520,7 +542,7 @@ export function createPipelineStreamResponse(
   result: PipelineStreamResult,
   signal: AbortSignal,
   idleTimeoutMs: number,
-  finalize: () => void,
+  finalize: (cleanup?: Promise<void>) => void,
 ): Response {
   const prepared = result.prepared ?? prepareCanonicalStream(result, signal);
   const { iterator, streamAbort, composedSignal, telemetry } = prepared;
@@ -534,6 +556,7 @@ export function createPipelineStreamResponse(
   const encode = (event: CanonicalOutputEvent): Uint8Array =>
     encoder.encode(`${JSON.stringify(event)}\n`);
   let terminalOutcome: PipelineOutcome | undefined;
+  let terminalCleanup: Promise<void> | undefined;
   let stopIdleWatch: (() => void) | undefined;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const clearIdleTimer = (): void => {
@@ -552,8 +575,13 @@ export function createPipelineStreamResponse(
     outcome: PipelineOutcome,
     reason?: unknown,
     requestDeadline = false,
-  ): void => {
-    if (!claimTerminal(outcome)) return;
+  ): Promise<void> => {
+    if (!claimTerminal(outcome)) return terminalCleanup ?? Promise.resolve();
+    let completeCleanup = (): void => {};
+    const cleanupFinished = new Promise<void>((resolve) => {
+      completeCleanup = resolve;
+    });
+    terminalCleanup = cleanupFinished;
     // Read before the cleanup steps run, so the silence verdict describes the
     // stream as the terminal found it.
     const report: StreamTerminalReport = {
@@ -576,14 +604,18 @@ export function createPipelineStreamResponse(
         // the next request on this account never overlaps a still-open stream.
         if (outcome !== "normal-complete") result.abortUpstream?.(reason);
       },
-      finalize,
+      // Notify lifecycle owners immediately; capacity owners can await the
+      // supplied promise without delaying cancellation or creating a teardown
+      // dependency cycle with the SDK iterator's return().
+      () => finalize(cleanupFinished),
     );
     if (outcome !== "normal-complete") {
       runCleanupSteps(() => {
         if (!streamAbort.signal.aborted) streamAbort.abort(reason);
       });
     }
-    void boundedCleanup(() => iterator.return?.(undefined));
+    void cleanupPreparedStream(prepared).then(completeCleanup, completeCleanup);
+    return terminalCleanup;
   };
   const onExternalAbort = (): void => {
     const requestDeadline =
@@ -591,7 +623,7 @@ export function createPipelineStreamResponse(
     result.telemetryContext?.diagnostics?.cancel(
       requestDeadline ? "request_deadline" : "external_abort",
     );
-    beginTerminal("external-abort", abortReason(composedSignal), requestDeadline);
+    void beginTerminal("external-abort", abortReason(composedSignal), requestDeadline);
   };
 
   return new Response(
@@ -618,7 +650,7 @@ export function createPipelineStreamResponse(
             ...streamErrorAuditFields(error, result.telemetryContext?.diagnostics),
             idle_timeout_ms: idleTimeoutMs,
           });
-          beginTerminal("idle-timeout", error);
+          void beginTerminal("idle-timeout", error);
         });
         try {
           const nextPromise = initialNext ?? iterator.next();
@@ -631,7 +663,7 @@ export function createPipelineStreamResponse(
           clearIdleTimer();
           if (next.done) {
             auditLog("info", "sdk_stream_completed", telemetry.auditFields());
-            beginTerminal("normal-complete");
+            await beginTerminal("normal-complete");
             return;
           }
           telemetry.observeCanonicalEvent(next.value);
@@ -650,7 +682,7 @@ export function createPipelineStreamResponse(
             ...streamErrorAuditFields(streamError, result.telemetryContext?.diagnostics),
           });
           result.telemetryContext?.diagnostics?.failure(streamError, "upstream_stream");
-          beginTerminal("upstream-error", streamError);
+          await beginTerminal("upstream-error", streamError);
         }
       },
       cancel(reason) {
@@ -659,12 +691,11 @@ export function createPipelineStreamResponse(
         // is no longer writable even when we already observed `completed`.
         streamController = undefined;
         if (telemetry.completedSeen) {
-          beginTerminal("normal-complete");
-          return;
+          return beginTerminal("normal-complete");
         }
         if (!telemetry.completionWitnessed)
           result.telemetryContext?.diagnostics?.cancel("consumer_cancel");
-        beginTerminal("consumer-cancel", reason);
+        return beginTerminal("consumer-cancel", reason);
       },
     }),
     { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },

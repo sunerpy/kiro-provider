@@ -3,7 +3,12 @@ import type { Config } from "../../config/schema.js";
 import { leastQueuedAccountIds, reserveAccountCapacity } from "../../core/account-capacity.js";
 import { isSelectableAccount } from "../../core/account-selection.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
-import { abortable, abortableSleep, accountQueueDepth } from "../../core/pipeline-runtime.js";
+import {
+  abortable,
+  abortableSleep,
+  accountQueueDepth,
+  acquireSessionQueue,
+} from "../../core/pipeline-runtime.js";
 import { resolveProxyUrl } from "../../core/proxy.js";
 import { retryAfterMs } from "../../core/retry-after.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
@@ -25,6 +30,7 @@ import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import type { ResponsesInputItem } from "../request-schema.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
+import { responsesSessionAffinity } from "../session-affinity.js";
 import { RESPONSES_CAPABILITY_EVIDENCE, responsesCapability } from "./capabilities.js";
 import type { NativeResponseOwner, ResponseContinuationContext } from "./continuation.js";
 import { ResponseContextError } from "./continuation.js";
@@ -681,6 +687,7 @@ export async function proxyNativeResponses(
   const manager = options.dependencies.accountManager;
   let accountForAudit: ManagedAccount | undefined;
   let release = (): void => {};
+  let releaseSession: (() => void) | undefined;
   let releaseOwned = true;
   let attempt = 0;
   let continuationMode = prepared.request.previous_response_id ? "upstream" : "none";
@@ -714,39 +721,69 @@ export async function proxyNativeResponses(
     });
   };
   try {
+    const affinity = responsesSessionAffinity(
+      options.adaptation?.original ?? prepared.request,
+      options.dependencies.tenantId,
+      options.config.session_affinity_mode,
+    );
+    const previousId =
+      prepared.request.previous_response_id ?? reasoningOrigins.at(-1)?.response.id;
+    const sessionKey =
+      affinity?.keyHash ?? (previousId ? nativeAffinityKey(tenantId, previousId) : undefined);
+    if (sessionKey !== undefined) {
+      const acquire = () => acquireSessionQueue(sessionKey, options.signals.combined);
+      releaseSession = await (options.signals.diagnostics?.waitForQueue("session", acquire) ??
+        acquire());
+    }
     const acquireCapacity = () =>
-      reserveAccountCapacity<ManagedAccount | null>(() => {
-        const selectionStarted = performance.now();
-        const policy = manager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
-        const now = Date.now();
-        const candidates = manager
-          .reconcileFromDb()
-          .filter(
-            (candidate) =>
-              isSelectableAccount(candidate, now, policy) &&
-              (owner
-                ? candidate.id === owner.accountId
-                : (options.adaptation?.eligibleAccounts?.has(candidate.id) ?? true)),
-          );
-        const available = leastQueuedAccountIds(candidates, undefined, policy);
-        if (available.size > 0 && [...available].every((id) => accountQueueDepth(id) > 0)) {
+      reserveAccountCapacity<ManagedAccount | null>(
+        () => {
+          const selectionStarted = performance.now();
+          const policy = manager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
+          const now = Date.now();
+          const candidates = manager
+            .reconcileFromDb()
+            .filter(
+              (candidate) =>
+                isSelectableAccount(candidate, now, policy) &&
+                (owner
+                  ? candidate.id === owner.accountId
+                  : (options.adaptation?.eligibleAccounts?.has(candidate.id) ?? true)),
+            );
+          const available = leastQueuedAccountIds(candidates, undefined, policy);
+          if (
+            available.size > 0 &&
+            [...available].every(
+              (id) => accountQueueDepth(id) >= options.config.account_inference_concurrency,
+            )
+          ) {
+            auditLog("info", "account_selection_completed", {
+              request_id: options.requestId,
+              duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
+              outcome: "capacity-wait",
+              replay_locked: owner !== undefined,
+            });
+            return {
+              kind: "wait",
+              accountIds: new Set(candidates.map((candidate) => candidate.id)),
+            };
+          }
+          const selected = manager.selectHealthyAccount(owner?.accountId, available);
           auditLog("info", "account_selection_completed", {
             request_id: options.requestId,
             duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
-            outcome: "capacity-wait",
+            outcome: selected ? "selected" : "result",
             replay_locked: owner !== undefined,
           });
-          return { kind: "wait", accountIds: new Set(candidates.map((candidate) => candidate.id)) };
-        }
-        const selected = manager.selectHealthyAccount(owner?.accountId, available);
-        auditLog("info", "account_selection_completed", {
-          request_id: options.requestId,
-          duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
-          outcome: selected ? "selected" : "result",
-          replay_locked: owner !== undefined,
-        });
-        return { kind: "ready", value: selected, ...(selected ? { accountId: selected.id } : {}) };
-      }, options.signals.combined);
+          return {
+            kind: "ready",
+            value: selected,
+            ...(selected ? { accountId: selected.id } : {}),
+          };
+        },
+        options.signals.combined,
+        options.config.account_inference_concurrency,
+      );
     const reservation = await (options.signals.diagnostics?.waitForQueue(
       "capacity",
       acquireCapacity,
@@ -1157,6 +1194,7 @@ export async function proxyNativeResponses(
         abortUpstream: () => nativeAbort.abort(),
         finish: () => {
           release();
+          releaseSession?.();
           options.finalize();
         },
       });
@@ -1334,6 +1372,9 @@ export async function proxyNativeResponses(
       streamOwnsResources: false,
     };
   } finally {
-    if (releaseOwned) release();
+    if (releaseOwned) {
+      release();
+      releaseSession?.();
+    }
   }
 }

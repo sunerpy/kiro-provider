@@ -31,7 +31,7 @@ Session queue + account selection (preferred binding first, then sticky /
 round-robin / lowest-usage)
         │
         ▼
-Account queue + token refresh if near expiry (provider-owned local auth runtime
+Account capacity reservation + token refresh if near expiry (provider-owned local auth runtime
 by default, via optional proxy)
         │
         ▼
@@ -143,19 +143,26 @@ instruction.
 
 The selected account manager layers strategy (`sticky` / `round-robin` /
 `lowest-usage`) and failover on top of the configured authority. When a
-request's chosen account fails or is rate-limited, the pipeline retries with
-the next eligible account (up to `max_request_iterations`) rather than
-failing the whole request.
+request's chosen account fails or is rate-limited before acceptance, the pipeline
+can retry within its configured budget on an eligible account. Accepted streams
+are not replayed, and owner-bound continuations retain their identity restrictions.
 
-The scheduler has two independent keyed queues:
+The scheduler separates execution ordering from account capacity:
 
-- a logical-session queue prevents overlapping turns when an explicit
-  conversation key exists;
-- an account queue protects one Kiro account while allowing different
-  accounts to run concurrently.
+- a tenant-scoped branch queue prevents overlapping turns of the same execution;
+- a shared account semaphore admits up to `account_inference_concurrency`
+  requests per account, default **10**, configurable from **1 to 10**.
+
+Messages and native/stateless Responses use the same process-wide capacity.
+Selection favors the least occupied eligible accounts and reserves a slot
+synchronously. A saturated request waits for any eligible slot; owner-bound
+waiters do not block other accounts. Native Responses shares explicit branch
+keys with stateless Responses and uses the stored previous response or reasoning
+origin when no explicit key exists.
 
 The account lease remains owned by a committed stream until that stream
-finishes, errors, times out, or is cancelled. On account failover, the
+reaches terminal cleanup. The terminal callback fires promptly, while lease
+release awaits asynchronous SDK cleanup within the bounded grace. On account failover, the
 persisted session binding and Kiro conversation ID are rotated together.
 Bindings persist across service restarts, while queue and socket-pool ownership
 remain process-local. The default single-instance lock prevents a second
@@ -164,7 +171,9 @@ provider process from splitting those owners.
 The default `session_affinity_mode: "explicit-only"` accepts Responses
 `metadata.zuno_session_id`, `metadata.kiro_provider_session_id`,
 compatibility `client_metadata`, or `prompt_cache_key`; Chat accepts only
-`prompt_cache_key`, and Anthropic has no verified explicit affinity field.
+`prompt_cache_key`. Anthropic uses `x-claude-code-session-id` plus the stable
+`x-claude-code-agent-id` when present, separating a main thread and its children
+without treating those headers as replay authorization.
 The migration-only `legacy-initial-input` mode restores old fingerprint
 heuristics without changing model-visible content. Tool declarations authorize
 only the current generation. Stored Responses continuations can carry private

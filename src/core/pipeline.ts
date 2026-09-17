@@ -1452,7 +1452,12 @@ function selectAttemptAccount(
   const candidates = !state.replayLocked && notQuarantined.length > 0 ? notQuarantined : selectable;
   const candidateIds = new Set(candidates.map((account) => account.id));
   const available = leastQueuedAccountIds(candidates, candidateIds, policy);
-  if (available.size > 0 && [...available].every((id) => accountQueueDepth(id) > 0)) {
+  if (
+    available.size > 0 &&
+    [...available].every(
+      (id) => accountQueueDepth(id) >= options.config.account_inference_concurrency,
+    )
+  ) {
     // Do not bind an unaccepted request behind one arbitrarily selected busy
     // account. Any of these already-qualified accounts may become free first.
     return { kind: "capacity-wait", accountIds: candidateIds };
@@ -2038,13 +2043,13 @@ async function prefetchStreamStart(
   abortUpstream: (reason?: unknown) => void,
 ): Promise<PrefetchOutcome> {
   const { iterator, telemetry, prefetched } = prepared;
-  const externalAbort = (): never => {
+  const externalAbort = async (): Promise<never> => {
     const reason = abortReason(signal);
     telemetry.emitTerminal("external_abort");
-    abandonPreparedStream(prepared, abortUpstream, reason);
+    await abandonPreparedStream(prepared, abortUpstream, reason);
     throw reason;
   };
-  const fail = (error: Error): PrefetchOutcome => {
+  const fail = async (error: Error): Promise<PrefetchOutcome> => {
     const idle = error instanceof StreamIdleTimeoutError;
     auditLog("warn", idle ? "sdk_stream_idle_timeout" : "sdk_stream_upstream_error", {
       ...telemetry.auditFields(),
@@ -2054,7 +2059,7 @@ async function prefetchStreamStart(
       phase: "prefetch",
     });
     telemetry.emitTerminal(idle ? "idle_timeout" : "upstream_error");
-    abandonPreparedStream(prepared, abortUpstream, error);
+    await abandonPreparedStream(prepared, abortUpstream, error);
     return { kind: "failed", error };
   };
   while (true) {
@@ -2583,23 +2588,29 @@ async function executeLoop(
     }
 
     const acquireCapacity = () =>
-      reserveAccountCapacity<ReadySelectionOutcome>(() => {
-        const selectionStarted = performance.now();
-        const outcome = selectAttemptAccount(options, state);
-        auditLog("info", "account_selection_completed", {
-          request_id: options.requestId,
-          duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
-          outcome: outcome.kind,
-          replay_locked: state.replayLocked,
-        });
-        return outcome.kind === "capacity-wait"
-          ? { kind: "wait", accountIds: outcome.accountIds }
-          : {
-              kind: "ready",
-              value: outcome,
-              ...(outcome.kind === "selected" ? { accountId: outcome.selection.selected.id } : {}),
-            };
-      }, signal);
+      reserveAccountCapacity<ReadySelectionOutcome>(
+        () => {
+          const selectionStarted = performance.now();
+          const outcome = selectAttemptAccount(options, state);
+          auditLog("info", "account_selection_completed", {
+            request_id: options.requestId,
+            duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
+            outcome: outcome.kind,
+            replay_locked: state.replayLocked,
+          });
+          return outcome.kind === "capacity-wait"
+            ? { kind: "wait", accountIds: outcome.accountIds }
+            : {
+                kind: "ready",
+                value: outcome,
+                ...(outcome.kind === "selected"
+                  ? { accountId: outcome.selection.selected.id }
+                  : {}),
+              };
+        },
+        signal,
+        options.config.account_inference_concurrency,
+      );
     const reservation = await (options.diagnostics?.waitForQueue(
       "capacity",
       acquireCapacity,
@@ -2697,17 +2708,21 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
         result,
         deadline.signal,
         tracedOptions.config.stream_idle_timeout_ms,
-        () => {
-          streamAccountRelease();
-          streamSessionRelease?.();
+        (cleanup) => {
           deadline.dispose();
-          diagnostics.cleanup();
+          const release = (): void => {
+            streamAccountRelease();
+            streamSessionRelease?.();
+            diagnostics.cleanup();
+          };
+          if (cleanup) void cleanup.then(release, release);
+          else release();
         },
       );
     } catch (constructionError) {
       // The prefetched upstream stream must not outlive a failed hand-off.
       result.prepared.telemetry.emitTerminal("external_abort");
-      abandonPreparedStream(result.prepared, result.abortUpstream, constructionError);
+      await abandonPreparedStream(result.prepared, result.abortUpstream, constructionError);
       throw constructionError;
     }
     releaseAccount = undefined;

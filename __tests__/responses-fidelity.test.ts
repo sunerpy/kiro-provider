@@ -420,7 +420,7 @@ describe("Responses fidelity regression", () => {
   });
 
   test("cancellation while waiting for an account queue returns a typed error and releases the waiter", async () => {
-    const f = fidelityFixture();
+    const f = fidelityFixture({ config: { account_inference_concurrency: 1 } });
     // A new unbound request can now use any idle eligible account. Occupy the
     // whole pool so this fixture still exercises cancellation during a wait.
     const releases = await Promise.all(

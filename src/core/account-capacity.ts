@@ -61,8 +61,8 @@ const pendingAdmissions = new Set<PendingAdmission>();
 let draining = false;
 let drainAgain = false;
 
-function hasFreeAccount(ids: ReadonlySet<string>): boolean {
-  for (const id of ids) if (accountQueueDepth(id) === 0) return true;
+function hasFreeAccount(ids: ReadonlySet<string>, concurrency: number): boolean {
+  for (const id of ids) if (accountQueueDepth(id) < concurrency) return true;
   return false;
 }
 
@@ -87,7 +87,7 @@ function drainAdmissions(): void {
 onAccountCapacityAvailable(drainAdmissions);
 
 /**
- * Wait for any eligible free account, then choose and reserve synchronously.
+ * Wait for a free slot on any eligible account, then choose and reserve synchronously.
  * Eligibility is rechecked by the caller on every possible admission. While
  * all remembered candidates remain occupied, wake-ups use only the queue map,
  * avoiding repeated database/replay work for every pending request.
@@ -95,6 +95,7 @@ onAccountCapacityAvailable(drainAdmissions);
 export function reserveAccountCapacity<T>(
   choose: () => AccountCapacityDecision<T>,
   signal: AbortSignal,
+  concurrency = 1,
 ): Promise<AccountCapacityReservation<T>> {
   if (signal.aborted) return Promise.reject(abortReason(signal));
   return new Promise((resolve, reject) => {
@@ -114,7 +115,7 @@ export function reserveAccountCapacity<T>(
       tryStart() {
         if (settled) return;
         if (signal.aborted) return onAbort();
-        if (waitingFor && !hasFreeAccount(waitingFor)) return;
+        if (waitingFor && !hasFreeAccount(waitingFor, concurrency)) return;
         let decision: AccountCapacityDecision<T>;
         try {
           decision = choose();
@@ -133,7 +134,10 @@ export function reserveAccountCapacity<T>(
           waitingFor = decision.accountIds;
           return;
         }
-        if (decision.accountId !== undefined && accountQueueDepth(decision.accountId) > 0) {
+        if (
+          decision.accountId !== undefined &&
+          accountQueueDepth(decision.accountId) >= concurrency
+        ) {
           waitingFor = new Set([decision.accountId]);
           return;
         }
@@ -141,7 +145,7 @@ export function reserveAccountCapacity<T>(
         const lease =
           decision.accountId === undefined
             ? undefined
-            : acquireAccountQueue(decision.accountId, signal);
+            : acquireAccountQueue(decision.accountId, signal, concurrency);
         // The caller awaits the original promise. Attach rejection handling now
         // so cancellation between reservation and hand-off cannot go unhandled.
         void lease?.catch(() => undefined);

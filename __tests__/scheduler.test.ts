@@ -59,6 +59,8 @@ const refresher: PipelineTokenRefresher = {
 function config() {
   return ConfigSchema.parse({
     api_keys: ["sk-test"],
+    // These original scheduler regressions exercise a saturated single slot.
+    account_inference_concurrency: 1,
     request_timeout_ms: 2_000,
     stream_idle_timeout_ms: 1_000,
     rate_limit_retry_delay_ms: 1,
