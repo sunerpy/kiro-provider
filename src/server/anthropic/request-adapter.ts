@@ -97,7 +97,7 @@ export type AdaptedAnthropicRequest = {
   readonly body: CanonicalRequest;
   readonly cacheControlCount: number;
   readonly contextManagementRequested: boolean;
-  readonly thinkingDisplay?: "omitted";
+  readonly thinkingDisplay?: "omitted" | "summarized";
   readonly outputTokenLimitMode?: "advisory";
   readonly reasoningReplayMode?: "conflict-omitted";
   readonly reasoningReplayConflictMessages?: number;
@@ -1067,6 +1067,12 @@ export function adaptAnthropicMessagesRequest(
 
   const thinkingEnabled =
     request.thinking?.type === "enabled" || request.thinking?.type === "adaptive";
+  const thinkingDisplay =
+    request.thinking?.display === "summarized"
+      ? ("summarized" as const)
+      : request.thinking?.display === "omitted"
+        ? ("omitted" as const)
+        : undefined;
   const body: CanonicalRequest = {
     canonicalVersion: 1,
     protocol: "anthropic-messages",
@@ -1089,7 +1095,7 @@ export function adaptAnthropicMessagesRequest(
             ...(request.thinking.budget_tokens !== undefined
               ? { budgetTokens: request.thinking.budget_tokens }
               : {}),
-            ...(request.thinking.display === "omitted" ? { display: "omitted" as const } : {}),
+            ...(thinkingDisplay !== undefined ? { display: thinkingDisplay } : {}),
           },
         }
       : {}),
@@ -1098,7 +1104,7 @@ export function adaptAnthropicMessagesRequest(
       ? { outputTokenLimit: request.max_tokens }
       : {}),
     reasoningReplays,
-    includeEncryptedReasoning: request.thinking?.display === "omitted",
+    includeEncryptedReasoning: thinkingDisplay === "omitted",
   };
   const count = cacheMarkers;
   return {
@@ -1108,7 +1114,7 @@ export function adaptAnthropicMessagesRequest(
       body,
       cacheControlCount: count,
       contextManagementRequested: request.context_management !== undefined,
-      ...(request.thinking?.display === "omitted" ? { thinkingDisplay: "omitted" as const } : {}),
+      ...(thinkingDisplay !== undefined ? { thinkingDisplay } : {}),
       ...(outputTokenLimitMode !== undefined ? { outputTokenLimitMode } : {}),
       ...(reasoningReplayConflictMessages > 0
         ? {

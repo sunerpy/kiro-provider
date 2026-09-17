@@ -7,6 +7,9 @@
 kiro-provider V3 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
 wire API。
 
+长期使用且希望保留原生 Codex home 时，参见[独立客户端入口示例](CLIENT_LAUNCHERS.zh-CN.md)，
+其中包含 `kirocodex`、命令鉴权、模型目录窗口、Ultra 和账号并发配置。
+
 ## 使用隔离配置运行
 
 测试时不要修改真实 Codex profile。先创建临时配置与 SQLite 状态，再把自定义
@@ -45,7 +48,7 @@ namespace 协作。仓库内 Codex 契约还会回放当前 `view_image` 的 fun
 形状：保留工具调用关联，并把图片字节提升到同一个 Kiro user turn。验收还会检查输出
 中是否泄露 Provider 私有 custom/namespace 别名。
 
-V3 按请求选择通道。普通兼容请求使用原生 KiroRuntime Responses；需要 custom
+V3 按请求选择通道。普通兼容请求使用原生 KiroRuntime Responses；Ultra／max、custom
 grammar、namespace 工具、`agent_message`、`additional_tools`、
 `parallel_tool_calls: false`、加密 reasoning 或 `store: false` 的请求使用 canonical
 stateless 通道。

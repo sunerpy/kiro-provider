@@ -420,8 +420,12 @@ describe("Responses fidelity regression", () => {
   });
 
   test("cancellation while waiting for an account queue returns a typed error and releases the waiter", async () => {
-    const f = fidelityFixture();
-    const release = await acquireAccountQueue(f.primary.id, new AbortController().signal);
+    const f = fidelityFixture({ config: { account_inference_concurrency: 1 } });
+    // A new unbound request can now use any idle eligible account. Occupy the
+    // whole pool so this fixture still exercises cancellation during a wait.
+    const releases = await Promise.all(
+      f.accounts.map((account) => acquireAccountQueue(account.id, new AbortController().signal)),
+    );
     try {
       const controller = new AbortController();
       const request = f.send(basic, {}, controller.signal);
@@ -430,7 +434,7 @@ describe("Responses fidelity regression", () => {
       expect((await request).status).toBe(499);
       expect(f.requests).toHaveLength(0);
     } finally {
-      release();
+      for (const release of releases) release();
       f.database.close();
     }
   });

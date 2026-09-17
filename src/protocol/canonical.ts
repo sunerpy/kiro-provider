@@ -102,9 +102,31 @@ export type KiroReasoningContent =
     }
   | { readonly kind: "redacted_content"; readonly bytes: Uint8Array };
 
+/** Authenticated provider projection metadata; never accepted from public input. */
+export interface InstructionReplayProjection {
+  readonly version: 1;
+  readonly legacyPrefixMessages?: number;
+}
+
+export function isInstructionReplayProjection(
+  value: unknown,
+): value is InstructionReplayProjection {
+  if (typeof value !== "object" || value === null || !("version" in value) || value.version !== 1)
+    return false;
+  if (!("legacyPrefixMessages" in value)) return true;
+  return (
+    typeof value.legacyPrefixMessages === "number" &&
+    Number.isSafeInteger(value.legacyPrefixMessages) &&
+    value.legacyPrefixMessages > 0
+  );
+}
+
 export interface ResolvedReasoningReplay {
   readonly insertBeforeMessage: number;
   readonly content: KiroReasoningContent;
+  readonly instructionProjection?: InstructionReplayProjection;
+  /** Compatibility hint for an authenticated token predating projection metadata. */
+  readonly legacyProjectionUnversioned?: true;
 }
 
 export interface CanonicalRequest {
@@ -130,7 +152,7 @@ export interface CanonicalRequest {
     readonly enabled: boolean;
     readonly budgetTokens?: number;
     /** Anthropic response visibility requested for signed thinking blocks. */
-    readonly display?: "omitted";
+    readonly display?: "omitted" | "summarized";
   };
   readonly temperature?: number;
   readonly outputTokenLimit?: number;

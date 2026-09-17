@@ -70,6 +70,8 @@ bun run build:binary
 
 Apply these coverage expectations:
 
+- Every defect fix must add or extend executable regression tests that reproduce the complete reported failure scenario, including the relevant ingress shape, state/history, cross-module path, and observable outcome. Confirm that the reproducer fails against the pre-fix behavior for the expected reason, then passes with the fix. Keep it in the regular test suite so later changes cannot silently reintroduce the defect.
+- A narrow implementation-mirroring test or written reproduction steps alone do not satisfy this requirement. Cover interactions with earlier fixes and the affected cancellation, cleanup, replay, authorization, or isolation boundaries. When real-client or upstream behavior is involved, also retain an executable integration/probe harness and sanitized evidence; unit tests alone cannot establish that behavior. Never delete, skip, or weaken regression assertions to hide a failure introduced by another fix.
 - Protocol or route changes: test streaming and non-streaming output, authentication, typed errors, cancellation/timeout, and relevant official-client shapes.
 - Responses changes: cover native/stateless selection, stored continuation, tool replay/authorization, opaque reasoning, SSE ordering/terminal events, and usage semantics where applicable.
 - Storage/auth changes: cover migrations, restart persistence, concurrent writers/refresh, tenant isolation, file permissions, and backward-compatible reads.

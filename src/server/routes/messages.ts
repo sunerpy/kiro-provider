@@ -4,6 +4,10 @@ import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { estimateTokens } from "../../kiro/transform/response.js";
 import {
+  type ClientNormalization,
+  isClientNormalization,
+} from "../../protocol/client-normalization.js";
+import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
   parseCanonicalCompletion,
@@ -92,8 +96,11 @@ function estimateInputTokens(value: unknown): number {
   return Math.max(1, estimateTokens(JSON.stringify(value)));
 }
 
-function claudeCodeSessionId(request: Request): string | undefined {
-  const value = request.headers.get("x-claude-code-session-id")?.trim();
+function claudeCodeIdentityHeader(
+  request: Request,
+  name: "x-claude-code-session-id" | "x-claude-code-agent-id",
+): string | undefined {
+  const value = request.headers.get(name)?.trim();
   return value && value.length <= 256 ? value : undefined;
 }
 
@@ -113,6 +120,20 @@ export async function handleMessages(
   if (!bodyResult.ok) {
     ingress.finalize();
     return bodyResult.response;
+  }
+  let clientNormalization: ClientNormalization | undefined;
+  const normalizationMode = request.headers.get("x-kiro-client-normalization");
+  const directoryHash = request.headers.get("x-kiro-working-directory-hash");
+  if (normalizationMode !== null || directoryHash !== null) {
+    const candidate = {
+      kind: normalizationMode?.trim(),
+      workingDirectoryHash: directoryHash?.trim().toLowerCase(),
+    };
+    if (!isClientNormalization(candidate)) {
+      ingress.finalize();
+      return anthropicError(400, "Invalid client normalization context", "invalid_request_error");
+    }
+    clientNormalization = candidate;
   }
   const adapted = adaptAnthropicMessagesRequest(
     bodyResult.value,
@@ -139,7 +160,8 @@ export async function handleMessages(
     adapted.value.source,
     dependencies.tenantId,
     config.session_affinity_mode,
-    claudeCodeSessionId(request),
+    claudeCodeIdentityHeader(request, "x-claude-code-session-id"),
+    claudeCodeIdentityHeader(request, "x-claude-code-agent-id"),
   );
   const compatibility = {
     ...(adapted.value.cacheControlCount > 0 ? { cacheControlObserved: true } : {}),
@@ -196,8 +218,8 @@ export async function handleMessages(
   let streamOwnsRouteResources = false;
   try {
     ingress.disableIdleTimeout();
-    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)(
-      buildPipelineOptions({
+    const pipelineResponse = await (dependencies.runPipeline ?? runChatCompletion)({
+      ...buildPipelineOptions({
         requestId: ingress.requestId,
         diagnostics: ingress.diagnostics,
         body: adapted.value.body,
@@ -209,7 +231,8 @@ export async function handleMessages(
         lineage,
         deadlineSignal: ingress.signals.combined,
       }),
-    );
+      ...(clientNormalization ? { clientNormalization } : {}),
+    });
     // Re-read the live request signal: a client that left while the pipeline
     // ran must not receive a body that would keep the account lease busy.
     if (request.signal.aborted && !ingress.signals.deadline.aborted) {
@@ -238,12 +261,21 @@ export async function handleMessages(
         ...compatibility,
       });
       streamOwnsRouteResources = true;
+      if (clientNormalization)
+        streaming.headers.set("x-kiro-client-normalization", clientNormalization.kind);
       return streaming;
     }
     if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
       const completion = parseCanonicalCompletion(await pipelineResponse.json());
       if (completion && completion.model === adapted.value.body.model) {
-        return anthropicMessageResponse(completion, adapted.value.body.model, compatibility);
+        const response = anthropicMessageResponse(
+          completion,
+          adapted.value.body.model,
+          compatibility,
+        );
+        if (clientNormalization)
+          response.headers.set("x-kiro-client-normalization", clientNormalization.kind);
+        return response;
       }
       return anthropicError(
         502,

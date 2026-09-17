@@ -82,13 +82,15 @@ export function buildEffortRequestFields(
 export function buildThinkingRequestFields(
   kiroModel: string,
   enabled: boolean,
-  display?: "omitted",
+  display?: "omitted" | "summarized",
 ): Record<string, unknown> | undefined {
   if (kiroModel !== "claude-fable-5.1" || !enabled) return undefined;
   return {
     thinking: {
       type: "adaptive",
-      display: display ?? "summarized",
+      // Fable's native default carries reasoning in the signature. Do not
+      // request streamed summary blocks unless the caller asks for them.
+      display: display ?? "omitted",
     },
   };
 }

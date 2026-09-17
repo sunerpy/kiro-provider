@@ -52,6 +52,7 @@ Configuration is validated once at startup; any violation raises a `ConfigLoadEr
 | `model_catalog_stale_ttl_ms`                | integer, `1`-`2147483647`, default `86400000` (24 h)                                        | `KIRO_PROVIDER_MODEL_CATALOG_STALE_TTL_MS`                | Maximum lifetime of a last-known-good account catalog after refresh failures.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `model_catalog_request_timeout_ms`          | integer, `1`-`2147483647`, default `10000`                                                  | `KIRO_PROVIDER_MODEL_CATALOG_REQUEST_TIMEOUT_MS`          | Deadline for one Kiro management model-list request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `account_selection_strategy`                | `"sticky" \| "round-robin" \| "lowest-usage"`, default `"lowest-usage"`                     | `KIRO_PROVIDER_ACCOUNT_SELECTION_STRATEGY`                | How the gateway picks an account per request: `sticky` favors the same account, `round-robin` cycles, `lowest-usage` prefers the account with the most remaining quota.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `account_inference_concurrency`             | integer `1`-`10`, default `10`                                                              | `KIRO_PROVIDER_ACCOUNT_INFERENCE_CONCURRENCY`             | Maximum simultaneous inference requests per account in this process, shared by Messages and both Responses transports. Independent branches can share an account; one stateful branch stays ordered.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `rate_limit_max_retries`                    | integer, `0`-`100`, default `3`                                                             | `KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES`                    | Maximum retry count shared by pre-acceptance HTTP/transport failures and existing later non-stream recovery. `0` disables those retries; accepted streams are never replayed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `rate_limit_retry_delay_ms`                 | integer, `1`-`2147483647`, default `5000`                                                   | `KIRO_PROVIDER_RATE_LIMIT_RETRY_DELAY_MS`                 | Base retry delay in milliseconds before a rate-limit retry.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `quota_recheck_interval_ms`                 | integer, `1`-`2147483647`, default `900000` (15 min)                                        | `KIRO_PROVIDER_QUOTA_RECHECK_INTERVAL_MS`                 | Minimum wait before an exhausted account is probed again. If Kiro reports a quota reset time, the probe waits for that reset instead, capped at the larger of this interval and 24 hours. An HTTP 402, a still-exhausted snapshot, or a failed probe advances this timestamp; it does not create a model retry.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -271,15 +272,19 @@ instruction-over-user priority. `safe` therefore returns
 `native-context-safe` mode uses `systemPrompt` only when Kiro advertises the
 private feature; it is not currently enabled for the tested account.
 
-`legacy-user-prefix` joins only the original instruction text with exactly
-`\n\n`. Leading and intermediate instruction blocks prefix the first user
-turn. A trailing contiguous instruction suffix that follows executable
-history stays at the current boundary: it is appended to a current user/tool
-message without moving its tool results or attachments, or becomes a synthetic
-current user turn when the history ends in an assistant result. This preserves
-reconciliation and continuation ordering instead of moving the new
-instruction back before an earlier assistant result. Startup emits a
-content-free structured warning. It does not restore message merging,
+On the stateless path, `v3-auto` uses the verified native `systemPrompt` field
+when the account and instruction shape support it. Otherwise it preserves
+each instruction's turn boundary through text projection, also used by
+`legacy-user-prefix`: a leading or intermediate instruction prefixes the
+immediately following user/tool turn, or becomes its own user turn before an
+assistant. A trailing instruction stays on the current user/tool turn without
+moving its tool results or attachments, or becomes the actual current input
+after an assistant result. Only original instruction text and `\n\n`
+separators are used; no assistant acknowledgement or generic follow-up prompt
+is fabricated. This fallback preserves timing but cannot promise native role
+priority. `safe` and `native-context-safe` retain their stricter rejection rules.
+
+Explicit `legacy-user-prefix` emits a content-free startup warning. It does not restore message merging,
 repeated-content collapse, trailing-character deletion, synthetic tool prose,
 or any other rewrite. The mode remains deprecated, but it has no fixed removal
 version: removal requires a protocol-faithful native Kiro instruction channel
@@ -327,17 +332,57 @@ these explicit sources:
   `client_metadata.thread_id|session_id|conversation_id`, then
   `prompt_cache_key`.
 - Chat Completions: `prompt_cache_key` only.
-- Anthropic Messages: no verified explicit field, so no affinity binding in
-  this mode.
+- Anthropic Messages: `x-claude-code-session-id`, with
+  `x-claude-code-agent-id` separating a subagent's execution branch from its
+  parent and siblings. The agent ID is scoped to the authenticated tenant and
+  family session; it never authorizes reasoning replay. Identity headers are
+  trimmed and bounded to 256 characters. Clients without a valid agent header
+  retain the session-level binding.
 
 With an explicit key, the provider stores only its tenant-isolated hash, the
 selected account ID, Kiro `conversationId`, and timestamps—not the original
-session value or prompt. One logical session is serialized in-process.
-Different accounts can execute concurrently, while requests sharing an
-account use one account queue. Transport objects are cached per account, and
+session value or prompt. One execution branch is serialized in-process.
+Different execution branches can execute concurrently across accounts or
+within one account's configured capacity. Transport objects are cached per account, and
 SDK clients are cached only while the account access token is unchanged. A
 token refresh rebuilds the SDK client against the new immutable credential
 while preserving the transport.
+
+For requests without a hard replay owner, account selection first restricts
+the eligible pool to free capacity. The configured strategy and soft affinity
+break ties within that pool. Selection and reservation occur without an
+asynchronous gap. When all eligible accounts are busy, the request waits for
+any of them to become free instead of queuing behind one preselected account.
+Waiting requests are admitted in arrival order when their eligible capacity
+is available; a request restricted to a busy owner does not block unrelated
+requests from using another free account. Messages, stateless Responses, and
+native Responses share this capacity pool.
+A busy soft affinity may therefore move to another eligible account and a
+fresh conversation, trading cache reuse for concurrency. Native continuation
+and owner-bound reasoning keep their account/region/profile restrictions.
+`account_inference_concurrency` defaults to **10**, accepts integers from **1 to 10**,
+and is shared by all three inference transports in the process. The least
+occupied eligible accounts are used first, so idle accounts participate before
+a busy account receives more work. At the configured limit, requests wait for
+any eligible slot to be released. Set it to `1` to retain the previous capacity.
+Native Responses uses the same explicit branch lock as stateless Responses;
+without an explicit key, a stored continuation serializes on its tenant-scoped
+previous response or reasoning origin. Identity and historical tool authorization
+checks remain independent of capacity.
+
+Ten is the upper bound of the tested configuration, not a published Kiro
+service quota. Real account/model rate limits still apply. An occupied pool
+queues requests and does not make an in-flight stream portable or replayable.
+
+`request_queue_wait` reports `queue: "session" | "capacity" | "account"`,
+`duration_ms`, and acquired/unavailable/aborted outcome. Capacity admission
+includes waiting for an eligible free account and chooser overhead;
+`account_selection_completed` separately measures the selection step.
+`upstream_attempt_started.preparation_ms` measures preparation
+after obtaining an account lease, only on its first dispatch.
+`upstream_headers_received.wait_ms` and `upstream_first_frame.wait_ms` are
+measured from that attempt's dispatch. Stream duration is measured against its
+terminal event. These are separate from pure model inference time.
 
 Accounts with `overage_count > 0`, or with a positive known limit where
 `used_count >= limit_count`, are excluded before refresh and SDK construction.
@@ -413,12 +458,13 @@ compatibility cutoff established when this version first opens the database.
 signed `reasoning_text` only in the following verified cells. All require
 `GenerateAssistantResponse`, a profile, and effective region `us-east-1`:
 
-| Public protocol    | Model           | Upstream runtime |
-| ------------------ | --------------- | ---------------- |
-| Responses          | GPT-5.6 Sol     | KiroRuntime      |
-| Responses          | GPT-5.6 Sol     | CodeWhisperer    |
-| Anthropic Messages | Claude Sonnet 5 | KiroRuntime      |
-| Anthropic Messages | Claude Opus 5   | KiroRuntime      |
+| Public protocol    | Model            | Upstream runtime                    |
+| ------------------ | ---------------- | ----------------------------------- |
+| Responses          | GPT-5.6 Sol      | KiroRuntime                         |
+| Responses          | GPT-5.6 Sol      | CodeWhisperer                       |
+| Anthropic Messages | Claude Sonnet 5  | KiroRuntime                         |
+| Anthropic Messages | Claude Opus 5    | KiroRuntime                         |
+| Anthropic Messages | Claude Fable 5.1 | KiroRuntime; same mint profile only |
 
 The request protocol and projected runtime operation must match the mint
 envelope, and the target account must resolve to the same effective region
@@ -428,6 +474,33 @@ Redacted reasoning, legacy tokens without the opt-in below, Terra, Luna,
 other regions, and every unlisted combination remain owner-bound. `strict`
 disables all migration.
 
+Fable migration additionally requires the exact authenticated mint profile
+ARN on the target account. Its signed blocks require an unchanged historical
+system/tools/message prefix. Migration does not authorize rewriting that
+prefix, removing signed reasoning, or sharing a cache across accounts.
+
+New replay records authenticate the instruction-projection version. When a
+pre-fix Fable `kr2_` record proves a Messages/KiroRuntime origin, the gateway
+can preserve the historical forced prefix used by that provider version.
+Only the signed historical prefix is retained; later system/developer input
+stays at its original turn. Subsequent records carry the frozen prefix
+boundary, including when a client removes the oldest thinking block.
+`reasoning_replay_projection_compatibility` logs only the model, protocol, and
+prefix-message count. New sessions do not acquire a synthetic acknowledgement.
+Both portable and database writers retain projection metadata across restart;
+an old database token without mint provenance is not used to guess that origin.
+
+An explicitly declared Claude Bash normalization context may also be
+authenticated in replay records. `x-kiro-client-normalization:
+claude-code-bash-v1` requires a 64-character
+`x-kiro-working-directory-hash` (SHA-256 of
+`kiro-provider-working-directory-v1\0` followed by the directory's UTF-8 bytes).
+It recognizes only a leading literal `cd` to that exact directory followed by
+`&&`; command suffixes, other arguments, and tool identities remain bound.
+Both portable and database records require the same normalization context when
+replayed. Untagged records keep their original strict fingerprint contract.
+This metadata changes neither account eligibility nor current tool authorization.
+
 `reasoning_replay_legacy_account_failover: "verified-current-cell"` is an
 explicit recovery switch for database `kr1_` tokens and pre-release `kr2_`
 envelopes created by this same deployment. Both must still pass tenant, model,
@@ -436,7 +509,8 @@ idle TTL, and pre-release `kr2_` uses its persisted transition cutoff. Neither
 format authenticates the mint protocol/region/profile/operation. Enabling this
 switch attests that those missing dimensions match the current owner row and
 request; the gateway cannot reconstruct the original mint provenance.
-Admission remains limited to the same verified runtime/profile cells above,
+Admission remains limited to the verified runtime/profile cells above except
+Fable, which requires authenticated mint provenance,
 with `reasoning_replay_account_failover: "verified"`. Redacted reasoning, Chat
 hash replay, `safe` projection, and every unlisted cell remain owner-bound.
 The default is `strict`; global `strict` also disables this recovery switch.
@@ -519,6 +593,7 @@ If you need a hard upper bound on connection lifetime regardless of client read 
   "model_catalog_stale_ttl_ms": 86400000,
   "model_catalog_request_timeout_ms": 10000,
   "account_selection_strategy": "lowest-usage",
+  "account_inference_concurrency": 10,
   "rate_limit_max_retries": 3,
   "sdk_http_keep_alive": false,
   "rate_limit_retry_delay_ms": 5000,

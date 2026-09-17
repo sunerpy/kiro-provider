@@ -73,6 +73,7 @@ export const ConfigSchema = z.object({
   account_selection_strategy: z
     .enum(["sticky", "round-robin", "lowest-usage"])
     .default("lowest-usage"),
+  account_inference_concurrency: z.number().int().min(1).max(10).default(10),
   rate_limit_max_retries: z.number().int().min(0).max(100).default(3),
   rate_limit_retry_delay_ms: z.number().int().min(1).max(2_147_483_647).default(5000),
   quota_recheck_interval_ms: z.number().int().min(1).max(2_147_483_647).default(900_000),

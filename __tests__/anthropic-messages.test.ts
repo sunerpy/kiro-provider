@@ -2005,7 +2005,7 @@ describe("Claude Code HTTP surface", () => {
   );
 
   test.each([false, true])(
-    "routes Fable 5.1 through Messages with native thinking and output controls (stream=%s)",
+    "routes Fable 5.1 with explicitly summarized thinking and output controls (stream=%s)",
     async (stream) => {
       let captured: GenerateAssistantResponseCommand["input"] | undefined;
       const client: PipelineSdkClient = {
@@ -2028,7 +2028,7 @@ describe("Claude Code HTTP surface", () => {
           validRequest({
             model: "claude-fable-5-1",
             stream,
-            thinking: { type: "adaptive" },
+            thinking: { type: "adaptive", display: "summarized" },
             output_config: { effort: "xhigh" },
           }),
         ),

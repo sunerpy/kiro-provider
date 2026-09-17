@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -6,6 +7,12 @@ import { join, resolve } from "node:path";
 const launcher = resolve(import.meta.dir, "../scripts/kiroclaude");
 const helper = resolve(import.meta.dir, "../scripts/kiroclaude-token");
 const roots: string[] = [];
+const expectedHeaders = (directory = process.cwd()): string =>
+  [
+    "X-Kiro-Output-Token-Limit-Mode: advisory",
+    "X-Kiro-Client-Normalization: claude-code-bash-v1",
+    `X-Kiro-Working-Directory-Hash: ${createHash("sha256").update("kiro-provider-working-directory-v1\0").update(directory).digest("hex")}`,
+  ].join("\n");
 
 afterEach(() => {
   for (const root of roots.splice(0)) {
@@ -98,6 +105,45 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
 }
 
 describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => {
+  test("declares the known 1M model defaults to Claude while leaving Haiku and custom pins alone", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const env = environment(root, fake);
+    const defaults = Bun.spawnSync(["sh", launcher, "--print", "fixture"], { env });
+    expect(defaults.exitCode).toBe(0);
+    const captured = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
+    const settings = JSON.parse(captured.arguments[1] as string) as {
+      env: Record<string, string>;
+      modelPicker: { options: Array<{ model: string }> };
+      autoCompactWindow: number;
+    };
+    expect(settings.autoCompactWindow).toBe(1000000);
+    expect(settings.env.CLAUDE_CODE_TOASTY_THIMBLE).toBe("0");
+    expect(settings.env.CLAUDE_CODE_GENTLE_PARASOL).toBe("0");
+    expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(expectedHeaders());
+    expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5[1m]");
+    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
+    expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
+    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
+    expect(settings.modelPicker.options.map((option) => option.model)).toEqual([
+      "gpt-5.6-sol[1m]",
+      "gpt-5.6-terra[1m]",
+      "gpt-5.6-luna[1m]",
+    ]);
+    const custom = Bun.spawnSync(["sh", launcher, "--print", "fixture"], {
+      env: {
+        ...env,
+        KIROCLAUDE_OPUS_MODEL: "custom-opus",
+        KIROCLAUDE_SOL_MODEL: "custom-sol",
+      },
+    });
+    expect(custom.exitCode).toBe(0);
+    const overridden = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
+    const customSettings = JSON.parse(overridden.arguments[1] as string) as typeof settings;
+    expect(customSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("custom-opus");
+    expect(customSettings.modelPicker.options[0]?.model).toBe("custom-sol");
+  });
+
   test("shares the native Claude home while applying process-local Kiro defaults", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
@@ -190,19 +236,19 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       replaceBuiltInOptions: false,
       options: [
         {
-          model: "gpt-5.6-sol",
+          model: "gpt-5.6-sol[1m]",
           label: "GPT-5.6 Sol",
           description: "Kiro GPT flagship",
           behavesAs: "claude-opus-5",
         },
         {
-          model: "gpt-5.6-terra",
+          model: "gpt-5.6-terra[1m]",
           label: "GPT-5.6 Terra",
           description: "Kiro GPT balanced",
           behavesAs: "claude-opus-5",
         },
         {
-          model: "gpt-5.6-luna",
+          model: "gpt-5.6-luna[1m]",
           label: "GPT-5.6 Luna",
           description: "Kiro GPT efficient",
           behavesAs: "claude-opus-5",
@@ -211,11 +257,11 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     });
     expect(settings.env).toMatchObject({
       ANTHROPIC_BASE_URL: "http://127.0.0.1:8787",
-      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5",
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5[1m]",
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
-      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1",
-      ANTHROPIC_CUSTOM_HEADERS: "X-Kiro-Output-Token-Limit-Mode: advisory",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
+      ANTHROPIC_CUSTOM_HEADERS: expectedHeaders(),
       CLAUDE_CODE_USE_BEDROCK: "0",
       CLAUDE_CODE_USE_VERTEX: "0",
       CLAUDE_CODE_USE_FOUNDRY: "0",

@@ -36,6 +36,12 @@ type NumericField = {
 const numericFields: NumericField[] = [
   { field: "port", envName: "KIRO_PROVIDER_PORT", min: 0, max: 65_535 },
   {
+    field: "account_inference_concurrency",
+    envName: "KIRO_PROVIDER_ACCOUNT_INFERENCE_CONCURRENCY",
+    min: 1,
+    max: 10,
+  },
+  {
     field: "rate_limit_max_retries",
     envName: "KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES",
     min: 0,

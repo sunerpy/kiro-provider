@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../../config/schema.js";
+import { leastQueuedAccountIds, reserveAccountCapacity } from "../../core/account-capacity.js";
+import { isSelectableAccount } from "../../core/account-selection.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
-import { abortable, abortableSleep, acquireAccountQueue } from "../../core/pipeline-runtime.js";
+import {
+  abortable,
+  abortableSleep,
+  accountQueueDepth,
+  acquireSessionQueue,
+} from "../../core/pipeline-runtime.js";
 import { resolveProxyUrl } from "../../core/proxy.js";
 import { retryAfterMs } from "../../core/retry-after.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
@@ -11,7 +18,7 @@ import {
 } from "../../core/tool-output-validation.js";
 import { readUpstreamErrorBody } from "../../core/upstream-error-body.js";
 import { KIRO_CONSTANTS } from "../../kiro/constants.js";
-import { isAccessTokenError } from "../../kiro/health.js";
+import { isAccessTokenError, toOveragePolicy } from "../../kiro/health.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import { RequestTransformError } from "../../kiro/transform/errors.js";
 import { SdkStreamProtocolError } from "../../kiro/transform/streaming/sdk-stream-runtime.js";
@@ -23,6 +30,7 @@ import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import type { ResponsesInputItem } from "../request-schema.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
+import { responsesSessionAffinity } from "../session-affinity.js";
 import { RESPONSES_CAPABILITY_EVIDENCE, responsesCapability } from "./capabilities.js";
 import type { NativeResponseOwner, ResponseContinuationContext } from "./continuation.js";
 import { ResponseContextError } from "./continuation.js";
@@ -676,27 +684,10 @@ export async function proxyNativeResponses(
       ),
       streamOwnsResources: false,
     };
-  const account = options.dependencies.accountManager.selectHealthyAccount(
-    owner?.accountId,
-    owner ? new Set([owner.accountId]) : options.adaptation?.eligibleAccounts,
-  );
-  if (!account || (owner && account.id !== owner.accountId)) {
-    const bound =
-      owner &&
-      options.dependencies.accountManager
-        .reconcileFromDb()
-        .find((candidate) => candidate.id === owner.accountId);
-    const delay = bound ? bound.rateLimitResetTime - Date.now() : 0;
-    const response = openAiError(
-      delay > 0 ? 429 : 503,
-      owner ? "The response's Kiro account is unavailable" : "No healthy Kiro account is available",
-      "service_unavailable",
-      owner ? "response_account_unavailable" : "no_healthy_accounts",
-    );
-    if (delay > 0) response.headers.set("Retry-After", String(Math.ceil(delay / 1000)));
-    return { response, streamOwnsResources: false };
-  }
+  const manager = options.dependencies.accountManager;
+  let accountForAudit: ManagedAccount | undefined;
   let release = (): void => {};
+  let releaseSession: (() => void) | undefined;
   let releaseOwned = true;
   let attempt = 0;
   let continuationMode = prepared.request.previous_response_id ? "upstream" : "none";
@@ -715,7 +706,7 @@ export async function proxyNativeResponses(
     auditLog(level, "native_responses_terminal", {
       request_id: options.requestId,
       attempt,
-      account_hash: auditHash(account.id),
+      account_hash: accountForAudit ? auditHash(accountForAudit.id) : undefined,
       model: prepared.requestedModel,
       wire_model: prepared.wireModel,
       requested_effort: prepared.requestedEffort,
@@ -730,8 +721,98 @@ export async function proxyNativeResponses(
     });
   };
   try {
-    options.signals.diagnostics?.phase("account_queue");
-    release = await acquireAccountQueue(account.id, options.signals.combined);
+    const affinity = responsesSessionAffinity(
+      options.adaptation?.original ?? prepared.request,
+      options.dependencies.tenantId,
+      options.config.session_affinity_mode,
+    );
+    const previousId =
+      prepared.request.previous_response_id ?? reasoningOrigins.at(-1)?.response.id;
+    const sessionKey =
+      affinity?.keyHash ?? (previousId ? nativeAffinityKey(tenantId, previousId) : undefined);
+    if (sessionKey !== undefined) {
+      const acquire = () => acquireSessionQueue(sessionKey, options.signals.combined);
+      releaseSession = await (options.signals.diagnostics?.waitForQueue("session", acquire) ??
+        acquire());
+    }
+    const acquireCapacity = () =>
+      reserveAccountCapacity<ManagedAccount | null>(
+        () => {
+          const selectionStarted = performance.now();
+          const policy = manager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
+          const now = Date.now();
+          const candidates = manager
+            .reconcileFromDb()
+            .filter(
+              (candidate) =>
+                isSelectableAccount(candidate, now, policy) &&
+                (owner
+                  ? candidate.id === owner.accountId
+                  : (options.adaptation?.eligibleAccounts?.has(candidate.id) ?? true)),
+            );
+          const available = leastQueuedAccountIds(candidates, undefined, policy);
+          if (
+            available.size > 0 &&
+            [...available].every(
+              (id) => accountQueueDepth(id) >= options.config.account_inference_concurrency,
+            )
+          ) {
+            auditLog("info", "account_selection_completed", {
+              request_id: options.requestId,
+              duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
+              outcome: "capacity-wait",
+              replay_locked: owner !== undefined,
+            });
+            return {
+              kind: "wait",
+              accountIds: new Set(candidates.map((candidate) => candidate.id)),
+            };
+          }
+          const selected = manager.selectHealthyAccount(owner?.accountId, available);
+          auditLog("info", "account_selection_completed", {
+            request_id: options.requestId,
+            duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
+            outcome: selected ? "selected" : "result",
+            replay_locked: owner !== undefined,
+          });
+          return {
+            kind: "ready",
+            value: selected,
+            ...(selected ? { accountId: selected.id } : {}),
+          };
+        },
+        options.signals.combined,
+        options.config.account_inference_concurrency,
+      );
+    const reservation = await (options.signals.diagnostics?.waitForQueue(
+      "capacity",
+      acquireCapacity,
+      (value) => value.lease !== undefined,
+    ) ?? acquireCapacity());
+    const account = reservation.value;
+    accountForAudit = account ?? undefined;
+    const lease = reservation.lease;
+    if (lease) {
+      const acquire = () => lease;
+      release = await (options.signals.diagnostics?.waitForQueue("account", acquire) ?? acquire());
+    }
+    if (!account || (owner && account.id !== owner.accountId)) {
+      const bound =
+        owner && manager.reconcileFromDb().find((candidate) => candidate.id === owner.accountId);
+      const delay = bound ? bound.rateLimitResetTime - Date.now() : 0;
+      const response = openAiError(
+        delay > 0 ? 429 : 503,
+        owner
+          ? "The response's Kiro account is unavailable"
+          : "No healthy Kiro account is available",
+        "service_unavailable",
+        owner ? "response_account_unavailable" : "no_healthy_accounts",
+      );
+      if (delay > 0) response.headers.set("Retry-After", String(Math.ceil(delay / 1000)));
+      return { response, streamOwnsResources: false };
+    }
+    if (!lease) throw new TypeError("Selected native account has no capacity reservation");
+    options.signals.combined.throwIfAborted();
     options.signals.diagnostics?.phase("token_refresh");
     const initialAuth = options.dependencies.accountManager.toAuthDetails(account);
     let refreshed = await options.dependencies.tokenRefresher.refreshIfNeeded(
@@ -1113,6 +1194,7 @@ export async function proxyNativeResponses(
         abortUpstream: () => nativeAbort.abort(),
         finish: () => {
           release();
+          releaseSession?.();
           options.finalize();
         },
       });
@@ -1290,6 +1372,9 @@ export async function proxyNativeResponses(
       streamOwnsResources: false,
     };
   } finally {
-    if (releaseOwned) release();
+    if (releaseOwned) {
+      release();
+      releaseSession?.();
+    }
   }
 }

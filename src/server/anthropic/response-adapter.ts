@@ -21,7 +21,7 @@ import {
 import { anthropicError, anthropicStreamError } from "./errors.js";
 
 export type AnthropicCompatibilityOptions = {
-  readonly thinkingDisplay?: "omitted";
+  readonly thinkingDisplay?: "omitted" | "summarized";
   readonly contextManagementRequested?: boolean;
   readonly cacheControlObserved?: boolean;
   readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";

@@ -56,6 +56,8 @@ export interface TransformSdkOutputOptions {
   readonly captureOutput?: SdkOutputCaptureHandler;
   readonly onCompletionWitness?: (kind: "token-usage-metadata" | "metering-clean-eof") => void;
   readonly onRawEvent?: (eventTypes: readonly string[]) => void;
+  /** Lets the transport retain its lease while asynchronous iterator teardown settles. */
+  readonly onIteratorCleanup?: (cleanup: Promise<void>) => void;
   /** Fires after every raw tool fragment; counts only, never arguments. */
   readonly onToolCallProgress?: (progress: ToolCallProgress) => void;
 }
@@ -83,12 +85,16 @@ function toolCallProgress(toolCalls: ReadonlyMap<string, ToolCallState>): ToolCa
   return { open: toolCalls.size - stopped, stopped };
 }
 
-function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): void {
+function closeIteratorWithoutBlocking(iterator: AsyncIterator<SdkStreamEvent>): Promise<void> {
   try {
     const closing = iterator.return?.();
-    if (closing) void Promise.resolve(closing).catch(() => undefined);
+    return Promise.resolve(closing).then(
+      () => undefined,
+      () => undefined,
+    );
   } catch {
     // Completion metadata is authoritative; cleanup failures must not erase it.
+    return Promise.resolve();
   }
 }
 
@@ -115,6 +121,10 @@ export async function* transformSdkOutputStream(
   let anthropicRedactedEmitted = false;
   let iteratorFinished = false;
   let iteratorClosed = false;
+  const closeIterator = (): void => {
+    const cleanup = closeIteratorWithoutBlocking(iterator);
+    options.onIteratorCleanup?.(cleanup);
+  };
   let completionWitness: "token-usage-metadata" | "metering-clean-eof" | undefined;
   let toolArgumentBytes = 0;
   const bufferLateGptReasoning =
@@ -172,11 +182,11 @@ export async function* transformSdkOutputStream(
           ...streamErrorAuditFields(transportError, options.diagnostics),
         });
         iteratorClosed = true;
-        closeIteratorWithoutBlocking(iterator);
+        closeIterator();
         break;
       }
       if (next.kind === "aborted") {
-        closeIteratorWithoutBlocking(iterator);
+        closeIterator();
         iteratorClosed = true;
         return;
       }
@@ -202,7 +212,7 @@ export async function* transformSdkOutputStream(
         completionWitness = "token-usage-metadata";
         options.onCompletionWitness?.(completionWitness);
         iteratorClosed = true;
-        closeIteratorWithoutBlocking(iterator);
+        closeIterator();
         break;
       }
       if (isCompletionMeteringEvent(event)) {
@@ -430,7 +440,7 @@ export async function* transformSdkOutputStream(
     }
   } finally {
     if (!iteratorFinished && !iteratorClosed && iterator.return) {
-      closeIteratorWithoutBlocking(iterator);
+      closeIterator();
     }
   }
 

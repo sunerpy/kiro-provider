@@ -3,8 +3,19 @@ interface QueueEntry {
   waiters: number;
 }
 
+interface AccountWaiter {
+  readonly concurrency: number;
+  readonly grant: () => void;
+}
+
+interface AccountQueueEntry {
+  active: number;
+  readonly waiting: Set<AccountWaiter>;
+}
+
 const sessionQueues = new Map<string, QueueEntry>();
-const accountQueues = new Map<string, QueueEntry>();
+const accountQueues = new Map<string, AccountQueueEntry>();
+const accountCapacityListeners = new Set<() => void>();
 
 export interface PipelineDeadline {
   readonly signal: AbortSignal;
@@ -104,8 +115,88 @@ export function acquireSessionQueue(key: string, signal: AbortSignal): Promise<(
   return acquireKeyedQueue(sessionQueues, key, signal);
 }
 
-export function acquireAccountQueue(accountId: string, signal: AbortSignal): Promise<() => void> {
-  return acquireKeyedQueue(accountQueues, accountId, signal);
+function drainAccountQueue(entry: AccountQueueEntry): void {
+  for (const waiter of entry.waiting) {
+    if (entry.active >= waiter.concurrency) break;
+    entry.waiting.delete(waiter);
+    waiter.grant();
+  }
+}
+
+/**
+ * Reserve synchronously, then hand the lease to its caller. Once handed off,
+ * cancellation alone does not release it: the stream must finish its upstream
+ * cleanup first. Direct internal callers retain the historical limit of one;
+ * both gateway transports supply the configured inference concurrency.
+ */
+export async function acquireAccountQueue(
+  accountId: string,
+  signal: AbortSignal,
+  concurrency = 1,
+): Promise<() => void> {
+  if (signal.aborted) throw abortReason(signal);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 10) {
+    throw new RangeError("Account inference concurrency must be an integer between 1 and 10");
+  }
+  let entry = accountQueues.get(accountId);
+  if (!entry) {
+    entry = { active: 0, waiting: new Set() };
+    accountQueues.set(accountId, entry);
+  }
+  const queueEntry = entry;
+  let open: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  if (!open) throw new TypeError("Account capacity gate was not initialized");
+  const grant = open;
+  let acquired = false;
+  let released = false;
+  const waiter: AccountWaiter = {
+    concurrency,
+    grant: () => {
+      acquired = true;
+      queueEntry.active += 1;
+      grant();
+    },
+  };
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    if (acquired) queueEntry.active -= 1;
+    else queueEntry.waiting.delete(waiter);
+    drainAccountQueue(queueEntry);
+    if (
+      queueEntry.active === 0 &&
+      queueEntry.waiting.size === 0 &&
+      accountQueues.get(accountId) === queueEntry
+    ) {
+      accountQueues.delete(accountId);
+    }
+    for (const listener of accountCapacityListeners) listener();
+  };
+  queueEntry.waiting.add(waiter);
+  drainAccountQueue(queueEntry);
+  try {
+    await abortable(gate, signal);
+    if (signal.aborted) throw abortReason(signal);
+  } catch (error) {
+    release();
+    throw error;
+  }
+  return release;
+}
+
+/** Includes the active lease and queued reservations, even before their first await resolves. */
+export function accountQueueDepth(accountId: string): number {
+  const entry = accountQueues.get(accountId);
+  return entry ? entry.active + entry.waiting.size : 0;
+}
+
+/** Internal admission wake-up, synchronous with releasing any reservation. */
+export function onAccountCapacityAvailable(listener: () => void): () => void {
+  accountCapacityListeners.add(listener);
+  return () => accountCapacityListeners.delete(listener);
 }
 
 export function createPipelineDeadline(

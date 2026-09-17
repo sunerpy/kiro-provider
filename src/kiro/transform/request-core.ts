@@ -66,11 +66,6 @@ function instructionText(messages: readonly CanonicalMessage[]): string {
     .join("\n\n");
 }
 
-function forcedInstructionText(messages: readonly CanonicalMessage[]): string {
-  if (messages.length <= 1) return instructionText(messages);
-  return messages.map((message) => `[${message.role}]\n${instructionText([message])}`).join("\n\n");
-}
-
 type NativeInstructionProjection =
   | {
       readonly ok: true;
@@ -155,6 +150,97 @@ function validateContentBlockProjection(messages: readonly CanonicalMessage[]): 
   }
 }
 
+function validateInstructionContent(instructions: readonly CanonicalMessage[]): void {
+  for (const instruction of instructions) {
+    if (
+      instruction.content.some((part) => part.type !== "text") ||
+      instruction.toolCalls.length > 0
+    ) {
+      throw new RequestTransformError(
+        `Instruction ${instruction.path} contains non-text content that legacy projection cannot represent`,
+        "unsupported_instruction_projection",
+      );
+    }
+  }
+}
+
+function projectLegacyReplayPrefix(
+  request: CanonicalRequest,
+  nativeSystemPromptEnabled: boolean,
+  boundary: number,
+  unversioned: boolean,
+): ReturnType<typeof projectMessages> | undefined {
+  if (
+    !Number.isSafeInteger(boundary) ||
+    boundary <= 0 ||
+    boundary >= request.messages.length ||
+    request.messages[boundary]?.role !== "assistant"
+  ) {
+    throw new RequestTransformError(
+      "Historical reasoning projection does not match the current message prefix",
+      "reasoning_replay_context_mismatch",
+    );
+  }
+  const prefix = request.messages.slice(0, boundary);
+  const instructions = prefix.filter(isInstruction);
+  validateInstructionContent(instructions);
+  const nonEmpty = instructions.filter((item) => instructionText([item]).length > 0);
+  if (
+    nonEmpty.length === 0 ||
+    (unversioned &&
+      nativeSystemPromptEnabled &&
+      nativeInstructionProjection({ ...request, messages: prefix }, instructions).ok)
+  )
+    return undefined;
+
+  // This is an authenticated pre-fix replay, not a new conversation. The old
+  // provider actually sent this prefix/acknowledgement before minting its
+  // signature. Freeze only that historical prefix; never move later steering
+  // into it. The boundary is carried in every subsequent encrypted replay.
+  const sourcePath = nonEmpty[0]?.path ?? "legacy-replay-prefix";
+  const prefixText =
+    nonEmpty.length === 1
+      ? instructionText(nonEmpty)
+      : nonEmpty.map((item) => `[${item.role}]\n${instructionText([item])}`).join("\n\n");
+  const messages: CanonicalMessage[] = [
+    {
+      role: "user",
+      content: [textPart(prefixText, sourcePath)],
+      toolCalls: [],
+      path: sourcePath,
+    },
+    {
+      role: "assistant",
+      content: [textPart("I will follow these instructions.", "legacy-replay-acknowledgement")],
+      toolCalls: [],
+      path: "legacy-replay-acknowledgement",
+    },
+  ];
+  const projectedIndexByOriginal = new Map<number, number>();
+  for (const [index, message] of prefix.entries()) {
+    if (isInstruction(message)) continue;
+    projectedIndexByOriginal.set(index, messages.length);
+    messages.push(cloneMessage(message));
+  }
+  const suffix = projectMessages({ ...request, messages: request.messages.slice(boundary) }, false);
+  for (const [index, projected] of suffix.projectedIndexByOriginal)
+    projectedIndexByOriginal.set(index + boundary, projected + messages.length);
+  messages.push(...suffix.messages);
+  return {
+    messages,
+    projectedIndexByOriginal,
+    diagnostics: {
+      ...suffix.diagnostics,
+      inputMessageCount: request.messages.length,
+      outputMessageCount: messages.length,
+      instructionChannel: "legacy-replay-prefix+inline-user",
+      prefixInstructionCount: instructions.length,
+      prefixAction: "kiro_cli_forced_role",
+      legacyPrefixMessages: boundary,
+    },
+  };
+}
+
 function projectMessages(
   request: CanonicalRequest,
   nativeSystemPromptEnabled: boolean,
@@ -171,17 +257,7 @@ function projectMessages(
       "unsupported_instruction_projection",
     );
   }
-  for (const instruction of instructions) {
-    if (
-      instruction.content.some((part) => part.type !== "text") ||
-      instruction.toolCalls.length > 0
-    ) {
-      throw new RequestTransformError(
-        `Instruction ${instruction.path} contains non-text content that legacy projection cannot represent`,
-        "unsupported_instruction_projection",
-      );
-    }
-  }
+  validateInstructionContent(instructions);
 
   const nativeProjection = nativeInstructionProjection(request, instructions);
   const useNativeProjection =
@@ -223,6 +299,7 @@ function projectMessages(
         inputMessageCount: request.messages.length,
         outputMessageCount: messages.length,
         prefixInstructionCount: instructions.length,
+        intermediateInstructionCount: 0,
         trailingInstructionCount: 0,
         prefixAction: systemPrompt === undefined ? "none" : "native_system_prompt",
         suffixAction: "none",
@@ -230,78 +307,20 @@ function projectMessages(
     };
   }
 
-  if (request.projectionMode === "v3-auto") {
-    const messages: CanonicalMessage[] = [];
-    const projectedIndexByOriginal = new Map<number, number>();
-    for (const [index, message] of request.messages.entries()) {
-      if (isInstruction(message)) continue;
-      projectedIndexByOriginal.set(index, messages.length);
-      messages.push(cloneMessage(message));
-    }
-    const executableMessageCount = messages.length;
-    const nonEmptyInstructions = instructions.filter(
-      (instruction) => instructionText([instruction]).length > 0,
+  const firstExecutableIndex = request.messages.findIndex((message) => !isInstruction(message));
+  const leadingEnd = firstExecutableIndex < 0 ? request.messages.length : firstExecutableIndex;
+  const leadingInstructions = request.messages.slice(0, leadingEnd);
+  let retainedSystemPrompt: string | undefined;
+  if (
+    nativeSystemPromptEnabled &&
+    (request.projectionMode === "v3-auto" || request.protocol === "responses") &&
+    leadingInstructions.length > 0
+  ) {
+    const leading = nativeInstructionProjection(
+      { ...request, messages: leadingInstructions },
+      leadingInstructions,
     );
-    let prefixAction: RequestProjectionDiagnostics["prefixAction"] = "none";
-    let suffixAction: RequestProjectionDiagnostics["suffixAction"] = "none";
-    if (executableMessageCount > 0 && nonEmptyInstructions.length > 0) {
-      const sourcePath = nonEmptyInstructions[0]?.path ?? "kiro-cli-forced-role";
-      messages.unshift(
-        {
-          role: "user",
-          content: [textPart(forcedInstructionText(nonEmptyInstructions), "kiro-cli-forced-role")],
-          toolCalls: [],
-          path: sourcePath,
-        },
-        {
-          role: "assistant",
-          content: [
-            textPart("I will follow these instructions.", "kiro-cli-forced-role-acknowledgement"),
-          ],
-          toolCalls: [],
-          path: "kiro-cli-forced-role-acknowledgement",
-        },
-      );
-      prefixAction = "kiro_cli_forced_role";
-      for (const [key, value] of projectedIndexByOriginal) {
-        projectedIndexByOriginal.set(key, value + 2);
-      }
-      if (messages.at(-1)?.role === "assistant") {
-        messages.push({
-          role: "user",
-          content: [textPart("Now follow the instruction.", sourcePath)],
-          toolCalls: [],
-          path: sourcePath,
-        });
-        suffixAction = "synthetic_user";
-      }
-    }
-    let trailingInstructionStart = request.messages.length;
-    while (
-      trailingInstructionStart > 0 &&
-      isInstruction(request.messages[trailingInstructionStart - 1] as CanonicalMessage)
-    ) {
-      trailingInstructionStart -= 1;
-    }
-    const trailingInstructionCount =
-      trailingInstructionStart < request.messages.length &&
-      request.messages.slice(0, trailingInstructionStart).some((message) => !isInstruction(message))
-        ? request.messages.length - trailingInstructionStart
-        : 0;
-    return {
-      messages,
-      projectedIndexByOriginal,
-      diagnostics: {
-        projectionMode: request.projectionMode,
-        instructionChannel: nonEmptyInstructions.length === 0 ? "none" : "kiro-cli-forced-role",
-        inputMessageCount: request.messages.length,
-        outputMessageCount: messages.length,
-        prefixInstructionCount: instructions.length - trailingInstructionCount,
-        trailingInstructionCount,
-        prefixAction,
-        suffixAction,
-      },
-    };
+    if (leading.ok) retainedSystemPrompt = leading.systemPrompt;
   }
 
   let trailingInstructionStart = request.messages.length;
@@ -317,122 +336,103 @@ function projectMessages(
   const trailingInstructions = hasEarlierExecutableMessage
     ? request.messages.slice(trailingInstructionStart)
     : [];
-  const prefixInstructions =
-    trailingInstructions.length > 0
-      ? instructions.slice(0, instructions.length - trailingInstructions.length)
-      : instructions;
-  let prefixAction: RequestProjectionDiagnostics["prefixAction"] = "none";
+  let prefixAction: RequestProjectionDiagnostics["prefixAction"] =
+    retainedSystemPrompt === undefined ? "none" : "native_system_prompt";
   let suffixAction: RequestProjectionDiagnostics["suffixAction"] = "none";
 
   const messages: CanonicalMessage[] = [];
   const projectedIndexByOriginal = new Map<number, number>();
-  if (request.protocol === "responses") {
-    let pending: CanonicalMessage[] = [];
-    const appendInstructionTurn = (): void => {
-      if (pending.length === 0) return;
-      messages.push({
-        role: "user",
-        content: [textPart(instructionText(pending), pending[0]?.path ?? "instructions")],
-        toolCalls: [],
-        path: pending[0]?.path ?? "instructions",
-      });
-      pending = [];
-      prefixAction = "synthetic_leading_user";
-    };
-    for (const [index, message] of request.messages.entries()) {
-      if (isInstruction(message)) {
-        if (trailingInstructions.length === 0 || index < trailingInstructionStart)
-          pending.push(message);
+  // A text-only fallback cannot retain native instruction priority, but it
+  // must retain the turn where each instruction becomes effective. Never move
+  // an intermediate instruction ahead of earlier work or invent an assistant
+  // acknowledgement. The original-index map keeps signed replay on its actual
+  // assistant message despite removed instruction messages.
+  let pending: CanonicalMessage[] = [];
+  const appendInstructionTurn = (trailing = false): void => {
+    if (pending.length === 0) return;
+    messages.push({
+      role: "user",
+      content: [textPart(instructionText(pending), pending[0]?.path ?? "instructions")],
+      toolCalls: [],
+      path: pending[0]?.path ?? "instructions",
+    });
+    pending = [];
+    if (trailing) suffixAction = "synthetic_user";
+    else if (prefixAction === "none") prefixAction = "synthetic_leading_user";
+  };
+  for (const [index, message] of request.messages.entries()) {
+    if (isInstruction(message)) {
+      if (retainedSystemPrompt !== undefined && index < leadingEnd) continue;
+      const text = instructionText([message]);
+      if (text.length === 0) {
+        if (
+          index === request.messages.length - 1 &&
+          pending.length === 0 &&
+          messages.at(-1)?.role === "assistant"
+        ) {
+          throw new RequestTransformError(
+            "Current input contains no text bytes, image, document, or tool result",
+            "missing_current_input",
+            trailingInstructions[0]?.path ?? message.path,
+          );
+        }
         continue;
       }
-      let projected = cloneMessage(message);
-      if (pending.length > 0) {
-        if (message.role === "user" || message.role === "tool") {
-          projected = {
-            ...projected,
-            content: [
-              textPart(`${instructionText(pending)}\n\n`, pending[0]?.path ?? "instructions"),
-              ...projected.content,
-            ],
-          };
-          pending = [];
-          prefixAction = "prepend_first_user";
-        } else appendInstructionTurn();
-      }
-      projectedIndexByOriginal.set(index, messages.length);
-      messages.push(projected);
-    }
-    appendInstructionTurn();
-  } else {
-    for (const [index, message] of request.messages.entries()) {
-      if (isInstruction(message)) continue;
-      projectedIndexByOriginal.set(index, messages.length);
-      messages.push(cloneMessage(message));
-    }
-    if (prefixInstructions.length > 0) {
-      const prefix = instructionText(prefixInstructions);
-      const firstUserIndex = messages.findIndex((message) => message.role === "user");
-      if (firstUserIndex < 0) {
-        // No user turn to glue into: the instruction block becomes its own leading
-        // user turn. Live A/B on 2026-09-03 (claude-opus-5, effort high, n=120/arm,
-        // docs/audits/kiro-ab-probes-2026-09-03.zh.md) found no turn-2 stop-rate
-        // difference between this shape and gluing (31.7% vs 33.3%, Fisher p=0.89),
-        // so the standalone turn is kept.
-        messages.unshift({
-          role: "user",
-          content: [textPart(prefix, "legacy-user-prefix")],
-          toolCalls: [],
-          path: "legacy-user-prefix",
-        });
-        prefixAction = "synthetic_leading_user";
-        for (const [key, value] of projectedIndexByOriginal) {
-          projectedIndexByOriginal.set(key, value + 1);
+      const previousIndex = messages.length - 1;
+      const previous = messages[previousIndex];
+      if (previous?.role === "user" || previous?.role === "tool") {
+        // Always make this decision from the preceding turn, including after
+        // a once-current instruction becomes historical. Changing its grouping
+        // on the next request would invalidate prefix-bound thinking signatures.
+        const separator = textFromParts(previous.content).length > 0 ? "\n\n" : "";
+        messages[previousIndex] = {
+          ...previous,
+          content: [...previous.content, textPart(`${separator}${text}`, message.path)],
+        };
+        if (trailingInstructions.length > 0 && index >= trailingInstructionStart) {
+          suffixAction = previous.role === "user" ? "append_user" : "append_tool";
         }
       } else {
-        const firstUser = messages[firstUserIndex];
-        if (firstUser) {
-          messages[firstUserIndex] = {
-            ...firstUser,
-            content: [textPart(`${prefix}\n\n`, "legacy-user-prefix"), ...firstUser.content],
-          };
-          prefixAction = "prepend_first_user";
-        }
+        pending.push(message);
       }
+      continue;
     }
-  }
-
-  if (trailingInstructions.length > 0) {
-    const suffix = instructionText(trailingInstructions);
-    const suffixPath = trailingInstructions[0]?.path ?? "legacy-user-suffix";
-    const currentIndex = messages.length - 1;
-    const current = messages[currentIndex];
-    if (current?.role === "user" || current?.role === "tool") {
-      const separator = textFromParts(current.content).length > 0 ? "\n\n" : "";
-      messages[currentIndex] = {
-        ...current,
-        content: [...current.content, textPart(`${separator}${suffix}`, suffixPath)],
-      };
-      suffixAction = current.role === "user" ? "append_user" : "append_tool";
-    } else {
-      messages.push({
-        role: "user",
-        content: [textPart(suffix, suffixPath)],
-        toolCalls: [],
-        path: suffixPath,
-      });
-      suffixAction = "synthetic_user";
+    let projected = cloneMessage(message);
+    if (pending.length > 0) {
+      if (message.role === "user" || message.role === "tool") {
+        projected = {
+          ...projected,
+          content: [
+            textPart(`${instructionText(pending)}\n\n`, pending[0]?.path ?? "instructions"),
+            ...projected.content,
+          ],
+        };
+        pending = [];
+        if (retainedSystemPrompt === undefined) prefixAction = "prepend_first_user";
+      } else appendInstructionTurn();
     }
+    projectedIndexByOriginal.set(index, messages.length);
+    messages.push(projected);
   }
+  appendInstructionTurn(trailingInstructions.length > 0);
 
   return {
     messages,
     projectedIndexByOriginal,
+    ...(retainedSystemPrompt === undefined ? {} : { systemPrompt: retainedSystemPrompt }),
     diagnostics: {
       projectionMode: request.projectionMode,
-      instructionChannel: instructions.length === 0 ? "none" : "legacy-user-prefix",
+      instructionChannel:
+        instructions.length === 0
+          ? "none"
+          : retainedSystemPrompt === undefined
+            ? "legacy-user-prefix"
+            : "kiro-runtime-system-prompt+inline-user",
       inputMessageCount: request.messages.length,
       outputMessageCount: messages.length,
-      prefixInstructionCount: prefixInstructions.length,
+      prefixInstructionCount: leadingInstructions.length,
+      intermediateInstructionCount:
+        instructions.length - leadingInstructions.length - trailingInstructions.length,
       trailingInstructionCount: trailingInstructions.length,
       prefixAction,
       suffixAction,
@@ -632,7 +632,33 @@ export function buildCodeWhispererRequest(
     }
     throw error;
   }
-  const projection = projectMessages(canonical, identity.nativeSystemPromptEnabled === true);
+  const legacyBoundaries =
+    canonical.protocol === "anthropic-messages" &&
+    canonical.model === "claude-fable-5-1" &&
+    canonical.projectionMode === "v3-auto"
+      ? (identity.resolvedReasoningReplays ?? []).flatMap((replay) =>
+          replay.instructionProjection?.legacyPrefixMessages === undefined
+            ? []
+            : [replay.instructionProjection.legacyPrefixMessages],
+        )
+      : [];
+  const legacyBoundary = legacyBoundaries.reduce(
+    (minimum, boundary) => Math.min(minimum, boundary),
+    Infinity,
+  );
+  const projection =
+    (legacyBoundaries.length > 0
+      ? projectLegacyReplayPrefix(
+          canonical,
+          identity.nativeSystemPromptEnabled === true,
+          legacyBoundary,
+          (identity.resolvedReasoningReplays ?? [])
+            .filter(
+              (replay) => replay.instructionProjection?.legacyPrefixMessages === legacyBoundary,
+            )
+            .every((replay) => replay.legacyProjectionUnversioned === true),
+        )
+      : undefined) ?? projectMessages(canonical, identity.nativeSystemPromptEnabled === true);
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
   }

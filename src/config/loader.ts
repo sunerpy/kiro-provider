@@ -151,6 +151,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_ACCOUNT_INFERENCE_CONCURRENCY",
+    field: "account_inference_concurrency",
+    kind: "integer",
+  },
+  {
     env: "KIRO_PROVIDER_RATE_LIMIT_MAX_RETRIES",
     field: "rate_limit_max_retries",
     kind: "integer",
