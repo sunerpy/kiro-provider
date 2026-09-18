@@ -1,5 +1,6 @@
 import { auditHash } from "../../../core/audit-log.js";
 import type { CanonicalAssistantOutput } from "../../../protocol/canonical.js";
+import type { CodeReference } from "../../../protocol/code-references.js";
 import type { CanonicalOutputUsage } from "../../../protocol/output.js";
 import {
   InvalidTokenUsageError,
@@ -42,6 +43,7 @@ export interface SdkStreamEvent {
     readonly redactedContent?: Uint8Array;
   };
   readonly assistantResponseEvent?: { readonly content?: string };
+  readonly codeReferenceEvent?: { readonly references?: readonly CodeReference[] };
   readonly toolUseEvent?: {
     readonly name?: string;
     readonly toolUseId?: string;
@@ -68,6 +70,7 @@ export interface SdkStreamEvent {
 
 const SAFE_STREAM_EVENT_TYPES = new Set([
   "assistantResponseEvent",
+  "codeReferenceEvent",
   "contextUsageEvent",
   "messageMetadataEvent",
   "metadataEvent",

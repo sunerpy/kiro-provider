@@ -1,4 +1,5 @@
 import { isRecord } from "./adapter-utils.js";
+import { type CodeReference, parseCodeReferences } from "./code-references.js";
 import {
   parseReportedUsage,
   parseUsageAccounting,
@@ -43,6 +44,7 @@ export interface CanonicalCompletion {
   readonly toolCalls: readonly CanonicalOutputToolCall[];
   readonly finishReason: "stop" | "tool_calls";
   readonly usage: CanonicalOutputUsage;
+  readonly codeReferences?: readonly CodeReference[];
 }
 
 interface CanonicalOutputEventBase {
@@ -87,6 +89,7 @@ export type CanonicalOutputEvent =
       readonly type: "completed";
       readonly finishReason: "stop" | "tool_calls";
       readonly usage: CanonicalOutputUsage;
+      readonly codeReferences?: readonly CodeReference[];
     });
 
 function hasOnlyKeys(
@@ -192,6 +195,7 @@ export function parseCanonicalCompletion(value: unknown): CanonicalCompletion | 
         "toolCalls",
         "finishReason",
         "usage",
+        "codeReferences",
       ]),
     ) ||
     value.canonicalOutputVersion !== CANONICAL_OUTPUT_VERSION ||
@@ -218,6 +222,9 @@ export function parseCanonicalCompletion(value: unknown): CanonicalCompletion | 
   }
   const usage = parseUsage(value.usage);
   if (!usage) return undefined;
+  const codeReferences =
+    value.codeReferences === undefined ? undefined : parseCodeReferences(value.codeReferences);
+  if (value.codeReferences !== undefined && codeReferences === undefined) return undefined;
   return {
     canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
     conversationId: value.conversationId,
@@ -228,6 +235,7 @@ export function parseCanonicalCompletion(value: unknown): CanonicalCompletion | 
     toolCalls,
     finishReason: value.finishReason,
     usage,
+    ...(codeReferences !== undefined ? { codeReferences } : {}),
   };
 }
 
@@ -329,18 +337,25 @@ export function parseCanonicalOutputEvent(value: unknown): CanonicalOutputEvent 
     }
     case "completed": {
       if (
-        !hasOnlyKeys(value, new Set(["canonicalOutputVersion", "type", "finishReason", "usage"])) ||
+        !hasOnlyKeys(
+          value,
+          new Set(["canonicalOutputVersion", "type", "finishReason", "usage", "codeReferences"]),
+        ) ||
         (value.finishReason !== "stop" && value.finishReason !== "tool_calls")
       ) {
         return undefined;
       }
       const usage = parseUsage(value.usage);
       if (!usage) return undefined;
+      const codeReferences =
+        value.codeReferences === undefined ? undefined : parseCodeReferences(value.codeReferences);
+      if (value.codeReferences !== undefined && codeReferences === undefined) return undefined;
       return {
         ...base,
         type: "completed",
         finishReason: value.finishReason,
         usage,
+        ...(codeReferences !== undefined ? { codeReferences } : {}),
       };
     }
     default:

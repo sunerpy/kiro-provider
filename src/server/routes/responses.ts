@@ -315,6 +315,7 @@ function completedResponse(
       model,
       output,
       usage: responsesUsage(payload.usage, usageMode),
+      codeReferences: payload.codeReferences,
       configuration,
       createdAt,
     }),

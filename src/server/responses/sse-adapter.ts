@@ -6,6 +6,7 @@ import {
   type StreamFailureCode,
   streamFailure,
 } from "../../core/stream-error.js";
+import type { CodeReference } from "../../protocol/code-references.js";
 import {
   type CanonicalOutputEvent,
   type CanonicalOutputUsage,
@@ -77,6 +78,7 @@ type AdapterOutcome =
 type TerminalCompletion = {
   readonly output: readonly ResponseOutputItem[];
   readonly usage: ResponseUsage | undefined;
+  readonly codeReferences?: readonly CodeReference[];
 };
 
 type TerminalFailure = {
@@ -200,6 +202,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             model: options.model,
             output: terminalCompletion.output,
             usage: terminalCompletion.usage,
+            codeReferences: terminalCompletion.codeReferences,
             sequenceNumber,
             createdAt,
             configuration: options.configuration,
@@ -231,6 +234,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               model: options.model,
               output: terminalCompletion?.output ?? [],
               usage: terminalCompletion?.usage,
+              codeReferences: terminalCompletion?.codeReferences,
               sequenceNumber: sequence,
               createdAt,
               completedAt: Math.floor(Date.now() / 1000),
@@ -597,7 +601,11 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     }
   };
 
-  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
+  const complete = (
+    usage: CanonicalOutputUsage,
+    finishReason: "stop" | "tool_calls",
+    codeReferences?: readonly CodeReference[],
+  ): void => {
     const invalidTool = [...tools.values()].some(
       (tool) => tool.id.length === 0 || tool.name.length === 0,
     );
@@ -740,7 +748,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     const output = [...completedOutput.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
-    terminalCompletion = { output, usage: responseUsage(usage, options.usageMode) };
+    terminalCompletion = { output, usage: responseUsage(usage, options.usageMode), codeReferences };
     beginTerminal("normal-complete");
   };
 
@@ -802,7 +810,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
               }
               if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(event.usage, event.finishReason);
+                complete(event.usage, event.finishReason, event.codeReferences);
                 return;
               }
               addEvent(event);
@@ -835,7 +843,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               } else if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(event.usage, event.finishReason);
+                complete(event.usage, event.finishReason, event.codeReferences);
                 return;
               } else {
                 addEvent(event);

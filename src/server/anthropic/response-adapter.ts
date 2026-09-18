@@ -5,6 +5,7 @@ import {
   type StreamFailure,
   streamFailure,
 } from "../../core/stream-error.js";
+import { type CodeReference, codeReferenceMetadata } from "../../protocol/code-references.js";
 import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
@@ -216,6 +217,7 @@ export function anthropicMessageResponse(
       stop_reason: completion.finishReason === "tool_calls" ? "tool_use" : "end_turn",
       stop_sequence: null,
       usage: usagePayload(completion.usage),
+      ...codeReferenceMetadata(completion.codeReferences),
       ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
     },
     { headers: compatibilityHeaders(options) },
@@ -695,7 +697,11 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     emit("content_block_stop", { type: "content_block_stop", index });
     return signed;
   };
-  const complete = (usage: CanonicalOutputUsage, finishReason: "stop" | "tool_calls"): void => {
+  const complete = (
+    usage: CanonicalOutputUsage,
+    finishReason: "stop" | "tool_calls",
+    codeReferences?: readonly CodeReference[],
+  ): void => {
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
     const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
@@ -769,6 +775,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         stop_sequence: null,
       },
       usage: usagePayload(usage),
+      ...codeReferenceMetadata(codeReferences),
       ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
     });
     emit("message_stop", { type: "message_stop" });
@@ -860,7 +867,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
               }
               if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(event.usage, event.finishReason);
+                complete(event.usage, event.finishReason, event.codeReferences);
                 return;
               }
               addEvent(event);
@@ -910,7 +917,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
                 return;
               } else if (event.type === "completed") {
                 canonicalCompleted = true;
-                complete(event.usage, event.finishReason);
+                complete(event.usage, event.finishReason, event.codeReferences);
                 return;
               } else {
                 addEvent(event);

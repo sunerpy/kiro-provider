@@ -159,5 +159,6 @@ export async function collectSdkResponse(
     toolCalls: outputToolCalls,
     finishReason: completed.finishReason,
     usage: completed.usage,
+    ...(completed.codeReferences !== undefined ? { codeReferences: completed.codeReferences } : {}),
   };
 }
