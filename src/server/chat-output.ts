@@ -1,5 +1,6 @@
 import { boundedCleanup, runCleanupSteps } from "../core/stream-cleanup.js";
 import { normalizeStreamFailure, type StreamFailure, streamFailure } from "../core/stream-error.js";
+import { codeReferenceMetadata } from "../protocol/code-references.js";
 import {
   type CanonicalCompletion,
   type CanonicalOutputEvent,
@@ -90,7 +91,10 @@ function eventFrames(
         ),
       ];
     case "completed": {
-      const finish = JSON.stringify(chatChunk(identity, {}, event.finishReason));
+      const finish = JSON.stringify({
+        ...chatChunk(identity, {}, event.finishReason),
+        ...codeReferenceMetadata(event.codeReferences),
+      });
       if (!includeUsage) return [finish];
       const usage = {
         id: identity.id,
@@ -155,6 +159,7 @@ export function canonicalCompletionToChat(completion: CanonicalCompletion): Resp
       completion_tokens: completion.usage.outputTokens,
       total_tokens: completion.usage.totalTokens,
     },
+    ...codeReferenceMetadata(completion.codeReferences),
   });
 }
 

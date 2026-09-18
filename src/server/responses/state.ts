@@ -1,5 +1,10 @@
 import { isRecord } from "../../protocol/adapter-utils.js";
 import type { CanonicalRequest, CanonicalToolDeclaration } from "../../protocol/canonical.js";
+import {
+  type CodeReference,
+  type CodeReferenceMetadata,
+  codeReferenceMetadata,
+} from "../../protocol/code-references.js";
 import type { CanonicalOutputUsage } from "../../protocol/output.js";
 import {
   hasCompleteReportedUsage,
@@ -387,7 +392,7 @@ const DEFAULT_CONFIGURATION: ResponseRequestConfiguration = {
   user: undefined,
 };
 
-export interface ResponseStateObject {
+export interface ResponseStateObject extends CodeReferenceMetadata {
   readonly id: string;
   readonly object: "response";
   readonly created_at: number;
@@ -432,6 +437,7 @@ export function responseState(input: {
   readonly createdAt?: number;
   readonly completedAt?: number;
   readonly configuration?: ResponseRequestConfiguration;
+  readonly codeReferences?: readonly CodeReference[];
 }): ResponseStateObject {
   const configuration = input.configuration ?? DEFAULT_CONFIGURATION;
   return {
@@ -469,5 +475,6 @@ export function responseState(input: {
           usage: input.usage,
           ...(input.usage.metadata ? { usage_metadata: { metadata: input.usage.metadata } } : {}),
         }),
+    ...codeReferenceMetadata(input.codeReferences),
   };
 }

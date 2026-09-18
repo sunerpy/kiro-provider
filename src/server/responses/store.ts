@@ -226,6 +226,9 @@ export function canonicalCompletionFromResponse(
     toolCalls,
     finishReason: toolCalls.length > 0 ? "tool_calls" : "stop",
     usage,
+    ...(response.x_kiro?.code_references !== undefined
+      ? { codeReferences: response.x_kiro.code_references }
+      : {}),
   };
 }
 

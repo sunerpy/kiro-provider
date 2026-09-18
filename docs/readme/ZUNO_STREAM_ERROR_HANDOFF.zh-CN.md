@@ -57,16 +57,16 @@ SSE 已发布后 HTTP 状态不能再改成 503/504。Responses 使用 `response
 
 `X-Request-ID` 关联逻辑请求，`attempt_id` 关联每次派发。未知上游状态和 ID 保持 null，不把本地超时或账户选择失败编造成上游 503。先 503、后本地 deadline 时，两种原因均保留；清理失败不会覆盖取消首因。
 
-| code | 客户端处理 |
-| --- | --- |
-| `upstream_stream_error`、`upstream_stream_incomplete` | 在自身总预算内决定是否替代重试；保留失败记录 |
-| `upstream_stream_idle_timeout` | 核对空闲阶段和剩余总预算 |
-| `request_deadline_exceeded` | Provider 总预算到期；不能重新无限计时 |
-| `malformed_upstream_tool_arguments` | 丢弃部分调用；无副作用时才考虑替代重试 |
-| `invalid_upstream_tool_call`、`incomplete_upstream_tool_call` | 身份或停止契约异常，不机械重试 |
-| `upstream_tool_arguments_too_large`、`upstream_tool_schema_violation` | 参数大小或 schema 不合法，不执行工具 |
-| `unknown_upstream_tool`、`invalid_custom_tool_input`、`upstream_tool_choice_violation` | 工具声明、包装或选择控制不匹配 |
-| `invalid_upstream_response`、`upstream_protocol_error`、`unsupported_upstream_event`、`upstream_invalid_state`、`invalid_upstream_reasoning`、`missing_upstream_stream` | 协议错误，应调查而不是反复生成 |
+| code                                                                                                                                                                    | 客户端处理                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `upstream_stream_error`、`upstream_stream_incomplete`                                                                                                                   | 在自身总预算内决定是否替代重试；保留失败记录 |
+| `upstream_stream_idle_timeout`                                                                                                                                          | 核对空闲阶段和剩余总预算                     |
+| `request_deadline_exceeded`                                                                                                                                             | Provider 总预算到期；不能重新无限计时        |
+| `malformed_upstream_tool_arguments`                                                                                                                                     | 丢弃部分调用；无副作用时才考虑替代重试       |
+| `invalid_upstream_tool_call`、`incomplete_upstream_tool_call`                                                                                                           | 身份或停止契约异常，不机械重试               |
+| `upstream_tool_arguments_too_large`、`upstream_tool_schema_violation`                                                                                                   | 参数大小或 schema 不合法，不执行工具         |
+| `unknown_upstream_tool`、`invalid_custom_tool_input`、`upstream_tool_choice_violation`                                                                                  | 工具声明、包装或选择控制不匹配               |
+| `invalid_upstream_response`、`upstream_protocol_error`、`unsupported_upstream_event`、`upstream_invalid_state`、`invalid_upstream_reasoning`、`missing_upstream_stream` | 协议错误，应调查而不是反复生成               |
 
 错误正文统一脱敏并限长。日志保存摘要哈希、计数和身份关联，不记录原始提示词、工具参数、Authorization、Cookie 或私有 reasoning。
 
@@ -90,3 +90,28 @@ SSE 已发布后 HTTP 状态不能再改成 503/504。Responses 使用 `response
 原生权限、输出上限等约束失败须单独记录。`unsupported_output_token_limit` 仍保持明确拒绝；不能静默删除预算或换模型后宣称原路径已修复。
 
 跨协议完整定义见 [STREAM_ERROR_CONTRACT.md](../STREAM_ERROR_CONTRACT.md)。修复前后证据见本批流交付审查报告；旧 v0.5.x 的 Zuno 分类补丁和发布数字仅为历史记录，不是此次需要执行的 Zuno 变更。
+
+## 6. 代码引用事件
+
+Kiro 可能在正文之后发送 `codeReferenceEvent`，携带代码来源或许可证。Provider 将收到的公开引用保存在 `x_kiro.code_references` 扩展中，继续等待正常完成凭证；空引用事件只算活动，不能冒充完成。
+
+| 接口             | 引用位置                                             |
+| ---------------- | ---------------------------------------------------- |
+| Responses 非流式 | `x_kiro.code_references`                             |
+| Responses 流式   | `response.completed.response.x_kiro.code_references` |
+| Messages 非流式  | `x_kiro.code_references`                             |
+| Messages 流式    | `message_delta.x_kiro.code_references`               |
+| Chat 非流式      | `x_kiro.code_references`                             |
+| Chat 流式        | finish chunk 的 `x_kiro.code_references`             |
+
+只有在完成前收到非空引用时才出现该扩展。每项保留 SDK 的可选字段 `licenseName`、`repository`、`url`、`recommendationContentSpan`（`start`／`end`），保持顺序及原始位置单位。这是 Provider 元数据扩展，不冒充原生 URL citation；正文、工具参数、usage 和签名回放使用原有字节。
+
+每次输出最多保留 128 条、256 KiB 引用元数据。未知字段、非法位置和畸形列表返回 `invalid_upstream_response`；其他未知 SDK 事件仍返回 `unsupported_upstream_event`。日志仅记录事件种类和计数，不记录引用 URL、仓库名或正文；已接纳流不会在 Provider 内重放。
+
+可执行离线验收使用真实二进制、合成 AWS EventStream、独立配置及假凭据，不调用真实模型。附加 `--clients` 可验证本机 Codex、Claude：
+
+```bash
+bun scripts/probe-code-reference-events.mjs \
+  --binary /path/to/kiro-provider --clients \
+  --codex-bin codex --claude-bin claude
+```

@@ -1,3 +1,4 @@
+import type { CodeReference } from "../../protocol/code-references.js";
 import type {
   OutputTextContent,
   ResponseError,
@@ -423,6 +424,7 @@ export function responseCompleted(input: {
   readonly createdAt?: number;
   readonly completedAt?: number;
   readonly configuration?: ResponseRequestConfiguration;
+  readonly codeReferences?: readonly CodeReference[];
 }): ResponseCompletedEvent {
   return {
     type: "response.completed",
@@ -433,6 +435,7 @@ export function responseCompleted(input: {
       status: "completed",
       output: input.output,
       usage: input.usage,
+      codeReferences: input.codeReferences,
       ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
       ...(input.completedAt !== undefined ? { completedAt: input.completedAt } : {}),
       ...(input.configuration !== undefined ? { configuration: input.configuration } : {}),

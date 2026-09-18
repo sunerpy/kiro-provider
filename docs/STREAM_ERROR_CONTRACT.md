@@ -64,7 +64,7 @@ completion witness.
 | `upstream_tool_arguments_too_large` | Aggregate tool arguments and identities exceed `max_request_body_bytes`; no completed call is emitted.                                                                                                                                                                             |
 | `upstream_tool_schema_violation`    | Final JSON arguments violate the declared tool schema.                                                                                                                                                                                                                             |
 | `upstream_tool_choice_violation`    | Upstream called a tool despite `tool_choice: none`.                                                                                                                                                                                                                                |
-| `invalid_upstream_response`         | A successful upstream response has the wrong streaming Content-Type.                                                                                                                                                                                                               |
+| `invalid_upstream_response`         | A successful upstream response has the wrong streaming Content-Type, or its code-reference metadata is malformed or exceeds the bounded metadata budget.                                                                                                                           |
 | `missing_upstream_stream`           | The SDK response contained no event stream.                                                                                                                                                                                                                                        |
 | `unknown_upstream_tool`             | The upstream tool identity matches no declared tool or bridge alias. Validation happens before forwarding that identity. The bridge code is `unknown_tool_alias`.                                                                                                                  |
 | `invalid_custom_tool_input`         | Kiro completed a Responses custom-tool call whose arguments were not exactly `{"input": string}`.                                                                                                                                                                                  |
@@ -84,6 +84,45 @@ codes as fatal until this document changes.
 
 These failures require a provider/protocol correction. Mechanical retry can
 repeat the same failure and must not be the default.
+
+## Code reference metadata
+
+Kiro can emit `codeReferenceEvent` after generated text. The provider preserves
+its public attribution fields in the `x_kiro.code_references` extension and
+continues reading for the usual completion witness. An empty reference event
+is valid activity; it does not establish successful completion.
+
+| Surface        | Attribution location                                 |
+| -------------- | ---------------------------------------------------- |
+| Responses JSON | `x_kiro.code_references`                             |
+| Responses SSE  | `response.completed.response.x_kiro.code_references` |
+| Messages JSON  | `x_kiro.code_references`                             |
+| Messages SSE   | `message_delta.x_kiro.code_references`               |
+| Chat JSON      | `x_kiro.code_references`                             |
+| Chat SSE       | `x_kiro.code_references` on the finish chunk         |
+
+The extension is present only when attribution was received before completion.
+Each entry preserves the SDK's optional `licenseName`, `repository`, `url`, and
+`recommendationContentSpan` (`start`/`end`) fields, including their order and span
+units. It is a provider metadata extension, not a native URL-citation block.
+Model text, tool arguments, token accounting, and signed replay use their
+original bytes.
+
+Reference metadata is bounded to 128 entries and 256 KiB per output. Unknown
+fields, invalid spans, and malformed lists fail with `invalid_upstream_response`.
+Other unrecognized SDK event types still fail with `unsupported_upstream_event`;
+the provider never retries an accepted stream to replace them. Audit records
+retain event types and counts without reference URLs, repository names, or text.
+
+The offline probe runs an actual provider binary against synthetic AWS
+EventStream frames. With `--clients`, it also verifies installed Codex and Claude
+clients using isolated configuration and dummy credentials:
+
+```bash
+bun scripts/probe-code-reference-events.mjs \
+  --binary /path/to/kiro-provider --clients \
+  --codex-bin codex --claude-bin claude
+```
 
 ## Surface mapping
 

@@ -1,6 +1,8 @@
 import { auditHash, auditLog } from "../../../core/audit-log.js";
 import { streamErrorAuditFields } from "../../../core/stream-error.js";
+import { isRecord } from "../../../protocol/adapter-utils.js";
 import { assistantOutputFingerprint } from "../../../protocol/canonical.js";
+import { type CodeReference, parseCodeReferences } from "../../../protocol/code-references.js";
 import { CANONICAL_OUTPUT_VERSION, type CanonicalOutputEvent } from "../../../protocol/output.js";
 import {
   couldStillBeGpt56ReasoningPlaceholder,
@@ -112,6 +114,7 @@ export async function* transformSdkOutputStream(
   const toolIndexes = new Map<string, number>();
   const pendingToolSurrogates = new Map<string, string>();
   const usage: UsageState = {};
+  let codeReferences: readonly CodeReference[] = [];
   const reasoning = createReasoningCaptureState();
   const iterator = eventStream[Symbol.asyncIterator]();
   let textOnlyContent = "";
@@ -198,6 +201,27 @@ export async function* transformSdkOutputStream(
       const event = next.result.value;
       options.onRawEvent?.(sdkEventTypes(event));
       assertSupportedSdkEvent(event);
+      if (event.codeReferenceEvent !== undefined) {
+        const referenceEvent = event.codeReferenceEvent;
+        const references =
+          isRecord(referenceEvent) &&
+          Object.keys(referenceEvent).every((key) => key === "references")
+            ? parseCodeReferences(
+                referenceEvent.references === undefined ? [] : referenceEvent.references,
+              )
+            : undefined;
+        const combined =
+          references === undefined
+            ? undefined
+            : parseCodeReferences([...codeReferences, ...references]);
+        if (combined === undefined) {
+          throw new SdkStreamProtocolError(
+            "Kiro returned invalid code reference metadata",
+            "invalid_upstream_response",
+          );
+        }
+        codeReferences = combined;
+      }
       updateUsageState(usage, event);
       appendReasoningCapture(reasoning, event.reasoningContentEvent);
       const eventReasoningText = event.reasoningContentEvent?.text ?? "";
@@ -574,5 +598,6 @@ export async function* transformSdkOutputStream(
     type: "completed",
     finishReason: toolCalls.size > 0 ? "tool_calls" : "stop",
     usage: tokenUsage,
+    ...(codeReferences.length > 0 ? { codeReferences } : {}),
   };
 }
