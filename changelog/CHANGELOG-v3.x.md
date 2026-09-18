@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.5](https://github.com/sunerpy/kiro-provider/compare/v3.5.4...v3.5.5) (2026-09-18)
+
+
+### Bug Fixes
+
+* **stream:** 保留代码引用事件元数据 ([0d3dbb3](https://github.com/sunerpy/kiro-provider/commit/0d3dbb338e88115c3e09c7a9a438863b5d396a34))
+
 ## [3.5.4](https://github.com/sunerpy/kiro-provider/compare/v3.5.3...v3.5.4) (2026-09-17)
 
 
