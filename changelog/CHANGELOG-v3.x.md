@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.4](https://github.com/sunerpy/kiro-provider/compare/v3.5.3...v3.5.4) (2026-09-17)
+
+
+### Bug Fixes
+
+* **workflow:** 修复并发调度与客户端上下文回放 ([#96](https://github.com/sunerpy/kiro-provider/issues/96)) ([e211adc](https://github.com/sunerpy/kiro-provider/commit/e211adcf3dff91ca9a36a438b04b579dd9d2b1d0))
+
 ## [3.5.3](https://github.com/sunerpy/kiro-provider/compare/v3.5.2...v3.5.3) (2026-09-17)
 
 
