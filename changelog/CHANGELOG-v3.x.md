@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.6](https://github.com/sunerpy/kiro-provider/compare/v3.5.5...v3.5.6) (2026-09-20)
+
+
+### Bug Fixes
+
+* **gateway:** 修复 Fable 回放与会话恢复并限制请求资源 ([#100](https://github.com/sunerpy/kiro-provider/issues/100)) ([d34b4f9](https://github.com/sunerpy/kiro-provider/commit/d34b4f9c9240f78aec35b5c61b666b01a75199ad))
+
 ## [3.5.5](https://github.com/sunerpy/kiro-provider/compare/v3.5.4...v3.5.5) (2026-09-18)
 
 
