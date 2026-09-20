@@ -33,6 +33,7 @@ export async function handleChatCompletions(
     config,
     dependencies.createRequestIdleTimeoutLease,
     dependencies.diagnostics,
+    dependencies.requestAdmission,
   );
   const bodyResult = await readJsonBody(request, config, ingress.signals, openAiIngressErrors);
   if (!bodyResult.ok) {

@@ -100,6 +100,8 @@ export const ConfigSchema = z.object({
   // text, or tool output at all.
   retry_empty_completion: z.boolean().default(true),
   max_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(10485760),
+  max_inflight_requests: z.number().int().min(1).max(10_000).default(16),
+  max_inflight_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(134217728),
   token_expiry_buffer_ms: z.number().int().min(1).max(2_147_483_647).default(300000),
   session_affinity_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   session_affinity_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),

@@ -14,7 +14,11 @@ import {
 } from "../../protocol/output.js";
 import { type AnthropicErrorType, anthropicError } from "../anthropic/errors.js";
 import { adaptAnthropicMessagesRequest } from "../anthropic/request-adapter.js";
-import { anthropicMessageResponse, anthropicSseAdapter } from "../anthropic/response-adapter.js";
+import {
+  type AnthropicCompatibilityOptions,
+  anthropicMessageResponse,
+  anthropicSseAdapter,
+} from "../anthropic/response-adapter.js";
 import {
   anthropicIngressErrors,
   buildPipelineOptions,
@@ -115,6 +119,7 @@ export async function handleMessages(
     config,
     dependencies.createRequestIdleTimeoutLease,
     dependencies.diagnostics,
+    dependencies.requestAdmission,
   );
   const bodyResult = await readJsonBody(request, config, ingress.signals, anthropicIngressErrors);
   if (!bodyResult.ok) {
@@ -163,7 +168,7 @@ export async function handleMessages(
     claudeCodeIdentityHeader(request, "x-claude-code-session-id"),
     claudeCodeIdentityHeader(request, "x-claude-code-agent-id"),
   );
-  const compatibility = {
+  let compatibility: AnthropicCompatibilityOptions = {
     ...(adapted.value.cacheControlCount > 0 ? { cacheControlObserved: true } : {}),
     ...(adapted.value.cacheControlCount > 0
       ? { promptCacheMode: config.kiro_prompt_cache_mode }
@@ -244,6 +249,13 @@ export async function handleMessages(
     if (!pipelineResponse.ok) {
       return await translatePipelineError(await withRetryAfter(pipelineResponse));
     }
+    if (pipelineResponse.headers.get("x-kiro-reasoning-replay-mode") === "conflict-omitted") {
+      compatibility = {
+        ...compatibility,
+        reasoningReplayMode: "conflict-omitted",
+        outputReasoningOmitted: true,
+      };
+    }
     if (adapted.value.source.stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
         void boundedCleanup(() => pipelineResponse.body?.cancel());
@@ -290,8 +302,12 @@ export async function handleMessages(
   }
 }
 
-export async function handleMessageTokenCount(request: Request, config: Config): Promise<Response> {
-  const ingress = createIngress(request, config);
+export async function handleMessageTokenCount(
+  request: Request,
+  config: Config,
+  requestAdmission?: import("../request-admission.js").RequestAdmissionLease,
+): Promise<Response> {
+  const ingress = createIngress(request, config, undefined, undefined, requestAdmission);
   try {
     const bodyResult = await readJsonBody(request, config, ingress.signals, anthropicIngressErrors);
     if (!bodyResult.ok) return bodyResult.response;

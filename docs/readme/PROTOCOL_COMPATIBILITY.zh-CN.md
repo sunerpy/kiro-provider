@@ -141,6 +141,24 @@ CodeWhisperer/Kiro 流式管道。它保留：
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
 - 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
 - 修复旧版 Claude Code 历史中同一 assistant 轮次含多个不同空 direct `thinking` 块的情况：省略全部歧义 replay 信封，但保留可见 assistant/tool 历史；兼容损失通过 `x-kiro-reasoning-replay-mode: conflict-omitted` 与脱敏审计事件明确暴露。
+- 当前客户端撤下 `TaskOutput` 等工具后，继续保留完整 Messages 工具历史。历史声明不授权新调用；本轮允许哪些工具及参数，只由当前 `tools` 和 schema 决定。
+
+Fable Messages 启用 thinking 且实际 `display: omitted` 时，若上游前缀含多个
+不同的 signature-only reasoning 事件，Provider 可整组省略。Provider 在
+`message_start` 前检查完整前缀，最多 128 个事件、1 MiB，然后继续原生成而不重试。
+被省略的 reasoning 不产生 thinking 块、replay capture、数据库记录或
+`kr1_`/`kr2_` token。响应携带
+`x-kiro-reasoning-replay-mode: conflict-omitted`；
+`anthropic_output_reasoning_conflict_omitted` 审计只含模型、方向、数量和字节长度，
+不包含签名或签名哈希。
+
+完全相同的重复签名仍按正常方式回放。非空、redacted、混合、超限或晚到冲突继续
+拒绝，其他模型或显式 `display: summarized` 的冲突也不降级。提交前可返回
+HTTP 502；提交后通过 SSE error 终止，不发成功终态。默认 Fable effective omitted
+不会改变正常情况下默认返回原生签名、显式 omitted 返回 Provider token 的区别。
+
+撤销工具会保留其可见历史，但仍可能改变上游签名前缀。跨账号回放支持不意味着
+任意 system/tools/历史变化都兼容；应保留原签名上下文，或将可见任务状态交接到新会话。
 
 在 `v3-auto` 中，只有原生 Responses 通道不能承载请求时，该通道才使用显式
 legacy 指令前缀。它不会把尾部指令移入更早历史，也不会构造空 current user。

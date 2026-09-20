@@ -153,6 +153,30 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
 - Codex collaboration `agent_message` content and author/recipient metadata;
 - signed or redacted Kiro reasoning replay through TTL- and mint-provenance-bound `kr2_` tokens, with owner-bound legacy `kr1_` reads.
 - recovery of legacy Claude Code turns containing multiple distinct empty direct `thinking` blocks by omitting all ambiguous replay envelopes while preserving visible assistant/tool history; the compatibility loss is explicit in `x-kiro-reasoning-replay-mode: conflict-omitted` and a sanitized audit event.
+- complete Messages tool history when the current client withdraws a tool such as `TaskOutput`. Historical declarations do not authorize new output: the current `tools` and schemas alone determine which calls the provider accepts.
+
+For Fable Messages with enabled thinking and effective `display: omitted`, an
+upstream prefix containing distinct signature-only reasoning events can be
+omitted in full. The provider inspects the entire prefix before `message_start`,
+within 128 events and 1 MiB, then continues the original generation without
+retrying. No thinking block, replay capture, database row or `kr1_`/`kr2_` token
+is produced for that omitted reasoning. The response includes
+`x-kiro-reasoning-replay-mode: conflict-omitted`; the
+`anthropic_output_reasoning_conflict_omitted` audit contains only the model,
+direction, counts and byte length, never signatures or their hashes.
+
+Identical duplicate signatures retain their normal replay behavior. Non-empty,
+redacted, mixed, oversized or late conflicts remain fatal, as do conflicts for
+other models or explicit `display: summarized`. Before publication the error
+can be HTTP 502; after publication the stream terminates with an SSE error and
+no successful terminal event. Fable's default effective omitted display does
+not change the existing distinction between native signatures by default and
+provider tokens for explicitly requested omitted display.
+
+Withdrawing a tool preserves its visible history but can still change a signed
+upstream prefix. Cross-account replay support does not guarantee compatibility
+with arbitrary system/tool/history changes; preserve the original signed
+context or transfer visible task state to a fresh conversation.
 
 In `v3-auto`, this lane uses the explicit legacy instruction prefix only when
 the native Responses lane cannot represent the request. It never moves a

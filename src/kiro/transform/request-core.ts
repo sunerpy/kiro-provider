@@ -662,7 +662,11 @@ export function buildCodeWhispererRequest(
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
   }
-  validateToolHistory(projection.messages, canonical.tools, canonical.protocol === "responses");
+  validateToolHistory(
+    projection.messages,
+    canonical.tools,
+    canonical.protocol === "responses" || canonical.protocol === "anthropic-messages",
+  );
 
   const projectedReplays = (identity.resolvedReasoningReplays ?? []).map((replay) => {
     const insertBeforeMessage = projection.projectedIndexByOriginal.get(replay.insertBeforeMessage);
