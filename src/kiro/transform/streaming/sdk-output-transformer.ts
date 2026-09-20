@@ -6,9 +6,11 @@ import { type CodeReference, parseCodeReferences } from "../../../protocol/code-
 import { CANONICAL_OUTPUT_VERSION, type CanonicalOutputEvent } from "../../../protocol/output.js";
 import {
   couldStillBeGpt56ReasoningPlaceholder,
+  isFable51Model,
   isGpt56Model,
   isGpt56ReasoningPlaceholder,
 } from "../../models.js";
+import { type ReasoningReplayDecision, readReasoningPrefix } from "./reasoning-prefix.js";
 import {
   appendReasoningCapture,
   appendToolFragment,
@@ -54,6 +56,8 @@ export interface TransformSdkOutputOptions {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly bufferLateGptReasoning?: boolean;
+  readonly prefetchFableReasoning?: boolean;
+  readonly reasoningReplayDecision?: ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
   readonly onCompletionWitness?: (kind: "token-usage-metadata" | "metering-clean-eof") => void;
@@ -137,6 +141,13 @@ export async function* transformSdkOutputStream(
   const bufferedAssistantEvents: BufferedAssistantEvent[] = [];
   let bufferedAssistantBytes = 0;
   let lateGptReasoningResolved = !bufferLateGptReasoning;
+  let reasoningOmitted = false;
+  let prefetched: SdkStreamEvent[] = [];
+  let prefetchedIndex = 0;
+  const observeRaw = (event: SdkStreamEvent): void => {
+    options.onRawEvent?.(sdkEventTypes(event));
+    assertSupportedSdkEvent(event);
+  };
 
   const bufferAssistantEvent = (event: BufferedAssistantEvent): void => {
     const bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
@@ -160,6 +171,33 @@ export async function* transformSdkOutputStream(
   };
 
   try {
+    if (
+      options.prefetchFableReasoning === true &&
+      options.emitAnthropicReasoningMetadata === true &&
+      isFable51Model(model)
+    ) {
+      const prefix = await readReasoningPrefix(async () => {
+        const next = await nextSdkEvent(iterator, signal);
+        if (next.kind === "event" && !next.result.done) observeRaw(next.result.value);
+        return next;
+      });
+      if (prefix.aborted) return;
+      prefetched = prefix.events;
+      iteratorFinished = prefix.done;
+      reasoningOmitted = prefix.omitted;
+      if (reasoningOmitted) {
+        if (options.reasoningReplayDecision) {
+          options.reasoningReplayDecision.mode = "conflict-omitted";
+        }
+        auditLog("warn", "anthropic_output_reasoning_conflict_omitted", {
+          model: "claude-fable-5-1",
+          direction: "output",
+          reasoning_event_count: prefix.reasoningEvents,
+          prefix_event_count: prefix.prefixEvents,
+          prefix_bytes: prefix.prefixBytes,
+        });
+      }
+    }
     yield {
       canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
       type: "started",
@@ -170,8 +208,18 @@ export async function* transformSdkOutputStream(
 
     while (true) {
       let next: NextSdkEvent;
+      let prefetchedEvent = false;
       try {
-        next = await nextSdkEvent(iterator, signal);
+        if (prefetchedIndex < prefetched.length) {
+          const value = prefetched[prefetchedIndex] as SdkStreamEvent;
+          delete prefetched[prefetchedIndex++];
+          prefetchedEvent = true;
+          next = { kind: "event", result: { done: false, value } };
+        } else if (iteratorFinished) {
+          break;
+        } else {
+          next = await nextSdkEvent(iterator, signal);
+        }
       } catch (transportError) {
         // A completion witness is authoritative: a transport failure while
         // draining the trailing bytes after it must not erase a complete
@@ -199,8 +247,19 @@ export async function* transformSdkOutputStream(
       }
 
       const event = next.result.value;
-      options.onRawEvent?.(sdkEventTypes(event));
-      assertSupportedSdkEvent(event);
+      if (!prefetchedEvent) observeRaw(event);
+      if (
+        reasoningOmitted &&
+        event.reasoningContentEvent !== undefined &&
+        ((event.reasoningContentEvent.text?.length ?? 0) > 0 ||
+          (event.reasoningContentEvent.signature?.length ?? 0) > 0 ||
+          event.reasoningContentEvent.redactedContent !== undefined)
+      ) {
+        throw new SdkStreamProtocolError(
+          "Kiro emitted reasoning after the omitted prefix ended",
+          "invalid_upstream_reasoning",
+        );
+      }
       if (event.codeReferenceEvent !== undefined) {
         const referenceEvent = event.codeReferenceEvent;
         const references =
@@ -542,7 +601,9 @@ export async function* transformSdkOutputStream(
   // off an account that is demonstrably healthy.
   let encryptedContent: string | undefined;
   try {
-    encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
+    if (!reasoningOmitted) {
+      encryptedContent = options.captureReasoning?.(captured, outputFingerprint);
+    }
     options.captureOutput?.(output, outputFingerprint);
   } catch (error) {
     throw new OutputPersistenceError({ cause: error });

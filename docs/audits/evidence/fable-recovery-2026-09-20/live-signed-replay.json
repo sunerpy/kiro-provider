@@ -1,0 +1,226 @@
+{
+  "model": "claude-fable-5-1",
+  "trials": 3,
+  "passed": true,
+  "evidence": [
+    {
+      "trial": 0,
+      "stream": true,
+      "passed": true,
+      "signed_replay": true,
+      "first": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 1,
+        "tool_calls": 1,
+        "text_chars": 0
+      },
+      "same_account": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "migrated": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "followup": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "withdrawn_signed": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "withdrawn_visible_only": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "corrupted_upstream_signature": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "same_answer": true,
+      "migrated_answer": true,
+      "followup_answer": true,
+      "visible_answer": true
+    },
+    {
+      "trial": 1,
+      "stream": false,
+      "passed": true,
+      "signed_replay": true,
+      "first": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 1,
+        "tool_calls": 1,
+        "text_chars": 0
+      },
+      "same_account": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "migrated": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "followup": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "withdrawn_signed": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "withdrawn_visible_only": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "corrupted_upstream_signature": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "same_answer": true,
+      "migrated_answer": true,
+      "followup_answer": true,
+      "visible_answer": true
+    },
+    {
+      "trial": 2,
+      "stream": true,
+      "passed": true,
+      "signed_replay": true,
+      "first": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 1,
+        "tool_calls": 1,
+        "text_chars": 0
+      },
+      "same_account": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "migrated": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "followup": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "withdrawn_signed": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "withdrawn_visible_only": {
+        "status": 200,
+        "omitted": false,
+        "failed": false,
+        "signature_rejected": false,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 19
+      },
+      "corrupted_upstream_signature": {
+        "status": 400,
+        "omitted": false,
+        "failed": true,
+        "signature_rejected": true,
+        "thinking_blocks": 0,
+        "tool_calls": 0,
+        "text_chars": 0
+      },
+      "same_answer": true,
+      "migrated_answer": true,
+      "followup_answer": true,
+      "visible_answer": true
+    }
+  ]
+}

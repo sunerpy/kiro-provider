@@ -229,9 +229,10 @@ placeholder ...`。
   出错的块，例如 `messages.1.content.0: Invalid signature in thinking block`。
 - **原因：** Kiro 在服务端校验回放的 `thinking` 签名。客户端回放的
   `thinking` 块的 `signature` 被修改、截断、重新编码，或来自其他模型/供应商。
-  签名不绑定会话或账号，所以这绝不是亲和问题。
-- **处置：** 原样回放 `thinking` 块（文本与签名都不改动），或从历史中删除
-  `thinking` 块；Kiro 接受不含它们的历史。Provider 遇到该错误不会重试、
+  改变被签名的 system/tools/历史前缀，即使留在同一账号也可能使签名失效。
+  跨账号迁移仅适用于已经验证的模型、区域、runtime 和 profile 单元，不保证任意前缀变化。
+- **处置：** 原样回放完整的原签名上下文。无法恢复时，保留旧 transcript，将可见
+  任务状态交接到新会话，并明确说明隐藏 reasoning 的损失。Provider 遇到该错误不会重试、
   不换账号、不静默降级，也不会把账号标记为不健康。
 
 ### `400 ... is not a valid single assistant reasoning block`（Claude Code）
@@ -246,6 +247,37 @@ placeholder ...`。
   `x-kiro-reasoning-replay-mode: conflict-omitted`，并记录只含消息/块数量的
   `anthropic_reasoning_replay_conflict_omitted` warn 审计。兼容范围刻意收窄：非空
   reasoning、Provider `kr1_` / `kr2_` token、redacted 块或混合类型冲突仍 fail closed。
+
+### Fable 上游 reasoning 签名冲突
+
+Fable 启用 thinking 且实际 `display: omitted` 时，可以在发布任何输出之前，
+整组省略冲突的 signature-only 前缀。前缀限制为 128 个事件、1 MiB，不能含非空
+reasoning 文本或 redacted payload。Provider 继续同一次上游请求，返回
+`x-kiro-reasoning-replay-mode: conflict-omitted` 和只含计数的
+`anthropic_output_reasoning_conflict_omitted` 审计，不捕获、存储或铸造该轮
+reasoning token。非空、混合、晚到或超限冲突继续拒绝。HTTP 头已提交后，错误
+通过 SSE error 终止流，不能再把 HTTP 状态改成 502。
+
+### Claude 升级后撤下 TaskOutput
+
+旧 Claude 历史可能包含已完成的 `TaskOutput` 调用，而新客户端不再声明该工具。
+Messages 现在将这些 call/result 历史独立于本轮工具声明进行校验；新输出仍必须
+符合本轮 tools 和 schema。旧 Provider 的 `missing_tool_declaration` 不能靠反复
+`continue` 消除。
+
+这个本地修复不重写签名历史。如果工具前缀改变后出现 `invalid_reasoning_signature`，
+按上面的签名上下文指引恢复；不要替不可用工具虚构本轮声明。
+
+### 内存压力停止后台命令与 ConnectionRefused
+
+先检查 Provider 监听、`systemctl --user status kiro-provider.service` 及其 journal，
+不要先假设防火墙故障。Provider 被 OOM killer 杀死后无法接受本地连接。Claude
+还可能独立回收空闲后台命令；该通知本身不能确定哪个进程耗尽了内存。
+
+Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 `Retry-After: 1`
+拒绝超额工作。它补充每账号并发限制，但不等于 heap 上限，也不能解决其他宿主
+进程的内存压力。自动重启延迟时，应检查父 cgroup 和 user manager。不要默认关闭
+压力保护、自动重跑被停止的重型 gate，或通过删除 replay 数据处理 OOM。
 
 ### `400 unsupported_reasoning_plaintext_replay`（Responses）
 

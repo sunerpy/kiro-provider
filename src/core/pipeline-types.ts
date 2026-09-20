@@ -128,6 +128,8 @@ export type PipelineReasoningReplayStore = Pick<
   Partial<Pick<ReasoningReplayStore, "resolveResponsesBatch">>;
 
 export interface RunChatCompletionOptions {
+  /** Invoked once, after the attempt's upstream and account/session teardown. */
+  readonly onCleanup?: () => void;
   readonly diagnostics?: RequestDiagnostics;
   readonly clientNormalization?: ClientNormalization;
   readonly validateToolArguments?: ValidateToolArguments;

@@ -812,12 +812,16 @@ function validateToolHistory(
   messages: readonly CanonicalMessage[],
   tools: readonly CanonicalToolDeclaration[],
 ): AnthropicFailure | undefined {
-  const violation = findToolHistoryViolation(messages, tools);
+  // Client upgrades may withdraw tools that remain in complete call/result
+  // history. Only the current declarations authorize this turn's output.
+  const violation = findToolHistoryViolation(messages, tools, {
+    allowHistoricalWithoutDeclarations: true,
+  });
   if (!violation) return undefined;
   switch (violation.kind) {
     case "missing_tool_declaration":
       return failure(
-        `Invalid request: tool call ${violation.callId} has no exact declaration for ${violation.toolName}`,
+        "Invalid request: historical tool call has no exact declaration",
         violation.code,
         violation.path,
       );

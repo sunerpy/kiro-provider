@@ -24,7 +24,9 @@ import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
-import { isGpt56Model } from "../kiro/models.js";
+import { isFable51Model, isGpt56Model } from "../kiro/models.js";
+import type { ReasoningReplayDecision } from "../kiro/transform/streaming/reasoning-prefix.js";
+import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   isAccessTokenError,
@@ -129,6 +131,8 @@ type CompletionResult =
       readonly emitEncryptedReasoning: boolean;
       readonly emitAnthropicReasoningMetadata: boolean;
       readonly bufferLateGptReasoning: boolean;
+      readonly prefetchFableReasoning: boolean;
+      readonly reasoningReplayDecision: ReasoningReplayDecision;
       readonly fingerprintOutput?: SdkOutputFingerprint;
       readonly captureOutput?: SdkOutputCaptureHandler;
       readonly releaseAccount: () => void;
@@ -811,6 +815,8 @@ function reasoningCaptureOptions(
   readonly emitEncryptedReasoning: boolean;
   readonly emitAnthropicReasoningMetadata: boolean;
   readonly bufferLateGptReasoning: boolean;
+  readonly prefetchFableReasoning: boolean;
+  readonly reasoningReplayDecision: ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
 } {
@@ -824,6 +830,12 @@ function reasoningCaptureOptions(
     emitAnthropicReasoningMetadata &&
     canonical.thinking?.enabled === true &&
     isGpt56Model(canonical.model);
+  const prefetchFableReasoning =
+    emitAnthropicReasoningMetadata &&
+    canonical.thinking?.enabled === true &&
+    canonical.thinking.display !== "summarized" &&
+    isFable51Model(canonical.model);
+  const reasoningReplayDecision: ReasoningReplayDecision = {};
   const captureOutput =
     options.lineage && options.affinityStore
       ? (output: CanonicalAssistantOutput): void => {
@@ -853,6 +865,8 @@ function reasoningCaptureOptions(
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
       bufferLateGptReasoning,
+      prefetchFableReasoning,
+      reasoningReplayDecision,
       fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
       ...(captureOutput ? { captureOutput } : {}),
     };
@@ -883,6 +897,8 @@ function reasoningCaptureOptions(
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
     bufferLateGptReasoning,
+    prefetchFableReasoning,
+    reasoningReplayDecision,
     fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
     ...(captureOutput ? { captureOutput } : {}),
   };
@@ -1998,21 +2014,23 @@ function nextWithIdleTimeout(
   iterator: AsyncGenerator<CanonicalOutputEvent>,
   signal: AbortSignal,
   idleTimeoutMs: number,
+  telemetry: StreamTelemetry,
 ): Promise<IteratorResult<CanonicalOutputEvent>> {
   if (signal.aborted) return Promise.reject(abortReason(signal));
   return new Promise((resolve, reject) => {
     const cleanup = (): void => {
-      clearTimeout(timer);
+      stopIdleWatch();
+      telemetry.onUpstreamReadSettled();
       signal.removeEventListener("abort", onAbort);
     };
     const onAbort = (): void => {
       cleanup();
       reject(abortReason(signal));
     };
-    const timer = setTimeout(() => {
+    const stopIdleWatch = telemetry.watchIdle(idleTimeoutMs, () => {
       cleanup();
       reject(new StreamIdleTimeoutError(idleTimeoutMs));
-    }, idleTimeoutMs);
+    });
     signal.addEventListener("abort", onAbort, { once: true });
     iterator.next().then(
       (result) => {
@@ -2065,7 +2083,7 @@ async function prefetchStreamStart(
   while (true) {
     let next: IteratorResult<CanonicalOutputEvent>;
     try {
-      next = await nextWithIdleTimeout(iterator, signal, idleTimeoutMs);
+      next = await nextWithIdleTimeout(iterator, signal, idleTimeoutMs, telemetry);
     } catch (error) {
       if (signal.aborted) return externalAbort();
       return fail(toStreamError(error));
@@ -2258,6 +2276,13 @@ async function runStreamAttempt(
     context.abortUpstream,
   );
   if (prefetch.kind === "failed") {
+    if (captureOptions.prefetchFableReasoning) {
+      return {
+        kind: "result",
+        leaseTransferred: false,
+        result: streamFailureResult(prefetch.error, classifyStreamFailure(prefetch.error)),
+      };
+    }
     return {
       kind: "stream-failed",
       account,
@@ -2284,23 +2309,43 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     accountHash: context.accountHash,
   });
   let completion: Awaited<ReturnType<typeof collectSdkResponse>>;
+  let upstreamCleanup = Promise.resolve();
+  const collectAbort = new AbortController();
+  const collectSignal = AbortSignal.any([signal, collectAbort.signal]);
+  const stopIdleWatch = captureOptions.prefetchFableReasoning
+    ? telemetry.watchIdle(options.config.stream_idle_timeout_ms, () => {
+        const error = new StreamIdleTimeoutError(options.config.stream_idle_timeout_ms);
+        collectAbort.abort(error);
+        context.abortUpstream(error);
+      })
+    : undefined;
   try {
-    completion = await collectSdkResponse(sdkResponse, options.model, conversationId, signal, {
-      ...captureOptions,
-      inputTokenEstimate: context.inputTokenEstimate,
-      contextUsageWindow: context.contextUsageWindow,
-      maxToolArgumentsBytes: options.config.max_request_body_bytes,
-      validateToolArguments: options.validateToolArguments,
-      diagnostics: options.diagnostics,
-      onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
-      onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
-      onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
-      onCanonicalEvent: (event) => telemetry.observeCanonicalEvent(event),
-    });
+    completion = await collectSdkResponse(
+      sdkResponse,
+      options.model,
+      conversationId,
+      collectSignal,
+      {
+        ...captureOptions,
+        inputTokenEstimate: context.inputTokenEstimate,
+        contextUsageWindow: context.contextUsageWindow,
+        maxToolArgumentsBytes: options.config.max_request_body_bytes,
+        validateToolArguments: options.validateToolArguments,
+        diagnostics: options.diagnostics,
+        onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
+        onRawEvent: (eventTypes) => telemetry.onRawEvent(eventTypes),
+        onToolCallProgress: (progress) => telemetry.onToolCallProgress(progress),
+        onCanonicalEvent: (event) => telemetry.observeCanonicalEvent(event),
+        onIteratorCleanup: (cleanup) => {
+          upstreamCleanup = cleanup;
+        },
+      },
+    );
   } catch (collectError) {
     const aborted = signal.aborted;
+    const idle = collectError instanceof StreamIdleTimeoutError;
     if (!aborted) {
-      auditLog("warn", "sdk_stream_upstream_error", {
+      auditLog("warn", idle ? "sdk_stream_idle_timeout" : "sdk_stream_upstream_error", {
         ...telemetry.auditFields(),
         ...streamErrorAuditFields(collectError, options.diagnostics),
         error_name: options.diagnostics?.identifier(
@@ -2308,9 +2353,17 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
         ),
       });
     }
-    telemetry.emitTerminal(aborted ? "external_abort" : "upstream_error");
+    telemetry.emitTerminal(aborted ? "external_abort" : idle ? "idle_timeout" : "upstream_error");
     context.abortUpstream(collectError);
+    await boundedCleanup(() => upstreamCleanup);
     if (aborted) throw abortReason(signal);
+    if (captureOptions.prefetchFableReasoning) {
+      return {
+        kind: "result",
+        leaseTransferred: false,
+        result: streamFailureResult(collectError, classifyStreamFailure(collectError)),
+      };
+    }
     if (!telemetry.collectorSemanticSeen) {
       return {
         kind: "stream-failed",
@@ -2320,14 +2373,21 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
       };
     }
     throw collectError;
+  } finally {
+    stopIdleWatch?.();
+    telemetry.onUpstreamReadSettled();
   }
+  await boundedCleanup(() => upstreamCleanup);
   if (signal.aborted) {
     telemetry.emitTerminal("external_abort");
     throw abortReason(signal);
   }
   auditLog("info", "sdk_stream_completed", telemetry.auditFields());
   telemetry.emitTerminal("normal_complete");
-  if (shouldRetryEmptyCompletion(options, state, telemetry)) {
+  if (
+    captureOptions.reasoningReplayDecision.mode === undefined &&
+    shouldRetryEmptyCompletion(options, state, telemetry)
+  ) {
     return recordEmptyCompletionRetry(context, telemetry);
   }
   // This completion is the answer, so the cell that served it is demonstrably
@@ -2339,7 +2399,12 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     result: {
       kind: "response",
       response: Response.json(completion, {
-        headers: { "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE },
+        headers: {
+          "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+          ...(captureOptions.reasoningReplayDecision.mode === "conflict-omitted"
+            ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
+            : {}),
+        },
       }),
     },
   };
@@ -2714,6 +2779,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
             streamAccountRelease();
             streamSessionRelease?.();
             diagnostics.cleanup();
+            runCleanupSteps(() => tracedOptions.onCleanup?.());
           };
           if (cleanup) void cleanup.then(release, release);
           else release();
@@ -2796,6 +2862,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       releaseSession?.();
       deadline.dispose();
       diagnostics.cleanup();
+      runCleanupSteps(() => tracedOptions.onCleanup?.());
     }
   }
 }

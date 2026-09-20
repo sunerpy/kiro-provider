@@ -21,6 +21,7 @@ import {
   openAiError,
   openAiInternalError,
 } from "./errors.js";
+import type { RequestAdmissionLease } from "./request-admission.js";
 import type { IngressSignals, RequestIdleTimeoutLease } from "./request-lifecycle.js";
 import { auditRequestShape } from "./request-shape.js";
 import type { NativeResponsesFetch } from "./responses/native-transport.js";
@@ -31,6 +32,7 @@ import type { PipelineResponseStore } from "./responses/store.js";
  * this once per request from `AppDependencies` plus the authenticated tenant.
  */
 export type RouteDependencies = {
+  readonly requestAdmission?: RequestAdmissionLease;
   readonly diagnostics?: RequestDiagnostics;
   readonly accountManager: PipelineAccountManager;
   readonly tokenRefresher: PipelineTokenRefresher;
@@ -115,6 +117,7 @@ export function createIngress(
   config: Pick<Config, "request_timeout_ms">,
   createLease?: () => RequestIdleTimeoutLease | undefined,
   suppliedDiagnostics?: RequestDiagnostics,
+  requestAdmission?: RequestAdmissionLease,
 ): Ingress {
   const diagnostics = suppliedDiagnostics ?? new RequestDiagnostics(newRequestId());
   const requestId = diagnostics.requestId;
@@ -143,6 +146,7 @@ export function createIngress(
       requestId,
       deadlineAt,
       diagnostics,
+      ...(requestAdmission ? { onBodyRead: requestAdmission.bodyRead } : {}),
     },
     disableIdleTimeout(): void {
       if (leaseRequested) return;
@@ -263,6 +267,7 @@ async function readRequestBody(
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
+    signals.onBodyRead?.(size);
     return { ok: true, text: new TextDecoder().decode(bytes) };
   } catch (error) {
     // A reader whose stream already errored rejects `cancel()`; bound it so the
@@ -342,6 +347,9 @@ export function buildPipelineOptions(input: PipelineOptionsInput): RunChatComple
   const { dependencies } = input;
   return {
     requestId: input.requestId,
+    ...(dependencies.requestAdmission
+      ? { onCleanup: dependencies.requestAdmission.retainExecution() }
+      : {}),
     ...((input.diagnostics ?? dependencies.diagnostics)
       ? { diagnostics: input.diagnostics ?? dependencies.diagnostics }
       : {}),

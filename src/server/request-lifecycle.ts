@@ -7,6 +7,7 @@ export type IngressSignals = {
   readonly client: AbortSignal;
   readonly requestId?: string;
   readonly deadlineAt?: number;
+  readonly onBodyRead?: (bytes: number) => void;
 };
 
 export interface RequestIdleTimeoutLease {

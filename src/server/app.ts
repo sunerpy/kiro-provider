@@ -51,6 +51,7 @@ import {
   DEFAULT_SHUTDOWN_DRAIN_MS,
   type ShutdownServer,
 } from "./lifecycle.js";
+import { RequestAdmissionGate, type RequestAdmissionLease } from "./request-admission.js";
 import type { RequestIdleTimeoutLease, RequestIdleTimeoutLeaseMaker } from "./request-lifecycle.js";
 import type { NativeResponsesFetch } from "./responses/native-transport.js";
 import { type PipelineResponseStore, SqliteResponseStore } from "./responses/store.js";
@@ -258,7 +259,9 @@ function healthHead(): Response {
 }
 
 export function createApp(config: Config, dependencies: AppDependencies): AppFetchHandler {
+  const admission = new RequestAdmissionGate(config);
   return async (request: Request, server?: Bun.Server<undefined>): Promise<Response> => {
+    let requestAdmission: RequestAdmissionLease | undefined;
     const url = new URL(request.url);
     const pathname = normalizeRoutePath(url.pathname);
     const diagnostics =
@@ -283,6 +286,26 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
           )
         : checkApiKey(request, config.api_keys);
       if (!auth.ok) return auth.response;
+      if (
+        request.method === "POST" &&
+        ["messages", "responses", "chat", "count_tokens"].includes(route?.name ?? "")
+      ) {
+        const admitted = admission.acquire();
+        if (!admitted.ok) {
+          void boundedCleanup(() => request.body?.cancel());
+          const response = anthropicRoute
+            ? anthropicError(503, "Provider request capacity is exhausted", "overloaded_error")
+            : openAiError(
+                503,
+                "Provider request capacity is exhausted",
+                "service_unavailable",
+                "request_capacity_exceeded",
+              );
+          response.headers.set("Retry-After", "1");
+          return response;
+        }
+        requestAdmission = admitted.lease;
+      }
 
       const maker: RequestIdleTimeoutLeaseMaker =
         dependencies.createRequestIdleTimeoutLease ?? createRequestIdleTimeoutLease;
@@ -290,6 +313,7 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
         ? () => maker(request, server)
         : undefined;
       const routeDependencies: RouteDependencies = {
+        ...(requestAdmission ? { requestAdmission } : {}),
         diagnostics,
         accountManager: dependencies.accountManager,
         tokenRefresher: dependencies.tokenRefresher,
@@ -353,7 +377,7 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
           case "messages":
             return await handleMessages(request, config, routeDependencies);
           case "count_tokens":
-            return await handleMessageTokenCount(request, config);
+            return await handleMessageTokenCount(request, config, requestAdmission);
           case "models":
             return await handleModels(
               dependencies.modelCapabilities,
@@ -386,7 +410,8 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
       }
     };
     const response = await dispatch();
-    return diagnostics ? diagnostics.publicResponse(response) : response;
+    const traced = diagnostics ? await diagnostics.publicResponse(response) : response;
+    return requestAdmission ? requestAdmission.wrapResponse(traced, request.signal) : traced;
   };
 }
 

@@ -689,6 +689,7 @@ export async function proxyNativeResponses(
   let release = (): void => {};
   let releaseSession: (() => void) | undefined;
   let releaseOwned = true;
+  const releaseAdmissionExecution = options.dependencies.requestAdmission?.retainExecution();
   let attempt = 0;
   let continuationMode = prepared.request.previous_response_id ? "upstream" : "none";
   let replayInput: ResponsesInputItem[] | undefined;
@@ -1195,6 +1196,7 @@ export async function proxyNativeResponses(
         finish: () => {
           release();
           releaseSession?.();
+          releaseAdmissionExecution?.();
           options.finalize();
         },
       });
@@ -1375,6 +1377,7 @@ export async function proxyNativeResponses(
     if (releaseOwned) {
       release();
       releaseSession?.();
+      releaseAdmissionExecution?.();
     }
   }
 }

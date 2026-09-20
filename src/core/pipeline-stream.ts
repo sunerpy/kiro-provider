@@ -33,6 +33,8 @@ export interface PipelineStreamResult {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly bufferLateGptReasoning?: boolean;
+  readonly prefetchFableReasoning?: boolean;
+  readonly reasoningReplayDecision?: import("../kiro/transform/streaming/reasoning-prefix.js").ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
   /**
@@ -471,6 +473,8 @@ export function prepareCanonicalStream(
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
       bufferLateGptReasoning: result.bufferLateGptReasoning,
+      prefetchFableReasoning: result.prefetchFableReasoning,
+      reasoningReplayDecision: result.reasoningReplayDecision,
       ...(result.fingerprintOutput ? { fingerprintOutput: result.fingerprintOutput } : {}),
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),
       onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
@@ -698,6 +702,13 @@ export function createPipelineStreamResponse(
         return beginTerminal("consumer-cancel", reason);
       },
     }),
-    { headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE } },
+    {
+      headers: {
+        "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+        ...(result.reasoningReplayDecision?.mode === "conflict-omitted"
+          ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
+          : {}),
+      },
+    },
   );
 }

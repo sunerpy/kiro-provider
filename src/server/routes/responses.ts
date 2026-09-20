@@ -500,6 +500,7 @@ export async function handleResponses(
     config,
     dependencies.createRequestIdleTimeoutLease,
     dependencies.diagnostics,
+    dependencies.requestAdmission,
   );
   let plan: ResponsesExecutionPlan | undefined;
   try {

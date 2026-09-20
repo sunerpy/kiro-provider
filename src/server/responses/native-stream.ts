@@ -87,11 +87,13 @@ export async function createNativeStream(options: NativeStreamOptions): Promise<
       // A completed fetch must not be cancelled: the runtime may still be
       // committing its continuation state when it closes the response body.
       runCleanupSteps(() => reader.releaseLock(), options.finish);
+      options.signals.diagnostics?.cleanup();
     } else {
-      runCleanupSteps(options.abortUpstream, options.finish);
-      void boundedCleanup(() => reader.cancel());
+      runCleanupSteps(options.abortUpstream);
+      void boundedCleanup(() => reader.cancel()).then(() => {
+        runCleanupSteps(options.finish, () => options.signals.diagnostics?.cleanup());
+      });
     }
-    options.signals.diagnostics?.cleanup();
   };
   const failure = (error: unknown): NativeStreamError =>
     error instanceof NativeStreamError

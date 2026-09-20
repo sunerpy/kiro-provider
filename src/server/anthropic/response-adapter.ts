@@ -28,6 +28,8 @@ export type AnthropicCompatibilityOptions = {
   readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";
   readonly outputTokenLimitMode?: "advisory";
   readonly reasoningReplayMode?: "conflict-omitted";
+  /** Trusted pipeline decision; the public marker may also describe input history. */
+  readonly outputReasoningOmitted?: boolean;
   readonly toolResultImageMode?: "multiple-lifted";
 };
 
@@ -123,6 +125,13 @@ export function anthropicMessageResponse(
 ): Response {
   const content: Array<Readonly<Record<string, unknown>>> = [];
   const reasoning = completion.reasoning;
+  if (options.outputReasoningOmitted && reasoning !== undefined) {
+    return anthropicError(
+      502,
+      "Pipeline emitted reasoning after omitting its conflict",
+      "api_error",
+    );
+  }
   if (
     reasoning?.redactedContent !== undefined &&
     (reasoning.text !== undefined || reasoning.signature !== undefined)
@@ -543,6 +552,10 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     redactedEmitted = true;
   };
   const addEvent = (event: CanonicalOutputEvent): void => {
+    if (options.outputReasoningOmitted && event.type.startsWith("reasoning_")) {
+      failReasoning("Pipeline emitted reasoning after omitting its conflict");
+      return;
+    }
     switch (event.type) {
       case "started":
       case "completed":

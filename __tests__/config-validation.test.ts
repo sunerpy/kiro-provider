@@ -66,6 +66,18 @@ const numericFields: NumericField[] = [
     max: 2_147_483_647,
   },
   {
+    field: "max_inflight_requests",
+    envName: "KIRO_PROVIDER_MAX_INFLIGHT_REQUESTS",
+    min: 1,
+    max: 10_000,
+  },
+  {
+    field: "max_inflight_request_body_bytes",
+    envName: "KIRO_PROVIDER_MAX_INFLIGHT_REQUEST_BODY_BYTES",
+    min: 1,
+    max: 2_147_483_647,
+  },
+  {
     field: "token_expiry_buffer_ms",
     envName: "KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS",
     min: 1,

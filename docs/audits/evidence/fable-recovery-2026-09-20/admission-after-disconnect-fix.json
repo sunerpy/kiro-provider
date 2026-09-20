@@ -1,0 +1,52 @@
+{
+  "passed": true,
+  "admitted_uploads": 12,
+  "bytes_per_partial_upload": 9437184,
+  "request_limit": 16,
+  "aggregate_body_budget": 134217728,
+  "initial": {
+    "rss_bytes": 80072704,
+    "peak_rss_bytes": 81051648
+  },
+  "pressure": {
+    "rss_bytes": 203182080,
+    "peak_rss_bytes": 203231232
+  },
+  "after": {
+    "rss_bytes": 208052224,
+    "peak_rss_bytes": 208052224
+  },
+  "health_status": 200,
+  "ready_status": 200,
+  "overflow": [
+    {
+      "path": "/v1/messages",
+      "status": 503,
+      "retry_after": "1",
+      "type": "overloaded_error"
+    },
+    {
+      "path": "/v1/responses",
+      "status": 503,
+      "retry_after": "1",
+      "type": "service_unavailable",
+      "code": "request_capacity_exceeded"
+    },
+    {
+      "path": "/v1/messages/count_tokens",
+      "status": 503,
+      "retry_after": "1",
+      "type": "overloaded_error"
+    }
+  ],
+  "post_cancel_count_status": 200,
+  "remaining_requests": 0,
+  "remaining_reserved_bytes": 0,
+  "sdk_dispatches": 0,
+  "scope_memory": {
+    "available": true,
+    "max_bytes": "2147483648",
+    "peak_bytes": 369430528,
+    "oom_kill": 0
+  }
+}

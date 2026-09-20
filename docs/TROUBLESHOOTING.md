@@ -258,12 +258,14 @@ stopped":
 Invalid signature in thinking block`.
 - **Cause:** Kiro validates replayed `thinking` signatures server-side. The
   client echoed a `thinking` block whose `signature` was altered, truncated,
-  re-encoded, or produced by a different model/provider. Signatures are not
-  bound to the conversation or account, so this is never an affinity
-  problem.
-- **Remedy:** Replay the `thinking` block exactly as returned (text and
-  signature unchanged), or drop the `thinking` blocks from history; Kiro
-  accepts a history without them. The provider does not retry, switch
+  re-encoded, or produced by a different model/provider. Changing the signed
+  system/tool/history prefix can also invalidate it on the same account.
+  Cross-account portability is limited to the verified model/region/runtime/
+  profile cells; it does not authorize arbitrary prefix changes.
+- **Remedy:** Replay the original signed context exactly. If it cannot be
+  reconstructed, preserve the old transcript and transfer visible task state
+  into a fresh conversation, explicitly acknowledging the loss of hidden
+  reasoning. The provider does not retry, switch
   accounts, or degrade silently on this error, and does not mark the account
   unhealthy.
 
@@ -281,6 +283,45 @@ Invalid signature in thinking block`.
   event `anthropic_reasoning_replay_conflict_omitted` with message/block counts.
   This repair is deliberately narrow: non-empty reasoning, provider `kr1_` /
   `kr2_` tokens, redacted blocks, or mixed conflict types still fail closed.
+
+### Fable conflicting upstream reasoning signatures
+
+Enabled Fable thinking with effective `display: omitted` can safely omit the
+entire conflicting signature-only prefix before any output is published. The
+prefix is bounded to 128 events and 1 MiB and must contain no reasoning text or
+redacted payload. The provider continues the same upstream request, emits
+`x-kiro-reasoning-replay-mode: conflict-omitted` and a count-only
+`anthropic_output_reasoning_conflict_omitted` audit, and does not capture, store
+or mint a token for that reasoning. Non-empty, mixed, late or oversized
+conflicts remain fatal. After HTTP headers are committed, failure is an SSE
+error rather than a replacement HTTP 502.
+
+### Claude upgrade withdraws `TaskOutput`
+
+Older Claude histories can contain completed `TaskOutput` calls even when a
+newer client no longer declares that tool. Messages now validates those
+call/result pairs independently from current tool declarations. New output
+must still match the current tools and schemas. Repeated `continue` requests
+cannot repair an older provider's `missing_tool_declaration` rejection.
+
+This local fix does not rewrite signed history. If a changed tool prefix
+causes `invalid_reasoning_signature`, use the signed-context guidance above;
+do not synthesize a current declaration for an unavailable tool.
+
+### Memory-pressure background stops and ConnectionRefused
+
+Check the provider listener, `systemctl --user status kiro-provider.service`
+and its journal before assuming a firewall failure. An OOM-killed provider
+cannot accept loopback connections. Claude's background-command pressure
+reaper can independently stop an idle command; that notice alone does not
+identify which process exhausted memory.
+
+The provider's global request/body admission budgets reject excess work with
+503 and `Retry-After: 1` before upstream dispatch. They complement per-account
+concurrency; they do not guarantee a heap ceiling or cure unrelated host
+memory pressure. Inspect parent cgroups and the user manager when automatic
+restart is delayed. Do not disable pressure protection, restart stopped heavy
+gates automatically, or delete replay data as an OOM workaround.
 
 ### `400 unsupported_reasoning_plaintext_replay` (Responses)
 

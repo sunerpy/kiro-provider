@@ -234,6 +234,16 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "integer",
   },
   {
+    env: "KIRO_PROVIDER_MAX_INFLIGHT_REQUESTS",
+    field: "max_inflight_requests",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_MAX_INFLIGHT_REQUEST_BODY_BYTES",
+    field: "max_inflight_request_body_bytes",
+    kind: "integer",
+  },
+  {
     env: "KIRO_PROVIDER_TOKEN_EXPIRY_BUFFER_MS",
     field: "token_expiry_buffer_ms",
     kind: "integer",
@@ -494,6 +504,11 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
       ...envOverrides.values,
       ...options.overrides,
     });
+    if (config.max_inflight_request_body_bytes < config.max_request_body_bytes) {
+      throw new ConfigLoadError(
+        "max_inflight_request_body_bytes must be at least max_request_body_bytes",
+      );
+    }
     return applyRemovedAuthSourceMigration(config);
   } catch (error) {
     if (error instanceof ConfigLoadError) {

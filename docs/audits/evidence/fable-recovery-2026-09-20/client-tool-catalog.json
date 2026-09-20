@@ -1,0 +1,32 @@
+[
+  {
+    "version": "2.1.275",
+    "exit_code": 0,
+    "fixture_ok": true,
+    "stderr_bytes": 0,
+    "requests": [
+      {
+        "tool_count": 21,
+        "TaskOutput_declared": true,
+        "TaskStop_declared": true,
+        "gettask_declared": false,
+        "stream": true
+      }
+    ]
+  },
+  {
+    "version": "2.1.278",
+    "exit_code": 0,
+    "fixture_ok": true,
+    "stderr_bytes": 0,
+    "requests": [
+      {
+        "tool_count": 20,
+        "TaskOutput_declared": false,
+        "TaskStop_declared": true,
+        "gettask_declared": false,
+        "stream": true
+      }
+    ]
+  }
+]
