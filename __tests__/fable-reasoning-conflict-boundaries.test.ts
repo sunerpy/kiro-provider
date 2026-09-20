@@ -9,6 +9,7 @@ import {
   anthropicMessageResponse,
   anthropicSseAdapter,
 } from "../src/server/anthropic/response-adapter.js";
+import { captureAuditEvents } from "./audit-test-helpers.js";
 import { FABLE_MODEL, messagesFixture } from "./messages-regression-helpers.js";
 
 const request = {
@@ -20,6 +21,88 @@ const second: SdkStreamEvent = { reasoningContentEvent: { signature: "fixture-b"
 const text: SdkStreamEvent = { assistantResponseEvent: { content: "BOUNDARY_OK" } };
 
 describe("Fable reasoning prefix boundaries", () => {
+  test.each([false, true])(
+    "separates input and output conflict omissions in one request (stream=%s)",
+    async (stream) => {
+      const audit = captureAuditEvents();
+      try {
+        const fixture = messagesFixture([first, second, text]);
+        const response = await fixture.request({
+          ...request,
+          stream,
+          messages: [
+            { role: "user", content: "Previous fixture." },
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "", signature: "input-opaque-a" },
+                { type: "thinking", thinking: "", signature: "input-opaque-b" },
+                { type: "text", text: "Previous visible answer." },
+              ],
+            },
+            { role: "user", content: "Continue the fixture." },
+          ],
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBe("conflict-omitted");
+        const body = await response.text();
+        expect(body).toContain("BOUNDARY_OK");
+        expect(body).not.toContain("thinking");
+        expect(JSON.stringify(fixture.inputs)).not.toContain("reasoningContent");
+        expect(audit.events("anthropic_reasoning_replay_conflict_omitted")).toHaveLength(1);
+        expect(audit.events("anthropic_reasoning_replay_conflict_omitted")[0]).toMatchObject({
+          message_count: 1,
+          block_count: 2,
+        });
+        expect(audit.events("anthropic_output_reasoning_conflict_omitted")).toHaveLength(1);
+        expect(audit.events("anthropic_output_reasoning_conflict_omitted")[0]).toMatchObject({
+          direction: "output",
+          reasoning_event_count: 2,
+          prefix_event_count: 2,
+        });
+        for (const signature of ["input-opaque-a", "input-opaque-b", "fixture-a", "fixture-b"]) {
+          expect(JSON.stringify(audit.events())).not.toContain(signature);
+        }
+      } finally {
+        audit.restore();
+      }
+    },
+  );
+
+  test.each([false, true])(
+    "rejects a completion witness with only a conflicting prefix (stream=%s)",
+    async (stream) => {
+      const audit = captureAuditEvents();
+      try {
+        const fixture = messagesFixture([first, second]);
+        const response = await fixture.request({ ...request, stream });
+        expect(response.status).toBe(502);
+        expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBeNull();
+        expect(await response.text()).not.toContain("message_start");
+        expect(audit.events("anthropic_output_reasoning_conflict_omitted")).toHaveLength(0);
+        expect(fixture.inputs).toHaveLength(1);
+        expect(fixture.state.aborted).toBe(1);
+        expect(fixture.state.iteratorClosed).toBe(1);
+      } finally {
+        audit.restore();
+      }
+    },
+  );
+
+  test.each([false, true])(
+    "counts large duplicate signatures against the cumulative byte budget (stream=%s)",
+    async (stream) => {
+      const signature = "x".repeat((1 << 19) + 1024);
+      const repeated = { reasoningContentEvent: { signature } };
+      const fixture = messagesFixture([repeated, repeated, text]);
+      const response = await fixture.request({ ...request, stream });
+      expect(response.status).toBe(502);
+      expect(await response.text()).not.toContain("BOUNDARY_OK");
+      expect(fixture.inputs).toHaveLength(1);
+      expect(fixture.state.iteratorClosed).toBe(1);
+    },
+  );
+
   test("treats SDK optional undefined fields as absent, without accepting empty redacted bytes", async () => {
     const fixture = messagesFixture([
       {
@@ -160,7 +243,7 @@ describe("trusted omission output contract", () => {
     const controller = new AbortController();
     let finalized = 0;
     const upstream = new Response(
-      [
+      `${[
         {
           canonicalOutputVersion: 1,
           type: "started",
@@ -171,7 +254,7 @@ describe("trusted omission output contract", () => {
         { canonicalOutputVersion: 1, type: "reasoning_delta", text: "MUST_NOT_ESCAPE" },
       ]
         .map((event) => JSON.stringify(event))
-        .join("\n") + "\n",
+        .join("\n")}\n`,
       {
         headers: { "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE },
       },
