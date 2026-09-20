@@ -111,7 +111,7 @@ async function wrapAdmittedResponse(
     release();
     return response;
   }
-  if (client.aborted && !response.ok) {
+  if (response.status === 499 || (client.aborted && !response.ok)) {
     // Bun does not consume a returned 499 once the socket has disconnected.
     // Drain the provider's error envelope here, then detach its bytes so direct
     // callers can still read it without retaining the abandoned request budget.

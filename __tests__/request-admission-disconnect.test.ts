@@ -13,6 +13,36 @@ async function waitFor(predicate: () => boolean, timeout = 1000): Promise<boolea
 }
 
 describe("real HTTP upload disconnect admission cleanup", () => {
+  test("releases a closed body reader even before the request signal flips", async () => {
+    const fixture = messagesFixture(undefined, {
+      config: {
+        max_inflight_requests: 1,
+        max_request_body_bytes: 1024,
+        max_inflight_request_body_bytes: 1024,
+      },
+    });
+    const request = new Request("http://fixture/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": MESSAGES_FIXTURE_KEY },
+      body: new ReadableStream({
+        start(controller) {
+          controller.error(new DOMException("The connection was closed.", "AbortError"));
+        },
+      }),
+    });
+    expect(request.signal.aborted).toBe(false);
+    const closed = await fixture.app(request);
+    expect(closed.status).toBe(499);
+    const recovered = await fixture.request(
+      { messages: [{ role: "user", content: "fixture" }] },
+      "/v1/messages/count_tokens",
+    );
+    expect(recovered.status).toBe(200);
+    await recovered.text();
+    expect(await closed.json()).toMatchObject({ type: "error", error: { type: "api_error" } });
+    expect(fixture.inputs).toHaveLength(0);
+  });
+
   test("releases disconnected uploads even when Bun never consumes their 499 bodies", async () => {
     const audit = captureAuditEvents();
     const fixture = messagesFixture(undefined, {
