@@ -127,11 +127,23 @@ for its child process; do not globally export them or replace the native
 Codex reads the gateway's model catalog, including its context and reasoning
 capabilities. The validated online Sol catalog declares 1M; Codex 0.154.0
 uses a 950,000-token effective budget. Its conservative static fallback can
-be smaller. For a **verified 1M model**, an explicit per-run override is:
+be smaller.
+
+On a fresh Codex 0.156.1 home, check the selected model before submitting a turn:
+the client's static migration prompt can otherwise switch to a model absent from
+the gateway catalog. A `model_catalog_json` file containing the gateway's
+`{"models": [...]}` projection pins discovery to that provider. Both real-client
+probes in the [Codex guide](CODEX.md#reproduce-the-smoke-gate) do this automatically.
+
+For a verified 1M model, the context override is:
 
 ```sh
 kirocodex --model gpt-5.6-sol -c model_context_window=1000000
 ```
+
+The gateway's 32 MiB HTTP body limit is independent of this token window. Inline
+screenshots still count toward request bytes; existing explicit 10 MiB configs
+need the migration described in the [Codex guide](CODEX.md#long-sessions-with-screenshots).
 
 Do not carry that override to a smaller model. Ultra is a client orchestration
 preset that sends inference effort `max`, not a Kiro model alias or a wire

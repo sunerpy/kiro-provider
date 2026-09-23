@@ -211,15 +211,18 @@ console.log(response.output_text);
 默认 `protocol_projection_mode: "v3-auto"` 由网关自动选择传输：
 
 - 普通 Responses 请求使用 KiroRuntime 原生 Responses；
-- `store: false`、max effort、Provider reasoning 回放、custom grammar 或协作
+- `store: false`、max effort、Provider reasoning 回放、custom grammar、协作或有界本地元数据
   item 等需要 stateless 语义的请求，使用 canonical stateless 路径；
 - Anthropic Messages 直接投影到 Kiro contract，signed thinking 回放对客户端保持
   opaque；
 - 无法保留的语义返回字段级错误。
 
-这不等于完整复刻 OpenAI 或 Anthropic。托管工具、background Responses、Responses
-conversation、Structured Outputs、远程文件、精确 input-token 计数、破坏性
-context edit 等能力目前无法完整保留。[协议兼容说明](PROTOCOL_COMPATIBILITY.zh-CN.md)
+compatible 模式本地执行有界 `single-string-object-v1` JSON Schema profile，用于
+一次性的单字符串元数据请求，例如 Codex 自动会话标题。当前工具声明会完整保留，
+但本轮工具调用会被拒绝，并报告兼容诊断。复杂 schema、JSON mode、工具历史、
+续接和严格保真模式仍拒绝该转换；这不表示 Kiro 原生支持 JSON Schema。
+托管工具、background Responses、Responses conversation、远程文件、精确 input-token
+计数、破坏性 context edit 等能力目前无法完整保留。[协议兼容说明](PROTOCOL_COMPATIBILITY.zh-CN.md)
 定义当前契约；[审计索引](../audits/README.md)保存带日期的探测证据。
 
 ## 状态与安全

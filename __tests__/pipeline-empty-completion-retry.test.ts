@@ -324,4 +324,24 @@ describe("empty completion retry (non-stream)", () => {
     expect(parseCanonicalCompletion(await response.json())?.text).toBe("");
     expect(scripted.sends).toEqual(["account-a"]);
   });
+
+  test("does not replace an empty completion after the upstream dispatch budget is spent", async () => {
+    const scripted = scriptedClient([EMPTY, TEXT]);
+
+    const response = await runChatCompletion({
+      body: BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new PreferredAccountManager([account("account-a")]),
+      tokenRefresher: refresher,
+      makeClient: scripted.makeClient,
+      maxUpstreamDispatches: 1,
+    });
+
+    expect(response.status).toBe(200);
+    expect(parseCanonicalCompletion(await response.json())?.text).toBe("");
+    expect(scripted.sends).toEqual(["account-a"]);
+    expect(audit.events("sdk_stream_empty_completion_retry")).toEqual([]);
+  });
 });

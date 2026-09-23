@@ -99,7 +99,9 @@ export const ConfigSchema = z.object({
   // Spend one same-account retry when Kiro completes a stream with no reasoning,
   // text, or tool output at all.
   retry_empty_completion: z.boolean().default(true),
-  max_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(10485760),
+  // Inline screenshots accumulate across stateless Codex history independently
+  // of model token usage. Keep aggregate admission bounded separately below.
+  max_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(33554432),
   max_inflight_requests: z.number().int().min(1).max(10_000).default(16),
   max_inflight_request_body_bytes: z.number().int().min(1).max(2_147_483_647).default(134217728),
   token_expiry_buffer_ms: z.number().int().min(1).max(2_147_483_647).default(300000),

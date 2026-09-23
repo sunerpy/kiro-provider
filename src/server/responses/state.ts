@@ -13,6 +13,7 @@ import {
   parseReportedUsage,
   parseUsageAccounting,
 } from "../../protocol/usage.js";
+import type { LocalStructuredOutputFormat } from "./structured-output.js";
 
 export type OutputTextContent = {
   readonly type: "output_text";
@@ -300,8 +301,10 @@ function normalizedOutputItem(item: ResponseOutputItem): ResponseOutputItem {
 }
 
 export type ResponseError = {
+  readonly type?: "upstream_error";
   readonly code: string;
   readonly message: string;
+  readonly param?: string;
   readonly request_id?: string;
   readonly details?: import("../../core/request-diagnostics.js").FailureDiagnostics;
 };
@@ -330,6 +333,8 @@ export type ResponseCustomTool = {
 
 export type ResponseTool = ResponseFunctionTool | ResponseCustomTool;
 
+export type ResponseTextFormat = { readonly type: "text" } | LocalStructuredOutputFormat;
+
 export interface ResponseRequestConfiguration {
   readonly instructions: string | null;
   readonly maxOutputTokens: number | null;
@@ -342,6 +347,7 @@ export interface ResponseRequestConfiguration {
   readonly previousResponseId?: string | null;
   readonly serviceTier?: "auto" | "default";
   readonly user?: string;
+  readonly textFormat?: ResponseTextFormat;
 }
 
 function responseTool(tool: CanonicalToolDeclaration): ResponseTool {
@@ -416,7 +422,7 @@ export interface ResponseStateObject extends CodeReferenceMetadata {
   readonly service_tier: "auto" | "default" | null;
   readonly store: boolean;
   readonly temperature: null;
-  readonly text: { readonly format: { readonly type: "text" } };
+  readonly text: { readonly format: ResponseTextFormat };
   readonly tool_choice: "auto" | "none";
   readonly tools: readonly ResponseTool[];
   readonly top_logprobs: null;
@@ -433,7 +439,7 @@ export function responseState(input: {
   readonly status: ResponseStatus;
   readonly output?: readonly ResponseOutputItem[];
   readonly usage?: ResponseUsage;
-  readonly error?: { readonly code: string; readonly message: string };
+  readonly error?: ResponseError;
   readonly createdAt?: number;
   readonly completedAt?: number;
   readonly configuration?: ResponseRequestConfiguration;
@@ -462,7 +468,7 @@ export function responseState(input: {
     service_tier: configuration.serviceTier ?? null,
     store: configuration.store ?? false,
     temperature: null,
-    text: { format: { type: "text" } },
+    text: { format: configuration.textFormat ?? { type: "text" } },
     tool_choice: configuration.toolChoice,
     tools: configuration.tools,
     top_logprobs: null,

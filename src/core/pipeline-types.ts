@@ -3,6 +3,7 @@ import type { Config } from "../config/schema.js";
 import type { OveragePolicy } from "../kiro/health.js";
 import type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
 import type { PipelineNativeContextCapabilities } from "../kiro/native-context-capabilities.js";
+import type { CollectedTextLimit } from "../kiro/transform/sdk-collector.js";
 import type { SdkStreamResponse } from "../kiro/transform/streaming/sdk-stream-runtime.js";
 import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
@@ -12,7 +13,7 @@ import type { AffinityStallTracker } from "./affinity-stall.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 import type { RequestDiagnostics } from "./request-diagnostics.js";
-import type { ValidateToolArguments } from "./tool-output-validation.js";
+import type { UnexpectedToolCallFailure, ValidateToolArguments } from "./tool-output-validation.js";
 import type { SdkSendOptions } from "./upstream-acceptance.js";
 
 export type { PipelineModelCapabilities } from "../kiro/model-capabilities.js";
@@ -156,4 +157,14 @@ export interface RunChatCompletionOptions {
   readonly makeClient?: PipelineClientFactory;
   readonly deadlineSignal?: AbortSignal;
   readonly createStreamResponse?: typeof createPipelineStreamResponse;
+  /**
+   * Hard request-scoped ceiling for actual upstream SDK sends. Unlike the
+   * ordinary retry knobs, this also bounds account switching, forced-refresh
+   * retries, pre-semantic stream replacement, and empty-completion replacement.
+   */
+  readonly maxUpstreamDispatches?: number;
+  /** When supplied, reject every upstream tool call with this protocol-specific failure. */
+  readonly unexpectedToolCallFailure?: UnexpectedToolCallFailure;
+  /** Optional byte ceiling while collecting non-stream visible output. */
+  readonly collectedTextLimit?: CollectedTextLimit;
 }

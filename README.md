@@ -229,16 +229,22 @@ the gateway:
 
 - ordinary Responses requests use KiroRuntime's native Responses operation;
 - requests that need stateless-only semantics, including `store: false`, max
-  effort, provider reasoning replay, custom grammar, or collaboration items,
-  use the canonical stateless path;
+  effort, provider reasoning replay, custom grammar, collaboration items, or the
+  bounded local `single-string-object-v1` output profile, use the canonical
+  stateless path;
 - Anthropic Messages requests are projected directly into the Kiro contract,
   with signed thinking replay kept opaque to the client;
 - unsupported semantics are rejected with field-level errors.
 
-This is not a promise of full OpenAI or Anthropic parity. Hosted tools,
-background Responses, Responses conversation objects, Structured Outputs,
-remote file references, exact input-token counting, and destructive context
-edits are examples of features the gateway cannot currently preserve. The
+This is not a promise of full OpenAI or Anthropic parity. In compatible mode,
+the provider locally enforces only a bounded `single-string-object-v1` JSON
+Schema profile for one-shot text metadata requests such as Codex thread
+titles. Current tool declarations are preserved, but output calls are rejected
+with an explicit compatibility diagnostic. Arbitrary Structured Outputs, JSON mode, tool histories, continuations, and
+strict-fidelity use remain fail-closed; this local envelope is not evidence that
+Kiro natively enforces JSON Schema. Hosted tools, background Responses,
+Responses conversation objects, remote file references, exact input-token
+counting, and destructive context edits are also outside the supported surface. The
 [compatibility guide](docs/PROTOCOL_COMPATIBILITY.md) is the current contract;
 the [audit index](docs/audits/README.md) contains dated probe evidence.
 

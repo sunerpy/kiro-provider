@@ -101,7 +101,8 @@ The stateless lane is selected for:
 - custom grammar tools and unverified native bridge combinations;
 - Codex `additional_tools` and `agent_message`;
 - `parallel_tool_calls: false` with callable tools;
-- `include: ["reasoning.encrypted_content"]` or input containing a provider `kr1_` or `kr2_` token.
+- `include: ["reasoning.encrypted_content"]` or input containing a provider `kr1_` or `kr2_` token;
+- the compatible-mode local `single-string-object-v1` structured-output profile.
 
 If a request references a native stored response, it stays on the native lane.
 A later request that would require switching that native lineage to the
@@ -189,6 +190,46 @@ user message.
 > requiring a hard provider-enforced serial guarantee must enforce it in their
 > own tool scheduler.
 
+### Bounded local structured-output profile
+
+`responses_fidelity_mode: "compatible"` admits one provider-local profile named
+`single-string-object-v1`. It is recognized only from protocol structure: a
+strict `json_schema` whose root object has exactly one required string property,
+`additionalProperties: false`, and integer `minLength`/`maxLength` with
+`1 <= minLength <= maxLength <= 256`. Format names are limited to 64 ASCII
+letters, digits, `_`, or `-`; property names use an identifier-shaped 64-byte
+limit and reject `__proto__`, `prototype`, and `constructor`. Unknown keywords,
+JSON mode, references, composition, enums, patterns, defaults, nested objects,
+and arrays are rejected.
+
+The request must be one-shot and text-only: `store` is absent or false,
+`previous_response_id` and `conversation` are absent, input contains no tool
+calls/results, reasoning replay, images, files or agent messages, and `background`
+is not true. Current `tools` and `additional_tools` declarations are validated
+and projected unchanged, including Codex's automatic-title collaboration
+namespace. Every output tool call is rejected before publication, even when
+declared. Recognition never examines user agent,
+client metadata, model, prompt text, cwd, originator, or schema-name wording.
+An omitted `store` is locally normalized to false and reported as a compatibility
+loss.
+
+Kiro still produces ordinary visible text. The provider buffers at most 64 KiB
+of UTF-8, constructs and AJV-validates the single-field JSON envelope, and only
+then publishes output text. A structured stream therefore exposes no raw model
+text delta. The request has a hard one-dispatch upstream budget: validation
+failure never triggers a repair inference or retry. Response usage remains the
+reported upstream usage; locally added JSON syntax is not counted as model
+tokens. Completed and failed Response state echoes the requested `text.format`.
+
+This profile is not general Structured Outputs support and does not establish
+native Kiro JSON Schema enforcement. Complex schemas, `json_object`, tool execution/history,
+continuation/stateful requests, and `responses_fidelity_mode: "strict"` remain
+fail-closed. Compatible responses report
+`structured_output_locally_enforced`; streams also report
+`structured_output_stream_buffered`, and omitted `store` reports
+`structured_output_store_defaulted_false`. Requests carrying tool declarations
+also report `structured_output_tool_calls_rejected`.
+
 ## 5. Stored response lifecycle
 
 V3 mirrors stored responses in the provider-owned SQLite database:
@@ -218,27 +259,27 @@ request physical deletion of Kiro's server-side response state.
 
 ## 6. Request capability matrix
 
-| Request feature                                            | V3 contract                                                                                                                                 |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Text, message arrays, images, inline documents             | Supported within documented Kiro format limits; a function/custom tool result may carry one inline data-URL image block.                    |
-| `instructions`, `system`, `developer`                      | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback.                                                     |
-| Function tools                                             | Native where possible; stateless fallback otherwise.                                                                                        |
-| Namespace and free-form custom tools                       | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path. |
-| `agent_message`                                            | Stateless fallback; visible content is preserved, encrypted child metadata is not injected into the parent model.                           |
-| `tool_choice: auto` / `none`                               | Supported where the request has no conflicting unfinished tool state.                                                                       |
-| Required, named, or constrained tool choice                | Rejected.                                                                                                                                   |
-| `strict: true`                                             | Rejected because Kiro cannot guarantee strict schema enforcement.                                                                           |
-| `store: true` / omitted                                    | Supported with local mirroring.                                                                                                             |
-| `store: false`                                             | Stateless lane; no local response mirror is written.                                                                                        |
-| `previous_response_id`                                     | Supported for locally mirrored native or stateless responses.                                                                               |
-| Responses `conversation` objects                           | Rejected with `unsupported_stateful_responses`.                                                                                             |
-| Structured Outputs / JSON schema                           | Rejected with `unsupported_structured_output`.                                                                                              |
-| Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                            |
-| Remote image URLs and OpenAI `file_id` references          | Rejected; send data URLs or inline file data.                                                                                               |
-| `background: true`                                         | Rejected.                                                                                                                                   |
-| Prompt templates, moderation config, context management    | Rejected.                                                                                                                                   |
-| `metadata`, `client_metadata`, `prompt_cache_key`          | Accepted for response echo, tenant/session routing, or compatibility metadata; not presented as a Kiro cache guarantee.                     |
-| `text.verbosity`                                           | Accepted as compatibility metadata; Kiro exposes no verified verbosity control.                                                             |
+| Request feature                                            | V3 contract                                                                                                                                    |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text, message arrays, images, inline documents             | Supported within documented Kiro format limits; a function/custom tool result may carry one inline data-URL image block.                       |
+| `instructions`, `system`, `developer`                      | Native on the ordinary V3 lane; ordered compatibility projection on stateless fallback.                                                        |
+| Function tools                                             | Native where possible; stateless fallback otherwise.                                                                                           |
+| Namespace and free-form custom tools                       | Native bridge in verified model/region cells; otherwise stateless compatibility. Grammar tools remain on the documented compatibility path.    |
+| `agent_message`                                            | Stateless fallback; visible content is preserved, encrypted child metadata is not injected into the parent model.                              |
+| `tool_choice: auto` / `none`                               | Supported where the request has no conflicting unfinished tool state.                                                                          |
+| Required, named, or constrained tool choice                | Rejected.                                                                                                                                      |
+| `strict: true`                                             | Accepted only for the bounded compatible-mode local profile below; all other strict JSON Schema requests are rejected.                         |
+| `store: true` / omitted                                    | Supported with local mirroring; the bounded local profile rejects true and normalizes omission to false with an explicit diagnostic.           |
+| `store: false`                                             | Stateless lane; no local response mirror is written.                                                                                           |
+| `previous_response_id`                                     | Supported for locally mirrored native or stateless responses.                                                                                  |
+| Responses `conversation` objects                           | Rejected with `unsupported_stateful_responses`.                                                                                                |
+| Structured Outputs / JSON schema                           | Only `single-string-object-v1` is locally enforced in compatible mode; arbitrary schemas and JSON mode return `unsupported_structured_output`. |
+| Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                               |
+| Remote image URLs and OpenAI `file_id` references          | Rejected; send data URLs or inline file data.                                                                                                  |
+| `background: true`                                         | Rejected.                                                                                                                                      |
+| Prompt templates, moderation config, context management    | Rejected.                                                                                                                                      |
+| `metadata`, `client_metadata`, `prompt_cache_key`          | Accepted for response echo, tenant/session routing, or compatibility metadata; not presented as a Kiro cache guarantee.                        |
+| `text.verbosity`                                           | Accepted as compatibility metadata; Kiro exposes no verified verbosity control.                                                                |
 
 ## 7. Native-context decision
 
@@ -317,7 +358,8 @@ losses before model dispatch. `responses_instruction_lift` and
 Experimental mode never bypasses storage, owner, or reasoning validation.
 
 `X-Kiro-Transport` is `native`, `native-adapted`, or `stateless`.
-`X-Kiro-Compatibility` lists stable loss codes. In us-east-1, the observed Opus 5
+`X-Kiro-Compatibility` lists stable loss codes, including the bounded local
+structured-output enforcement and stream-buffering codes documented above. In us-east-1, the observed Opus 5
 and Sonnet 5 instruction-priority uncertainty is reported in compatible mode and
 rejected in strict mode. Unverified instruction lifting remains off in auto mode.
 Existing tool mappings remain usable after disabling new adaptation admissions.

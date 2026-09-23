@@ -294,3 +294,21 @@ describe("native tool stream integrity", () => {
     expect(() => native().complete([{ ...item, name: "other" }])).toThrow("undeclared");
   });
 });
+
+test("local structured output overrides undeclared tool calls with its stable failure code", () => {
+  const validator = toolOutputValidator([], true, {
+    code: "structured_output_unexpected_tool_call",
+    message: "Upstream returned a tool call for a local structured output request",
+  });
+  let failure: unknown;
+  try {
+    validator.assertName("secret-tool-name");
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({
+    code: "structured_output_unexpected_tool_call",
+    message: "Upstream returned a tool call for a local structured output request",
+  });
+  expect(JSON.stringify(failure)).not.toContain("secret-tool-name");
+});

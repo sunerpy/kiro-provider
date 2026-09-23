@@ -19,6 +19,8 @@ function configFile() {
     path,
     JSON.stringify({
       api_keys: ["fixture-key"],
+      // This precedence fixture intentionally keeps its smaller shared budget.
+      max_request_body_bytes: 10485760,
       max_inflight_requests: 4,
       max_inflight_request_body_bytes: 16777216,
     }),

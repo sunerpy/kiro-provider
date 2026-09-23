@@ -14,6 +14,18 @@ const STREAM_FAILURES = {
     disposition: "fatal",
     message: "Upstream tool arguments exceeded the configured request-body budget",
   },
+  structured_output_unexpected_tool_call: {
+    disposition: "fatal",
+    message: "Upstream returned a tool call for a local structured output request",
+  },
+  structured_output_validation_failed: {
+    disposition: "fatal",
+    message: "Upstream output could not satisfy the local structured output profile",
+  },
+  structured_output_buffer_exceeded: {
+    disposition: "fatal",
+    message: "Upstream output exceeded the local structured output buffer limit",
+  },
   invalid_upstream_response: {
     disposition: "fatal",
     message: "Upstream returned an invalid response",

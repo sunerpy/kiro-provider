@@ -363,6 +363,32 @@ describe("pre-publication stream retry (non-stream)", () => {
     ]);
   });
 
+  test("does not replace a pre-semantic failure after the upstream dispatch budget is spent", async () => {
+    const scripted = scriptedClient([
+      () => rejectingResponse(),
+      () => okResponse("must not appear"),
+    ]);
+
+    const response = await runChatCompletion({
+      body: BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new PreferredAccountManager([account("account-a")]),
+      tokenRefresher: refresher,
+      makeClient: scripted.makeClient,
+      maxUpstreamDispatches: 1,
+    });
+
+    expect(response.status).toBe(502);
+    expect(await errorBody(response)).toMatchObject({
+      type: "upstream_error",
+      code: "upstream_stream_error",
+    });
+    expect(scripted.sends).toEqual(["account-a"]);
+    expect(audit.events("sdk_stream_attempt_retry")).toEqual([]);
+  });
+
   test("returns the failure code once stream_max_attempts is exhausted", async () => {
     const scripted = scriptedClient([() => rejectingResponse()]);
 

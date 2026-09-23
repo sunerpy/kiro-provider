@@ -128,6 +128,61 @@ describe("Responses state events", () => {
       error: { code: "upstream_error", message: "failed" },
     });
   });
+
+  test("created, in_progress, completed, and failed echo the requested text format", () => {
+    const requestedFormat = {
+      type: "json_schema",
+      name: "thread_title",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: { title: { type: "string", minLength: 1, maxLength: 36 } },
+        required: ["title"],
+        additionalProperties: false,
+      },
+    } as const;
+    const configuration = {
+      instructions: null,
+      maxOutputTokens: null,
+      metadata: {},
+      reasoningEffort: null,
+      toolChoice: "none",
+      tools: [],
+      textFormat: requestedFormat,
+    } as const;
+    const events = [
+      responseCreated({
+        responseId: "resp_structured",
+        model: "auto",
+        sequenceNumber: 0,
+        configuration,
+      }),
+      responseInProgress({
+        responseId: "resp_structured",
+        model: "auto",
+        sequenceNumber: 1,
+        configuration,
+      }),
+      responseCompleted({
+        responseId: "resp_structured",
+        model: "auto",
+        output: [messageDone],
+        sequenceNumber: 2,
+        configuration,
+      }),
+      responseFailed({
+        responseId: "resp_structured",
+        model: "auto",
+        error: { code: "structured_output_validation_failed", message: "failed" },
+        sequenceNumber: 3,
+        configuration,
+      }),
+    ];
+
+    for (const event of events) {
+      expect(event.response.text.format).toEqual(requestedFormat);
+    }
+  });
 });
 
 describe("Responses item/content lifecycle events", () => {
