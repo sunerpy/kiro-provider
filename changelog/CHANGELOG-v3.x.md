@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.7](https://github.com/sunerpy/kiro-provider/compare/v3.5.6...v3.5.7) (2026-09-23)
+
+
+### Bug Fixes
+
+* **codex:** 修复自动标题和大图片会话请求 ([f5c0f62](https://github.com/sunerpy/kiro-provider/commit/f5c0f62c55adfc96daf7faa05a4afaced23718eb))
+
 ## [3.5.6](https://github.com/sunerpy/kiro-provider/compare/v3.5.5...v3.5.6) (2026-09-20)
 
 
