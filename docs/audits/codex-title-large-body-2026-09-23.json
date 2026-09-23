@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-23",
+  "baseline_commit": "ba0e2631ce089e6ca0d4cce13c20304894a81c46",
+  "candidate_source_tree_sha256": "29b7a7e2618bd0a23b44d1dac9dce689e5cb8c2d483d963cef78a4b4478b73ea",
+  "candidate_binary_sha256": "6e1d3fa361caa1423d67295cc087512371aa01a00069d7f9c2019cae02c0cb1e",
+  "configuration": {
+    "max_request_body_bytes": 33554432,
+    "max_inflight_request_body_bytes": 134217728,
+    "max_inflight_requests": 16
+  },
+  "local_gates": {
+    "command": "make pre-ci",
+    "tests_passed": 2525,
+    "tests_failed": 0,
+    "assertions": 11043,
+    "coverage_lines_covered": 26160,
+    "coverage_lines_total": 27414,
+    "coverage_percent": 95.43,
+    "coverage_floor_percent": 93
+  },
+  "title": {
+    "codex_version": "codex-cli 0.156.1",
+    "model": "gpt-5.6-sol",
+    "passed": true,
+    "request_count": 2,
+    "title_chars": 11,
+    "title_persisted_after_exit": true,
+    "title_persistence_source": "session_index",
+    "manual_rename_calls": 0,
+    "title_sha256": "1be0f5cf429ab87a9734456eaca9c0cfe68c690e7a698c7649d5ae46c6243262",
+    "tui_exit_code": 0,
+    "proxy_errors": 0,
+    "requests": [
+      {
+        "kind": "conversation",
+        "request_bytes": 96277,
+        "requested_model": "gpt-5.6-sol",
+        "top_level_tool_count": 5,
+        "tool_types": ["function", "namespace", "function", "function", "function"],
+        "namespace_child_counts": [6],
+        "status": 200,
+        "completed_events": 1,
+        "failed_events": 0,
+        "compatibility": "instruction_role_projection",
+        "transport": "stateless",
+        "duration_ms": 7051
+      },
+      {
+        "kind": "title",
+        "request_bytes": 10699,
+        "requested_model": "gpt-5.6-sol",
+        "top_level_tool_count": 1,
+        "tool_types": ["namespace"],
+        "namespace_child_counts": [6],
+        "status": 200,
+        "completed_events": 1,
+        "failed_events": 0,
+        "compatibility": "structured_output_locally_enforced,instruction_role_projection,structured_output_tool_calls_rejected,structured_output_stream_buffered",
+        "transport": "stateless",
+        "duration_ms": 6165
+      }
+    ]
+  },
+  "large_body": [
+    {
+      "case": "historical_tool_images",
+      "status": 200,
+      "request_bytes": 11025119,
+      "image_count": 14,
+      "image_hash": "716cf70b1e9b18f03e081d51699cc44acfd4ebaa448eef14b460f068f5322932",
+      "completion_count": 1,
+      "output_hash": "7a07b7fce52e1f5f7aaaeb2af2e18e94c12108577a081361f368149698a31f6a",
+      "marker_match": true,
+      "success": true
+    },
+    {
+      "case": "real_codex_images",
+      "exit_code": 0,
+      "request_count": 2,
+      "max_request_bytes": 11126975,
+      "statuses": [200, 200],
+      "requests": [
+        {
+          "bytes": 98751,
+          "status": 200,
+          "model": "gpt-5.6-sol",
+          "historical_images": 0
+        },
+        {
+          "bytes": 11126975,
+          "status": 200,
+          "model": "gpt-5.6-sol",
+          "historical_images": 14
+        }
+      ],
+      "message_count": 1,
+      "marker_match": true,
+      "success": true
+    }
+  ]
+}

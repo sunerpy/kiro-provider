@@ -19,6 +19,21 @@ const TOOL_OUTPUT_CODES = [
   ["invalid_custom_tool_input", "Upstream returned invalid custom tool input"],
 ] as const;
 
+const STRUCTURED_OUTPUT_CODES = [
+  [
+    "structured_output_unexpected_tool_call",
+    "Upstream returned a tool call for a local structured output request",
+  ],
+  [
+    "structured_output_validation_failed",
+    "Upstream output could not satisfy the local structured output profile",
+  ],
+  [
+    "structured_output_buffer_exceeded",
+    "Upstream output exceeded the local structured output buffer limit",
+  ],
+] as const;
+
 /** Every code that existed before the tool-output codes, with its pinned disposition. */
 const EXISTING_CODES: ReadonlyArray<readonly [StreamFailureCode, StreamFailureDisposition]> = [
   ["request_deadline_exceeded", "retryable"],
@@ -36,6 +51,11 @@ const EXISTING_CODES: ReadonlyArray<readonly [StreamFailureCode, StreamFailureDi
 ];
 
 describe("Responses tool-output codes in the stream failure registry", () => {
+  test.each(STRUCTURED_OUTPUT_CODES)("%s is a fatal registered failure", (code, message) => {
+    expect(streamFailure(code)).toEqual({ code, disposition: "fatal", message });
+    expect(normalizeStreamFailure({ code })).toEqual(streamFailure(code));
+  });
+
   test.each(TOOL_OUTPUT_CODES)("%s is a fatal registered failure", (code, message) => {
     expect(streamFailure(code)).toEqual({ code, disposition: "fatal", message });
   });

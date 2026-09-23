@@ -33,6 +33,7 @@ import type {
   ResponsesReasoningItem,
   ResponsesRequest,
 } from "../request-schema.js";
+import { parseLocalStructuredOutputProfile } from "./structured-output.js";
 import {
   createResponsesToolBridge,
   type ResponsesToolBridge,
@@ -513,15 +514,11 @@ export function validateTextConfig(value: unknown): ProtocolResult<undefined> {
     }
   }
   if (value.format === undefined) return { ok: true, value: undefined };
-  const format = value.format;
-  if (isRecord(format) && format.type === "text" && Object.keys(format).length === 1) {
-    return { ok: true, value: undefined };
+  const structuredOutput = parseLocalStructuredOutputProfile(value);
+  if (structuredOutput.kind === "rejected") {
+    return protocolFailure(structuredOutput.code, structuredOutput.message, structuredOutput.param);
   }
-  return protocolFailure(
-    "unsupported_structured_output",
-    "Structured Responses text output cannot be represented by the Kiro upstream",
-    "text.format",
-  );
+  return { ok: true, value: undefined };
 }
 
 export function validateReasoningConfig(request: ResponsesRequest): ProtocolResult<undefined> {

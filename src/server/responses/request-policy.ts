@@ -12,6 +12,11 @@ import {
   validateTextConfig,
   validateToolDeclarations,
 } from "./request-adapter.js";
+import {
+  type LocalStructuredOutputProfile,
+  parseLocalStructuredOutputProfile,
+  validateLocalStructuredOutputRequestBoundary,
+} from "./structured-output.js";
 
 export type ResponsesTransport = "native" | "native-adapted" | "stateless";
 
@@ -20,6 +25,8 @@ export interface NormalizedResponsesRequest {
   readonly requestedEffort?: string;
   readonly effectiveEffort?: string;
   readonly wireModel: string;
+  readonly localStructuredOutputProfile?: LocalStructuredOutputProfile;
+  readonly localStructuredOutputStoreDefaulted?: true;
 }
 
 export interface ResponsesExecutionPlan {
@@ -95,7 +102,9 @@ export function normalizeResponsesRequest(
       issue?.path.join("."),
     );
   }
-  const request = parsed.data;
+  const parsedRequest = parsed.data;
+  const structuredOutput = parseLocalStructuredOutputProfile(parsedRequest.text);
+  let request = parsedRequest;
   for (const key of Object.keys(request)) {
     if (!RESPONSES_REQUEST_KEYS.has(key)) {
       return openAiError(
@@ -175,6 +184,18 @@ export function normalizeResponsesRequest(
       }
     }
   }
+  if (structuredOutput.kind === "profile") {
+    const boundary = validateLocalStructuredOutputRequestBoundary(request);
+    if (!boundary.ok) {
+      return openAiError(
+        400,
+        boundary.message,
+        "invalid_request_error",
+        boundary.code,
+        boundary.param,
+      );
+    }
+  }
   let variant: ReturnType<typeof resolveModelVariant>;
   try {
     variant = resolveModelVariant(request.model);
@@ -187,6 +208,11 @@ export function normalizeResponsesRequest(
       "model",
     );
   }
+  const localStructuredOutputProfile =
+    structuredOutput.kind === "profile" ? structuredOutput.profile : undefined;
+  const localStructuredOutputStoreDefaulted =
+    localStructuredOutputProfile !== undefined && request.store === undefined;
+  if (localStructuredOutputProfile !== undefined) request = { ...request, store: false };
   const requestedEffort = request.reasoning?.effort;
   const effectiveEffort = requestedEffort ?? variant.effort ?? config.effort ?? undefined;
   return {
@@ -199,6 +225,10 @@ export function normalizeResponsesRequest(
     wireModel: variant.wireId,
     ...(requestedEffort !== undefined ? { requestedEffort } : {}),
     ...(effectiveEffort !== undefined ? { effectiveEffort } : {}),
+    ...(localStructuredOutputProfile !== undefined ? { localStructuredOutputProfile } : {}),
+    ...(localStructuredOutputStoreDefaulted
+      ? { localStructuredOutputStoreDefaulted: true as const }
+      : {}),
   };
 }
 

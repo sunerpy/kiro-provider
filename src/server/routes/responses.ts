@@ -65,6 +65,12 @@ import {
   responseStoreTenant,
   type StoredResponse,
 } from "../responses/store.js";
+import {
+  enforceLocalStructuredOutput,
+  LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
+  type LocalStructuredOutputFailure,
+  type LocalStructuredOutputProfile,
+} from "../responses/structured-output.js";
 import { type ResponsesToolBridge, reportToolRestoreFailure } from "../responses/tool-bridge.js";
 import { canonicalSessionLineage, responsesSessionAffinity } from "../session-affinity.js";
 
@@ -76,6 +82,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 type StatelessV3Reason =
+  | "local_structured_output"
   | "store_false"
   | "max_effort"
   | "parallel_tool_calls_false"
@@ -218,6 +225,47 @@ function selectV3Route(body: unknown, dependencies: ResponsesDependencies): V3Ro
     : { transport: "stateless", reason: requirement.reason };
 }
 
+function structuredOutputCompatibility(
+  request: ResponsesRequest,
+  transport: import("../responses/request-policy.js").ResponsesTransport,
+  profile: LocalStructuredOutputProfile | undefined,
+  storeDefaulted: boolean,
+): readonly import("../responses/request-policy.js").CompatibilityLoss[] {
+  const compatibility = [...responsesCompatibility(request, transport)];
+  if (profile === undefined) return compatibility;
+  compatibility.unshift({
+    code: "structured_output_locally_enforced",
+    param: "text.format",
+  });
+  if (
+    (request.tools?.length ?? 0) > 0 ||
+    (Array.isArray(request.input) &&
+      request.input.some(
+        (item) =>
+          item.type === "additional_tools" && Array.isArray(item.tools) && item.tools.length > 0,
+      ))
+  ) {
+    compatibility.push({ code: "structured_output_tool_calls_rejected", param: "tools" });
+  }
+  if (request.stream) {
+    compatibility.push({
+      code: "structured_output_stream_buffered",
+      param: "text.format",
+    });
+  }
+  if (storeDefaulted) {
+    compatibility.push({
+      code: "structured_output_store_defaulted_false",
+      param: "store",
+    });
+  }
+  return compatibility;
+}
+
+function structuredOutputFailureResponse(failure: LocalStructuredOutputFailure): Response {
+  return openAiError(502, failure.message, "upstream_error", failure.code, failure.param);
+}
+
 function requestedEffort(body: unknown): string | undefined {
   if (!isRecord(body) || !isRecord(body.reasoning)) return undefined;
   return typeof body.reasoning.effort === "string" ? body.reasoning.effort : undefined;
@@ -263,7 +311,37 @@ function completedResponse(
   responseId: string,
   createdAt: number,
   usageMode: "compatible" | "strict",
+  localStructuredOutputProfile?: LocalStructuredOutputProfile,
 ): CompletedResponseProjection {
+  let visibleText = payload.text;
+  if (localStructuredOutputProfile !== undefined) {
+    if (payload.toolCalls.length > 0 || payload.finishReason === "tool_calls") {
+      return {
+        ok: false,
+        response: openAiError(
+          502,
+          "Upstream returned a tool call for a local structured output request",
+          "upstream_error",
+          "structured_output_unexpected_tool_call",
+          "text.format",
+        ),
+      };
+    }
+    if ((payload.codeReferences?.length ?? 0) > 0) {
+      return {
+        ok: false,
+        response: structuredOutputFailureResponse({
+          ok: false,
+          code: "structured_output_validation_failed",
+          message: "Upstream output could not satisfy the local structured output profile",
+          param: "text.format",
+        }),
+      };
+    }
+    const enforced = enforceLocalStructuredOutput(localStructuredOutputProfile, payload.text);
+    if (!enforced.ok) return { ok: false, response: structuredOutputFailureResponse(enforced) };
+    visibleText = enforced.text;
+  }
   const restored = bridge.restoreCalls(
     payload.toolCalls.map((call) => ({
       itemId: `fc_${randomUUID()}`,
@@ -296,13 +374,13 @@ function completedResponse(
     };
     output.push(reasoning);
   }
-  if (payload.text.length > 0) {
+  if (visibleText.length > 0) {
     const message: MessageOutputItem = {
       id: `msg_${randomUUID()}`,
       type: "message",
       role: "assistant",
       status: "completed",
-      content: [outputTextContent(payload.text)],
+      content: [outputTextContent(visibleText)],
     };
     output.push(message);
   }
@@ -315,7 +393,7 @@ function completedResponse(
       model,
       output,
       usage: responsesUsage(payload.usage, usageMode),
-      codeReferences: payload.codeReferences,
+      codeReferences: localStructuredOutputProfile ? undefined : payload.codeReferences,
       configuration,
       createdAt,
     }),
@@ -541,6 +619,9 @@ async function handleResponsesCore(
     return normalized;
   }
   const normalizedBody = normalized.request;
+  const localStructuredOutputProfile = normalized.localStructuredOutputProfile;
+  const localStructuredOutputStoreDefaulted =
+    normalized.localStructuredOutputStoreDefaulted === true;
   const storedPrevious = normalizedBody.previous_response_id
     ? dependencies.responseStore?.get(
         responseStoreTenant(dependencies.tenantId),
@@ -548,7 +629,9 @@ async function handleResponsesCore(
       )
     : undefined;
   const adaptation =
-    config.protocol_projection_mode === "v3-auto" && storedPrevious?.transport !== "stateless"
+    localStructuredOutputProfile === undefined &&
+    config.protocol_projection_mode === "v3-auto" &&
+    storedPrevious?.transport !== "stateless"
       ? prepareNativeAdaptation(
           normalizedBody,
           config,
@@ -568,16 +651,23 @@ async function handleResponsesCore(
     return adaptation;
   }
   const routingBody = adaptation?.wireRequest ?? normalizedBody;
-  const v3Route =
-    config.protocol_projection_mode === "v3-auto"
-      ? selectV3Route(routingBody, dependencies)
-      : undefined;
+  const v3Route: V3RouteDecision | undefined =
+    localStructuredOutputProfile !== undefined
+      ? { transport: "stateless", reason: "local_structured_output" }
+      : config.protocol_projection_mode === "v3-auto"
+        ? selectV3Route(routingBody, dependencies)
+        : undefined;
   if (v3Route?.transport !== "reject") {
     const transport =
       adaptation && v3Route?.transport === "native"
         ? "native-adapted"
         : (v3Route?.transport ?? "stateless");
-    const compatibility = responsesCompatibility(normalizedBody, transport);
+    const compatibility = structuredOutputCompatibility(
+      normalizedBody,
+      transport,
+      localStructuredOutputProfile,
+      localStructuredOutputStoreDefaulted,
+    );
     setPlan({ transport, reason: v3Route?.reason ?? "legacy_mode", compatibility });
     const rejected = fidelityRejection(
       compatibility.filter((loss) => loss.code !== "instruction_role_projection"),
@@ -597,6 +687,13 @@ async function handleResponsesCore(
       model: requestedModel(bodyResult.value),
       requested_effort: requestedEffort(bodyResult.value),
       previous_response_present: previousResponsePresent(bodyResult.value),
+      ...(localStructuredOutputProfile !== undefined
+        ? {
+            local_profile: localStructuredOutputProfile.kind,
+            schema_hash: auditHash(JSON.stringify(localStructuredOutputProfile.schema)),
+            property_hash: auditHash(localStructuredOutputProfile.propertyName),
+          }
+        : {}),
       ...(v3Route.transport === "reject"
         ? {
             required_transport: "stateless",
@@ -711,7 +808,12 @@ async function handleResponsesCore(
       : parsed.value.input;
   const logicalInput = [...(previous?.input ?? []), ...currentInput];
   let compatibility = [
-    ...responsesCompatibility({ ...parsed.value, input: logicalInput }, "stateless"),
+    ...structuredOutputCompatibility(
+      { ...parsed.value, input: logicalInput },
+      "stateless",
+      localStructuredOutputProfile,
+      localStructuredOutputStoreDefaulted,
+    ),
   ];
   for (const message of previous?.messages ?? []) {
     if (message.role === "system" || message.role === "developer")
@@ -755,7 +857,14 @@ async function handleResponsesCore(
       adapted.param,
     );
   }
-  const responseConfiguration = responseConfigurationFromCanonical(adapted.body);
+  const responseConfiguration: ResponseRequestConfiguration = {
+    ...responseConfigurationFromCanonical(adapted.body),
+    ...(localStructuredOutputProfile !== undefined
+      ? {
+          textFormat: localStructuredOutputProfile.requestedFormat,
+        }
+      : {}),
+  };
   const continuation = (state: ResponseStateObject): ResponseContinuationContext => ({
     transport: "stateless",
     request: { ...parsed.value, input: logicalInput },
@@ -786,6 +895,20 @@ async function handleResponsesCore(
         lineage,
         deadlineSignal: ingress.signals.combined,
       }),
+      ...(localStructuredOutputProfile !== undefined
+        ? {
+            maxUpstreamDispatches: 1,
+            collectedTextLimit: {
+              maxBytes: LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
+              code: "structured_output_buffer_exceeded",
+              message: "Upstream output exceeded the local structured output buffer limit",
+            },
+            unexpectedToolCallFailure: {
+              code: "structured_output_unexpected_tool_call",
+              message: "Upstream returned a tool call for a local structured output request",
+            },
+          }
+        : {}),
       onProjection: ({ projection }) => {
         if (projection.instructionChannel === "kiro-runtime-system-prompt") {
           compatibility = compatibility.filter(
@@ -807,7 +930,34 @@ async function handleResponsesCore(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
-    if (!pipelineResponse.ok) return await withRetryAfter(pipelineResponse);
+    if (!pipelineResponse.ok) {
+      if (localStructuredOutputProfile !== undefined) {
+        try {
+          const body: unknown = await pipelineResponse.clone().json();
+          const error = isRecord(body) && isRecord(body.error) ? body.error : undefined;
+          if (error?.code === "structured_output_unexpected_tool_call") {
+            return openAiError(
+              502,
+              "Upstream returned a tool call for a local structured output request",
+              "upstream_error",
+              "structured_output_unexpected_tool_call",
+              "text.format",
+            );
+          }
+          if (error?.code === "structured_output_buffer_exceeded") {
+            return structuredOutputFailureResponse({
+              ok: false,
+              code: "structured_output_buffer_exceeded",
+              message: "Upstream output exceeded the local structured output buffer limit",
+              param: "text.format",
+            });
+          }
+        } catch {
+          // Preserve the original bounded upstream error when it is not JSON.
+        }
+      }
+      return await withRetryAfter(pipelineResponse);
+    }
     if (stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
         void boundedCleanup(() => pipelineResponse.body?.cancel());
@@ -829,6 +979,7 @@ async function handleResponsesCore(
         configuration: responseConfiguration,
         includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
         captureEncryptedReasoning: adapted.body.store !== false,
+        localStructuredOutputProfile,
         onCompleted: (state) =>
           persistResponse(
             dependencies,
@@ -853,6 +1004,7 @@ async function handleResponsesCore(
           responseId,
           createdAt,
           config.responses_fidelity_mode,
+          localStructuredOutputProfile,
         );
         if (!projected.ok) return projected.response;
         const publicState = publicResponseState(

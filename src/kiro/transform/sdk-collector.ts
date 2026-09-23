@@ -21,9 +21,17 @@ import {
  * transformer exactly as on the streaming path, and `onRawEvent` /
  * `onCompletionWitness` expose the same raw-stream audit hooks.
  */
+export interface CollectedTextLimit {
+  readonly maxBytes: number;
+  readonly code: string;
+  readonly message: string;
+}
+
 export type CollectSdkResponseOptions = TransformSdkOutputOptions & {
   /** Observes every canonical event as it is folded into the completion. */
   readonly onCanonicalEvent?: (event: CanonicalOutputEvent) => void;
+  /** Reject before retaining output beyond a protocol-specific UTF-8 budget. */
+  readonly textLimit?: CollectedTextLimit;
 };
 
 export class MissingSdkEventStreamError extends Error {
@@ -60,6 +68,7 @@ export async function collectSdkResponse(
 
   let createdAt: number | undefined;
   let text = "";
+  let textBytes = 0;
   let reasoningText = "";
   // An empty Anthropic reasoning delta is deliberate when Kiro returns a
   // replayable signature without visible thinking; preserve its presence.
@@ -69,7 +78,7 @@ export async function collectSdkResponse(
   let encryptedContent: string | undefined;
   const toolCalls = new Map<number, ToolCallAccumulator>();
   let completed: CompletedEvent | undefined;
-  const { onCanonicalEvent, ...transformOptions } = options;
+  const { onCanonicalEvent, textLimit, ...transformOptions } = options;
 
   try {
     for await (const event of transformSdkOutputStream(
@@ -98,6 +107,20 @@ export async function collectSdkResponse(
           encryptedContent = event.encryptedContent;
           break;
         case "text_delta":
+          if (textLimit !== undefined) {
+            let addedBytes = Buffer.byteLength(event.text, "utf8");
+            const previous = text.charCodeAt(text.length - 1);
+            const next = event.text.charCodeAt(0);
+            if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+              // An astral character split across SDK deltas occupies four UTF-8
+              // bytes, not the six bytes of two isolated surrogate halves.
+              addedBytes -= 2;
+            }
+            if (textBytes + addedBytes > textLimit.maxBytes) {
+              throw new SdkStreamProtocolError(textLimit.message, textLimit.code);
+            }
+            textBytes += addedBytes;
+          }
           text += event.text;
           break;
         case "tool_call_delta": {

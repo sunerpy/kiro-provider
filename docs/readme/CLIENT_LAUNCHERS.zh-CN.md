@@ -117,11 +117,20 @@ Provider 配置应放在这个专用的用户级 `config.toml` 中，而不是�
 
 Codex 会读取网关模型目录中的上下文和推理能力。已验证的在线 Sol 目录声明
 1M，Codex 0.154.0 使用 950,000 tokens 的有效预算；保守静态回退目录可能更小。
-对于**已验证的 1M 模型**，也可以只在本次启动时显式指定：
+
+新建 Codex 0.156.1 home 后，提交前先核对选中的模型；客户端静态迁移提示可能切换到
+网关目录中不存在的模型。可通过 `model_catalog_json` 加载网关的 `{"models": [...]}`
+目录投影，让发现结果绑定到当前 Provider。[真实客户端探针](CODEX.zh-CN.md#复现-smoke-门禁)
+已自动执行这一步。
+
+已验证 1M 模型的单次窗口覆盖命令为：
 
 ```sh
 kirocodex --model gpt-5.6-sol -c model_context_window=1000000
 ```
+
+网关默认 32 MiB 的 HTTP 请求体上限独立于 token 窗口。内联截图仍占请求字节，
+已有显式 10 MiB 配置需要按 [Codex 接入说明](CODEX.zh-CN.md#带截图的长会话)迁移。
 
 切换到小窗口模型时不要沿用这项覆盖。Ultra 是客户端编排预设，实际推理 effort
 为 `max`，不是 Kiro 的模型别名或名为 `ultra` 的 wire effort。

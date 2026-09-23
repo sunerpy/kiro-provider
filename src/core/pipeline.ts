@@ -1034,6 +1034,36 @@ function returning(result: CompletionResult): LoopDirective {
 }
 
 /**
+ * A few protocol profiles must make exactly one auditable inference attempt.
+ * This budget is deliberately independent of the normal retry knobs: those
+ * knobs cover distinct failure classes and can otherwise combine into more
+ * SDK sends than any single setting suggests.
+ */
+function hasRemainingUpstreamDispatchBudget(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+): boolean {
+  return (
+    options.maxUpstreamDispatches === undefined ||
+    state.sdkDispatches < options.maxUpstreamDispatches
+  );
+}
+
+function reportUpstreamDispatchBudgetExhausted(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  outcome: string,
+): void {
+  auditLog("warn", "upstream_dispatch_budget_exhausted", {
+    request_id: options.requestId,
+    dispatches: state.sdkDispatches,
+    max_dispatches: options.maxUpstreamDispatches,
+    outcome,
+    mode: options.stream ? "stream" : "non-stream",
+  });
+}
+
+/**
  * The binding key this request's stall streak is counted against.
  *
  * An explicit session affinity key when the client supplied one, otherwise the
@@ -1795,6 +1825,24 @@ async function runAttempt(
         prefix_message_count: prepared.diagnostics.projection.legacyPrefixMessages,
       });
     }
+    // Keep the invariant at the actual send boundary as well as at every known
+    // retry decision. A future retry path cannot accidentally bypass the
+    // profile's hard inference ceiling.
+    if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+      reportUpstreamDispatchBudgetExhausted(options, state, "dispatch-guard");
+      return {
+        kind: "result",
+        leaseTransferred: false,
+        result: {
+          kind: "response",
+          response: terminalError(
+            502,
+            "Upstream inference dispatch budget was exhausted",
+            "upstream_dispatch_budget_exhausted",
+          ),
+        },
+      };
+    }
     const plannedAttempt = state.sdkDispatches + 1;
     const conversationHash = auditHash(prepared.conversationId);
     const accountHash = auditHash(account.id);
@@ -2116,6 +2164,7 @@ function shouldRetryEmptyCompletion(
     options.config.retry_empty_completion &&
     !state.emptyCompletionRetried &&
     state.streamAttempts < options.config.stream_max_attempts &&
+    hasRemainingUpstreamDispatchBudget(options, state) &&
     telemetry.isEmptyCompletion()
   );
 }
@@ -2330,6 +2379,7 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
         inputTokenEstimate: context.inputTokenEstimate,
         contextUsageWindow: context.contextUsageWindow,
         maxToolArgumentsBytes: options.config.max_request_body_bytes,
+        textLimit: options.collectedTextLimit,
         validateToolArguments: options.validateToolArguments,
         diagnostics: options.diagnostics,
         onCompletionWitness: (kind) => telemetry.onCompletionWitness(kind),
@@ -2430,6 +2480,10 @@ async function applyStreamFailure(
   state.lastStreamFailure = failure;
   const terminal = returning(streamFailureResult(caught, failure));
   if (failure.disposition === "fatal") return terminal;
+  if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+    reportUpstreamDispatchBudgetExhausted(options, state, "stream-failed");
+    return terminal;
+  }
   const maxAttempts = options.config.stream_max_attempts;
   if (state.streamAttempts >= maxAttempts) {
     auditLog("warn", "sdk_stream_attempts_exhausted", {
@@ -2499,6 +2553,7 @@ async function applyClassification(
     const streamFailure = normalizeStreamFailure(caught, "upstream_protocol_error");
     if (
       streamFailure.disposition === "retryable" &&
+      hasRemainingUpstreamDispatchBudget(options, state) &&
       state.retryCount < options.config.rate_limit_max_retries
     ) {
       state.retryCount += 1;
@@ -2513,6 +2568,12 @@ async function applyClassification(
         signal,
       );
       return CONTINUE;
+    }
+    if (
+      streamFailure.disposition === "retryable" &&
+      !hasRemainingUpstreamDispatchBudget(options, state)
+    ) {
+      reportUpstreamDispatchBudgetExhausted(options, state, "non-stream-failed");
     }
     return returning({
       kind: "response",
@@ -2540,6 +2601,13 @@ async function applyClassification(
 
   switch (classification.action) {
     case "refresh-then-retry":
+      if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+        reportUpstreamDispatchBudgetExhausted(options, state, "refresh-then-retry");
+        return returning({
+          kind: "response",
+          response: terminalError(classification.status, error.message, error.code),
+        });
+      }
       // Record the forced refresh before attempting it: the classifier reads
       // this set and turns the next credential rejection on the same account
       // into a switch or terminal failure, so this path runs once per account.
@@ -2554,6 +2622,13 @@ async function applyClassification(
       }
       return CONTINUE;
     case "retry":
+      if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+        reportUpstreamDispatchBudgetExhausted(options, state, "retry");
+        return returning({
+          kind: "response",
+          response: terminalError(classification.status ?? 502, error.message, error.code),
+        });
+      }
       state.retryCount += 1;
       options.diagnostics?.phase("retry_backoff");
       await abortableSleep(classification.retryAfterMs ?? 0, signal);
@@ -2579,6 +2654,17 @@ async function applyClassification(
           account,
           Date.now() + (classification.retryAfterMs ?? options.config.rate_limit_retry_delay_ms),
         );
+      }
+      if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+        reportUpstreamDispatchBudgetExhausted(options, state, "switch");
+        return returning({
+          kind: "response",
+          response: terminalError(
+            classification.status ?? 502,
+            error.message,
+            classification.code ?? error.code,
+          ),
+        });
       }
       if (state.replayLocked) {
         if (error.status === 429) {
@@ -2760,6 +2846,7 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
         publicType: tool.publicType,
       })),
       options.body.toolChoice !== "none",
+      options.unexpectedToolCallFailure,
     );
     const result = await executeLoop({ ...tracedOptions, validateToolArguments }, deadline.signal);
     if (result.kind === "response") return await diagnostics.response(result.response);

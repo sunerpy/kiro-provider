@@ -308,7 +308,7 @@ describe("loadConfig environment parsing", () => {
 
     expect(config.port).toBe(9100);
     expect(config.log_level).toBe("warn");
-    expect(config.max_request_body_bytes).toBe(10_485_760);
+    expect(config.max_request_body_bytes).toBe(33_554_432);
     expect(config.max_request_iterations).toBe(20);
   });
 

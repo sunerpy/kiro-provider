@@ -48,6 +48,10 @@ import {
   responseUsage,
 } from "./state.js";
 import {
+  type LocalStructuredOutputProfile,
+  LocalStructuredOutputTextBuffer,
+} from "./structured-output.js";
+import {
   type BridgeFailure,
   type ResponsesToolBridge,
   reportToolRestoreFailure,
@@ -64,6 +68,7 @@ type AdapterOptions = {
   readonly configuration: ResponseRequestConfiguration;
   readonly includeEncryptedReasoning: boolean;
   readonly captureEncryptedReasoning?: boolean;
+  readonly localStructuredOutputProfile?: LocalStructuredOutputProfile;
   readonly onCompleted?: (response: ResponseStateObject) => void;
 };
 
@@ -82,13 +87,21 @@ type TerminalCompletion = {
 };
 
 type TerminalFailure = {
+  readonly type?: "upstream_error";
   readonly code: string;
   readonly message: string;
+  readonly param?: string;
 };
 
 function toTerminalFailure(failure: StreamFailure): TerminalFailure {
   return { code: failure.code, message: failure.message };
 }
+
+const LOCAL_STRUCTURED_OUTPUT_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "structured_output_unexpected_tool_call",
+  "structured_output_validation_failed",
+  "structured_output_buffer_exceeded",
+]);
 
 type ToolCallAccumulator = {
   readonly itemId: string;
@@ -118,6 +131,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
   const responseId = options.responseId ?? `resp_${randomUUID()}`;
   const messageId = `msg_${randomUUID()}`;
   const createdAt = options.createdAt ?? Math.floor(Date.now() / 1000);
+  const localStructuredOutputBuffer = options.localStructuredOutputProfile
+    ? new LocalStructuredOutputTextBuffer(options.localStructuredOutputProfile)
+    : undefined;
   const tools = new Map<number, ToolCallAccumulator>();
   const completedOutput = new Map<number, ResponseOutputItem>();
   const pendingFrames: Uint8Array[] = [];
@@ -220,6 +236,7 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     terminalFailure = failure;
     if (outcome === "consumer-cancel") pendingFrames.length = 0;
     runCleanupSteps(
+      () => localStructuredOutputBuffer?.dispose(),
       removeDeadlineListener,
       removeClientListener,
       () => {
@@ -251,11 +268,20 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
             code: "upstream_stream_error",
             message: "Upstream stream error",
           };
+          const diagnosticError = signals.diagnostics?.streamError(details.code, details.message);
+          const structuredOutputFailure =
+            options.localStructuredOutputProfile !== undefined &&
+            LOCAL_STRUCTURED_OUTPUT_FAILURE_CODES.has(details.code);
           emit((sequence) =>
             responseFailed({
               responseId,
               model: options.model,
-              error: signals.diagnostics?.streamError(details.code, details.message) ?? details,
+              error: {
+                ...(diagnosticError ?? details),
+                ...(structuredOutputFailure
+                  ? { type: "upstream_error" as const, param: "text.format" }
+                  : {}),
+              },
               sequenceNumber: sequence,
               createdAt,
               configuration: options.configuration,
@@ -482,6 +508,17 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       case "reasoning_redacted":
         return;
       case "text_delta": {
+        if (localStructuredOutputBuffer !== undefined) {
+          const buffered = localStructuredOutputBuffer.append(event.text);
+          if (!buffered.ok) {
+            signals.diagnostics?.failure(
+              Object.assign(new Error(buffered.message), { code: buffered.code }),
+              "projection",
+            );
+            beginTerminal("upstream-error", undefined, buffered);
+          }
+          return;
+        }
         closeReasoningBeforeOutput();
         if (messageIndex === undefined) {
           messageIndex = nextOutputIndex;
@@ -522,6 +559,18 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
         return;
       }
       case "tool_call_delta": {
+        if (localStructuredOutputBuffer !== undefined) {
+          const failure = {
+            code: "structured_output_unexpected_tool_call",
+            message: "Upstream returned a tool call for a local structured output request",
+          };
+          signals.diagnostics?.failure(
+            Object.assign(new Error(failure.message), { code: failure.code }),
+            "projection",
+          );
+          beginTerminal("upstream-error", undefined, failure);
+          return;
+        }
         closeReasoningBeforeOutput();
         const existing: ToolCallAccumulator = tools.get(event.index) ?? {
           itemId: `fc_${randomUUID()}`,
@@ -606,6 +655,70 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
     finishReason: "stop" | "tool_calls",
     codeReferences?: readonly CodeReference[],
   ): void => {
+    if (localStructuredOutputBuffer !== undefined) {
+      if ((codeReferences?.length ?? 0) > 0 || finishReason === "tool_calls" || tools.size > 0) {
+        const failure =
+          finishReason === "tool_calls" || tools.size > 0
+            ? {
+                code: "structured_output_unexpected_tool_call",
+                message: "Upstream returned a tool call for a local structured output request",
+              }
+            : {
+                code: "structured_output_validation_failed",
+                message: "Upstream output could not satisfy the local structured output profile",
+              };
+        signals.diagnostics?.failure(
+          Object.assign(new Error(failure.message), { code: failure.code }),
+          "projection",
+        );
+        beginTerminal("upstream-error", undefined, failure);
+        return;
+      }
+      const enforced = localStructuredOutputBuffer.complete();
+      if (!enforced.ok) {
+        signals.diagnostics?.failure(
+          Object.assign(new Error(enforced.message), { code: enforced.code }),
+          "projection",
+        );
+        beginTerminal("upstream-error", undefined, enforced);
+        return;
+      }
+      text = enforced.text;
+      closeReasoningBeforeOutput();
+      messageIndex = nextOutputIndex;
+      nextOutputIndex += 1;
+      emit((sequence) =>
+        outputItemAdded({
+          item: {
+            id: messageId,
+            type: "message",
+            role: "assistant",
+            status: "in_progress",
+            content: [],
+          },
+          outputIndex: messageIndex ?? 0,
+          sequenceNumber: sequence,
+        }),
+      );
+      emit((sequence) =>
+        contentPartAdded({
+          itemId: messageId,
+          outputIndex: messageIndex ?? 0,
+          contentIndex: 0,
+          part: outputTextContent(""),
+          sequenceNumber: sequence,
+        }),
+      );
+      emit((sequence) =>
+        outputTextDelta({
+          itemId: messageId,
+          outputIndex: messageIndex ?? 0,
+          contentIndex: 0,
+          delta: text,
+          sequenceNumber: sequence,
+        }),
+      );
+    }
     const invalidTool = [...tools.values()].some(
       (tool) => tool.id.length === 0 || tool.name.length === 0,
     );

@@ -16,6 +16,11 @@ export interface ValidateToolArguments {
   readonly assertName: (name: string) => void;
 }
 
+export interface UnexpectedToolCallFailure {
+  readonly code: string;
+  readonly message: string;
+}
+
 /**
  * Validate observed arguments locally; never coerce, fill defaults, remove
  * properties, fetch remote schemas, or claim upstream strict generation support.
@@ -23,6 +28,7 @@ export interface ValidateToolArguments {
 export function toolOutputValidator(
   tools: readonly ToolOutputSchema[],
   callsAllowed = true,
+  unexpectedToolCallFailure?: UnexpectedToolCallFailure,
 ): ValidateToolArguments {
   const validators = new Map<string, (value: unknown) => boolean>();
   const compilers = new Map<string, Ajv | Ajv2019 | Ajv2020>();
@@ -71,6 +77,12 @@ export function toolOutputValidator(
     }
   }
   const assertName = (name: string): void => {
+    if (unexpectedToolCallFailure !== undefined) {
+      throw new SdkStreamProtocolError(
+        unexpectedToolCallFailure.message,
+        unexpectedToolCallFailure.code,
+      );
+    }
     if (!callsAllowed) {
       throw new SdkStreamProtocolError(
         "Upstream called a tool despite tool_choice=none",

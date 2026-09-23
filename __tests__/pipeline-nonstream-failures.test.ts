@@ -185,6 +185,28 @@ describe("non-stream stream-failure routing (B4)", () => {
     expect(scripted.sends()).toBe(2);
   });
 
+  test("does not retry a semantic stream failure after the upstream dispatch budget is spent", async () => {
+    const embeddedError = exactResponse([
+      { assistantResponseEvent: { content: "partial" } },
+      { error: { message: "upstream hiccup" } } as SdkStreamEvent,
+    ]);
+    const scripted = sequence([embeddedError, OK]);
+
+    const response = await runChatCompletion({
+      body: BODY,
+      model: "auto",
+      stream: false,
+      config: config(),
+      accountManager: new FakeAccountManager([account("account-a")]),
+      tokenRefresher: refresher,
+      makeClient: () => scripted.client,
+      maxUpstreamDispatches: 1,
+    });
+
+    expect(response.status).toBe(502);
+    expect(scripted.sends()).toBe(1);
+  });
+
   test("returns 502 once a retryable pre-semantic failure exhausts stream_max_attempts", async () => {
     const malformed = exactResponse([
       { toolUseEvent: { toolUseId: "tool-1", name: "lookup", input: "{not json", stop: true } },
