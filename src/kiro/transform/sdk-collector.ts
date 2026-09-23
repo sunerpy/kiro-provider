@@ -1,3 +1,4 @@
+import { utf8AppendByteLength } from "../../core/utf8-byte-length.js";
 import {
   CANONICAL_OUTPUT_VERSION,
   type CanonicalCompletion,
@@ -108,14 +109,7 @@ export async function collectSdkResponse(
           break;
         case "text_delta":
           if (textLimit !== undefined) {
-            let addedBytes = Buffer.byteLength(event.text, "utf8");
-            const previous = text.charCodeAt(text.length - 1);
-            const next = event.text.charCodeAt(0);
-            if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-              // An astral character split across SDK deltas occupies four UTF-8
-              // bytes, not the six bytes of two isolated surrogate halves.
-              addedBytes -= 2;
-            }
+            const addedBytes = utf8AppendByteLength(text, event.text);
             if (textBytes + addedBytes > textLimit.maxBytes) {
               throw new SdkStreamProtocolError(textLimit.message, textLimit.code);
             }

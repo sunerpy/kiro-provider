@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createConnection } from "node:net";
 import type { Config } from "../src/config/schema.js";
 import { buildServeOptions } from "../src/server/app.js";
 import { captureAuditEvents } from "./audit-test-helpers.js";
@@ -41,6 +42,53 @@ async function waitFor(predicate: () => boolean): Promise<boolean> {
     await Bun.sleep(5);
   }
   return predicate();
+}
+
+/**
+ * Observe Bun's header-level 413 before sending a multi-megabyte body. Native
+ * Windows fetch can otherwise surface the server's early close as ECONNRESET
+ * while it is still uploading, hiding the HTTP status from the test harness.
+ */
+function rejectedUploadStatus(port: number, body: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let headers = "";
+    let finished = false;
+    const finish = (error?: Error, status?: number): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (error) reject(error);
+      else if (status !== undefined) resolve(status);
+    };
+    const timer = setTimeout(() => finish(new Error("missing oversized upload rejection")), 3000);
+    socket.on("error", (error) => finish(error));
+    socket.on("close", () => {
+      if (!finished) finish(new Error("connection closed without an HTTP rejection"));
+    });
+    socket.on("data", (bytes) => {
+      headers += bytes.toString("utf8");
+      if (!headers.includes("\r\n\r\n")) return;
+      const status = /^HTTP\/1\.[01] (\d{3}) /.exec(headers)?.[1];
+      if (status === undefined) finish(new Error("invalid HTTP rejection"));
+      else finish(undefined, Number(status));
+    });
+    socket.on("connect", () =>
+      socket.write(
+        [
+          "POST /v1/responses HTTP/1.1",
+          `Host: 127.0.0.1:${port}`,
+          `Authorization: Bearer ${MESSAGES_FIXTURE_KEY}`,
+          "Content-Type: application/json",
+          `Content-Length: ${Buffer.byteLength(body)}`,
+          "Connection: close",
+          "",
+          "",
+        ].join("\r\n"),
+      ),
+    );
+  });
 }
 
 describe("Codex screenshot history across the real HTTP body limit", () => {
@@ -108,9 +156,7 @@ describe("Codex screenshot history across the real HTTP body limit", () => {
   test("an explicit legacy 10 MiB limit still refuses the same screenshot history", async () => {
     const run = loopback({ max_request_body_bytes: 10 * MIB });
     try {
-      const response = await run.post(codexBody());
-      expect(response.status).toBe(413);
-      await response.arrayBuffer();
+      expect(await rejectedUploadStatus(run.server.port as number, codexBody())).toBe(413);
       expect(run.inputs).toHaveLength(0);
       const recovered = await run.post(codexBody(false, 1));
       expect(recovered.status).toBe(200);
@@ -125,9 +171,7 @@ describe("Codex screenshot history across the real HTTP body limit", () => {
     try {
       const oversized = codexBody(false, 43);
       expect(Buffer.byteLength(oversized)).toBeGreaterThan(32 * MIB);
-      const response = await run.post(oversized);
-      expect(response.status).toBe(413);
-      await response.arrayBuffer();
+      expect(await rejectedUploadStatus(run.server.port as number, oversized)).toBe(413);
       expect(run.inputs).toHaveLength(0);
       const recovered = await run.post(codexBody(false, 1));
       expect(recovered.status).toBe(200);

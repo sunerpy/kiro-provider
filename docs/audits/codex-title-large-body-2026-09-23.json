@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "validation_stage": "initial_linux_candidate",
   "date": "2026-09-23",
   "baseline_commit": "ba0e2631ce089e6ca0d4cce13c20304894a81c46",
   "candidate_source_tree_sha256": "29b7a7e2618bd0a23b44d1dac9dce689e5cb8c2d483d963cef78a4b4478b73ea",

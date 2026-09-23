@@ -17,6 +17,7 @@
  */
 
 import { Database } from "bun:sqlite";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -100,7 +101,109 @@ function pathContains(parent: string, candidate: string): boolean {
   return child === "" || (!child.startsWith("..") && !isAbsolute(child));
 }
 
-function assertOwnerOnly(description: string, metadata: Stats, requiredOwnerBits: number): void {
+const WINDOWS_ACL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath $env:KIRO_PROBE_ACL_PATH
+$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
+$result = @{
+  user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  daclPresent = $null -ne $descriptor.DiscretionaryAcl
+  aceCount = if ($null -eq $descriptor.DiscretionaryAcl) { 0 } else { $descriptor.DiscretionaryAcl.Count }
+  rules = @($rules | ForEach-Object { @{
+    sid = $_.IdentityReference.Value
+    type = $_.AccessControlType.ToString()
+    rights = [int64]$_.FileSystemRights
+    inheritOnly = ($_.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0
+  } })
+}
+$result | ConvertTo-Json -Depth 5 -Compress
+`;
+
+/** Windows chmod/stat modes do not describe DACL protection; inspect numeric SIDs instead. */
+export function assertPrivateWindowsAcl(
+  description: string,
+  value: unknown,
+  requiredOwnerBits: number,
+): void {
+  const invalid: () => never = () => {
+    throw new Error(`${description} must have a verifiable owner-only Windows ACL`);
+  };
+  if (
+    !isRecord(value) ||
+    typeof value.user !== "string" ||
+    !/^S-1-(?:\d+-)+\d+$/.test(value.user) ||
+    typeof value.owner !== "string" ||
+    value.daclPresent !== true ||
+    !Array.isArray(value.rules) ||
+    value.aceCount !== value.rules.length ||
+    value.rules.length === 0
+  ) {
+    invalid();
+  }
+  if (value.owner !== value.user) {
+    throw new Error(`${description} must be owned by the current user`);
+  }
+  // SYSTEM and built-in Administrators already have privileged takeover rights,
+  // just as root can read a POSIX 0600 file. No ordinary user/group is allowed.
+  const privileged = new Set([value.user, "S-1-5-18", "S-1-5-32-544"]);
+  let ownerRights = 0;
+  for (const rule of value.rules) {
+    if (
+      !isRecord(rule) ||
+      typeof rule.sid !== "string" ||
+      rule.type !== "Allow" ||
+      !privileged.has(rule.sid) ||
+      typeof rule.rights !== "number" ||
+      !Number.isSafeInteger(rule.rights) ||
+      rule.rights <= 0 ||
+      rule.rights > 0x7fffffff ||
+      typeof rule.inheritOnly !== "boolean"
+    ) {
+      invalid();
+    }
+    if (rule.sid === value.user && !rule.inheritOnly) ownerRights |= rule.rights;
+  }
+  const requiredRights = (requiredOwnerBits & 0o100) !== 0 ? 0x200a9 : 0x20089;
+  if ((ownerRights & requiredRights) !== requiredRights) invalid();
+}
+
+function assertOwnerOnly(
+  description: string,
+  path: string,
+  metadata: Stats,
+  requiredOwnerBits: number,
+): void {
+  if (process.platform === "win32") {
+    let acl: unknown;
+    try {
+      acl = JSON.parse(
+        execFileSync(
+          "powershell.exe",
+          [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            Buffer.from(WINDOWS_ACL_SCRIPT, "utf16le").toString("base64"),
+          ],
+          {
+            encoding: "utf8",
+            env: { ...process.env, KIRO_PROBE_ACL_PATH: path },
+            timeout: 10_000,
+            maxBuffer: 64 * 1024,
+            windowsHide: true,
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        ),
+      );
+    } catch {
+      throw new Error(`${description} must have a verifiable owner-only Windows ACL`);
+    }
+    assertPrivateWindowsAcl(description, acl, requiredOwnerBits);
+    return;
+  }
   if ((metadata.mode & requiredOwnerBits) !== requiredOwnerBits || (metadata.mode & 0o077) !== 0) {
     throw new Error(`${description} must be owner-only`);
   }
@@ -169,7 +272,7 @@ export function validateIsolatedConfigRoot(
   if (!rootStat.isDirectory()) {
     throw new Error("The isolated config root must be a directory");
   }
-  assertOwnerOnly("The isolated config root", rootStat, 0o500);
+  assertOwnerOnly("The isolated config root", root, rootStat, 0o500);
 
   for (const protectedRoot of protectedConfigRoots) {
     const resolvedProtectedRoot = existingRealPath(protectedRoot);
@@ -191,7 +294,7 @@ export function validateIsolatedConfigRoot(
   if (!providerStat.isDirectory() || dirname(providerPathReal) !== root) {
     throw new Error("The isolated provider directory must stay inside the config root");
   }
-  assertOwnerOnly("The isolated provider directory", providerStat, 0o500);
+  assertOwnerOnly("The isolated provider directory", providerPathReal, providerStat, 0o500);
 
   const databasePath = join(providerPathReal, "accounts.db");
   const databaseLinkStat = lstatSync(databasePath);
@@ -203,7 +306,7 @@ export function validateIsolatedConfigRoot(
   if (!databaseStat.isFile() || dirname(databasePathReal) !== providerPathReal) {
     throw new Error("The isolated account database must be a regular file inside the config root");
   }
-  assertOwnerOnly("The isolated account database", databaseStat, 0o400);
+  assertOwnerOnly("The isolated account database", databasePathReal, databaseStat, 0o400);
   if (databaseStat.nlink !== 1) {
     throw new Error("The isolated account database must not be hard-linked");
   }

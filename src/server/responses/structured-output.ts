@@ -1,4 +1,5 @@
 import Ajv from "ajv";
+import { utf8AppendByteLength, utf8ByteLength } from "../../core/utf8-byte-length.js";
 
 export const LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024;
 
@@ -311,7 +312,7 @@ export function enforceLocalStructuredOutput(
   visibleText: string,
   maxBufferBytes = LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
 ): LocalStructuredOutputResult {
-  const inputBytes = Buffer.byteLength(visibleText, "utf8");
+  const inputBytes = utf8ByteLength(visibleText);
   if (inputBytes > maxBufferBytes) return STRUCTURED_OUTPUT_BUFFER_FAILURE;
 
   const trimmedText = trimUnicodeWhitespace(visibleText);
@@ -349,17 +350,9 @@ export function enforceLocalStructuredOutput(
     text,
     value: Object.freeze(value),
     inputBytes,
-    outputBytes: Buffer.byteLength(text, "utf8"),
+    outputBytes: utf8ByteLength(text),
     truncated,
   };
-}
-
-function isHighSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-}
-
-function isLowSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
 /**
@@ -371,7 +364,6 @@ export class LocalStructuredOutputTextBuffer {
   readonly #maxBufferBytes: number;
   #chunks: string[] = [];
   #byteLength = 0;
-  #endsWithHighSurrogate = false;
   #terminal: LocalStructuredOutputResult | undefined;
   #disposed = false;
 
@@ -397,12 +389,7 @@ export class LocalStructuredOutputTextBuffer {
     if (this.#disposed) return STRUCTURED_OUTPUT_VALIDATION_FAILURE;
     if (delta.length === 0) return { ok: true };
 
-    let addedBytes = Buffer.byteLength(delta, "utf8");
-    if (this.#endsWithHighSurrogate && delta.length > 0 && isLowSurrogate(delta.charCodeAt(0))) {
-      // Buffer.byteLength counts isolated surrogate halves as three bytes each;
-      // a pair split between chunks is four bytes, so remove the two-byte excess.
-      addedBytes -= 2;
-    }
+    const addedBytes = utf8AppendByteLength(this.#chunks.at(-1) ?? "", delta);
     const byteLength = this.#byteLength + addedBytes;
     if (byteLength > this.#maxBufferBytes) {
       this.#byteLength = byteLength;
@@ -413,9 +400,6 @@ export class LocalStructuredOutputTextBuffer {
 
     this.#byteLength = byteLength;
     this.#chunks.push(delta);
-    if (delta.length > 0) {
-      this.#endsWithHighSurrogate = isHighSurrogate(delta.charCodeAt(delta.length - 1));
-    }
     return { ok: true };
   }
 
@@ -431,7 +415,6 @@ export class LocalStructuredOutputTextBuffer {
   dispose(): void {
     this.#chunks = [];
     this.#byteLength = 0;
-    this.#endsWithHighSurrogate = false;
     this.#terminal = undefined;
     this.#disposed = true;
   }
