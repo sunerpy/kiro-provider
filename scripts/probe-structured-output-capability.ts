@@ -11,6 +11,7 @@
  *     --confirm-live-structured-output-probe \
  *     --isolated-config-root /path/to/isolated-xdg \
  *     --repeats 2 [--model gpt-5.6-sol]
+ * Windows live probes require PowerShell 7 (pwsh.exe) for DACL inspection.
  *
  * Output intentionally excludes model text, JSON Schema, tokens, profile ARN,
  * account id, and upstream error prose.
@@ -102,6 +103,7 @@ function pathContains(parent: string, candidate: string): boolean {
 }
 
 const WINDOWS_ACL_SCRIPT = `
+#requires -Version 7.0
 $ErrorActionPreference = 'Stop'
 $acl = Get-Acl -LiteralPath $env:KIRO_PROBE_ACL_PATH
 $descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
@@ -180,7 +182,7 @@ function assertOwnerOnly(
     try {
       acl = JSON.parse(
         execFileSync(
-          "powershell.exe",
+          "pwsh.exe",
           [
             "-NoLogo",
             "-NoProfile",
@@ -199,7 +201,9 @@ function assertOwnerOnly(
         ),
       );
     } catch {
-      throw new Error(`${description} must have a verifiable owner-only Windows ACL`);
+      throw new Error(
+        `${description} must have a verifiable owner-only Windows ACL (PowerShell 7 pwsh.exe required)`,
+      );
     }
     assertPrivateWindowsAcl(description, acl, requiredOwnerBits);
     return;

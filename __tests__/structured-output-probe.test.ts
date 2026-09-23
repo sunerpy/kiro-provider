@@ -30,9 +30,11 @@ function fixturePermissions(
     return;
   }
   const script = `
+#requires -Version 7.0
 $ErrorActionPreference = 'Stop'
 $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-foreach ($entry in @($env:KIRO_PROBE_TEST_ACLS | ConvertFrom-Json)) {
+$entries = ConvertFrom-Json -InputObject $env:KIRO_PROBE_TEST_ACLS
+foreach ($entry in $entries) {
   $directory = Test-Path -LiteralPath $entry.path -PathType Container
   $acl = if ($directory) { [System.Security.AccessControl.DirectorySecurity]::new() } else { [System.Security.AccessControl.FileSecurity]::new() }
   $acl.SetOwner($user)
@@ -47,7 +49,7 @@ foreach ($entry in @($env:KIRO_PROBE_TEST_ACLS | ConvertFrom-Json)) {
 }
 `;
   execFileSync(
-    "powershell.exe",
+    "pwsh.exe",
     [
       "-NoLogo",
       "-NoProfile",
