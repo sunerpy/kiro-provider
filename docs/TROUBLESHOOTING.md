@@ -518,6 +518,40 @@ to "local" or delete the key`.
   service, then set `auth_source` to `"local"` (or remove it; `local` is the
   default). The OpenCode database is not read afterwards.
 
+### Claude Code sessions are titled with the first prompt (e.g. `/model`)
+
+- **Look at:** The session list shows the literal first input (`/model`, a
+  slash command, or the opening prompt) instead of an AI-generated title, and
+  the transcript has no `ai-title` record. On providers older than this version
+  the log shows `protocol_projection_rejected` with `code`
+  `unsupported_parameter` and `param` `output_config.format` on
+  `/v1/messages`, usually followed by a second rejection with
+  `unsupported_message_field` and `param` `messages.1.output_config` as Claude
+  Code retries once with the field moved onto a message. On current builds, a
+  remaining `unsupported_structured_output` rejection with `param`
+  `output_config.format` normally comes from a prompt-hook evaluator request
+  (`ok`/`reason`/`impossible` schema), which is outside the title profile and
+  fails closed by design; it is not a title failure.
+- **Cause:** Claude Code 2.1.280 generates titles with a side request that
+  carries `output_config.format` (a `json_schema` whose root object has exactly
+  one required string property `title`). Older providers accepted only
+  `output_config.effort`, so the title request failed and the client fell back
+  to the first prompt.
+- **Remedy:** Upgrade the provider. Current builds accept that shape as the
+  bounded local `single-string-object-v1` profile, buffer the upstream text,
+  validate it locally, and answer with one text block containing
+  `{"title":"..."}` plus `x-kiro-structured-output: single-string-object-v1`.
+  Each recognized request writes the info event
+  `anthropic_structured_output_enforced` (request id, model, stream flag,
+  profile name, and hashes of the schema and property name only); a failed
+  publication writes the warn event `anthropic_structured_output_failed` with
+  the code (`structured_output_validation_failed`,
+  `structured_output_buffer_exceeded`, `structured_output_unexpected_tool_call`,
+  `structured_output_unexpected_reasoning`) and never the text. Two cases remain client-side and no provider can fix
+  them: a session whose only inputs are slash commands, and one whose prompts
+  are all under 10 characters, because Claude Code never requests a title for
+  either. Existing transcripts are not rewritten; use `/rename` for those.
+
 ### `413`: request too large vs context length exceeded
 
 - **Look at:** HTTP `413`. `error.code` `request_too_large` (message

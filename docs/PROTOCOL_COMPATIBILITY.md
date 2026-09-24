@@ -65,8 +65,9 @@ KiroRuntime `GenerateAssistantResponse` with a profile in `us-east-1` is enabled
 
 Only `clear_thinking_20251015` with `keep: "all"` is accepted for
 `context_management`; it returns `applied_edits: []`. Destructive edits,
-Structured Outputs, forced/serial tool controls, and unknown semantic fields
-remain explicit `invalid_request_error` failures. Streaming emits ordered
+Structured Outputs outside the bounded `single-string-object-v1` profile
+(see the Anthropic Messages variant in section 4), forced/serial tool controls,
+and unknown semantic fields remain explicit `invalid_request_error` failures. Streaming emits ordered
 Anthropic blocks and keep-alive `ping` events. `x-claude-code-session-id` is
 consumed as a tenant-scoped affinity key and is never logged verbatim.
 
@@ -230,6 +231,48 @@ fail-closed. Compatible responses report
 `structured_output_store_defaulted_false`. Requests carrying tool declarations
 also report `structured_output_tool_calls_rejected`.
 
+#### Anthropic Messages variant
+
+`POST /v1/messages` recognizes the same `single-string-object-v1` profile from
+top-level `output_config.format`, which must be exactly
+`{ type: "json_schema", schema }`; Anthropic's shape carries no `name` or
+`strict`, and any other key is rejected. The schema bounds are identical: a
+root object with exactly one required string property,
+`additionalProperties: false`, an identifier-shaped property name that is not
+`__proto__`, `prototype`, or `constructor`, and optional integer
+`minLength`/`maxLength` within `1 <= minLength <= maxLength <= 256`
+(defaulting to 1 and 256). This is the exact shape Claude Code 2.1.280 sends
+for session-title generation. The request boundary requires `thinking` to be
+absent or `{ type: "disabled" }` and `tool_choice` to be absent, `auto`, or
+`none`; tools may be declared, but every upstream tool call is rejected before
+publication. Streaming and non-streaming requests are both accepted, and
+`output_config.effort` keeps its existing projection alongside `format`. The
+adapter strips `format` from the upstream projection: no schema, injected
+prompt, or second inference reaches Kiro.
+
+Publication follows the Responses lane. The provider buffers at most 64 KiB of
+upstream text, normalizes it into the single-property JSON envelope (trimmed,
+truncated to `maxLength` code points, an upstream JSON object or string with
+the same property normalized rather than double-wrapped), validates it with AJV,
+and only then publishes exactly one text block (`content_block_start`, one
+`text_delta`, `content_block_stop` in streams) with `stop_reason: "end_turn"`,
+the reported upstream usage, and the response header
+`x-kiro-structured-output: single-string-object-v1`. Any other
+`output_config.format` returns `400 invalid_request_error` with code
+`unsupported_structured_output` and `param: "output_config.format"`; boundary
+violations use the same code with the offending `param`. Publication failures
+return `502 api_error` with `structured_output_validation_failed`,
+`structured_output_buffer_exceeded`, `structured_output_unexpected_tool_call`,
+or `structured_output_unexpected_reasoning`; once a stream is committed they
+become the SSE `error` event carrying the same code, and no partial text is
+ever published. Recognition emits the hash-and-count audit event
+`anthropic_structured_output_enforced`; failures emit
+`anthropic_structured_output_failed` with the code only. Other `output_config`
+keys keep `unsupported_parameter` and message-level `output_config` keeps
+`unsupported_message_field`. `responses_fidelity_mode` does not gate this
+variant: it governs only the Responses lane, and Messages has no alternative
+lane, so the profile is always available there.
+
 ## 5. Stored response lifecycle
 
 V3 mirrors stored responses in the provider-owned SQLite database:
@@ -273,7 +316,7 @@ request physical deletion of Kiro's server-side response state.
 | `store: false`                                             | Stateless lane; no local response mirror is written.                                                                                           |
 | `previous_response_id`                                     | Supported for locally mirrored native or stateless responses.                                                                                  |
 | Responses `conversation` objects                           | Rejected with `unsupported_stateful_responses`.                                                                                                |
-| Structured Outputs / JSON schema                           | Only `single-string-object-v1` is locally enforced in compatible mode; arbitrary schemas and JSON mode return `unsupported_structured_output`. |
+| Structured Outputs / JSON schema                           | Only `single-string-object-v1` is locally enforced: Responses in compatible mode from strict `text.format`, Messages from `output_config.format` regardless of fidelity mode; arbitrary schemas and JSON mode return `unsupported_structured_output`. |
 | Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                               |
 | Remote image URLs and OpenAI `file_id` references          | Rejected; send data URLs or inline file data.                                                                                                  |
 | `background: true`                                         | Rejected.                                                                                                                                      |
