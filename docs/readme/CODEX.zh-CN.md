@@ -59,8 +59,8 @@ compatible fidelity 模式下，Codex 自动会话标题使用 Provider 本地�
 流式文本在本地验证完成后才以 JSON 公开。该能力主要覆盖同形的单字符串元数据请求，例如 Codex 标题线程；它不是通用
 Structured Outputs，也不能证明 Kiro 上游原生执行 JSON Schema。
 默认 `responses_fidelity_mode: "compatible"` 启用该能力；`strict` 会在上游请求前拒绝。
-`X-Kiro-Compatibility` 明确报告本地转换：裁剪首尾空白，按请求的字符串长度截断，
-包装成唯一属性后验证。响应保留请求的 schema，每个元数据请求至多发起一次上游推理。
+`X-Kiro-Compatibility` 明确报告本地转换：裁剪首尾空白，剥掉包住整段输出的单个
+Markdown 代码围栏，按请求的字符串长度截断，包装成唯一属性后验证。响应保留请求的 schema，每个元数据请求至多发起一次上游推理。
 
 Codex 0.156.1 的自动标题线程也可能携带 collaboration namespace。当前 `tools` 和
 `additional_tools` 声明经过既有校验后完整投影，兼容头额外报告

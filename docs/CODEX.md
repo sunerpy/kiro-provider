@@ -65,8 +65,9 @@ validation. This primarily covers same-shape metadata requests, for example the 
 thread; it is not general Structured Outputs support and does not imply native
 Kiro JSON Schema enforcement. The default `responses_fidelity_mode: "compatible"`
 enables this profile; `strict` rejects it before an upstream request. Conversion
-is explicit in `X-Kiro-Compatibility`: visible text is trimmed, bounded to the
-requested string length, wrapped as the single requested property and validated.
+is explicit in `X-Kiro-Compatibility`: visible text is trimmed, stripped of a
+single Markdown code fence around the whole output, bounded to the requested
+string length, wrapped as the single requested property and validated.
 The provider preserves the requested schema in the Responses result and makes
 at most one upstream inference dispatch for each metadata request.
 

@@ -111,8 +111,8 @@ Claude Code 2.1.280 通过一个 `/v1/messages` 旁路请求生成会话标题�
 恰好一个 required string 属性、`additionalProperties: false`，以及本地 1-256
 字符边界（显式整数 `minLength`/`maxLength` 必须落在该范围内）。Schema 不会发往
 上游，也不会注入任何 prompt。Kiro 仍生成普通文本；Provider 先缓冲、去除首尾
-空白，再包装成 `{"title":"..."}`（上游若已返回带同名属性的 JSON object 或 JSON
-string，会归一而不是二次包装），按 `maxLength` 个 code point 截断，本地验证通过后
+空白、剥掉包住整段输出的单个 Markdown 代码围栏，再包装成 `{"title":"..."}`
+（上游若已返回带同名属性的 JSON object 或 JSON string，会归一而不是二次包装），按 `maxLength` 个 code point 截断，本地验证通过后
 才发布恰好一个包含该 JSON 的 text block，`stop_reason` 为 `end_turn`。成功响应带
 `x-kiro-structured-output: single-string-object-v1`。`output_config.effort` 可与
 `format` 同时使用；其他任何 `output_config` 键（例如 `task_budget`）仍返回

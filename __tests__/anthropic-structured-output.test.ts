@@ -422,6 +422,17 @@ describe("Messages structured output normalization", () => {
     ['"A JSON string"', '{"title":"A JSON string"}'],
     ["  \n spaced title \t ", '{"title":"spaced title"}'],
     ['  {"title":"  padded  "}  ', '{"title":"padded"}'],
+    // Observed live on 2026-09-24 against Sonnet 5: the title JSON arrived inside a
+    // Markdown fence and was wrapped verbatim before fences were unwrapped.
+    [
+      '```json\n{"title": "Fix reasoning replay migration bug, release 3.5.8"}\n```',
+      '{"title":"Fix reasoning replay migration bug, release 3.5.8"}',
+    ],
+    ["```\nFenced plain title\n```", '{"title":"Fenced plain title"}'],
+    [
+      '```json\n{"title":"a"}\n```\ntrailing prose',
+      JSON.stringify({ title: '```json\n{"title":"a"}\n```\ntrailing prose' }),
+    ],
   ])(
     "normalizes upstream %j into the single property (non-stream and stream)",
     async (upstream, expected) => {

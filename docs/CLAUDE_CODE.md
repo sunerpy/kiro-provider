@@ -124,9 +124,10 @@ that shape, the bounded local `single-string-object-v1` profile: a root object,
 exactly one required string property, `additionalProperties: false`, and a
 local 1-256 character bound (explicit integer `minLength`/`maxLength` must stay
 within it). The schema is never sent upstream and no prompt is injected. Kiro
-produces ordinary text; the provider buffers it, trims it, wraps it as
-`{"title":"..."}` (an upstream JSON object or JSON string with the same
-property is normalized rather than double-wrapped), truncates it to `maxLength`
+produces ordinary text; the provider buffers it, trims it, unwraps a single
+Markdown code fence around the whole output, wraps it as `{"title":"..."}` (an
+upstream JSON object or JSON string with the same property is normalized rather
+than double-wrapped), truncates it to `maxLength`
 code points, validates it locally, and only then publishes exactly one text
 block containing that JSON with `stop_reason: "end_turn"`. Successful responses
 carry `x-kiro-structured-output: single-string-object-v1`. `output_config.effort`

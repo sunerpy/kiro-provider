@@ -219,8 +219,9 @@ Kiro 上游仍生成普通 visible text。Provider 在内部最多缓冲 64 KiB 
 Schema、注入的 prompt 或第二次推理到达 Kiro。
 
 发布流程与 Responses 通道一致。Provider 最多缓冲 64 KiB 上游文本，归一为单属性
-JSON envelope（去除首尾空白、按 `maxLength` 个 code point 截断，上游若返回带同名
-属性的 JSON object 或 JSON string 则归一而不二次包装），经 AJV 验证后才发布恰好
+JSON envelope（去除首尾空白、剥掉包住整段输出的单个 Markdown 代码围栏、按
+`maxLength` 个 code point 截断，上游若返回带同名属性的 JSON object 或 JSON string
+则归一而不二次包装），经 AJV 验证后才发布恰好
 一个 text block（流式为 `content_block_start`、一个 `text_delta`、
 `content_block_stop`），`stop_reason` 为 `end_turn`，usage 为真实上游值，并带响应头
 `x-kiro-structured-output: single-string-object-v1`。其他任何
