@@ -5,7 +5,6 @@
 
 ### Bug Fixes
 
-* **gateway:** 修复 reasoning 回放迁移误触发与绑定过早提交 ([da9ec8e](https://github.com/sunerpy/kiro-provider/commit/da9ec8e437d94693672e4144ffc1bf0dc63be9c6))
 * **gateway:** 修复 reasoning 回放迁移误触发与绑定过早提交 ([04bb8b8](https://github.com/sunerpy/kiro-provider/commit/04bb8b8ea42a458069159d3a811c51384220d438))
 
 ## [3.5.7](https://github.com/sunerpy/kiro-provider/compare/v3.5.6...v3.5.7) (2026-09-23)
