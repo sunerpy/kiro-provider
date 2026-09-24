@@ -232,8 +232,12 @@ placeholder ...`。
   改变被签名的 system/tools/历史前缀，即使留在同一账号也可能使签名失效。
   跨账号迁移仅适用于已经验证的模型、区域、runtime 和 profile 单元，不保证任意前缀变化。
 - **处置：** 原样回放完整的原签名上下文。无法恢复时，保留旧 transcript，将可见
-  任务状态交接到新会话，并明确说明隐藏 reasoning 的损失。Provider 遇到该错误不会重试、
-  不换账号、不静默降级，也不会把账号标记为不健康。
+  任务状态交接到新会话，并明确说明隐藏 reasoning 的损失。除迁移后的 portable 回放
+  尝试外，Provider 遇到该错误不会重试、不换账号、不静默降级，也不会把账号标记为
+  不健康。若该 `400` 出现在刚被 `reasoning_replay_account_failover: "verified"`
+  迁移到其他账号的尝试上，则按下文 `400 reasoning_replay_migration_rejected` 处理：
+  只在原账号、原 conversation 上回退一次，原账号不可用时客户端收到的错误码为
+  `reasoning_replay_migration_rejected` 而不是本错误码。
 
 ### `400 ... is not a valid single assistant reasoning block`（Claude Code）
 
@@ -311,6 +315,59 @@ Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 
   Anthropic `thinking` signature，或经过认证的 Provider token 命中了精确验证的
   迁移单元。真实迁移还会输出只含哈希的 `reasoning_replay_account_migrated`。
   `false` 是正常值，不是错误。
+
+### `400 reasoning_replay_migration_rejected`
+
+- **查看：** HTTP `400`，`error.code` 为 `reasoning_replay_migration_rejected`
+  （message 为 `Kiro rejected the request after its signed reasoning history was
+  migrated to another account, and the original account is unavailable`），以及
+  同一 `request_id` 的审计序列：
+  - `reasoning_replay_account_migrated`（`info`）：已验证的 portable 回放正被派发到
+    其绑定单元以外的账号。每次真实迁移只发一条；之后延展已提交单元的尝试（空完成
+    重试、被拒绝的第二跳回退）不算迁移，不再发出。字段：`request_id`、`protocol`、
+    `model`、`from_account_hash`、`to_account_hash`、`replay_count`、
+    `legacy_replay_count`、`binding`。`binding: "deferred"` 表示显式 session affinity
+    绑定要等 Kiro 接受本次尝试后才提交；`binding: "none"` 表示请求没有显式 session
+    affinity store，因此没有可提交的持久绑定。
+  - `reasoning_replay_migration_committed`（`info`）：Kiro 已接受迁移请求（流式为
+    首个事件，非流式为完整收集完成），若存在持久绑定，此时才改为新账号和新
+    conversation。字段：`request_id`、`protocol`、`model`、`from_account_hash`、
+    `to_account_hash`、`conversation_hash`、`replay_count`。
+  - `reasoning_replay_migration_commit_failed`（`warn`）：Kiro 已接受迁移请求，但
+    向 accounts 数据库写入新绑定失败（磁盘满、I/O 错误）。已接受的回答仍会正常
+    返回，持久绑定继续指向原账号，下一请求会重新解析。字段：与 `committed` 相同，
+    另加 `error_type`（错误类名）和 `error_code`（驱动错误码，如 `SQLITE_FULL`，
+    存在时才有）。
+  - `reasoning_replay_migration_rejected`（`warn`）：Kiro 在产生任何输出前拒绝了
+    迁移请求。字段：`request_id`、`protocol`、`model`、`from_account_hash`、
+    `to_account_hash`、`replay_count`、`upstream_status`（HTTP 状态码）、
+    `upstream_code`（上游 reason 枚举，`REQUEST_BODY_INVALID` 或
+    `THINKING_SIGNATURE_INVALID`；签名拒绝以不带 reason 的纯消息 `400` 形式到达时
+    省略）、`fallback`、`fallback_blocked_reason`。`fallback: "origin"` 表示已在
+    原账号和原 conversation 上回退一次；`fallback: "none"` 表示回退被阻止，
+    `fallback_blocked_reason` 给出原因：`fallback_spent`、`origin_missing`、
+    `origin_ineligible`、`origin_quarantined`、`origin_unselectable` 或
+    `dispatch_budget`。
+
+  这些事件只含哈希、计数、枚举值以及错误类名或驱动错误码；绝不包含消息文本、
+  提示词、签名或账号标识。
+- **原因：** 请求回放了已验证的 portable signed reasoning，但无法留在原账号
+  （额度耗尽、限流、不健康、模型不符、被隔离，或已达
+  `account_inference_concurrency`），于是 `reasoning_replay_account_failover:
+  "verified"` 把它迁移到另一个账号并使用新的 Kiro conversation。Kiro 在服务端
+  校验迁移后的请求体，在产生输出前以 `400 ValidationException` /
+  `REQUEST_BODY_INVALID`（`Improperly formed request.`）或无效 reasoning 签名拒绝。
+  Provider 在 Kiro 接受迁移请求之前绝不重写持久绑定，因此会话仍指向原账号。
+  原账号可选时，Provider 只在原账号、原 conversation 上重试一次，客户端通常会在
+  `warn` 事件旁看到正常响应。只有这一次回退被阻止时才会返回 `400`：原账号仍不
+  可用、本次请求已经回退过，或上游派发预算已耗尽。
+- **处置：** 等原账号恢复（额度重置、健康恢复或 `kiro-provider login` 重新登录）
+  后重发；绑定仍指向它。若原账号无法恢复，从不含 signed reasoning 的历史继续
+  （去掉 `encrypted_content` / `thinking` 块或另起新会话），并明确接受隐藏
+  reasoning 的损失。要完全禁用迁移，设置 `reasoning_replay_account_failover:
+  "strict"`；此后 owner 失败会返回下文的 replay 绑定错误码而不是迁移会话。不要
+  自动删除 reasoning、合并历史或让客户端循环重试：Provider 已经执行了唯一安全的
+  回退，Kiro 具体拒绝的字段仍在调查中。
 
 ### replay 绑定账号错误码
 

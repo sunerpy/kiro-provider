@@ -434,8 +434,16 @@ mint provenance。准入仍只限上文已验证的 runtime/profile 单元，但
 具有认证 mint provenance 的 Fable；同时须配置
 `reasoning_replay_account_failover: "verified"`。redacted reasoning、Chat 哈希回放、
 `safe` 投影与未列单元继续 owner-bound。默认值为 `strict`；全局 `strict`
-也会禁用此恢复开关。符合条件的历史在 owner 额度耗尽后可切换到健康账号，并保留
-签名 reasoning 与完整输出；已被上游接受的流不会换号重试。
+也会禁用此恢复开关。符合条件的历史在 owner 不可用时可切换到健康账号，并保留
+签名 reasoning 与完整输出。携带已验证 portable 回放的请求优先使用其绑定的原账号：
+只要原账号可选且并发低于 `account_inference_concurrency`，即使其他账号队列更短
+也不迁移；只有原账号不可用（额度耗尽、限流、不健康、模型不符或被隔离）或已达
+并发上限时才迁移。迁移后的 session affinity 绑定只在 Kiro 接受迁移请求之后提交
+（流式为首个事件，非流式为完整收集完成），因此被拒绝的迁移不会改动原绑定。
+若 Kiro 在产生任何输出前以 `400 REQUEST_BODY_INVALID` 或无效 reasoning 签名
+拒绝迁移请求，Provider 在原账号仍可选时只回退一次到原账号和原 conversation，
+否则返回 `400 reasoning_replay_migration_rejected`；不再进一步重试，已被上游
+接受的流也不会换号重试。
 
 恢复旧会话不会重写历史 `kr1_` token。默认 `portable-v2` 写端会为后续输出生成
 `kr2_`，因此恢复后的历史可以同时包含两种格式，以及多个已验证 owner 账号。
