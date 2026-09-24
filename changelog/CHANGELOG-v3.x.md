@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.10](https://github.com/sunerpy/kiro-provider/compare/v3.5.9...v3.5.10) (2026-09-24)
+
+
+### Bug Fixes
+
+* **messages:** 结构化输出归一时剥掉整段 Markdown 代码围栏 ([ee1c1c4](https://github.com/sunerpy/kiro-provider/commit/ee1c1c45f6552f46cb859437243e4331be63c8ba))
+
 ## [3.5.9](https://github.com/sunerpy/kiro-provider/compare/v3.5.8...v3.5.9) (2026-09-24)
 
 
