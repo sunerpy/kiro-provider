@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.9](https://github.com/sunerpy/kiro-provider/compare/v3.5.8...v3.5.9) (2026-09-24)
+
+
+### Bug Fixes
+
+* **messages:** 支持 Claude Code 会话标题的 output_config.format 本地 profile ([d6b4736](https://github.com/sunerpy/kiro-provider/commit/d6b4736ce088efb874889a1e7b7dfaf3601031fe))
+
 ## [3.5.8](https://github.com/sunerpy/kiro-provider/compare/v3.5.7...v3.5.8) (2026-09-24)
 
 
