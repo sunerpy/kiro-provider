@@ -251,9 +251,10 @@ adapter strips `format` from the upstream projection: no schema, injected
 prompt, or second inference reaches Kiro.
 
 Publication follows the Responses lane. The provider buffers at most 64 KiB of
-upstream text, normalizes it into the single-property JSON envelope (trimmed,
-truncated to `maxLength` code points, an upstream JSON object or string with
-the same property normalized rather than double-wrapped), validates it with AJV,
+upstream text, normalizes it into the single-property JSON envelope (trimmed, a
+single Markdown code fence around the whole output unwrapped, truncated to
+`maxLength` code points, an upstream JSON object or string with the same
+property normalized rather than double-wrapped), validates it with AJV,
 and only then publishes exactly one text block (`content_block_start`, one
 `text_delta`, `content_block_stop` in streams) with `stop_reason: "end_turn"`,
 the reported upstream usage, and the response header

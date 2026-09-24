@@ -171,6 +171,12 @@ describe("single-string-object-v1 local envelope", () => {
     ['  {"title":"已经封装"}  ', '{"title":"已经封装"}'],
     ['  "JSON string"  ', '{"title":"JSON string"}'],
     ['  引号 " 反斜杠 \\ 换行\n  ', '{"title":"引号 \\" 反斜杠 \\\\ 换行"}'],
+    ['```json\n{"title":"围栏 JSON"}\n```', '{"title":"围栏 JSON"}'],
+    ["  ```\r\n围栏纯文本\r\n```  ", '{"title":"围栏纯文本"}'],
+    [
+      '```json\n{"title":"a"}\n```\n结尾',
+      JSON.stringify({ title: '```json\n{"title":"a"}\n```\n结尾' }),
+    ],
   ])("enforces and JSON-escapes %p", (visibleText, expected) => {
     const result = enforceLocalStructuredOutput(parseProfile(), visibleText);
     expect(result).toMatchObject({ ok: true, text: expected });

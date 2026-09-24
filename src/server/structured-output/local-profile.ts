@@ -196,10 +196,22 @@ function trimUnicodeWhitespace(value: string): string {
   return value.replace(/^[\p{White_Space}\uFEFF]+/u, "").replace(/[\p{White_Space}\uFEFF]+$/u, "");
 }
 
+/**
+ * A single Markdown code fence around the whole output (for example
+ * ```` ```json {...} ``` ````) is presentation, not content: models routinely
+ * wrap the requested JSON that way even when asked for JSON only. Returns the
+ * fenced body, or the text unchanged when it is not exactly one fenced block.
+ */
+function unwrapMarkdownFence(text: string): string {
+  const match = /^```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/u.exec(text);
+  return match?.[1] === undefined ? text : trimUnicodeWhitespace(match[1]);
+}
+
 function parsedCandidate(
   profile: LocalSingleStringObjectProfile,
-  text: string,
+  fencedText: string,
 ): string | undefined {
+  const text = unwrapMarkdownFence(fencedText);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
