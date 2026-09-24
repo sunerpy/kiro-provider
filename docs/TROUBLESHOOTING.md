@@ -265,9 +265,15 @@ Invalid signature in thinking block`.
 - **Remedy:** Replay the original signed context exactly. If it cannot be
   reconstructed, preserve the old transcript and transfer visible task state
   into a fresh conversation, explicitly acknowledging the loss of hidden
-  reasoning. The provider does not retry, switch
-  accounts, or degrade silently on this error, and does not mark the account
-  unhealthy.
+  reasoning. Outside a migrated portable replay, the provider does not retry,
+  switch accounts, or degrade silently on this error, and does not mark the
+  account unhealthy. When this `400` lands on an attempt that
+  `reasoning_replay_account_failover: "verified"` had just migrated to another
+  account, it is handled as a rejected migration instead (see
+  `400 reasoning_replay_migration_rejected` below): one bounded fallback runs
+  on the origin account and conversation, and if the
+  origin is unavailable the client receives `reasoning_replay_migration_rejected`
+  rather than this code.
 
 ### `400 ... is not a valid single assistant reasoning block` (Claude Code)
 
@@ -365,6 +371,74 @@ gates automatically, or delete replay data as an OOM workaround.
   verified migration cell. An actual migration additionally emits
   `reasoning_replay_account_migrated` with hashes only. `false` is normal and is
   not an error.
+
+### `400 reasoning_replay_migration_rejected`
+
+- **Look at:** HTTP `400`, `error.code` `reasoning_replay_migration_rejected`
+  ("Kiro rejected the request after its signed reasoning history was migrated
+  to another account, and the original account is unavailable"), and the audit
+  sequence for that `request_id`:
+  - `reasoning_replay_account_migrated` (`info`): a verified portable replay is
+    being dispatched away from the cell it is bound to. Emitted once per
+    migration the request makes; a later attempt that extends an already
+    committed cell (an empty-completion replacement, the fallback of a rejected
+    second hop) is not a migration and emits nothing. Fields: `request_id`,
+    `protocol`, `model`, `from_account_hash`, `to_account_hash`, `replay_count`,
+    `legacy_replay_count`, `binding`. `binding: "deferred"` means an explicit
+    session-affinity binding will be committed only after Kiro accepts the
+    attempt; `binding: "none"` means the request has no explicit session
+    affinity store, so there is no stored binding to commit.
+  - `reasoning_replay_migration_committed` (`info`): Kiro accepted the migrated
+    attempt (first streamed event, or a completed non-streaming collection) and
+    the stored binding, when there is one, now names the new account and
+    conversation. Fields: `request_id`, `protocol`, `model`,
+    `from_account_hash`, `to_account_hash`, `conversation_hash`, `replay_count`.
+  - `reasoning_replay_migration_commit_failed` (`warn`): Kiro accepted the
+    migrated attempt but writing the new binding to the accounts database
+    failed (disk full, I/O error). The accepted answer is still served, the
+    stored binding keeps naming the origin, and the next request re-resolves it.
+    Fields: the `committed` fields plus `error_type` (the error class name) and
+    `error_code` (the driver code, for example `SQLITE_FULL`, when present).
+  - `reasoning_replay_migration_rejected` (`warn`): Kiro rejected the migrated
+    attempt before any output. Fields: `request_id`, `protocol`, `model`,
+    `from_account_hash`, `to_account_hash`, `replay_count`, `upstream_status`
+    (the HTTP status), `upstream_code` (the upstream reason enum,
+    `REQUEST_BODY_INVALID` or `THINKING_SIGNATURE_INVALID`; omitted when the
+    signature rejection arrived as a message-only `400` without a reason),
+    `fallback`, and `fallback_blocked_reason`. `fallback: "origin"` means one
+    fallback attempt ran on the origin account and conversation;
+    `fallback: "none"` means the fallback was blocked and
+    `fallback_blocked_reason` says why: `fallback_spent`, `origin_missing`,
+    `origin_ineligible`, `origin_quarantined`, `origin_unselectable`, or
+    `dispatch_budget`.
+
+  These events carry only hashes, counts, enums, and error class names or
+  driver codes; never message text, prompts, signatures, or account
+  identifiers.
+- **Cause:** The request replayed verified portable signed reasoning but could
+  not stay on its origin account (quota exhausted, rate limited, unhealthy,
+  model-ineligible, quarantined, or at `account_inference_concurrency`), so
+  `reasoning_replay_account_failover: "verified"` migrated it to another
+  account with a fresh Kiro conversation. Kiro validated the migrated body
+  server-side and rejected it with `400 ValidationException` /
+  `REQUEST_BODY_INVALID` (`Improperly formed request.`) or an invalid reasoning
+  signature before producing output. The provider never rewrites the stored
+  binding before Kiro accepts a migrated attempt, so the session still points at
+  the origin. When the origin is selectable the provider retries exactly once
+  there, in the original conversation, and the client normally sees a normal
+  response next to the `warn` event. The `400` surfaces only when that single
+  fallback is blocked: the origin is still unavailable, the fallback already
+  ran for this request, or no upstream dispatch budget remains.
+- **Remedy:** Wait for the origin account to recover (quota reset, health
+  recovery, or `kiro-provider login` re-login) and resend; the binding still
+  names it. If the origin cannot come back, continue from history without the
+  signed reasoning (drop the `encrypted_content` / `thinking` blocks or fork a
+  fresh conversation), explicitly accepting the loss of hidden reasoning. To
+  disable migration entirely, set `reasoning_replay_account_failover:
+  "strict"`; owner failures then return the replay-bound codes below instead of
+  moving the session. Do not strip reasoning automatically, merge history, or
+  loop client retries: the provider already performed the only safe fallback,
+  and the specific field Kiro rejects is still under investigation.
 
 ### Replay-bound account error codes
 

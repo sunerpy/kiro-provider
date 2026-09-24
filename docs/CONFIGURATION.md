@@ -519,9 +519,22 @@ Fable, which requires authenticated mint provenance,
 with `reasoning_replay_account_failover: "verified"`. Redacted reasoning, Chat
 hash replay, `safe` projection, and every unlisted cell remain owner-bound.
 The default is `strict`; global `strict` also disables this recovery switch.
-Eligible histories can move to a healthy account when their owner runs out of
-quota, preserving signed reasoning and complete output. An already accepted
-stream is never retried on another account.
+Eligible histories can move to a healthy account when their owner becomes
+unavailable, preserving signed reasoning and complete output. A request that
+carries verified portable replay prefers its bound origin account for as long as
+that account is selectable and below `account_inference_concurrency`, even when
+another account has a shorter queue; it migrates only when the origin is
+unavailable (quota exhausted, rate limited, unhealthy, model-ineligible, or
+quarantined) or already at its concurrency ceiling. The migrated
+session-affinity binding is committed only after Kiro accepts the migrated
+request (the first streamed event, or a completed non-streaming collection), so
+a rejected migration leaves the previous binding untouched. If Kiro rejects the
+migrated attempt with `400 REQUEST_BODY_INVALID` or an invalid reasoning
+signature before any output, the provider makes exactly one fallback attempt on
+the origin account and its original conversation when the origin is still
+selectable; otherwise it returns `400 reasoning_replay_migration_rejected`.
+There is no further retry, and an already accepted stream is never retried on
+another account.
 
 Restoring an old session does not rewrite its historical `kr1_` tokens. With the
 default `portable-v2` writer, subsequent outputs use `kr2_`; the restored history

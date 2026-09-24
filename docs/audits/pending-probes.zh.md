@@ -1,6 +1,6 @@
 # 待实测探针清单
 
-记录已有线索、但尚未用真实 Kiro 流量验证的假设；两项均已于 2026-09-03 完成实测（见各节状态行）。每一项写明要测什么、
+记录已有线索、但尚未用真实 Kiro 流量验证的假设；P1、P2 已于 2026-09-03 完成实测，P3 待实测（见各节状态行）。每一项写明要测什么、
 怎么测（沿用 [`scripts/probe-evidence.ts`](../../scripts/probe-evidence.ts)
 的只读探针风格）、以及各种结果分别会推动什么决策。清单只登记，不做结论；
 完成后应新增一份带日期的探针记录并在 [README](README.md) 中登记，本文件
@@ -107,3 +107,69 @@ assistant 条目并继续工具结果轮次，Kiro 返回 200，且同会话、�
 | 独立轮臂过早停止率显著更高（复现插件结论） | 修改 `request-core.ts`：无用户轮时不再 `unshift`，改为并入第一条非指令消息之前最近的用户文本；若历史中完全没有可并入的用户消息，则以 `unsupported_instruction_projection` 拒绝并在 `PROTOCOL_COMPATIBILITY.md` 记录。同步更新 `history-builder` 相关测试。 |
 | 无显著差异 | 保持 `unshift`；在 `request-core.ts` 注释与 `PROTOCOL_COMPATIBILITY.md` 记录探针结论，关闭该项。 |
 | `request_shape` 统计显示该路径在真实流量中几乎不出现 | 无论 A/B 结果如何，优先选择"拒绝"方案以缩小 legacy 模式表面，并按计划在 legacy 模式移除时一并删除。 |
+
+## P3：迁移后 `REQUEST_BODY_INVALID` 的字段级复现
+> **状态：待实测。** 2026-09-24 只读核对了 journal 与源码，未修改配置或重启服务；Kiro 具体拒绝的字段尚未复现确认。
+
+### 现状
+
+2026-09-22～24 的生产 journal（本地 3.5.7，共 36,612 次上游派发）显示：
+
+- 91 次 signed reasoning 跨账号迁移（`reasoning_replay_account_migrated`），其中
+  8 次在 attempt 1 的上游响应头阶段（2.4～6.7 s）收到 HTTP 400
+  `ValidationException` / `REQUEST_BODY_INVALID`（`Improperly formed request.`），
+  没有任何输出。
+- 未迁移的 36,521 次派发中，此类失败为 0 次。
+- 另外 2 次 `REQUEST_BODY_INVALID` 是客户端在失败迁移已经改写的绑定
+  （同一新账号、同一新 conversation）上重试同一线程，再次失败。
+- 二跳迁移（历史已同时含两个 owner 账号铸造的 token，再迁移到第三个账号）成功
+  24 次，因此"历史混合多个来源账号即被拒绝"的假设不成立。
+- 典型样本（北京时间 11:02:40，stateless / codewhisperer，`gpt-5.6-sol` / max）：
+  携带 33 条 reasoning 回放，原账号只是有一条在途请求（容量等待 4 ms，无限流），
+  切换账号并更换上游 conversation 后约 2.8 s 收到 400。上一轮成功请求的上下文
+  占用约 21.7%，涉及账号同区域、同 profile，不支持上下文耗尽或跨区域错配。
+
+本分支的修复（携带 portable 回放的请求优先在原账号有界排队；迁移绑定延迟到
+Kiro 接受后再提交；被拒绝后只回退一次到原账号，见
+[`src/core/pipeline.ts`](../../src/core/pipeline.ts) 与
+[`src/storage/accounts-db.ts`](../../src/storage/accounts-db.ts)）只是缩小暴露面
+并阻止失败绑定持久化，没有解释 Kiro 为什么拒绝。现有迁移白名单
+`VERIFIED_PORTABLE_REPLAY_CELLS` 依据 2026-09-15/16 的短工具回放探针（3 次连续
+工具结果回放通过），不足以证明几十轮、含工具结果和子代理消息的长会话可靠。
+
+### 待验证
+
+- Kiro 对跨账号回放的拒绝条件到底是什么：账号、conversation、历史长度、某类
+  消息（工具结果、子代理消息、多轮签名）还是它们的组合。2.4～6.7 s 后才返回
+  400 说明服务端做了实质校验，而不是边缘层的 schema 拒绝。
+- 同一份完整历史在"原账号原 conversation"下是否始终通过；若通过，失败是否
+  只发生在更换账号，或更换 conversation 就已足够触发。
+
+### 方法
+
+- 沿用文件顶部的只读探针约束：只读打开 `accounts.db`，选取同区域、同 profile、
+  用量最低且 access token 剩余 ≥ 10 分钟的两个健康账号 A、B；不写库、不刷新
+  token；不打印凭据、原始签名或提示词，签名只输出 SHA-256 前 16 位。
+- 在 `scripts/probe-evidence.ts` 新增探针 `p3`，先在账号 A 的一个 conversation
+  内用固定任务真实生成一份长历史：≥ 20 个 assistant 轮次，每轮携带 reasoning
+  签名，混合串行工具调用/工具结果、子代理（sub-agent）消息以及至少一次
+  多签名轮次；模型与 runtime 与生产样本一致（`gpt-5.6-sol` / max，
+  stateless / codewhisperer），另加一组 Fable / kiro-runtime。
+- 把**同一份完整历史**分别以三种臂发送并记录状态码、`reason`、耗时和输出：
+  1. 原账号原 conversation（A / conversation-A）；
+  2. 原账号新 conversation（A / 新 UUID）；
+  3. 新账号新 conversation（B / 新 UUID）。
+- 每臂 n ≥ 10，交替执行。若臂 3 失败而臂 1 通过，再对历史做二分裁剪：去掉子
+  代理消息、去掉工具结果、只保留最近 N 轮签名、缩短为 5/10/20 轮，定位触发
+  400 的最小字段集合。
+- 输出与既有探针相同的脱敏 JSON：状态码、reason、耗时、消息计数、签名哈希前缀；
+  不含账号 ID、提示词或原始签名。
+
+### 决策
+
+| 结果 | 决策 |
+| --- | --- |
+| 三臂均 200 | 拒绝与账号/conversation 无关，取决于生产历史的特定形态；在 `reasoning_replay_migration_rejected` 旁补充 count-only 的历史形态字段（轮次数、工具结果数、子代理消息数），继续在生产定位。 |
+| 臂 1、臂 2 通过，臂 3 失败 | 确认 Kiro 拒绝该形态的跨账号回放；把该 runtime/模型单元从 `VERIFIED_PORTABLE_REPLAY_CELLS` 移出或按裁剪结果收窄准入条件，超出条件的历史在迁移前 fail closed；保留 origin-first 与单次回退；同步更新 [`PROTOCOL_COMPATIBILITY.md`](../PROTOCOL_COMPATIBILITY.md)。 |
+| 臂 2、臂 3 均失败，臂 1 通过 | 拒绝绑定的是 conversation 而不是账号；审查迁移与 rebind 时更换 conversation 的策略，并在 [`STREAM_ERROR_CONTRACT.md`](../STREAM_ERROR_CONTRACT.md) 分类表记录该形态。 |
+| 二分裁剪定位到具体字段（例如子代理消息或某类工具结果） | 在 `src/kiro/transform` 投影层修正或 fail closed 校验该字段，补齐覆盖多轮签名、工具结果和子代理消息的回归测试，再决定是否恢复该单元的迁移准入。 |

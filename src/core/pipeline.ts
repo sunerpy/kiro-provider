@@ -231,6 +231,24 @@ function isInvalidReasoningSignature(error: NormalizedSdkError): boolean {
   return error.status === 400 && INVALID_REASONING_SIGNATURE_PATTERN.test(error.message);
 }
 
+/** SDK `ValidationExceptionReason` Kiro returns for a history it cannot parse at all. */
+const REQUEST_BODY_INVALID_REASON = "REQUEST_BODY_INVALID";
+
+/**
+ * Kiro's answer to a signed reasoning history that does not fit the account
+ * it was migrated to: HTTP 400 `REQUEST_BODY_INVALID` ("Improperly formed
+ * request."; in production this reason followed only migrated dispatches, never
+ * a fresh one) or a refused replayed signature. The rejection arrives at the
+ * response headers before any output exists. A missing status covers the same
+ * reason delivered without an HTTP envelope.
+ */
+function isMigrationRejection(error: NormalizedSdkError): boolean {
+  return (
+    (error.status === undefined || error.status === 400) &&
+    (error.reason === REQUEST_BODY_INVALID_REASON || isInvalidReasoningSignature(error))
+  );
+}
+
 /**
  * Alternatives the classifier may switch to: accounts that are eligible for
  * the model AND selectable right now. Counting rate-limited or unhealthy
@@ -905,10 +923,43 @@ function reasoningCaptureOptions(
 }
 
 /**
+ * A portable-replay migration whose binding has not been committed yet. The
+ * attempt runs on `toAccountId`/`toConversationId`; the stored binding (when
+ * there is one) still names `fromAccountId`, so a rejection leaves it intact
+ * and the client's retry can return to the origin.
+ */
+interface PendingMigration {
+  readonly fromAccountId: string;
+  readonly fromConversationId: string | undefined;
+  readonly toAccountId: string;
+  readonly toConversationId: string;
+  readonly replayCount: number;
+  readonly legacyReplayCount: number;
+}
+
+/** The single bounded return to the origin after Kiro rejected a migration. */
+interface MigrationFallback {
+  readonly accountId: string;
+  readonly conversationId?: string;
+  /** Returned unchanged when the origin cannot serve the fallback after all. */
+  readonly terminal: CompletionResult;
+}
+
+/**
  * Mutable per-request state shared by the executeLoop phases. Every set/map is
  * scoped to one request; nothing here outlives runChatCompletion.
  */
 interface LoopState {
+  /**
+   * Migration made by the current attempt, awaiting upstream acceptance before
+   * its binding is stored. Reset at the start of every bind; cleared by the
+   * commit or by the rejection handler.
+   */
+  pendingMigration: PendingMigration | undefined;
+  /** The one origin fallback after a rejected migration has been used. */
+  migrationFallbackSpent: boolean;
+  /** Restricts selection to the origin while the fallback attempt is pending. */
+  migrationFallback: MigrationFallback | undefined;
   readonly forcedRefreshAccountIds: Set<string>;
   readonly serverErrors: Map<string, number>;
   readonly requestExcludedAccountIds: Set<string>;
@@ -1164,6 +1215,9 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     });
   }
   return {
+    pendingMigration: undefined,
+    migrationFallbackSpent: false,
+    migrationFallback: undefined,
     forcedRefreshAccountIds: new Set<string>(),
     serverErrors: new Map<string, number>(),
     requestExcludedAccountIds: new Set<string>(),
@@ -1424,6 +1478,34 @@ function iterationsExhaustedResult(
 }
 
 /**
+ * The account a request carrying portable signed reasoning should stay on: its
+ * preferred (bound) account, whenever that account is a candidate and can take
+ * one more request.
+ *
+ * The least-queued spread treats a single in-flight request as a reason to
+ * move elsewhere. For a replay-carrying thread that means re-projecting the
+ * whole signed history into a fresh conversation on a foreign account, which
+ * Kiro rejected outright (400 REQUEST_BODY_INVALID) for 8 of 91 production
+ * migrations while no fresh dispatch ever failed that way. So the origin wins
+ * ahead of the spread while it is below its concurrency ceiling; only an origin
+ * at capacity still shares idle capacity elsewhere, which keeps the verified
+ * failover useful for a rate-limited or exhausted owner. Requests without
+ * portable replays keep the plain spread.
+ */
+function portableReplayOrigin(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  candidateIds: ReadonlySet<string>,
+): string | undefined {
+  const preferred = state.preferredAccountId;
+  if (state.replayState.portableCount === 0 || preferred === undefined) return undefined;
+  if (!candidateIds.has(preferred)) return undefined;
+  return accountQueueDepth(preferred) < options.config.account_inference_concurrency
+    ? preferred
+    : undefined;
+}
+
+/**
  * Phase 2: pick the account for this attempt. Reports newly excluded
  * quota-exhausted accounts, applies model eligibility, and when nothing is
  * selectable decides between a terminal result and waiting out a rate limit.
@@ -1485,19 +1567,29 @@ function selectAttemptAccount(
   // the stall would repeat. Hold it out of the candidate set instead, and fall
   // back to it only when nothing else can serve the request, so a
   // single-account deployment still gets an answer.
+  //
+  // After a rejected migration the request may return to its origin exactly
+  // once; that attempt is restricted to the origin the same way an owner lock
+  // is, so it can never turn into a migration onto a third account.
+  const fallbackAccountId = state.migrationFallback?.accountId;
   const selectionNow = Date.now();
   const selectable = accounts.filter(
     (account) =>
       eligibleAccountIds.has(account.id) &&
       isSelectableAccount(account, selectionNow, policy) &&
-      (!state.replayLocked || account.id === state.replayState.accountId),
+      (!state.replayLocked || account.id === state.replayState.accountId) &&
+      (fallbackAccountId === undefined || account.id === fallbackAccountId),
   );
   const notQuarantined = selectable.filter(
     (account) => !state.quarantinedAccountIds.has(account.id),
   );
   const candidates = !state.replayLocked && notQuarantined.length > 0 ? notQuarantined : selectable;
   const candidateIds = new Set(candidates.map((account) => account.id));
-  const available = leastQueuedAccountIds(candidates, candidateIds, policy);
+  const replayOrigin = portableReplayOrigin(options, state, candidateIds);
+  const available =
+    replayOrigin === undefined
+      ? leastQueuedAccountIds(candidates, candidateIds, policy)
+      : new Set([replayOrigin]);
   if (
     available.size > 0 &&
     [...available].every(
@@ -1516,6 +1608,13 @@ function selectAttemptAccount(
     return { kind: "selected", selection: { selected, accounts, eligibleAccountIds } };
   }
 
+  if (state.migrationFallback !== undefined) {
+    // The origin stopped being selectable between the rejection and this
+    // selection. Projecting the same signed history onto yet another account
+    // would repeat the rejected shape, so the request ends with the rejection
+    // it already earned.
+    return { kind: "result", result: state.migrationFallback.terminal };
+  }
   if (state.replayLocked) {
     return replayLockedSelectionResult(options, state, accounts, eligibleAccountIds);
   }
@@ -1591,15 +1690,43 @@ function bindAttemptAffinity(
   selected: ManagedAccount,
 ): "proceed" | "reselect" {
   const now = Date.now();
+  // A migration recorded by an earlier attempt of this request was never
+  // committed (that attempt failed before acceptance), so this bind starts over.
+  state.pendingMigration = undefined;
   const migratedPortableReplay =
     state.replayState.portableCount > 0 &&
     state.replayState.preferredAccountId !== undefined &&
     selected.id !== state.replayState.preferredAccountId;
+  // An already committed migration binds `selected`; extending that row is the
+  // ordinary claim below, not a new migration.
+  const deferredMigration = migratedPortableReplay && state.binding?.accountId !== selected.id;
+  const deferredBinding =
+    deferredMigration && options.affinity !== undefined && options.affinityStore !== undefined;
+  // The cell this migration leaves. Once an earlier attempt of this request
+  // committed a migration, the stored binding names that accepted cell, and a
+  // rejected second hop has to fall back there: falling back to the
+  // resolve-time owner would rebind the thread to a conversation Kiro never
+  // accepted, which is exactly the defect deferred commits remove.
+  const migrationOrigin =
+    state.binding?.accountId ?? (state.replayState.preferredAccountId as string);
   if (migratedPortableReplay) {
     state.requestAccountId = selected.id;
     state.requestConversationId = randomUUID();
   }
-  if (options.affinity && options.affinityStore) {
+  if (deferredMigration) {
+    // Nothing is stored yet. Upstream acceptance commits the binding
+    // (commitPendingMigration); until then the stored row keeps naming the
+    // origin, so a rejection at the headers leaves the thread where it was.
+    state.pendingMigration = {
+      fromAccountId: migrationOrigin,
+      fromConversationId:
+        state.binding?.conversationId ?? state.replayState.preferredConversationId,
+      toAccountId: selected.id,
+      toConversationId: state.requestConversationId as string,
+      replayCount: state.replayState.portableCount,
+      legacyReplayCount: state.replayState.legacyPortableCount,
+    };
+  } else if (options.affinity && options.affinityStore) {
     if (!state.binding) {
       // A quarantined key still has its stalled row in storage, and
       // claimSessionAffinity would re-adopt it: the delete only covers expired
@@ -1672,15 +1799,20 @@ function bindAttemptAffinity(
     state.requestConversationId = randomUUID();
   }
 
-  if (migratedPortableReplay) {
+  // Only a migration this bind actually makes is reported. A later attempt of
+  // this request that lands on the already committed cell (an empty-completion
+  // replacement, the fallback of a rejected second hop) extends that binding
+  // and is not a second migration.
+  if (deferredMigration) {
     auditLog("info", "reasoning_replay_account_migrated", {
       request_id: options.requestId,
       protocol: options.body.protocol,
       model: options.model,
-      from_account_hash: auditHash(state.replayState.preferredAccountId),
+      from_account_hash: auditHash(migrationOrigin),
       to_account_hash: auditHash(selected.id),
       replay_count: state.replayState.portableCount,
       legacy_replay_count: state.replayState.legacyPortableCount,
+      binding: deferredBinding ? "deferred" : "none",
     });
   }
 
@@ -2287,6 +2419,83 @@ function recordAffinityTerminal(
   });
 }
 
+/** An error's class name or `code` when it is a plain identifier; never its message. */
+function safeErrorIdentifier(
+  value: unknown,
+  diagnostics: RunChatCompletionOptions["diagnostics"],
+): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(value)) return undefined;
+  return diagnostics ? diagnostics.identifier(value) : value;
+}
+
+/**
+ * Stores the binding of a migrated portable replay once the upstream accepted
+ * the attempt: the first semantic stream event, or a completed non-stream
+ * collection. Acceptance is the only proof that the migrated signed history is
+ * usable on its new account; committing at bind time left the stored row
+ * naming a cell Kiro had just rejected, so every client retry on that thread
+ * repeated the same rejection.
+ *
+ * The overwrite deliberately also replaces a quarantined row: the migrated
+ * account just proved itself, so the replacement is the row later attempts of
+ * this request extend.
+ *
+ * The write runs after `upstreamStarted`, so it must not throw: an exception
+ * here would be classified as an upstream failure, echo the storage error text
+ * to the client, and in the stream lane orphan an accepted upstream stream
+ * that nothing abandons before the lease is released. A provider-local write
+ * failing says nothing about the answer Kiro already accepted (the same stance
+ * `recordAffinityTerminal` takes for `localPersistence`), so the answer is
+ * served, the stored row keeps naming the origin, and the failure is audited
+ * with identifiers only. The next request re-resolves the origin binding and
+ * migrates afresh if it still has to.
+ */
+function commitPendingMigration(context: AttemptStreamContext): void {
+  const { options, state, account, conversationId } = context;
+  const pending = state.pendingMigration;
+  if (pending === undefined) return;
+  state.pendingMigration = undefined;
+  const fields = {
+    request_id: options.requestId,
+    protocol: options.body.protocol,
+    model: options.model,
+    from_account_hash: auditHash(pending.fromAccountId),
+    to_account_hash: auditHash(account.id),
+    conversation_hash: auditHash(conversationId),
+    replay_count: pending.replayCount,
+  };
+  if (options.affinity && options.affinityStore) {
+    let committed: PipelineAffinityBinding;
+    try {
+      committed = options.affinityStore.rebindSessionAffinity(
+        options.affinity.keyHash,
+        account.id,
+        conversationId,
+        Date.now(),
+        options.config.session_affinity_ttl_ms,
+        options.config.session_affinity_max_entries,
+      );
+    } catch (error) {
+      auditLog("warn", "reasoning_replay_migration_commit_failed", {
+        ...fields,
+        error_type:
+          safeErrorIdentifier(
+            error instanceof Error ? error.name : undefined,
+            options.diagnostics,
+          ) ?? (error instanceof Error ? "Error" : typeof error),
+        error_code: safeErrorIdentifier(
+          error !== null && typeof error === "object" && "code" in error ? error.code : undefined,
+          options.diagnostics,
+        ),
+      });
+      return;
+    }
+    state.binding = committed;
+    state.affinityQuarantined = false;
+  }
+  auditLog("info", "reasoning_replay_migration_committed", fields);
+}
+
 /**
  * Stream attempt: upstream acceptance commits the streaming boundary.
  */
@@ -2339,6 +2548,8 @@ async function runStreamAttempt(
       failure: classifyStreamFailure(prefetch.error),
     };
   }
+  // The first semantic event is on hand: Kiro accepted this history here.
+  commitPendingMigration(context);
   return { kind: "result", leaseTransferred: true, result: { ...streamResult, prepared } };
 }
 
@@ -2434,6 +2645,9 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
   }
   auditLog("info", "sdk_stream_completed", telemetry.auditFields());
   telemetry.emitTerminal("normal_complete");
+  // Kiro accepted and completed this history here; an empty-completion
+  // replacement below stays on the same, now committed, cell.
+  commitPendingMigration(context);
   if (
     captureOptions.reasoningReplayDecision.mode === undefined &&
     shouldRetryEmptyCompletion(options, state, telemetry)
@@ -2519,6 +2733,102 @@ async function applyStreamFailure(
     streamRetryDelayMs(options.config.rate_limit_retry_delay_ms, state.streamAttempts),
     signal,
   );
+  return CONTINUE;
+}
+
+type MigrationFallbackBlockedReason =
+  | "fallback_spent"
+  | "origin_missing"
+  | "origin_unselectable"
+  | "origin_ineligible"
+  | "origin_quarantined"
+  | "dispatch_budget";
+
+/**
+ * Why the request cannot return to its origin after a rejected migration, or
+ * undefined when it can. Selectability (quota, health, rate limit) is judged
+ * before the selection's eligibility set, because that set already excludes
+ * quota-exhausted accounts and would otherwise report an exhausted origin as
+ * model-ineligible.
+ */
+function migrationFallbackBlockedReason(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  selection: AttemptSelection,
+  originAccountId: string,
+): MigrationFallbackBlockedReason | undefined {
+  if (state.migrationFallbackSpent) return "fallback_spent";
+  const origin = selection.accounts.find((account) => account.id === originAccountId);
+  if (origin === undefined) return "origin_missing";
+  if (!isSelectableAccount(origin, Date.now(), overagePolicy(options))) {
+    return "origin_unselectable";
+  }
+  if (
+    !selection.eligibleAccountIds.has(originAccountId) ||
+    state.requestExcludedAccountIds.has(originAccountId) ||
+    state.modelRejectedAccountIds.has(originAccountId)
+  ) {
+    return "origin_ineligible";
+  }
+  if (state.quarantinedAccountIds.has(originAccountId)) return "origin_quarantined";
+  if (!hasRemainingUpstreamDispatchBudget(options, state)) return "dispatch_budget";
+  return undefined;
+}
+
+/**
+ * Kiro rejected the migrated attempt at its headers, so nothing was published
+ * and the stored binding still names the origin. The safest continuation is
+ * one bounded return to that origin with its original conversation; when the
+ * origin cannot serve, the request ends with a typed rejection instead of a
+ * third projection of the same history onto yet another account.
+ *
+ * The fallback attempt reuses the ordinary bind path: `selected` equals the
+ * stored binding's account, so the claim extends that binding and the origin
+ * conversation goes on the wire. Whatever fails afterwards takes normal
+ * classification; `pendingMigration` is already cleared, so there is never a
+ * second fallback.
+ */
+function rejectMigration(
+  options: RunChatCompletionOptions,
+  state: LoopState,
+  selection: AttemptSelection,
+  pending: PendingMigration,
+  error: NormalizedSdkError,
+): LoopDirective {
+  state.pendingMigration = undefined;
+  const terminal: CompletionResult = {
+    kind: "response",
+    response: terminalError(
+      400,
+      "Kiro rejected the request after its signed reasoning history was migrated to another account, and the original account is unavailable",
+      "reasoning_replay_migration_rejected",
+    ),
+  };
+  const blocked = migrationFallbackBlockedReason(options, state, selection, pending.fromAccountId);
+  auditLog("warn", "reasoning_replay_migration_rejected", {
+    request_id: options.requestId,
+    protocol: options.body.protocol,
+    model: options.model,
+    from_account_hash: auditHash(pending.fromAccountId),
+    to_account_hash: auditHash(pending.toAccountId),
+    replay_count: pending.replayCount,
+    upstream_status: error.status,
+    upstream_code: error.reason,
+    fallback: blocked === undefined ? "origin" : "none",
+    fallback_blocked_reason: blocked,
+  });
+  if (blocked !== undefined) return returning(terminal);
+  state.migrationFallbackSpent = true;
+  state.migrationFallback = {
+    accountId: pending.fromAccountId,
+    ...(pending.fromConversationId !== undefined
+      ? { conversationId: pending.fromConversationId }
+      : {}),
+    terminal,
+  };
+  state.preferredAccountId = pending.fromAccountId;
+  state.requestAccountId = pending.fromAccountId;
+  state.requestConversationId = pending.fromConversationId;
   return CONTINUE;
 }
 
@@ -2688,7 +2998,15 @@ async function applyClassification(
       forgetPreferredAccount(state);
       return CONTINUE;
     }
-    case "fail":
+    case "fail": {
+      const pending = state.pendingMigration;
+      if (
+        pending !== undefined &&
+        pending.toAccountId === account.id &&
+        isMigrationRejection(error)
+      ) {
+        return rejectMigration(options, state, selection, pending, error);
+      }
       if (isInvalidReasoningSignature(error)) {
         return returning({
           kind: "response",
@@ -2717,6 +3035,7 @@ async function applyClassification(
           classification.code ?? error.code,
         ),
       });
+    }
   }
 }
 
