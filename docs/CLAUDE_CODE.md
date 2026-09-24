@@ -104,6 +104,52 @@ to `claude-fable-5-1[1m]`, whose Kiro wire id is `claude-fable-5.1`.
 The launcher also adds `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
 `gpt-5.6-luna[1m]` to the picker.
 
+Claude Code 2.1.280 session-title generation and prompt hooks additionally
+send `output_config.format`. Messages accepts it only as the bounded local
+`single-string-object-v1` profile described below, which covers the single
+required `title` string of the session-title request; the `hook_prompt`
+evaluator schema (`ok`/`reason`/`impossible`, two required properties, boolean
+types) is outside that profile and still returns
+`400 unsupported_structured_output`, so this profile does not claim complete
+prompt-hook compatibility.
+
+### Session titles and `output_config.format`
+
+Claude Code 2.1.280 generates a session title with a side request on
+`/v1/messages`: thinking disabled, an empty tool list, one user message, and
+`output_config.format` carrying `{ type: "json_schema", schema }` whose root
+object has exactly one required string property (`title`) with
+`additionalProperties: false`. Messages accepts `output_config.format` only in
+that shape, the bounded local `single-string-object-v1` profile: a root object,
+exactly one required string property, `additionalProperties: false`, and a
+local 1-256 character bound (explicit integer `minLength`/`maxLength` must stay
+within it). The schema is never sent upstream and no prompt is injected. Kiro
+produces ordinary text; the provider buffers it, trims it, wraps it as
+`{"title":"..."}` (an upstream JSON object or JSON string with the same
+property is normalized rather than double-wrapped), truncates it to `maxLength`
+code points, validates it locally, and only then publishes exactly one text
+block containing that JSON with `stop_reason: "end_turn"`. Successful responses
+carry `x-kiro-structured-output: single-string-object-v1`. `output_config.effort`
+keeps working alongside `format`; every other `output_config` key (for example
+`task_budget`) keeps its `unsupported_parameter` rejection, and `output_config`
+inside a message keeps its `unsupported_message_field` rejection.
+
+The profile fails closed. Any other schema shape, enabled thinking, or a forced
+`tool_choice` with `format` returns `400 unsupported_structured_output`. An
+upstream tool call, upstream reasoning arriving although thinking is disabled,
+output over 64 KiB, or empty text that cannot satisfy the profile returns
+`502 structured_output_unexpected_tool_call`,
+`structured_output_unexpected_reasoning`, `structured_output_buffer_exceeded`,
+or `structured_output_validation_failed` (an SSE `api_error` event once the
+stream is committed). Partial text is never published before validation, and
+validation failure never triggers a second inference. The profile does not
+depend on `responses_fidelity_mode`, which governs only the Responses lane;
+Claude Code has no other way to obtain a title.
+A session whose only inputs are slash commands (for example `/model`) or prompts
+under 10 characters still shows its first prompt as the title, because Claude
+Code never asks for one in that case, and upgrading the provider does not rewrite
+existing transcripts.
+
 Claude Code's gateway discovery filters out model IDs without `claude` or
 `anthropic`, so the GPT rows must be declared explicitly. Each uses
 `behavesAs: "claude-opus-5"` as the client-side capability template. This
@@ -255,9 +301,10 @@ Direct user images mixed with image-bearing tool results remain rejected. A real
 `text → non-text → text` interleave is also rejected because Kiro exposes one
 text field.
 
-The provider also rejects destructive context edits, Structured Outputs,
-forced tool selection, hard serial-tool requirements, and unknown beta/tool
-fields with an Anthropic `invalid_request_error`. It does not silently remove
+The provider also rejects destructive context edits, Structured Outputs outside
+the bounded `single-string-object-v1` profile, forced tool selection, hard
+serial-tool requirements, and unknown beta/tool fields with an Anthropic
+`invalid_request_error`. It does not silently remove
 those semantics. Prompt caching and token counting remain estimates, not native
 Anthropic services.
 

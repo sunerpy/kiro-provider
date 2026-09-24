@@ -20,6 +20,20 @@ import {
   isGpt56ReasoningPlaceholder,
 } from "../responses/reasoning.js";
 import { anthropicError, anthropicStreamError } from "./errors.js";
+import {
+  ANTHROPIC_STRUCTURED_OUTPUT_HEADER,
+  type AnthropicLocalStructuredOutputProfile,
+  type AnthropicStructuredOutputFailure,
+  AnthropicStructuredOutputTextBuffer,
+  anthropicStructuredCompletionFailure,
+  anthropicStructuredOutputFailureForCode,
+  anthropicStructuredOutputFailureMessage,
+  enforceAnthropicStructuredOutput,
+  isAnthropicStructuredOutputFailureCode,
+  STRUCTURED_OUTPUT_UNEXPECTED_REASONING_FAILURE,
+  STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_FAILURE,
+  STRUCTURED_OUTPUT_VALIDATION_FAILURE,
+} from "./structured-output.js";
 
 export type AnthropicCompatibilityOptions = {
   readonly thinkingDisplay?: "omitted" | "summarized";
@@ -31,6 +45,13 @@ export type AnthropicCompatibilityOptions = {
   /** Trusted pipeline decision; the public marker may also describe input history. */
   readonly outputReasoningOmitted?: boolean;
   readonly toolResultImageMode?: "multiple-lifted";
+  /**
+   * Recognized `output_config.format`. Visible text is buffered privately and
+   * published as one validated JSON text block; tool calls and reasoning fail.
+   */
+  readonly localStructuredOutputProfile?: AnthropicLocalStructuredOutputProfile;
+  /** Route-owned audit hook; receives only the stable failure code and message. */
+  readonly onLocalStructuredOutputFailure?: (failure: AnthropicStructuredOutputFailure) => void;
 };
 
 type AdapterOptions = AnthropicCompatibilityOptions & {
@@ -99,7 +120,48 @@ function compatibilityHeaders(
   if (options.toolResultImageMode === "multiple-lifted") {
     headers["x-kiro-tool-result-image-mode"] = "multiple-lifted";
   }
+  if (options.localStructuredOutputProfile !== undefined) {
+    headers[ANTHROPIC_STRUCTURED_OUTPUT_HEADER] = options.localStructuredOutputProfile.kind;
+  }
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function structuredOutputErrorResponse(
+  options: AnthropicCompatibilityOptions,
+  failure: AnthropicStructuredOutputFailure,
+): Response {
+  options.onLocalStructuredOutputFailure?.(failure);
+  return anthropicError(502, anthropicStructuredOutputFailureMessage(failure), "api_error");
+}
+
+/**
+ * Publish one complete profile completion: exactly one text block carrying the
+ * validated JSON, `stop_reason: "end_turn"`, and never a thinking or tool block.
+ */
+function anthropicStructuredMessageResponse(
+  completion: CanonicalCompletion,
+  model: string,
+  options: AnthropicCompatibilityOptions,
+  profile: AnthropicLocalStructuredOutputProfile,
+): Response {
+  const rejected = anthropicStructuredCompletionFailure(completion);
+  if (rejected !== undefined) return structuredOutputErrorResponse(options, rejected);
+  const enforced = enforceAnthropicStructuredOutput(profile, completion.text);
+  if (!enforced.ok) return structuredOutputErrorResponse(options, enforced);
+  return Response.json(
+    {
+      id: `msg_${randomUUID()}`,
+      type: "message",
+      role: "assistant",
+      model,
+      content: [{ type: "text", text: enforced.text }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: usagePayload(completion.usage),
+      ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
+    },
+    { headers: compatibilityHeaders(options) },
+  );
 }
 
 function parseToolInput(argumentsText: string): Readonly<Record<string, unknown>> | undefined {
@@ -123,6 +185,14 @@ export function anthropicMessageResponse(
   model: string,
   options: AnthropicCompatibilityOptions = {},
 ): Response {
+  if (options.localStructuredOutputProfile !== undefined) {
+    return anthropicStructuredMessageResponse(
+      completion,
+      model,
+      options,
+      options.localStructuredOutputProfile,
+    );
+  }
   const content: Array<Readonly<Record<string, unknown>>> = [];
   const reasoning = completion.reasoning;
   if (options.outputReasoningOmitted && reasoning !== undefined) {
@@ -247,6 +317,9 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const messageId = `msg_${randomUUID()}`;
+  const structuredOutputBuffer = options.localStructuredOutputProfile
+    ? new AnthropicStructuredOutputTextBuffer(options.localStructuredOutputProfile)
+    : undefined;
   const tools = new Map<number, ToolAccumulator>();
   const pendingFrames: Uint8Array[] = [];
   let buffer = "";
@@ -367,6 +440,7 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     if (!claimTerminal(outcome)) return;
     if (outcome === "consumer-cancel") pendingFrames.length = 0;
     runCleanupSteps(
+      () => structuredOutputBuffer?.dispose(),
       clearPingTimer,
       removeDeadlineListener,
       removeClientListener,
@@ -389,6 +463,16 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
       undefined,
       toAnthropicFailure(streamFailure("upstream_protocol_error"), message),
     );
+  };
+  // Profile failures are fatal and terminate the committed stream with one
+  // api_error event; buffered text is dropped by dispose() and never published.
+  const failStructured = (failure: AnthropicStructuredOutputFailure): void => {
+    if (terminalOutcome !== undefined) return;
+    options.onLocalStructuredOutputFailure?.(failure);
+    beginTerminal("upstream-error", undefined, {
+      message: anthropicStructuredOutputFailureMessage(failure),
+      type: "api_error",
+    });
   };
   // Same disposition as the non-stream 502: a thinking block that completes
   // without a signature cannot be replayed and must not be handed to clients.
@@ -551,7 +635,35 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     emit("content_block_stop", { type: "content_block_stop", index });
     redactedEmitted = true;
   };
+  const addStructuredEvent = (
+    structured: AnthropicStructuredOutputTextBuffer,
+    event: CanonicalOutputEvent,
+  ): void => {
+    switch (event.type) {
+      case "started":
+      case "completed":
+      case "reasoning_encrypted":
+        return;
+      case "text_delta": {
+        const buffered = structured.append(event.text);
+        if (!buffered.ok) failStructured(buffered);
+        return;
+      }
+      case "tool_call_delta":
+        failStructured(STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_FAILURE);
+        return;
+      case "reasoning_delta":
+      case "reasoning_signature":
+      case "reasoning_redacted":
+        failStructured(STRUCTURED_OUTPUT_UNEXPECTED_REASONING_FAILURE);
+        return;
+    }
+  };
   const addEvent = (event: CanonicalOutputEvent): void => {
+    if (structuredOutputBuffer !== undefined) {
+      addStructuredEvent(structuredOutputBuffer, event);
+      return;
+    }
     if (options.outputReasoningOmitted && event.type.startsWith("reasoning_")) {
       failReasoning("Pipeline emitted reasoning after omitting its conflict");
       return;
@@ -710,11 +822,45 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
     emit("content_block_stop", { type: "content_block_stop", index });
     return signed;
   };
+  const completeStructured = (
+    structured: AnthropicStructuredOutputTextBuffer,
+    usage: CanonicalOutputUsage,
+    finishReason: "stop" | "tool_calls",
+    codeReferences?: readonly CodeReference[],
+  ): void => {
+    if (finishReason === "tool_calls" || tools.size > 0) {
+      failStructured(STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_FAILURE);
+      return;
+    }
+    if ((codeReferences?.length ?? 0) > 0) {
+      failStructured(STRUCTURED_OUTPUT_VALIDATION_FAILURE);
+      return;
+    }
+    const enforced = structured.complete();
+    if (!enforced.ok) {
+      failStructured(enforced);
+      return;
+    }
+    emitText(enforced.text);
+    stopText();
+    emit("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: usagePayload(usage),
+      ...(options.contextManagementRequested ? { context_management: { applied_edits: [] } } : {}),
+    });
+    emit("message_stop", { type: "message_stop" });
+    beginTerminal("normal-complete");
+  };
   const complete = (
     usage: CanonicalOutputUsage,
     finishReason: "stop" | "tool_calls",
     codeReferences?: readonly CodeReference[],
   ): void => {
+    if (structuredOutputBuffer !== undefined) {
+      completeStructured(structuredOutputBuffer, usage, finishReason, codeReferences);
+      return;
+    }
     const orderedTools = [...tools.entries()].sort(([left], [right]) => left - right);
     const expectedFinishReason = orderedTools.length > 0 ? "tool_calls" : "stop";
     if (finishReason !== expectedFinishReason) {
@@ -943,6 +1089,13 @@ export function anthropicSseAdapter(pipelineResponse: Response, options: Adapter
         } catch (error) {
           if (terminalOutcome !== undefined) return;
           const failure = normalizeStreamFailure(error);
+          if (
+            structuredOutputBuffer !== undefined &&
+            isAnthropicStructuredOutputFailureCode(failure.code)
+          ) {
+            failStructured(anthropicStructuredOutputFailureForCode(failure.code));
+            return;
+          }
           beginTerminal(
             failure.disposition === "fatal" ? "upstream-protocol-error" : "upstream-error",
             error,

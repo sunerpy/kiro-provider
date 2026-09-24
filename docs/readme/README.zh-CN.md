@@ -217,10 +217,12 @@ console.log(response.output_text);
   opaque；
 - 无法保留的语义返回字段级错误。
 
-compatible 模式本地执行有界 `single-string-object-v1` JSON Schema profile，用于
-一次性的单字符串元数据请求，例如 Codex 自动会话标题。当前工具声明会完整保留，
+Provider 只在本地执行有界 `single-string-object-v1` JSON Schema profile，用于
+一次性的单字符串元数据请求：Responses 的 `text.format` 仅在 compatible 模式接受
+（Codex 自动会话标题），Anthropic Messages 的 `output_config.format` 则不受
+`responses_fidelity_mode` 影响（Claude Code 会话标题）。当前工具声明会完整保留，
 但本轮工具调用会被拒绝，并报告兼容诊断。复杂 schema、JSON mode、工具历史、
-续接和严格保真模式仍拒绝该转换；这不表示 Kiro 原生支持 JSON Schema。
+续接和 Responses 严格保真模式仍拒绝该转换；这不表示 Kiro 原生支持 JSON Schema。
 托管工具、background Responses、Responses conversation、远程文件、精确 input-token
 计数、破坏性 context edit 等能力目前无法完整保留。[协议兼容说明](PROTOCOL_COMPATIBILITY.zh-CN.md)
 定义当前契约；[审计索引](../audits/README.md)保存带日期的探测证据。

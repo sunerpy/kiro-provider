@@ -22,6 +22,13 @@ import {
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { isLegacyReplayToken, isProviderReplayToken } from "../../reasoning/replay-token.js";
 import { isGpt56Model } from "../responses/reasoning.js";
+import {
+  ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
+  ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_CODE,
+  ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_MESSAGE,
+  type AnthropicLocalStructuredOutputProfile,
+  parseAnthropicLocalStructuredOutputFormat,
+} from "./structured-output.js";
 
 const ContentBlockSchema = z.object({ type: z.string().min(1) }).passthrough();
 
@@ -80,6 +87,7 @@ const AnthropicMessagesRequestSchema = z
     output_config: z
       .object({
         effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+        format: z.unknown().optional(),
       })
       .passthrough()
       .optional(),
@@ -106,6 +114,8 @@ export type AdaptedAnthropicRequest = {
   readonly toolResultImageMessages?: number;
   readonly toolResultImageResults?: number;
   readonly toolResultImageBlocks?: number;
+  /** Recognized `output_config.format`; the schema itself is never projected upstream. */
+  readonly localStructuredOutputProfile?: AnthropicLocalStructuredOutputProfile;
 };
 
 export type AdaptAnthropicRequestResult =
@@ -840,6 +850,72 @@ function validateToolHistory(
   }
 }
 
+/**
+ * `output_config.format` is accepted only as the bounded local
+ * `single-string-object-v1` profile. Effort keeps working alongside it; every
+ * other key stays on the ordinary unsupported_parameter path.
+ */
+function validateOutputConfig(
+  value: AnthropicMessagesRequest["output_config"],
+):
+  | AnthropicFailure
+  | { readonly localStructuredOutputProfile?: AnthropicLocalStructuredOutputProfile } {
+  if (value === undefined) return {};
+  for (const key of Object.keys(value)) {
+    if (key !== "effort" && key !== "format") {
+      return failure(
+        `Invalid request: output_config.${key} is not supported`,
+        "unsupported_parameter",
+        `output_config.${key}`,
+      );
+    }
+  }
+  if (!Object.hasOwn(value, "format")) return {};
+  const localStructuredOutputProfile = parseAnthropicLocalStructuredOutputFormat(value.format);
+  if (localStructuredOutputProfile === undefined) {
+    return failure(
+      ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_MESSAGE,
+      ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_CODE,
+      ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
+    );
+  }
+  return { localStructuredOutputProfile };
+}
+
+/**
+ * The profile buffers one plain-text inference and publishes a single text
+ * block, so it cannot carry thinking blocks or a forced tool selection. Tools
+ * may still be declared (Claude Code sends an empty list); any upstream tool
+ * call is rejected before publication.
+ */
+function validateStructuredOutputBoundary(
+  request: AnthropicMessagesRequest,
+): AnthropicFailure | undefined {
+  if (
+    request.thinking !== undefined &&
+    (request.thinking.type !== "disabled" ||
+      Object.keys(request.thinking).some((key) => key !== "type"))
+  ) {
+    return failure(
+      "Invalid request: thinking must be absent or disabled when output_config.format is used",
+      ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_CODE,
+      "thinking",
+    );
+  }
+  if (
+    request.tool_choice !== undefined &&
+    request.tool_choice.type !== "auto" &&
+    request.tool_choice.type !== "none"
+  ) {
+    return failure(
+      "Invalid request: tool_choice must be auto or none when output_config.format is used",
+      ANTHROPIC_STRUCTURED_OUTPUT_REJECTION_CODE,
+      "tool_choice",
+    );
+  }
+  return undefined;
+}
+
 export function adaptAnthropicMessagesRequest(
   raw: unknown,
   options: {
@@ -889,6 +965,13 @@ export function adaptAnthropicMessagesRequest(
       }
     }
   }
+  const outputConfig = validateOutputConfig(request.output_config);
+  if (isFailure(outputConfig)) return outputConfig;
+  const localStructuredOutputProfile = outputConfig.localStructuredOutputProfile;
+  if (localStructuredOutputProfile !== undefined) {
+    const boundary = validateStructuredOutputBoundary(request);
+    if (boundary) return boundary;
+  }
   if (request.tool_choice?.type === "any" || request.tool_choice?.type === "tool") {
     return failure(
       `Invalid request: tool_choice.type ${request.tool_choice.type} is not supported because Kiro has no forced-tool control`,
@@ -917,17 +1000,6 @@ export function adaptAnthropicMessagesRequest(
       "unsupported_parallel_tool_calls",
       "tool_choice.disable_parallel_tool_use",
     );
-  }
-  if (request.output_config) {
-    for (const key of Object.keys(request.output_config)) {
-      if (key !== "effort") {
-        return failure(
-          `Invalid request: output_config.${key} is not supported`,
-          "unsupported_parameter",
-          `output_config.${key}`,
-        );
-      }
-    }
   }
   const cacheControl = validateCacheControl(request.cache_control, "cache_control");
   if (cacheControl) return cacheControl;
@@ -1135,6 +1207,7 @@ export function adaptAnthropicMessagesRequest(
             toolResultImageBlocks,
           }
         : {}),
+      ...(localStructuredOutputProfile !== undefined ? { localStructuredOutputProfile } : {}),
     },
   };
 }

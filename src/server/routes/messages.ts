@@ -1,5 +1,5 @@
 import type { Config } from "../../config/schema.js";
-import { auditLog } from "../../core/audit-log.js";
+import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { estimateTokens } from "../../kiro/transform/response.js";
@@ -20,6 +20,13 @@ import {
   anthropicSseAdapter,
 } from "../anthropic/response-adapter.js";
 import {
+  type AnthropicStructuredOutputFailure,
+  anthropicStructuredOutputFailureForCode,
+  anthropicStructuredOutputFailureMessage,
+  isAnthropicStructuredOutputFailureCode,
+  STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_FAILURE,
+} from "../anthropic/structured-output.js";
+import {
   anthropicIngressErrors,
   buildPipelineOptions,
   createIngress,
@@ -28,6 +35,10 @@ import {
   withRetryAfter,
 } from "../ingress.js";
 import { anthropicSessionAffinity, canonicalSessionLineage } from "../session-affinity.js";
+import {
+  LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
+  STRUCTURED_OUTPUT_BUFFER_EXCEEDED_MESSAGE,
+} from "../structured-output/local-profile.js";
 
 export type MessagesDependencies = RouteDependencies;
 
@@ -94,6 +105,25 @@ export async function translatePipelineError(response: Response): Promise<Respon
   const retryAfter = response.headers.get("Retry-After");
   if (retryAfter !== null) translated.headers.set("Retry-After", retryAfter);
   return translated;
+}
+
+/**
+ * With a structured-output profile the pipeline itself may fail closed (one
+ * dispatch, tool-call rejection, collected-text ceiling). Surface those coded
+ * failures as the profile's 502 instead of the generic upstream translation.
+ */
+async function structuredOutputPipelineFailure(
+  response: Response,
+): Promise<AnthropicStructuredOutputFailure | undefined> {
+  try {
+    const details = pipelineErrorDetails(await response.clone().json());
+    if (isAnthropicStructuredOutputFailureCode(details.code)) {
+      return anthropicStructuredOutputFailureForCode(details.code);
+    }
+  } catch {
+    // Not a JSON pipeline error; fall through to the ordinary translation.
+  }
+  return undefined;
 }
 
 function estimateInputTokens(value: unknown): number {
@@ -187,6 +217,30 @@ export async function handleMessages(
       ? { toolResultImageMode: adapted.value.toolResultImageMode }
       : {}),
   };
+  const localStructuredOutputProfile = adapted.value.localStructuredOutputProfile;
+  const reportStructuredOutputFailure = (failure: AnthropicStructuredOutputFailure): void => {
+    auditLog("warn", "anthropic_structured_output_failed", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      stream: adapted.value.source.stream,
+      code: failure.code,
+    });
+  };
+  if (localStructuredOutputProfile !== undefined) {
+    auditLog("info", "anthropic_structured_output_enforced", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      stream: adapted.value.source.stream,
+      local_profile: localStructuredOutputProfile.kind,
+      schema_hash: auditHash(JSON.stringify(localStructuredOutputProfile.schema)),
+      property_hash: auditHash(localStructuredOutputProfile.propertyName),
+    });
+    compatibility = {
+      ...compatibility,
+      localStructuredOutputProfile,
+      onLocalStructuredOutputFailure: reportStructuredOutputFailure,
+    };
+  }
   if (adapted.value.cacheControlCount > 0) {
     auditLog("info", "anthropic_cache_control_observed", {
       request_id: ingress.requestId,
@@ -237,6 +291,17 @@ export async function handleMessages(
         deadlineSignal: ingress.signals.combined,
       }),
       ...(clientNormalization ? { clientNormalization } : {}),
+      ...(localStructuredOutputProfile !== undefined
+        ? {
+            maxUpstreamDispatches: 1,
+            collectedTextLimit: {
+              maxBytes: LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
+              code: "structured_output_buffer_exceeded",
+              message: STRUCTURED_OUTPUT_BUFFER_EXCEEDED_MESSAGE,
+            },
+            unexpectedToolCallFailure: STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_FAILURE,
+          }
+        : {}),
     });
     // Re-read the live request signal: a client that left while the pipeline
     // ran must not receive a body that would keep the account lease busy.
@@ -247,6 +312,13 @@ export async function handleMessages(
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
     if (!pipelineResponse.ok) {
+      if (localStructuredOutputProfile !== undefined) {
+        const failure = await structuredOutputPipelineFailure(pipelineResponse);
+        if (failure !== undefined) {
+          reportStructuredOutputFailure(failure);
+          return anthropicError(502, anthropicStructuredOutputFailureMessage(failure), "api_error");
+        }
+      }
       return await translatePipelineError(await withRetryAfter(pipelineResponse));
     }
     if (pipelineResponse.headers.get("x-kiro-reasoning-replay-mode") === "conflict-omitted") {

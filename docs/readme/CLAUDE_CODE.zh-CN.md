@@ -94,6 +94,43 @@ Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
 为 `claude-fable-5.1`。启动器还会在 picker 中加入 `gpt-5.6-sol[1m]`、
 `gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
 
+Claude Code 2.1.280 的会话标题生成和 prompt hook 还会发送 `output_config.format`。
+Messages 只按下文描述的有界本地 `single-string-object-v1` profile 接受它，该
+profile 覆盖会话标题请求中唯一的必填 `title` 字符串；`hook_prompt` 评估器的
+schema（`ok`／`reason`／`impossible`，两个 required 属性且含 boolean）不在 profile
+内，仍返回 `400 unsupported_structured_output`，因此本 profile 不代表 prompt hook
+已完整兼容。
+
+### 会话标题与 `output_config.format`
+
+Claude Code 2.1.280 通过一个 `/v1/messages` 旁路请求生成会话标题：thinking
+关闭、工具列表为空、只有一条 user message，并在 `output_config.format` 中携带
+`{ type: "json_schema", schema }`，其根 object 恰好有一个 required string 属性
+（`title`）且 `additionalProperties: false`。Messages 只接受这一形状的
+`output_config.format`，即有界本地 `single-string-object-v1` profile：根 object、
+恰好一个 required string 属性、`additionalProperties: false`，以及本地 1-256
+字符边界（显式整数 `minLength`/`maxLength` 必须落在该范围内）。Schema 不会发往
+上游，也不会注入任何 prompt。Kiro 仍生成普通文本；Provider 先缓冲、去除首尾
+空白，再包装成 `{"title":"..."}`（上游若已返回带同名属性的 JSON object 或 JSON
+string，会归一而不是二次包装），按 `maxLength` 个 code point 截断，本地验证通过后
+才发布恰好一个包含该 JSON 的 text block，`stop_reason` 为 `end_turn`。成功响应带
+`x-kiro-structured-output: single-string-object-v1`。`output_config.effort` 可与
+`format` 同时使用；其他任何 `output_config` 键（例如 `task_budget`）仍返回
+`unsupported_parameter`，message 内的 `output_config` 仍返回
+`unsupported_message_field`。
+
+该 profile 采取 fail closed。其他 Schema 形状、开启 thinking、或与 `format` 同时
+出现的强制 `tool_choice` 返回 `400 unsupported_structured_output`。上游工具调用、
+thinking 已关闭时仍返回的上游 reasoning、超过 64 KiB 的输出，或无法满足 profile
+的空文本返回 `502 structured_output_unexpected_tool_call`、
+`structured_output_unexpected_reasoning`、`structured_output_buffer_exceeded`
+或 `structured_output_validation_failed`（流已提交后则是 SSE `api_error` 事件）。
+验证前不会发布任何部分文本，验证失败也不会触发第二次推理。该 profile 不受
+`responses_fidelity_mode` 控制，该配置只作用于 Responses 通道；Claude Code 没有
+其他获取标题的途径。若某个会话的输入只有 slash command（例如 `/model`）或不足
+10 个字符的提示词，标题仍显示首条输入，因为这种情况下 Claude Code 根本不会请求
+标题；升级 Provider 也不会改写既有 transcript。
+
 Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthropic`
 的模型，所以这三个 GPT 行需要显式声明。它们以 `behavesAs: "claude-opus-5"`
 作为客户端能力模板，从而获得 adaptive thinking 和左右切换 effort 的能力，无需
@@ -213,8 +250,9 @@ Kiro user turn。多个含图结果会保留每个 tool result、状态、文本
 审计事件。普通 user 图片与图片型 tool result 混用仍会被拒绝。真正的
 `text → 非文本 → text` 交错输入也会被拒绝：Kiro 只有一个文本字段。
 
-Destructive context edits、Structured Outputs、强制工具、硬性串行工具要求和未知
-beta/tool 字段会返回 Anthropic `invalid_request_error`，不会被静默删除。Prompt
+Destructive context edits、有界 `single-string-object-v1` profile 之外的 Structured
+Outputs、强制工具、硬性串行工具要求和未知 beta/tool 字段会返回 Anthropic
+`invalid_request_error`，不会被静默删除。Prompt
 caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。
 
 ## 排障

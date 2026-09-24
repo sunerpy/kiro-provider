@@ -58,7 +58,8 @@ cache hint 与无损 context management 形状。`thinking.display: "omitted"` �
 `GenerateAssistantResponse` 在 `us-east-1` 铸造的 Claude Sonnet 5 signed text。
 
 `context_management` 仅接受 `clear_thinking_20251015` 且 `keep: "all"`，
-并返回 `applied_edits: []`。Destructive edits、Structured Outputs、强制/串行
+并返回 `applied_edits: []`。Destructive edits、有界 `single-string-object-v1`
+profile 之外的 Structured Outputs（见第 4 节的 Anthropic Messages 变体）、强制/串行
 工具控制以及未知语义字段继续以 `invalid_request_error` 明确失败。流式响应维持
 Anthropic block 顺序，并在静默期发送 `ping`。`x-claude-code-session-id` 只作为
 租户隔离的 affinity key 使用，不记录原文。
@@ -202,6 +203,40 @@ Kiro 上游仍生成普通 visible text。Provider 在内部最多缓冲 64 KiB 
 `structured_output_store_defaulted_false`；携带工具声明时再报告
 `structured_output_tool_calls_rejected`。
 
+#### Anthropic Messages 变体
+
+`POST /v1/messages` 从顶层 `output_config.format` 识别同一个
+`single-string-object-v1` profile，该字段必须恰好是
+`{ type: "json_schema", schema }`；Anthropic 的形状没有 `name` 或 `strict`，出现
+任何其他键都会被拒绝。Schema 边界完全相同：根 object 恰好一个 required string
+属性、`additionalProperties: false`、标识符形状且不是 `__proto__`、`prototype`、
+`constructor` 的属性名，以及可选的整数 `minLength`/`maxLength`，满足
+`1 <= minLength <= maxLength <= 256`（省略时默认为 1 和 256）。这正是 Claude Code
+2.1.280 生成会话标题时发送的形状。请求边界要求 `thinking` 省略或为
+`{ type: "disabled" }`，`tool_choice` 省略、`auto` 或 `none`；可以声明工具，但任何
+上游工具调用都会在公开前被拒绝。流式与非流式请求都接受，`output_config.effort`
+与 `format` 同时出现时保持既有投影。适配器在上游投影中剥离 `format`：不会有
+Schema、注入的 prompt 或第二次推理到达 Kiro。
+
+发布流程与 Responses 通道一致。Provider 最多缓冲 64 KiB 上游文本，归一为单属性
+JSON envelope（去除首尾空白、按 `maxLength` 个 code point 截断，上游若返回带同名
+属性的 JSON object 或 JSON string 则归一而不二次包装），经 AJV 验证后才发布恰好
+一个 text block（流式为 `content_block_start`、一个 `text_delta`、
+`content_block_stop`），`stop_reason` 为 `end_turn`，usage 为真实上游值，并带响应头
+`x-kiro-structured-output: single-string-object-v1`。其他任何
+`output_config.format` 返回 `400 invalid_request_error`，code 为
+`unsupported_structured_output`，`param` 为 `output_config.format`；边界违规使用
+同一 code 并在 `param` 中指出违规字段。发布失败返回 `502 api_error`，code 为
+`structured_output_validation_failed`、`structured_output_buffer_exceeded`、
+`structured_output_unexpected_tool_call` 或
+`structured_output_unexpected_reasoning`；流已提交后则变为携带同一 code 的 SSE
+`error` 事件，且永不发布部分文本。识别时记录只含哈希与计数的审计事件
+`anthropic_structured_output_enforced`；失败时记录只含 code 的
+`anthropic_structured_output_failed`。其他 `output_config` 键仍返回
+`unsupported_parameter`，message 级 `output_config` 仍返回
+`unsupported_message_field`。`responses_fidelity_mode` 不控制该变体：它只作用于
+Responses 通道，而 Messages 没有备选通道，因此该 profile 在 Messages 上始终可用。
+
 ## 5. Response 状态生命周期
 
 V3 在 Provider 自有 SQLite 中镜像已存储 Response：
@@ -241,7 +276,7 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 | `store: false`                                       | 走 stateless，不写本地 Response 镜像。                                                                               |
 | `previous_response_id`                               | 支持本地镜像中的原生或 stateless Response。                                                                          |
 | Responses `conversation` 对象                        | 返回 `unsupported_stateful_responses`。                                                                              |
-| Structured Outputs / JSON schema                     | compatible 仅本地执行 `single-string-object-v1`；任意复杂 Schema 与 JSON mode 返回 `unsupported_structured_output`。 |
+| Structured Outputs / JSON schema                     | 仅本地执行 `single-string-object-v1`：Responses 在 compatible 模式下从 strict `text.format` 识别，Messages 从 `output_config.format` 识别且不受保真模式限制；任意复杂 Schema 与 JSON mode 返回 `unsupported_structured_output`。 |
 | 内置 Web Search、File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。                                                                                  |
 | 远程图片 URL 与 OpenAI `file_id`                     | 拒绝；应发送 data URL 或内联文件数据。                                                                               |
 | `background: true`                                   | 拒绝。                                                                                                               |

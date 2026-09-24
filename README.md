@@ -236,13 +236,15 @@ the gateway:
   with signed thinking replay kept opaque to the client;
 - unsupported semantics are rejected with field-level errors.
 
-This is not a promise of full OpenAI or Anthropic parity. In compatible mode,
-the provider locally enforces only a bounded `single-string-object-v1` JSON
-Schema profile for one-shot text metadata requests such as Codex thread
-titles. Current tool declarations are preserved, but output calls are rejected
-with an explicit compatibility diagnostic. Arbitrary Structured Outputs, JSON mode, tool histories, continuations, and
-strict-fidelity use remain fail-closed; this local envelope is not evidence that
-Kiro natively enforces JSON Schema. Hosted tools, background Responses,
+This is not a promise of full OpenAI or Anthropic parity. The provider locally
+enforces only a bounded `single-string-object-v1` JSON Schema profile for
+one-shot text metadata requests: Responses `text.format` in compatible mode
+(Codex thread titles) and Anthropic Messages `output_config.format` regardless
+of `responses_fidelity_mode` (Claude Code session titles). Current tool
+declarations are preserved, but output calls are rejected with an explicit
+compatibility diagnostic. Arbitrary Structured Outputs, JSON mode, tool
+histories, continuations, and strict-fidelity Responses use remain fail-closed;
+this local envelope is not evidence that Kiro natively enforces JSON Schema. Hosted tools, background Responses,
 Responses conversation objects, remote file references, exact input-token
 counting, and destructive context edits are also outside the supported surface. The
 [compatibility guide](docs/PROTOCOL_COMPATIBILITY.md) is the current contract;

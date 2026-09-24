@@ -438,6 +438,33 @@ kiro-provider.service` 确认只定义了一个服务，且同一用户没有前
   设为 `"local"`（或删除该键；`local` 是默认值）。之后不再读取 OpenCode
   数据库。
 
+### Claude Code 会话标题变成首条输入（例如 `/model`）
+
+- **查看：** 会话列表显示的是字面首条输入（`/model`、某个 slash command 或开场
+  提示词），而不是 AI 生成的标题，transcript 中也没有 `ai-title` 记录。在早于本
+  版本的 Provider 上，日志会出现 `/v1/messages` 的
+  `protocol_projection_rejected`，`code` 为 `unsupported_parameter`、`param` 为
+  `output_config.format`；随后通常还有一次 `unsupported_message_field`、`param`
+  为 `messages.1.output_config` 的拒绝，因为 Claude Code 会把该字段挪到 message
+  上重试一次。在当前版本上，若仍看到 `unsupported_structured_output` 且 `param` 为
+  `output_config.format` 的拒绝，来源通常是 prompt hook 评估请求
+  （`ok`／`reason`／`impossible` schema），它不在标题 profile 内、按设计 fail
+  closed，并不是标题请求失败。
+- **原因：** Claude Code 2.1.280 通过一个携带 `output_config.format` 的旁路请求
+  生成标题（`json_schema`，根 object 恰好一个 required string 属性 `title`）。旧版
+  Provider 只接受 `output_config.effort`，标题请求因此失败，客户端回退为首条提示词。
+- **处置：** 升级 Provider。当前版本会把该形状识别为有界本地
+  `single-string-object-v1` profile，缓冲上游文本并在本地验证，然后返回一个包含
+  `{"title":"..."}` 的 text block，并带 `x-kiro-structured-output:
+  single-string-object-v1`。每次识别都会写入 info 事件
+  `anthropic_structured_output_enforced`（只含 request id、模型、是否流式、profile
+  名称，以及 Schema 与属性名的哈希）；发布失败写入 warn 事件
+  `anthropic_structured_output_failed`，只含 code（`structured_output_validation_failed`、
+  `structured_output_buffer_exceeded`、`structured_output_unexpected_tool_call`、
+  `structured_output_unexpected_reasoning`），绝不包含文本。仍有两种情况属于客户端行为，任何 Provider 都无法修复：会话输入只有
+  slash command，或所有提示词都不足 10 个字符，因为这两种情况下 Claude Code 根本
+  不会请求标题。既有 transcript 不会被改写，可用 `/rename` 手动命名。
+
 ### `413`：请求体过大与上下文超长
 
 - **查看：** HTTP `413`。`error.code` 为 `request_too_large`（message 为
