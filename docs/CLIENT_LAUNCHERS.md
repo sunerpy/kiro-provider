@@ -61,8 +61,8 @@ KIROCLAUDE_MODEL=sonnet KIROCLAUDE_EFFORT=high kiroclaude
 
 The launcher already maps the verified Opus, Sonnet, Fable, Sol, Terra, and
 Luna defaults to `[1m]` and sets `autoCompactWindow: 1000000`. Claude removes
-`[1m]` before sending the model ID; Haiku remains 200K. Explicit custom model
-pins are preserved. Ultra is the default; it sends `xhigh` in the validated
+`[1m]` before sending the model ID. The small-fast row maps to Sonnet 5, so it
+inherits that 1M window. Explicit custom model pins are preserved. Ultra is the default; it sends `xhigh` in the validated
 Claude version. The launcher also supplies the compatibility settings needed
 for stable Fable thinking and Bash history replay. Keep these settings when
 writing another wrapper around it.

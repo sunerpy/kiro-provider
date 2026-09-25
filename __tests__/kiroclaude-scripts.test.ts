@@ -105,7 +105,7 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
 }
 
 describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => {
-  test("declares the known 1M model defaults to Claude while leaving Haiku and custom pins alone", () => {
+  test("uses the probe-confirmed Sonnet fallback for small-fast requests while preserving custom pins", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
     const env = environment(root, fake);
@@ -124,7 +124,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
-    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
+    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-sonnet-5[1m]");
     expect(settings.modelPicker.options.map((option) => option.model)).toEqual([
       "gpt-5.6-sol[1m]",
       "gpt-5.6-terra[1m]",
@@ -259,7 +259,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       ANTHROPIC_BASE_URL: "http://127.0.0.1:8787",
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5[1m]",
       ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5[1m]",
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-5[1m]",
       ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
       ANTHROPIC_CUSTOM_HEADERS: expectedHeaders(),
       CLAUDE_CODE_USE_BEDROCK: "0",
@@ -336,6 +336,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
     expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://gateway.example.test");
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("opus-custom");
+    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("haiku-custom");
     expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("fable-custom");
     expect(capture.arguments.slice(-3)).toEqual(["--model", "claude-sonnet-5", "task"]);
   });

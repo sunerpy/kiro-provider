@@ -87,7 +87,10 @@ if [ "$backend" = kiro ]; then
   # before sending the model ID. Custom pins remain exactly as supplied.
   opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5[1m]}
   sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5[1m]}
-  haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-haiku-4-5}
+  # Claude Code uses its small-fast model for prompt hooks and sends max_tokens.
+  # Kiro Haiku 4.5 rejects additionalModelRequestFields, so use the
+  # probe-confirmed Sonnet 5 mapping unless the operator explicitly overrides it.
+  haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-sonnet-5[1m]}
   kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-1[1m]}
   sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol[1m]}
   terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra[1m]}

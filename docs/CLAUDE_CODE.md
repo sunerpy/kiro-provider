@@ -98,20 +98,22 @@ subprocesses.
 
 ## Choose a model
 
-The built-in Claude rows map to `claude-opus-5[1m]`,
-`claude-sonnet-5[1m]`, and `claude-haiku-4-5`. The built-in Fable row maps
-to `claude-fable-5-1[1m]`, whose Kiro wire id is `claude-fable-5.1`.
-The launcher also adds `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
-`gpt-5.6-luna[1m]` to the picker.
-
-Claude Code 2.1.280 session-title generation and prompt hooks additionally
-send `output_config.format`. Messages accepts it only as the bounded local
-`single-string-object-v1` profile described below, which covers the single
-required `title` string of the session-title request; the `hook_prompt`
-evaluator schema (`ok`/`reason`/`impossible`, two required properties, boolean
-types) is outside that profile and still returns
-`400 unsupported_structured_output`, so this profile does not claim complete
-prompt-hook compatibility.
+The built-in Opus and Sonnet rows map to `claude-opus-5[1m]` and
+`claude-sonnet-5[1m]`. The built-in Haiku/small-fast row intentionally also
+maps to `claude-sonnet-5[1m]`: Claude Code uses that row for prompt hooks and
+sends a positive `max_tokens`, while Kiro Haiku 4.5 rejects every
+`additionalModelRequestFields` object. This removes that Haiku-specific
+rejection. Claude Code 2.1.280 session-title generation and prompt hooks
+additionally send `output_config.format`. Messages accepts it only as the
+bounded local `single-string-object-v1` profile described below, which covers
+the single required `title` string of the session-title request; the
+`hook_prompt` evaluator schema (`ok`/`reason`/`impossible`, two required
+properties, boolean types) is outside that profile and still returns
+`400 unsupported_structured_output`, so neither the model mapping nor this
+profile claims complete prompt-hook compatibility. The built-in
+Fable row maps to `claude-fable-5-1[1m]`, whose Kiro wire id is
+`claude-fable-5.1`. The launcher also adds `gpt-5.6-sol[1m]`,
+`gpt-5.6-terra[1m]`, and `gpt-5.6-luna[1m]` to the picker.
 
 ### Session titles and `output_config.format`
 
@@ -157,9 +159,10 @@ Claude Code's gateway discovery filters out model IDs without `claude` or
 exposes adaptive thinking and the left/right effort control without duplicating
 each model at every effort level. The `[1m]` suffix makes Claude Code use
 the advertised 1M context window; Claude strips it before sending the model
-ID. The actual installed client was checked for all six 1M entries. Haiku
-keeps its 200K window. A provider catalog alone does not change the client
-window, and output reserves still reduce the available input budget.
+ID. The actual installed client was checked for all six distinct 1M model IDs,
+and the small-fast row inherits Sonnet's 1M window. A provider catalog alone
+does not change the client window, and output reserves still reduce the
+available input budget.
 
 The Kiro overlay also sets `autoCompactWindow: 1000000` so these gateway
 models compact proactively. Claude caps it at the selected model's window
@@ -169,6 +172,8 @@ files and the separate Bedrock overlay are not changed.
 
 Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `[1m]` yourself when pinning a custom ID that supports the larger window.
+`KIROCLAUDE_HAIKU_MODEL` remains an explicit escape hatch, but its target must
+accept Claude Code's required positive `max_tokens` or prompt hooks will fail.
 This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
 
 Run the optional installed-client regression probe from a checkout:

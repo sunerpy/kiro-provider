@@ -89,17 +89,19 @@ Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
 
 ## 选择模型
 
-内置 Claude 行分别映射到 `claude-opus-5[1m]`、`claude-sonnet-5[1m]` 和
-`claude-haiku-4-5`。Fable 行映射到 `claude-fable-5-1[1m]`，实际 Kiro wire ID
-为 `claude-fable-5.1`。启动器还会在 picker 中加入 `gpt-5.6-sol[1m]`、
-`gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
-
-Claude Code 2.1.280 的会话标题生成和 prompt hook 还会发送 `output_config.format`。
-Messages 只按下文描述的有界本地 `single-string-object-v1` profile 接受它，该
-profile 覆盖会话标题请求中唯一的必填 `title` 字符串；`hook_prompt` 评估器的
-schema（`ok`／`reason`／`impossible`，两个 required 属性且含 boolean）不在 profile
-内，仍返回 `400 unsupported_structured_output`，因此本 profile 不代表 prompt hook
-已完整兼容。
+内置 Opus 和 Sonnet 行分别映射到 `claude-opus-5[1m]` 与
+`claude-sonnet-5[1m]`。Haiku／small-fast 行也有意映射到
+`claude-sonnet-5[1m]`：Claude Code 会用该槽位执行 prompt hook，并发送正整数
+`max_tokens`，而 Kiro Haiku 4.5 会拒绝所有 `additionalModelRequestFields` 对象。
+该映射会消除 Haiku 特有的拒绝。Claude Code 2.1.280 的会话标题生成和 prompt hook
+还会发送 `output_config.format`。Messages 只按下文描述的有界本地
+`single-string-object-v1` profile 接受它，该 profile 覆盖会话标题请求中唯一的
+必填 `title` 字符串；`hook_prompt` 评估器的 schema（`ok`／`reason`／`impossible`，
+两个 required 属性且含 boolean）不在 profile 内，仍返回
+`400 unsupported_structured_output`，切换模型和本 profile 都不代表 prompt hook
+已完整兼容。Fable 行映射到 `claude-fable-5-1[1m]`，
+实际 Kiro wire ID 为 `claude-fable-5.1`。启动器还会在 picker 中加入
+`gpt-5.6-sol[1m]`、`gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
 
 ### 会话标题与 `output_config.format`
 
@@ -135,9 +137,9 @@ Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthro
 的模型，所以这三个 GPT 行需要显式声明。它们以 `behavesAs: "claude-opus-5"`
 作为客户端能力模板，从而获得 adaptive thinking 和左右切换 effort 的能力，无需
 为每个 effort 档位重复模型。`[1m]` 后缀让 Claude Code 使用声明的 1M 窗口，
-客户端发请求前会去掉后缀。已用实际安装的客户端核对六个 1M 选项；Haiku
-保留 200K。仅有服务端模型目录不会自动改变客户端窗口，输出预留仍会减少可用
-输入预算。
+客户端发请求前会去掉后缀。已用实际安装的客户端核对六个不同的 1M 模型 ID；
+small-fast 行继承 Sonnet 的 1M 窗口。仅有服务端模型目录不会自动改变客户端窗口，
+输出预留仍会减少可用输入预算。
 
 Kiro overlay 同时设置 `autoCompactWindow: 1000000`，让网关模型主动压缩；
 Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。仍可使用
@@ -145,7 +147,9 @@ Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间�
 原生设置文件与独立 Bedrock overlay 不受影响。
 
 显式 `KIROCLAUDE_*_MODEL` 覆盖值会原样保留；自定义 ID 确实支持更大窗口时，
-请在覆盖值中带上 `[1m]`。这一变化仅适用于 Kiro 启动器，独立 Bedrock 模式不变。
+请在覆盖值中带上 `[1m]`。`KIROCLAUDE_HAIKU_MODEL` 仍是显式逃生口，但目标模型
+必须接受 Claude Code 必填的正整数 `max_tokens`，否则 prompt hook 仍会失败。这一
+变化仅适用于 Kiro 启动器，独立 Bedrock 模式不变。
 
 可在 checkout 中运行实际客户端回归探测：
 
