@@ -471,21 +471,25 @@ signed `reasoning_text` only in the following verified cells. All require
 | Responses          | GPT-5.6 Sol      | CodeWhisperer                       |
 | Anthropic Messages | Claude Sonnet 5  | KiroRuntime                         |
 | Anthropic Messages | Claude Opus 5    | KiroRuntime                         |
+| Anthropic Messages | Claude Opus 5.5  | KiroRuntime; parity, probe owed     |
 | Anthropic Messages | Claude Fable 5.1 | KiroRuntime; same mint profile only |
 
-Claude Opus 5.5 is absent pending its own probe, not by design. A cell is only
-added from a live A→B cross-account signed-replay result, and that probe needs
-two un-rate-limited accounts in the same region, which were not available when
-the model was catalogued. Until it runs, Opus 5.5 reasoning replay stays
-owner-bound under `"verified"` — fail-closed and safe, but the `kiroclaude`
-built-in Opus row now carries Opus 5.5, so a default Claude Code session has no
-replay account migration. Pin `KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` if that
-matters more than the newer model. The reproducer is:
+Every other cell in that table rests on its own live A→B run. The Claude Opus
+5.5 cell does not: it was admitted by explicit maintainer decision on family
+parity with the Opus 5 cell, because the two models share the same catalog
+schema and emit the same signed reasoning envelopes. Its dedicated probe is
+still owed and needs two un-rate-limited accounts in the same region:
 
 ```sh
 bun run scripts/probe-replay-portability.ts --confirm \
   --model claude-opus-5.5 --effort max
 ```
+
+Until that run is recorded, treat this one cell as an assumption rather than
+evidence. If a migrated Opus 5.5 signature is ever rejected upstream, the
+failure surfaces as an error on that replay; set
+`reasoning_replay_account_failover: "strict"`, or pin
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]`, to fall back to owner-bound replay.
 
 The request protocol and projected runtime operation must match the mint
 envelope, and the target account must resolve to the same effective region

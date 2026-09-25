@@ -121,26 +121,34 @@ reasoning 字符，与其 control 一致，容易误判为 effort 无效。必�
 
 ## 已知限制
 
-- **跨账号 reasoning replay 待探测（本次被限流阻塞）。** `src/core/pipeline.ts` 的
-  `VERIFIED_PORTABLE_REPLAY_CELLS` 未包含
+- **跨账号 reasoning replay 按家族一致性准入，探测仍欠着。**
+  `src/core/pipeline.ts` 的 `VERIFIED_PORTABLE_REPLAY_CELLS` 已包含
   `anthropic-messages:claude-opus-5-5:us-east-1:kiro-runtime:profile:reasoning_text`，
-  因此在默认 `reasoning_replay_account_failover: "verified"` 下，Opus 5.5 的
-  签名 reasoning 回放保持 owner-bound，不会迁移到其他账号。这是 fail-closed 的
-  正确行为，但由于启动器的内置 Opus 行已改指 5.5，默认 kiroclaude 会话相比
-  Opus 5 失去了这项跨账号 failover。
+  因此在默认 `reasoning_replay_account_failover: "verified"` 下，Opus 5.5 的签名
+  reasoning 回放可以跨账号迁移。
 
-  这不是有意排除。补入该 cell 的工具是现成的
-  `scripts/probe-replay-portability.ts`，它要求「同区域两个健康账号」做 A→B：
+  与该集合中其他 cell 不同，这一条**不是**由它自己的活体探测支撑，而是经维护者
+  明确决定、按与 Opus 5 cell 的家族一致性准入：两者共用同一套
+  `additionalModelRequestFieldsSchema`（adaptive thinking、effort、max_tokens），
+  且本次探测确认 5.5 在各 effort 档位都发出带签名的 reasoning 封套。
+
+  欠的探测是 `scripts/probe-replay-portability.ts`，它要求「同区域两个健康账号」
+  做 A→B：
 
   ```sh
   bun run scripts/probe-replay-portability.ts --confirm \
     --model claude-opus-5.5 --effort max
   ```
 
-  探测时 50 个账号中 49 个处于限流，只有 1 个可用，下一批恢复在约 4.4 小时后，
-  因此本次无法运行。账号恢复后按 Opus 5 的同一标准（2026-09-16 的 3/3 通过）
-  重跑，通过即可补入该 cell 并更新本记录与
-  [`docs/CONFIGURATION.md`](../CONFIGURATION.md) 的说明。
+  本次无法运行：50 个账号中 49 个处于限流，只有 1 个可用，下一批恢复在约 4.4
+  小时后。账号恢复后按 Opus 5 的同一标准（2026-09-16 的 3/3 通过）补跑，并更新
+  本记录、[`docs/CONFIGURATION.md`](../CONFIGURATION.md) 与 `pipeline.ts` 中该
+  cell 的注释。若上游拒绝迁移后的签名，失败会以该次回放报错的形式出现；届时可用
+  `reasoning_replay_account_failover: "strict"` 回到 owner-bound 回放。
+
+  回归覆盖：`__tests__/pipeline.test.ts` 的
+  “migrates a Claude Opus 5.5 Messages replay in its verified cell” 断言该 cell
+  生效（移除该 cell 后请求变为 402 owner-bound）。
 - **未做满 1M 输入验收。** 目录声明 1,000,000 input，本次未做长输入分级探测，
   参考 `claude-opus-5` 的既有结论。
 - **原生 Responses 通道未验证。** `RESPONSES_CAPABILITY_EVIDENCE` 未收录该模型，

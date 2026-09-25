@@ -398,19 +398,22 @@ profile 和有效区域 `us-east-1`：
 | Responses          | GPT-5.6 Sol      | CodeWhisperer                    |
 | Anthropic Messages | Claude Sonnet 5  | KiroRuntime                      |
 | Anthropic Messages | Claude Opus 5    | KiroRuntime                      |
+| Anthropic Messages | Claude Opus 5.5  | KiroRuntime；家族一致准入，待探测 |
 | Anthropic Messages | Claude Fable 5.1 | KiroRuntime；限相同 mint profile |
 
-Claude Opus 5.5 是待探测而非有意排除。收录一条 cell 必须有活体 A→B 跨账号签名
-回放结果，而该探测需要同区域两个未限流账号，模型入目录时不具备这一条件。在探测
-完成前，Opus 5.5 的 reasoning 回放在 `"verified"` 下保持 owner-bound —— 属
-fail-closed 的安全行为，但 `kiroclaude` 的内置 Opus 行现在承载 Opus 5.5，因此默认
-的 Claude Code 会话不具备回放账号迁移能力。如果这项能力比新模型更重要，请固定
-`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]`。复现命令为：
+表中其他 cell 都有各自的活体 A→B 实测依据，Claude Opus 5.5 这一条没有：它是按与
+Opus 5 的家族一致性、经维护者明确决定准入的 —— 两者共用同一套目录 schema，且发出
+相同形态的签名 reasoning 封套。它自己的探测仍然欠着，需要同区域两个未限流账号：
 
 ```sh
 bun run scripts/probe-replay-portability.ts --confirm \
   --model claude-opus-5.5 --effort max
 ```
+
+在该结果留档前，请把这一条 cell 当作假设而非证据。如果迁移后的 Opus 5.5 签名被
+上游拒绝，失败会以该次回放报错的形式出现；可将
+`reasoning_replay_account_failover` 设为 `"strict"`，或固定
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]`，回到 owner-bound 回放。
 
 当前请求协议和投影 runtime operation 仍须与 mint envelope 一致，目标账号也须
 解析到同一有效区域并带 profile。CodeWhisperer 单元覆盖无状态 Responses 路径：

@@ -350,14 +350,16 @@ function reasoningReplayRequest(): CanonicalRequest {
   };
 }
 
-function anthropicReasoningReplayRequest(): CanonicalRequest {
+function anthropicReasoningReplayRequest(model = "claude-sonnet-5"): CanonicalRequest {
   const base = reasoningReplayRequest();
   const replay = base.reasoningReplays[0];
   if (!replay) throw new TypeError("missing replay fixture");
   return {
     ...base,
     protocol: "anthropic-messages",
-    model: "claude-sonnet-5",
+    // runChatCompletion rejects a CanonicalRequest whose model differs from the
+    // pipeline model with canonical_model_mismatch.
+    model,
     reasoningReplays: [
       {
         ...replay,
@@ -1695,6 +1697,38 @@ describe("runChatCompletion signed reasoning replay lock", () => {
         selectedAccountIds.push(factoryArgs[5]);
         return clientWith(async () =>
           responseFrom([{ assistantResponseEvent: { content: "messages migrated" } }]),
+        );
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(selectedAccountIds).toEqual(["account-b"]);
+  });
+
+  test("migrates a Claude Opus 5.5 Messages replay in its verified cell", async () => {
+    const selectedAccountIds: Array<string | undefined> = [];
+    const response = await runChatCompletion({
+      body: anthropicReasoningReplayRequest("claude-opus-5-5"),
+      model: "claude-opus-5-5",
+      stream: false,
+      config: config({ reasoning_replay_account_failover: "verified" }),
+      accountManager: new PreferredAccountManager([
+        account("account-a", { usedCount: 10_000, limitCount: 10_000 }),
+        account("account-b", { usedCount: 1, limitCount: 10_000 }),
+      ]),
+      tokenRefresher: new FakeTokenRefresher(),
+      tenantId: "tenant-a",
+      // The cell key's model segment comes from the request model above, not
+      // from the replay provenance.
+      reasoningReplayStore: reasoningReplayStore(
+        "account-a",
+        "conversation-a",
+        "anthropic-messages",
+      ),
+      makeClient: (...factoryArgs) => {
+        selectedAccountIds.push(factoryArgs[5]);
+        return clientWith(async () =>
+          responseFrom([{ assistantResponseEvent: { content: "opus 5.5 migrated" } }]),
         );
       },
     });
