@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.6.0](https://github.com/sunerpy/kiro-provider/compare/v3.5.10...v3.6.0) (2026-09-25)
+
+
+### Features
+
+* **models:** 新增 Claude Opus 5.5 目录与 effort 变体 ([97e994e](https://github.com/sunerpy/kiro-provider/commit/97e994e7782025596a93580dd9006ebac3d35d01))
+
+
+### Bug Fixes
+
+* **claude:** small-fast 行改用 Sonnet 5 ([c10446f](https://github.com/sunerpy/kiro-provider/commit/c10446f8007669302cc8a4d633299834a713f2b8))
+
 ## [3.5.10](https://github.com/sunerpy/kiro-provider/compare/v3.5.9...v3.5.10) (2026-09-24)
 
 
