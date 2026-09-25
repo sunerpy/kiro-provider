@@ -56,7 +56,7 @@ checkout for tests, or copy/link them after deciding to keep this launcher.
 | ------------------------------------- | ---------------------------------------------------- |
 | Gateway root                          | `http://127.0.0.1:8787` (no `/v1` suffix)            |
 | Claude state                          | Shared native `~/.claude` and `~/.claude.json`       |
-| Model                                 | Opus 5, 1M client context window                     |
+| Model                                 | Opus 5.5, 1M client context window                   |
 | Reasoning                             | Ultra: `effortLevel: "max"`, `ultracode: true`       |
 | Permission mode                       | Inherit native Claude settings; no launcher override |
 | Away recap                            | Disabled                                             |
@@ -98,20 +98,32 @@ subprocesses.
 
 ## Choose a model
 
-The built-in Claude rows map to `claude-opus-5[1m]`,
-`claude-sonnet-5[1m]`, and `claude-haiku-4-5`. The built-in Fable row maps
-to `claude-fable-5-1[1m]`, whose Kiro wire id is `claude-fable-5.1`.
-The launcher also adds `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
-`gpt-5.6-luna[1m]` to the picker.
+The built-in Opus and Sonnet rows map to `claude-opus-5-5[1m]` and
+`claude-sonnet-5[1m]`. The built-in Haiku/small-fast row intentionally also
+maps to `claude-sonnet-5[1m]`: Claude Code uses that row for prompt hooks and
+sends a positive `max_tokens`, while Kiro Haiku 4.5 rejects every
+`additionalModelRequestFields` object. This removes that Haiku-specific
+rejection. Claude Code 2.1.280 session-title generation and prompt hooks
+additionally send `output_config.format`. Messages accepts it only as the
+bounded local `single-string-object-v1` profile described below, which covers
+the single required `title` string of the session-title request; the
+`hook_prompt` evaluator schema (`ok`/`reason`/`impossible`, two required
+properties, boolean types) is outside that profile and still returns
+`400 unsupported_structured_output`, so neither the model mapping nor this
+profile claims complete prompt-hook compatibility. The built-in
+Fable row maps to `claude-fable-5-1[1m]`, whose Kiro wire id is
+`claude-fable-5.1`. The launcher also adds `claude-opus-5[1m]`,
+`gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and `gpt-5.6-luna[1m]` to the picker.
 
-Claude Code 2.1.280 session-title generation and prompt hooks additionally
-send `output_config.format`. Messages accepts it only as the bounded local
-`single-string-object-v1` profile described below, which covers the single
-required `title` string of the session-title request; the `hook_prompt`
-evaluator schema (`ok`/`reason`/`impossible`, two required properties, boolean
-types) is outside that profile and still returns
-`400 unsupported_structured_output`, so this profile does not claim complete
-prompt-hook compatibility.
+`claude-opus-5-5` carries the Kiro wire id `claude-opus-5.5`, which keeps its
+dotted minor version even though plain Opus 5 does not. Its live catalog entry
+advertises a 1M input window, 128K output, image input, a 2.0x rate multiplier,
+prompt caching, and an `additionalModelRequestFieldsSchema` declaring
+`output_config.effort` as the full `low|medium|high|xhigh|max` enum plus
+`max_tokens` from 1,024 through 128,000. Kiro still describes it as an
+experimental preview. The built-in Opus row is the only Claude row this launcher
+pins on every run, so it carries the current flagship; Opus 5 stays reachable as
+an explicit picker row and through `KIROCLAUDE_OPUS5_MODEL`.
 
 ### Session titles and `output_config.format`
 
@@ -152,14 +164,18 @@ Code never asks for one in that case, and upgrading the provider does not rewrit
 existing transcripts.
 
 Claude Code's gateway discovery filters out model IDs without `claude` or
-`anthropic`, so the GPT rows must be declared explicitly. Each uses
+`anthropic`, so the GPT rows must be declared explicitly. The Opus 5 row passes
+that filter on its own but is still declared so its `[1m]` suffix applies rather
+than a discovered default window. Every declared picker row uses
 `behavesAs: "claude-opus-5"` as the client-side capability template. This
 exposes adaptive thinking and the left/right effort control without duplicating
 each model at every effort level. The `[1m]` suffix makes Claude Code use
 the advertised 1M context window; Claude strips it before sending the model
-ID. The actual installed client was checked for all six 1M entries. Haiku
-keeps its 200K window. A provider catalog alone does not change the client
-window, and output reserves still reduce the available input budget.
+ID. The actual installed client was checked for all seven distinct 1M model IDs
+it can send (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`,
+`claude-fable-5-1`, and the three GPT rows), and the small-fast row inherits
+Sonnet's 1M window. A provider catalog alone does not change the client window,
+and output reserves still reduce the available input budget.
 
 The Kiro overlay also sets `autoCompactWindow: 1000000` so these gateway
 models compact proactively. Claude caps it at the selected model's window
@@ -169,6 +185,11 @@ files and the separate Bedrock overlay are not changed.
 
 Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `[1m]` yourself when pinning a custom ID that supports the larger window.
+`KIROCLAUDE_OPUS_MODEL` repoints the built-in Opus row and
+`KIROCLAUDE_OPUS5_MODEL` repoints the Opus 5 picker row, so
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` restores the previous default.
+`KIROCLAUDE_HAIKU_MODEL` remains an explicit escape hatch, but its target must
+accept Claude Code's required positive `max_tokens` or prompt hooks will fail.
 This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
 
 Run the optional installed-client regression probe from a checkout:

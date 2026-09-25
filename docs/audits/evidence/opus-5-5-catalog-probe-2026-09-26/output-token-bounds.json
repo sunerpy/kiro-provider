@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "model": "claude-opus-5.5",
+  "account_hash": "a0c2cb34db08bc1d",
+  "results": [
+    {
+      "name": "max_tokens_min",
+      "ok": true,
+      "status": 200,
+      "event_count": 5,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99"
+    },
+    {
+      "name": "max_tokens_upper",
+      "ok": true,
+      "status": 200,
+      "event_count": 5,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99"
+    },
+    {
+      "name": "max_tokens_over",
+      "ok": false,
+      "status": 400,
+      "code": "REQUEST_BODY_INVALID",
+      "message": "Invalid additionalModelRequestFields: must have a maximum value of 128000.0"
+    }
+  ]
+}

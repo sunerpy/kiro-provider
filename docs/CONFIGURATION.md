@@ -473,6 +473,20 @@ signed `reasoning_text` only in the following verified cells. All require
 | Anthropic Messages | Claude Opus 5    | KiroRuntime                         |
 | Anthropic Messages | Claude Fable 5.1 | KiroRuntime; same mint profile only |
 
+Claude Opus 5.5 is absent pending its own probe, not by design. A cell is only
+added from a live A→B cross-account signed-replay result, and that probe needs
+two un-rate-limited accounts in the same region, which were not available when
+the model was catalogued. Until it runs, Opus 5.5 reasoning replay stays
+owner-bound under `"verified"` — fail-closed and safe, but the `kiroclaude`
+built-in Opus row now carries Opus 5.5, so a default Claude Code session has no
+replay account migration. Pin `KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` if that
+matters more than the newer model. The reproducer is:
+
+```sh
+bun run scripts/probe-replay-portability.ts --confirm \
+  --model claude-opus-5.5 --effort max
+```
+
 The request protocol and projected runtime operation must match the mint
 envelope, and the target account must resolve to the same effective region
 with a profile. The CodeWhisperer cell covers the stateless Responses route,

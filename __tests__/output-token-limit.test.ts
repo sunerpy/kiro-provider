@@ -15,6 +15,10 @@ describe("probe-backed Kiro output-token limits", () => {
     ["claude-opus-5", "claude-opus-5"],
     ["claude-opus-5-thinking", "claude-opus-5"],
     ["claude-opus-5-max", "claude-opus-5"],
+    // Opus 5.5 keeps the dotted wire id behind its hyphenated public ids.
+    ["claude-opus-5-5", "claude-opus-5.5"],
+    ["claude-opus-5-5-thinking", "claude-opus-5.5"],
+    ["claude-opus-5-5-max", "claude-opus-5.5"],
   ])("maps %s to native Claude max_tokens", (model, wireModel) => {
     expect(resolveOutputTokenLimit(model, 4_096)).toEqual({
       ok: true,
@@ -23,7 +27,7 @@ describe("probe-backed Kiro output-token limits", () => {
     });
   });
 
-  test.each(["claude-fable-5-1", "claude-sonnet-5", "claude-opus-5"])(
+  test.each(["claude-fable-5-1", "claude-sonnet-5", "claude-opus-5", "claude-opus-5-5"])(
     "rejects out-of-range %s max_tokens values before Kiro",
     (model) => {
       for (const limit of [KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1]) {

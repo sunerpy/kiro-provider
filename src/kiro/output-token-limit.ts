@@ -7,6 +7,7 @@ const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set([
   "claude-fable-5.1",
   "claude-sonnet-5",
   "claude-opus-5",
+  "claude-opus-5.5",
 ]);
 const ADVISORY_ONLY_MAX_TOKENS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
 
@@ -37,9 +38,15 @@ export function supportsAdvisoryOutputTokenLimit(model: string): boolean {
 
 /**
  * Return the exact Kiro-native projection proven by live probes.
- * Claude Sonnet 5 (2026-08-26), Claude Opus 5 (2026-08-27), and Claude
- * Fable 5.1 (2026-09-16) accept max_tokens from 1,024 through 128,000.
- * GPT 5.6 rejected every tested standard spelling, so it remains fail-closed.
+ * Claude Sonnet 5 (2026-08-26), Claude Opus 5 (2026-08-27), Claude
+ * Fable 5.1 (2026-09-16), and Claude Opus 5.5 (2026-09-26) accept max_tokens
+ * from 1,024 through 128,000. Both Opus 5.5 bounds returned 200 and 128,001
+ * was rejected with `must have a maximum value of 128000.0`, matching the
+ * range its own additionalModelRequestFieldsSchema declares
+ * (docs/audits/opus-5-5-catalog-probe-2026-09-26.zh.md).
+ * GPT 5.6 rejected every tested standard spelling, so it remains fail-closed,
+ * and `max_output_tokens` is rejected with REQUEST_BODY_INVALID on Opus 5 and
+ * Opus 5.5 alike.
  */
 export function resolveOutputTokenLimit(model: string, limit: number): OutputTokenLimitResult {
   let wireModel: string;

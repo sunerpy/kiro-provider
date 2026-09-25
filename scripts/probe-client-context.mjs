@@ -40,10 +40,16 @@ const cases = toolLoop
     ]
   : useLauncher && !thresholdMode
     ? [
+        // `opus` resolves through ANTHROPIC_DEFAULT_OPUS_MODEL, so this case
+        // covers whichever Opus the launcher currently pins; launcher-opus5
+        // covers the explicit Opus 5 picker row.
         { name: "launcher-opus", model: "opus", env: {}, expectedWindow: 1000000 },
+        { name: "launcher-opus5", model: "claude-opus-5[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-sonnet", model: "sonnet", env: {}, expectedWindow: 1000000 },
         { name: "launcher-fable", model: "fable", env: {}, expectedWindow: 1000000 },
-        { name: "launcher-haiku", model: "haiku", env: {}, expectedWindow: 200000 },
+        // The small-fast row maps to Sonnet 5, so it inherits that 1M window
+        // rather than Kiro Haiku 4.5's 200K one.
+        { name: "launcher-haiku", model: "haiku", env: {}, expectedWindow: 1000000 },
         { name: "launcher-sol", model: "gpt-5.6-sol[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-terra", model: "gpt-5.6-terra[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-luna", model: "gpt-5.6-luna[1m]", env: {}, expectedWindow: 1000000 },

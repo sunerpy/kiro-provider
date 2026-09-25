@@ -400,6 +400,18 @@ profile 和有效区域 `us-east-1`：
 | Anthropic Messages | Claude Opus 5    | KiroRuntime                      |
 | Anthropic Messages | Claude Fable 5.1 | KiroRuntime；限相同 mint profile |
 
+Claude Opus 5.5 是待探测而非有意排除。收录一条 cell 必须有活体 A→B 跨账号签名
+回放结果，而该探测需要同区域两个未限流账号，模型入目录时不具备这一条件。在探测
+完成前，Opus 5.5 的 reasoning 回放在 `"verified"` 下保持 owner-bound —— 属
+fail-closed 的安全行为，但 `kiroclaude` 的内置 Opus 行现在承载 Opus 5.5，因此默认
+的 Claude Code 会话不具备回放账号迁移能力。如果这项能力比新模型更重要，请固定
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]`。复现命令为：
+
+```sh
+bun run scripts/probe-replay-portability.ts --confirm \
+  --model claude-opus-5.5 --effort max
+```
+
 当前请求协议和投影 runtime operation 仍须与 mint envelope 一致，目标账号也须
 解析到同一有效区域并带 profile。CodeWhisperer 单元覆盖无状态 Responses 路径：
 `v3-auto` 对加密 reasoning 历史实际选择 `legacy-user-prefix` 投影。redacted reasoning、

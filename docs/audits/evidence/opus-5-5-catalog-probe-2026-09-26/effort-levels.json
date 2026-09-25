@@ -1,0 +1,150 @@
+{
+  "account": "a0c2cb34db08bc1d",
+  "prompt_hash": "faad37033b95e4af",
+  "results": [
+    {
+      "model": "claude-opus-5.5",
+      "name": "bare",
+      "ok": true,
+      "duration_ms": 6744,
+      "counts": {
+        "reasoningContentEvent": 14,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 56,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5.5",
+      "name": "effort_low",
+      "ok": true,
+      "duration_ms": 5570,
+      "counts": {
+        "reasoningContentEvent": 16,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 83,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5.5",
+      "name": "effort_max",
+      "ok": true,
+      "duration_ms": 7720,
+      "counts": {
+        "reasoningContentEvent": 21,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 201,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5.5",
+      "name": "adaptive_summarized_max",
+      "ok": true,
+      "duration_ms": 7405,
+      "counts": {
+        "reasoningContentEvent": 14,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 144,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5",
+      "name": "bare",
+      "ok": true,
+      "duration_ms": 6559,
+      "counts": {
+        "reasoningContentEvent": 12,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 110,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5",
+      "name": "effort_low",
+      "ok": true,
+      "duration_ms": 5301,
+      "counts": {
+        "reasoningContentEvent": 11,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 84,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5",
+      "name": "effort_max",
+      "ok": true,
+      "duration_ms": 7853,
+      "counts": {
+        "reasoningContentEvent": 15,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 107,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    },
+    {
+      "model": "claude-opus-5",
+      "name": "adaptive_summarized_max",
+      "ok": true,
+      "duration_ms": 6482,
+      "counts": {
+        "reasoningContentEvent": 18,
+        "assistantResponseEvent": 1,
+        "metadataEvent": 1,
+        "contextUsageEvent": 1,
+        "meteringEvent": 1
+      },
+      "text_chars": 3,
+      "text_hash": "e13b778ae833ca8c",
+      "reasoning_chars": 164,
+      "reasoning_signatures": 1,
+      "reasoning_redacted": 0
+    }
+  ]
+}

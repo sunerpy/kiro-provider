@@ -5,7 +5,7 @@ import {
   supportsEffort,
   supportsXHighEffort,
 } from "../src/kiro/effort.js";
-import { resolveModelVariant } from "../src/kiro/models.js";
+import { getContextWindowSize, resolveModelVariant, stripModelSuffix } from "../src/kiro/models.js";
 
 describe("resolveModelVariant", () => {
   describe("parse — variants (exact deep-equal)", () => {
@@ -23,6 +23,31 @@ describe("resolveModelVariant", () => {
           effort,
         });
       }
+    });
+
+    test("all claude-opus-5-5 effort variants resolve to the dotted 5.5 wire id", () => {
+      for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+        expect(resolveModelVariant(`claude-opus-5-5-${effort}`)).toEqual({
+          wireId: "claude-opus-5.5",
+          effort,
+        });
+      }
+    });
+
+    test("claude-opus-5-5 never parses as a claude-opus-5 variant", () => {
+      // `-5` is not an effort suffix, so the base must survive intact rather
+      // than collapsing onto claude-opus-5.
+      expect(resolveModelVariant("claude-opus-5-5")).toEqual({
+        wireId: "claude-opus-5.5",
+        effort: undefined,
+      });
+      expect(resolveModelVariant("claude-opus-5-5-thinking")).toEqual({
+        wireId: "claude-opus-5.5",
+        effort: undefined,
+      });
+      expect(stripModelSuffix("claude-opus-5-5-max")).toBe("claude-opus-5-5");
+      expect(stripModelSuffix("claude-opus-5-5-thinking")).toBe("claude-opus-5-5");
+      expect(getContextWindowSize("claude-opus-5-5-max")).toBe(1_000_000);
     });
 
     test("claude-sonnet-4-6-max -> {wireId: claude-sonnet-4.6, effort: max}", () => {
@@ -150,10 +175,19 @@ describe("effort capability", () => {
     expect(resolveEffort("claude-sonnet-4.5", "high")).toBeUndefined();
   });
 
-  test("opus 4.7, 4.8, and 5 keep xhigh (no clamp)", () => {
+  test("opus 4.7, 4.8, 5, and 5.5 keep xhigh (no clamp)", () => {
     expect(resolveEffort("claude-opus-4.7", "xhigh")).toBe("xhigh");
     expect(resolveEffort("claude-opus-4.8", "xhigh")).toBe("xhigh");
     expect(resolveEffort("claude-opus-5", "xhigh")).toBe("xhigh");
+    expect(resolveEffort("claude-opus-5.5", "xhigh")).toBe("xhigh");
+  });
+
+  test("claude-opus-5.5 supports the full effort enum its catalog schema declares", () => {
+    expect(supportsEffort("claude-opus-5.5")).toBe(true);
+    expect(supportsXHighEffort("claude-opus-5.5")).toBe(true);
+    // Reached through the hyphenated public id and its variants too.
+    expect(supportsEffort(resolveModelVariant("claude-opus-5-5").wireId)).toBe(true);
+    expect(supportsXHighEffort(resolveModelVariant("claude-opus-5-5-xhigh").wireId)).toBe(true);
   });
 });
 
@@ -167,6 +201,7 @@ describe("buildEffortRequestFields — per-model wire shape dispatch", () => {
   test("Claude models use output_config.effort", () => {
     for (const wire of [
       "claude-opus-5",
+      "claude-opus-5.5",
       "claude-opus-4.8",
       "claude-sonnet-5",
       "claude-sonnet-4.6",

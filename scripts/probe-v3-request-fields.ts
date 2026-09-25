@@ -236,6 +236,14 @@ async function main(): Promise<void> {
       prompt: "Reply with exactly FIELD_PROBE_OK.",
     },
     {
+      // Upper bound of the range PROBE_CONFIRMED_MAX_TOKENS_MODELS advertises.
+      // A catalog schema declaring `maximum` is not evidence that the field is
+      // accepted at that value.
+      name: "max_tokens_upper",
+      fields: { max_tokens: 128000 },
+      prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    {
       name: "max_output_tokens",
       fields: { max_output_tokens: 64 },
       prompt: "Reply with exactly FIELD_PROBE_OK.",

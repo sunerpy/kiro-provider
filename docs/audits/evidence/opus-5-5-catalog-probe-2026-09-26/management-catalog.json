@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "source": "Kiro ListAvailableModels (management.us-east-1.kiro.dev), origin AI_EDITOR",
+  "date": "2026-09-26",
+  "model": {
+    "modelId": "claude-opus-5.5",
+    "modelName": "Claude Opus 5.5",
+    "description": "Experimental preview of Claude Opus 5.5 model with 1M context window",
+    "supportedInputTypes": [
+      "TEXT",
+      "IMAGE"
+    ],
+    "tokenLimits": {
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 128000
+    },
+    "rateMultiplier": 2,
+    "promptCaching": {
+      "supportsPromptCaching": true
+    },
+    "additionalModelRequestFieldsSchema": {
+      "type": "object",
+      "properties": {
+        "thinking": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "adaptive"
+              ]
+            },
+            "display": {
+              "type": "string",
+              "enum": [
+                "summarized",
+                "omitted"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "output_config": {
+          "type": "object",
+          "properties": {
+            "effort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ],
+              "default": "medium"
+            }
+          }
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 128000
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

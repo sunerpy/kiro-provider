@@ -42,9 +42,9 @@ describe("MODEL_CATALOG", () => {
   });
 
   test("advertises the probe-backed Opus 5 family with exact limits", () => {
-    const opus5 = MODEL_CATALOG.filter(
-      ({ id }) => id === "claude-opus-5" || id.startsWith("claude-opus-5-"),
-    );
+    // Keyed by wire id, not an id prefix: claude-opus-5-5* are a different
+    // upstream model whose public ids would otherwise be captured here.
+    const opus5 = MODEL_CATALOG.filter(({ wireId }) => wireId === "claude-opus-5");
 
     expect(opus5.map(({ id }) => id)).toEqual([
       "claude-opus-5",
@@ -59,6 +59,96 @@ describe("MODEL_CATALOG", () => {
       expect(entry.contextLimit).toBe(1_000_000);
       expect(entry.outputLimit).toBe(128_000);
     }
+  });
+
+  test("advertises the probe-backed Opus 5.5 preview family with exact limits", () => {
+    const opus55 = MODEL_CATALOG.filter(({ wireId }) => wireId === "claude-opus-5.5");
+
+    expect(opus55.map(({ id }) => id)).toEqual([
+      "claude-opus-5-5",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+      "claude-opus-5-5-xhigh",
+      "claude-opus-5-5-max",
+    ]);
+    for (const entry of opus55) {
+      // The hyphenated public id keeps the dotted wire id, unlike plain Opus 5
+      // whose two spellings coincide.
+      expect(entry.wireId).toBe("claude-opus-5.5");
+      expect(entry.contextLimit).toBe(1_000_000);
+      expect(entry.outputLimit).toBe(128_000);
+      expect(entry.rateMultiplier).toBe(2);
+      expect(entry.modalities.input).toContain("image");
+    }
+    expect(opus55.map(({ name }) => name)).toEqual([
+      "Claude Opus 5.5 (2.0x)",
+      "Claude Opus 5.5 (low) (2.0x)",
+      "Claude Opus 5.5 (medium) (2.0x)",
+      "Claude Opus 5.5 (high) (2.0x)",
+      "Claude Opus 5.5 (xhigh) (2.0x)",
+      "Claude Opus 5.5 (max) (2.0x)",
+    ]);
+  });
+
+  test("expands the live dotted Opus 5.5 wire model into its public effort family", () => {
+    // Before claude-opus-5.5 was catalogued, the live wire id fell through to the
+    // dynamic branch and produced a single entry whose public id was the dotted
+    // wire id, with no effort variants for Codex to offer.
+    const entries = modelCatalogFromAvailableModels([
+      {
+        modelId: "claude-opus-5.5",
+        modelName: "Claude Opus 5.5",
+        description: "Experimental preview of Claude Opus 5.5 model with 1M context window",
+        supportedInputTypes: ["TEXT", "IMAGE"],
+        tokenLimits: { maxInputTokens: 1_000_000, maxOutputTokens: 128_000 },
+        rateMultiplier: 2,
+        promptCaching: { supportsPromptCaching: true },
+        additionalModelRequestFieldsSchema: {
+          type: "object",
+          properties: {
+            output_config: {
+              type: "object",
+              properties: {
+                effort: {
+                  type: "string",
+                  enum: ["low", "medium", "high", "xhigh", "max"],
+                  default: "medium",
+                },
+              },
+            },
+            max_tokens: { type: "integer", minimum: 1024, maximum: 128000 },
+          },
+        },
+      },
+    ]);
+
+    expect(entries.map(({ id }) => id)).toEqual([
+      "claude-opus-5-5",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-medium",
+      "claude-opus-5-5-high",
+      "claude-opus-5-5-xhigh",
+      "claude-opus-5-5-max",
+    ]);
+    for (const entry of entries) {
+      expect(entry.wireId).toBe("claude-opus-5.5");
+      expect(entry.contextLimit).toBe(1_000_000);
+      expect(entry.outputLimit).toBe(128_000);
+      expect(entry.rateMultiplier).toBe(2);
+      expect(entry.promptCaching).toEqual({ supportsPromptCaching: true });
+      expect(entry.description).toBe(
+        "Experimental preview of Claude Opus 5.5 model with 1M context window",
+      );
+    }
+    expect(entries[0]?.additionalModelRequestFieldsSchema).toMatchObject({
+      properties: {
+        output_config: {
+          properties: { effort: { enum: ["low", "medium", "high", "xhigh", "max"] } },
+        },
+        max_tokens: { minimum: 1024, maximum: 128000 },
+      },
+    });
   });
 
   test("advertises the probe-backed Fable 5.1 preview with exact Kiro metadata", () => {
