@@ -61,12 +61,13 @@ KIROCLAUDE_MODEL=sonnet KIROCLAUDE_EFFORT=high kiroclaude
 
 The launcher already maps the verified Opus 5.5, Opus 5, Sonnet, Fable, Sol,
 Terra, and Luna defaults to `[1m]` and sets `autoCompactWindow: 1000000`. Claude
-removes `[1m]` before sending the model ID. The built-in Opus row carries Opus
-5.5 and the small-fast row maps to Sonnet 5, so it inherits that 1M window.
-Explicit custom model pins are preserved. Ultra is the default; it sends `xhigh` in the validated
-Claude version. The launcher also supplies the compatibility settings needed
-for stable Fable thinking and Bash history replay. Keep these settings when
-writing another wrapper around it.
+removes `[1m]` before sending the model ID. Opus 5.5 is both the built-in Opus
+row's target and a named `Claude Opus 5.5` picker row, and it is the default
+session model; the small-fast row maps to Sonnet 5, so it inherits that 1M
+window. Explicit custom model pins are preserved. Ultra is the default; it sends
+`xhigh` in the validated Claude version. The launcher also supplies the
+compatibility settings needed for stable Fable thinking and Bash history replay.
+Keep these settings when writing another wrapper around it.
 
 The gateway root is `http://127.0.0.1:8787`, **without `/v1`**. Override it
 with `KIROCLAUDE_BASE_URL`; use `KIROCLAUDE_PROVIDER_CONFIG` if its credential

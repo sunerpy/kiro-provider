@@ -41,9 +41,15 @@ const cases = toolLoop
   : useLauncher && !thresholdMode
     ? [
         // `opus` resolves through ANTHROPIC_DEFAULT_OPUS_MODEL, so this case
-        // covers whichever Opus the launcher currently pins; launcher-opus5
-        // covers the explicit Opus 5 picker row.
+        // covers the family alias; launcher-opus55 and launcher-opus5 cover the
+        // two named picker rows by their exact IDs.
         { name: "launcher-opus", model: "opus", env: {}, expectedWindow: 1000000 },
+        {
+          name: "launcher-opus55",
+          model: "claude-opus-5-5[1m]",
+          env: {},
+          expectedWindow: 1000000,
+        },
         { name: "launcher-opus5", model: "claude-opus-5[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-sonnet", model: "sonnet", env: {}, expectedWindow: 1000000 },
         { name: "launcher-fable", model: "fable", env: {}, expectedWindow: 1000000 },

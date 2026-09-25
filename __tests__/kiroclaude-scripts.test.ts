@@ -113,6 +113,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(defaults.exitCode).toBe(0);
     const captured = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
     const settings = JSON.parse(captured.arguments[1] as string) as {
+      model: string;
       env: Record<string, string>;
       modelPicker: { options: Array<{ model: string }> };
       autoCompactWindow: number;
@@ -121,13 +122,17 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.env.CLAUDE_CODE_TOASTY_THIMBLE).toBe("0");
     expect(settings.env.CLAUDE_CODE_GENTLE_PARASOL).toBe("0");
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(expectedHeaders());
-    // The built-in Opus row is the only Claude row the launcher pins per run, so
-    // it carries the current flagship while Opus 5 stays an explicit picker row.
+    // The built-in Opus row carries the current flagship so the `opus` family
+    // alias resolves to it; Opus 5 stays reachable as its own picker row.
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-sonnet-5[1m]");
+    // Opus 5.5 is declared as a named picker row as well as the built-in Opus
+    // target, so the client displays the exact model instead of a generic label.
+    expect(settings.model).toBe("claude-opus-5-5[1m]");
     expect(settings.modelPicker.options.map((option) => option.model)).toEqual([
+      "claude-opus-5-5[1m]",
       "claude-opus-5[1m]",
       "gpt-5.6-sol[1m]",
       "gpt-5.6-terra[1m]",
@@ -145,8 +150,12 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     const overridden = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
     const customSettings = JSON.parse(overridden.arguments[1] as string) as typeof settings;
     expect(customSettings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("custom-opus");
-    expect(customSettings.modelPicker.options[0]?.model).toBe("custom-opus5");
-    expect(customSettings.modelPicker.options[1]?.model).toBe("custom-sol");
+    // The named Opus 5.5 row follows KIROCLAUDE_OPUS_MODEL, and so does the
+    // default session model, so an override cannot leave the two out of sync.
+    expect(customSettings.model).toBe("custom-opus");
+    expect(customSettings.modelPicker.options[0]?.model).toBe("custom-opus");
+    expect(customSettings.modelPicker.options[1]?.model).toBe("custom-opus5");
+    expect(customSettings.modelPicker.options[2]?.model).toBe("custom-sol");
   });
 
   test("shares the native Claude home while applying process-local Kiro defaults", () => {
@@ -231,7 +240,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       env: Record<string, string>;
     };
     expect(settings.apiKeyHelper).toBe(helper);
-    expect(settings.model).toBe("opus");
+    expect(settings.model).toBe("claude-opus-5-5[1m]");
     expect(settings.effortLevel).toBe("max");
     expect(settings.ultracode).toBe(true);
     expect(settings).not.toHaveProperty("permissions");
@@ -240,6 +249,12 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.modelPicker).toEqual({
       replaceBuiltInOptions: false,
       options: [
+        {
+          model: "claude-opus-5-5[1m]",
+          label: "Claude Opus 5.5",
+          description: "Kiro Claude flagship",
+          behavesAs: "claude-opus-5",
+        },
         {
           model: "claude-opus-5[1m]",
           label: "Claude Opus 5",
