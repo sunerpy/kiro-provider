@@ -85,7 +85,10 @@ if [ "$backend" = kiro ]; then
   # Claude Code uses a conservative window behind custom gateways unless the
   # client model explicitly declares [1m]. Claude strips this client-only suffix
   # before sending the model ID. Custom pins remain exactly as supplied.
-  opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5[1m]}
+  # The built-in Opus row is the only Claude row this launcher pins per run, so it
+  # carries the current flagship. Opus 5 stays reachable as an explicit picker row.
+  opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5-5[1m]}
+  opus5_model=${KIROCLAUDE_OPUS5_MODEL:-claude-opus-5[1m]}
   sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5[1m]}
   # Claude Code uses its small-fast model for prompt hooks and sends max_tokens.
   # Kiro Haiku 4.5 rejects additionalModelRequestFields, so use the
@@ -96,7 +99,7 @@ if [ "$backend" = kiro ]; then
   terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra[1m]}
   luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna[1m]}
 
-  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
+  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$opus5_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
 import json
 import hashlib
 import os
@@ -113,6 +116,7 @@ from urllib.parse import urlsplit
     permission_mode,
     skip_dangerous_prompt,
     opus,
+    opus5,
     sonnet,
     haiku,
     fable,
@@ -125,7 +129,10 @@ if parsed.scheme not in {"http", "https"} or not parsed.netloc:
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be an absolute http(s) URL")
 if parsed.query or parsed.fragment or parsed.path.rstrip("/"):
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be the gateway root, without /v1 or another path")
-if not all(value.strip() for value in (model, effort, opus, sonnet, haiku, fable, sol, terra, luna)):
+if not all(
+    value.strip()
+    for value in (model, effort, opus, opus5, sonnet, haiku, fable, sol, terra, luna)
+):
     raise SystemExit("kiroclaude: model and effort settings must not be empty")
 settings = {
     "apiKeyHelper": shlex.quote(helper),
@@ -140,6 +147,7 @@ settings = {
     "modelPicker": {
         "replaceBuiltInOptions": False,
         "options": [
+            {"model": opus5, "label": "Claude Opus 5", "description": "Kiro Claude previous flagship", "behavesAs": "claude-opus-5"},
             {"model": sol, "label": "GPT-5.6 Sol", "description": "Kiro GPT flagship", "behavesAs": "claude-opus-5"},
             {"model": terra, "label": "GPT-5.6 Terra", "description": "Kiro GPT balanced", "behavesAs": "claude-opus-5"},
             {"model": luna, "label": "GPT-5.6 Luna", "description": "Kiro GPT efficient", "behavesAs": "claude-opus-5"},

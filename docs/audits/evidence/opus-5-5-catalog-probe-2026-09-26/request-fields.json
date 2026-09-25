@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "model": "claude-opus-5.5",
+  "account_hash": "a0c2cb34db08bc1d",
+  "results": [
+    {
+      "name": "control",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 3751,
+      "event_count": 5,
+      "completion_witnessed": false,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99",
+      "reasoning_chars": 0,
+      "reasoning_signatures": 0,
+      "reasoning_redacted": 0
+    },
+    {
+      "name": "effort_xhigh",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 3661,
+      "event_count": 5,
+      "completion_witnessed": false,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99",
+      "reasoning_chars": 0,
+      "reasoning_signatures": 0,
+      "reasoning_redacted": 0
+    },
+    {
+      "name": "thinking_summarized",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 3656,
+      "event_count": 5,
+      "completion_witnessed": false,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99",
+      "reasoning_chars": 0,
+      "reasoning_signatures": 0,
+      "reasoning_redacted": 0
+    },
+    {
+      "name": "thinking_omitted",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 3716,
+      "event_count": 5,
+      "completion_witnessed": false,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99",
+      "reasoning_chars": 0,
+      "reasoning_signatures": 0,
+      "reasoning_redacted": 0
+    },
+    {
+      "name": "max_tokens",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 4648,
+      "event_count": 5,
+      "completion_witnessed": false,
+      "text_chars": 14,
+      "text_hash": "6614a88cb7dffe99",
+      "reasoning_chars": 0,
+      "reasoning_signatures": 0,
+      "reasoning_redacted": 0
+    },
+    {
+      "name": "max_output_tokens",
+      "ok": false,
+      "status": 400,
+      "code": "REQUEST_BODY_INVALID",
+      "message": "Invalid additionalModelRequestFields: property 'max_output_tokens' is not defined in the schema and the schema does not allow additional properties",
+      "duration_ms": 2411
+    }
+  ]
+}

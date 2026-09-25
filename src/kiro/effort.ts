@@ -24,6 +24,11 @@ const GPT_REASONING_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-l
  */
 const XHIGH_CAPABLE_MODELS = new Set([
   "claude-fable-5.1",
+  // 2026-09-26: this model's own additionalModelRequestFieldsSchema declares
+  // output_config.effort as the full low|medium|high|xhigh|max enum with
+  // default medium, and a live xhigh request returns 200
+  // (docs/audits/opus-5-5-catalog-probe-2026-09-26.zh.md).
+  "claude-opus-5.5",
   "claude-opus-5",
   "claude-opus-4.7",
   "claude-opus-4.8",

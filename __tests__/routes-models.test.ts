@@ -24,6 +24,7 @@ describe("GET /v1/models", () => {
         base_instructions: string;
         context_window: number;
         shell_type: string;
+        default_reasoning_level: string | null;
         supported_reasoning_levels: unknown[];
       }>;
     };
@@ -75,6 +76,28 @@ describe("GET /v1/models", () => {
         { effort: "xhigh" },
         { effort: "max" },
       ],
+    });
+
+    // kirocodex /model reads models[].supported_reasoning_levels, so a newly
+    // catalogued Claude model is only switchable once these are populated.
+    const opus55 = entries.find((entry) => entry.id === "claude-opus-5-5") as
+      | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
+      | undefined;
+    const opus55Codex = body.models.find((entry) => entry.slug === "claude-opus-5-5");
+    expect(opus55).toMatchObject({ context_limit: 1_000_000, output_limit: 128_000 });
+    expect(opus55Codex).toMatchObject({
+      context_window: 1_000_000,
+      default_reasoning_level: "medium",
+      supported_reasoning_levels: [
+        { effort: "low" },
+        { effort: "medium" },
+        { effort: "high" },
+        { effort: "xhigh" },
+        { effort: "max" },
+      ],
+    });
+    expect(body.models.find((entry) => entry.slug === "claude-opus-5-5-xhigh")).toMatchObject({
+      default_reasoning_level: "xhigh",
     });
 
     const fable = entries.find((entry) => entry.id === "claude-fable-5-1") as
