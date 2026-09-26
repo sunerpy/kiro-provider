@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.7.0](https://github.com/sunerpy/kiro-provider/compare/v3.6.0...v3.7.0) (2026-09-26)
+
+
+### Features
+
+* **claude:** 让 picker 直接显示 Claude Opus 5.5 ([22049b6](https://github.com/sunerpy/kiro-provider/commit/22049b6986382858f5cb6fbd1133f57b9caf266b))
+* **replay:** 准入 Opus 5.5 的跨账号回放单元 ([b787f91](https://github.com/sunerpy/kiro-provider/commit/b787f912183895ce19de2d9a1c1b4e89f808d537))
+
+
+### Bug Fixes
+
+* **test:** 用裸 socket 读取大请求体的 401 ([d86789c](https://github.com/sunerpy/kiro-provider/commit/d86789cda4380e17328734c2272702174fa27286))
+
 ## [3.6.0](https://github.com/sunerpy/kiro-provider/compare/v3.5.10...v3.6.0) (2026-09-25)
 
 
