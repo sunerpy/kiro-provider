@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.1](https://github.com/sunerpy/kiro-provider/compare/v3.7.0...v3.7.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **claude:** 让 KIROCLAUDE_EFFORT=max 真正生效 ([#116](https://github.com/sunerpy/kiro-provider/issues/116)) ([bef9484](https://github.com/sunerpy/kiro-provider/commit/bef948454d4eef4acfc6b5602a74221ae6d66e81))
+
 ## [3.7.0](https://github.com/sunerpy/kiro-provider/compare/v3.6.0...v3.7.0) (2026-09-26)
 
 
