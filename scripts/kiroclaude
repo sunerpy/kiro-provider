@@ -6,14 +6,26 @@ fail() {
   exit 1
 }
 
+# Claude Code persists only low, medium, high, and xhigh in `effortLevel` and
+# silently drops anything else, so a settings value of max fell back to the
+# model default. Max exists only as a session level, passed as `--effort max`.
+# Ultra is Claude Code's Ultracode (xhigh plus standing workflow orchestration);
+# an explicit session effort turns Ultracode off, so ultra never adds one.
 resolve_effort() {
   case "$1" in
     ultra | ultracode)
-      resolved_effort=max
+      resolved_effort=xhigh
+      resolved_session_effort=
       resolved_ultracode=true
       ;;
-    low | medium | high | xhigh | max)
+    low | medium | high | xhigh)
       resolved_effort=$1
+      resolved_session_effort=
+      resolved_ultracode=false
+      ;;
+    max)
+      resolved_effort=
+      resolved_session_effort=max
       resolved_ultracode=false
       ;;
     *) fail "unsupported effort '$1' (use ultra, low, medium, high, xhigh, or max)" ;;
@@ -135,9 +147,11 @@ if parsed.query or parsed.fragment or parsed.path.rstrip("/"):
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be the gateway root, without /v1 or another path")
 if not all(
     value.strip()
-    for value in (model, effort, opus, opus5, sonnet, haiku, fable, sol, terra, luna)
+    for value in (model, opus, opus5, sonnet, haiku, fable, sol, terra, luna)
 ):
-    raise SystemExit("kiroclaude: model and effort settings must not be empty")
+    raise SystemExit("kiroclaude: model settings must not be empty")
+if effort not in {"", "low", "medium", "high", "xhigh"}:
+    raise SystemExit("kiroclaude: persisted effort must be low, medium, high, or xhigh")
 settings = {
     "apiKeyHelper": shlex.quote(helper),
     "model": model,
@@ -145,7 +159,8 @@ settings = {
     # would otherwise use reactive overflow handling. Claude clamps this to
     # each model's window; --autocompact and the native environment override win.
     "autoCompactWindow": 1000000,
-    "effortLevel": effort,
+    # Empty for max, which travels as the session-only --effort flag instead.
+    **({"effortLevel": effort} if effort else {}),
     "ultracode": ultracode == "true",
     "awaySummaryEnabled": False,
     "modelPicker": {
@@ -211,11 +226,14 @@ import json
 import sys
 
 model, effort, ultracode, permission_mode, skip_dangerous_prompt, profile, region, fable = sys.argv[1:]
-if not all(value.strip() for value in (model, effort, profile, region, fable)):
+if not all(value.strip() for value in (model, profile, region, fable)):
     raise SystemExit("kiroclaude: Bedrock Fable settings must not be empty")
+if effort not in {"", "low", "medium", "high", "xhigh"}:
+    raise SystemExit("kiroclaude: persisted effort must be low, medium, high, or xhigh")
 settings = {
     "model": model,
-    "effortLevel": effort,
+    # Empty for max, which travels as the session-only --effort flag instead.
+    **({"effortLevel": effort} if effort else {}),
     "ultracode": ultracode == "true",
     "awaySummaryEnabled": False,
     "modelPicker": {
@@ -281,6 +299,12 @@ else
   export AWS_REGION="$aws_region"
   export AWS_DEFAULT_REGION="$aws_region"
   export ANTHROPIC_DEFAULT_FABLE_MODEL="$fable_model"
+fi
+
+# The session level goes before the caller's arguments. Claude keeps the last
+# --effort it sees, so an explicit per-invocation --effort still wins.
+if [ -n "$resolved_session_effort" ]; then
+  set -- --effort "$resolved_session_effort" "$@"
 fi
 
 exec "$claude_bin" --settings "$settings" "$@"

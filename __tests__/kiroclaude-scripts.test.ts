@@ -79,6 +79,31 @@ PY
   return { executable, capture };
 }
 
+// Claude Code 2.1.280 effort resolution, evidenced against the installed client by
+// `bun scripts/probe-client-context.mjs --effort-matrix`: the persisted
+// `effortLevel` setting accepts only these values and silently drops any other
+// (so `"max"` fell back to medium), the last `--effort` flag sets a session
+// level that may be max and turns Ultracode off, and Ultracode alone runs at xhigh.
+const persistableEfforts = ["low", "medium", "high", "xhigh"];
+
+function claudeEffectiveEffort(
+  argv: readonly string[],
+  settings: { readonly effortLevel?: unknown; readonly ultracode?: unknown },
+): { effort: string; ultracode: boolean } {
+  let session: string | undefined;
+  for (const [index, argument] of argv.entries()) {
+    if (argument === "--effort") session = argv[index + 1];
+    else if (argument.startsWith("--effort=")) session = argument.slice("--effort=".length);
+  }
+  if (session !== undefined) return { effort: session, ultracode: false };
+  if (settings.ultracode === true) return { effort: "xhigh", ultracode: true };
+  const persisted =
+    typeof settings.effortLevel === "string" && persistableEfforts.includes(settings.effortLevel)
+      ? settings.effortLevel
+      : "model-default";
+  return { effort: persisted, ultracode: false };
+}
+
 function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<string, string> {
   return {
     ...process.env,
@@ -241,8 +266,15 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     };
     expect(settings.apiKeyHelper).toBe(helper);
     expect(settings.model).toBe("claude-opus-5-5[1m]");
-    expect(settings.effortLevel).toBe("max");
+    // Ultra is Claude Code's Ultracode: xhigh plus standing orchestration. An
+    // explicit session effort would switch Ultracode off, so none is passed.
+    expect(settings.effortLevel).toBe("xhigh");
     expect(settings.ultracode).toBe(true);
+    expect(capture.arguments).not.toContain("--effort");
+    expect(claudeEffectiveEffort(capture.arguments, settings)).toEqual({
+      effort: "xhigh",
+      ultracode: true,
+    });
     expect(settings).not.toHaveProperty("permissions");
     expect(settings).not.toHaveProperty("skipDangerousModePermissionPrompt");
     expect(settings.awaySummaryEnabled).toBe(false);
@@ -443,9 +475,15 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(capture.env.AWS_DEFAULT_REGION).toBe("us-east-2");
     expect(capture.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("us.anthropic.claude-fable-5-1");
     expect(settings).not.toHaveProperty("apiKeyHelper");
+    // The Bedrock default is max, which Claude Code accepts only per session.
+    expect(settings).not.toHaveProperty("effortLevel");
+    expect(capture.arguments.slice(2, 4)).toEqual(["--effort", "max"]);
+    expect(claudeEffectiveEffort(capture.arguments, settings)).toEqual({
+      effort: "max",
+      ultracode: false,
+    });
     expect(settings).toMatchObject({
       model: "fable",
-      effortLevel: "max",
       ultracode: false,
       awaySummaryEnabled: false,
       modelPicker: {
@@ -483,6 +521,92 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(capture.effectiveSettings.env.ANTHROPIC_BEDROCK_BASE_URL).toBe("");
     expect(capture.effectiveSettings.env.ANTHROPIC_API_KEY).toBe("");
     expect(capture.arguments.slice(-2)).toEqual(["--print", "hello"]);
+  });
+
+  test("every KIROCLAUDE_EFFORT value reaches Claude Code as the effort it names", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    // A native persisted level must not leak into an explicit launcher choice.
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "settings.json"), '{"effortLevel":"high"}\n');
+    const expected: Record<string, { effort: string; ultracode: boolean }> = {
+      ultra: { effort: "xhigh", ultracode: true },
+      ultracode: { effort: "xhigh", ultracode: true },
+      low: { effort: "low", ultracode: false },
+      medium: { effort: "medium", ultracode: false },
+      high: { effort: "high", ultracode: false },
+      xhigh: { effort: "xhigh", ultracode: false },
+      max: { effort: "max", ultracode: false },
+    };
+    for (const [effort, outcome] of Object.entries(expected)) {
+      const result = Bun.spawnSync(["sh", launcher, "--print", "hello"], {
+        env: { ...environment(root, fake), KIROCLAUDE_EFFORT: effort },
+      });
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+        arguments: string[];
+        effectiveSettings: { effortLevel?: unknown; ultracode?: unknown };
+      };
+      const overlay = JSON.parse(capture.arguments[1] as string) as {
+        effortLevel?: string;
+        ultracode?: boolean;
+      };
+      // Any persisted level the launcher writes must survive Claude's schema.
+      if (overlay.effortLevel !== undefined) {
+        expect(persistableEfforts).toContain(overlay.effortLevel);
+      }
+      expect([effort, claudeEffectiveEffort(capture.arguments, capture.effectiveSettings)]).toEqual(
+        [effort, outcome],
+      );
+      expect(capture.arguments.slice(-2)).toEqual(["--print", "hello"]);
+    }
+  });
+
+  test("max applies to the session while a later explicit --effort still wins", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const env = { ...environment(root, fake), KIROCLAUDE_EFFORT: "max" };
+
+    const session = Bun.spawnSync(["sh", launcher, "--resume", "session-id"], { env });
+    expect(session.exitCode).toBe(0);
+    const resumed = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
+    const resumedSettings = JSON.parse(resumed.arguments[1] as string) as Record<string, unknown>;
+    expect(resumedSettings).not.toHaveProperty("effortLevel");
+    expect(resumedSettings.ultracode).toBe(false);
+    expect(resumed.arguments.slice(2)).toEqual(["--effort", "max", "--resume", "session-id"]);
+    expect(claudeEffectiveEffort(resumed.arguments, resumedSettings).effort).toBe("max");
+
+    for (const override of [["--effort", "high"], ["--effort=low"]]) {
+      const result = Bun.spawnSync(["sh", launcher, ...override, "--print", "hello"], { env });
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as { arguments: string[] };
+      const settings = JSON.parse(capture.arguments[1] as string) as Record<string, unknown>;
+      expect(capture.arguments.slice(-override.length - 2)).toEqual([
+        ...override,
+        "--print",
+        "hello",
+      ]);
+      expect(claudeEffectiveEffort(capture.arguments, settings).effort).toBe(
+        override.length === 2 ? "high" : "low",
+      );
+    }
+
+    const bedrock = Bun.spawnSync(["sh", launcher, "--bedrock-fable", "--print", "hello"], {
+      env: { ...env, KIROCLAUDE_FABLE_EFFORT: "high" },
+    });
+    expect(bedrock.exitCode).toBe(0);
+    const bedrockCapture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+    };
+    const bedrockSettings = JSON.parse(bedrockCapture.arguments[1] as string) as Record<
+      string,
+      unknown
+    >;
+    expect(bedrockCapture.arguments).not.toContain("--effort");
+    expect(claudeEffectiveEffort(bedrockCapture.arguments, bedrockSettings)).toEqual({
+      effort: "high",
+      ultracode: false,
+    });
   });
 
   test("allows an explicit safer permission mode without changing shared settings", () => {
