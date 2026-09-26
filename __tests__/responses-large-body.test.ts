@@ -45,11 +45,17 @@ async function waitFor(predicate: () => boolean): Promise<boolean> {
 }
 
 /**
- * Observe Bun's header-level 413 before sending a multi-megabyte body. Native
+ * Observe a header-level rejection before sending a multi-megabyte body. Native
  * Windows fetch can otherwise surface the server's early close as ECONNRESET
  * while it is still uploading, hiding the HTTP status from the test harness.
+ * This covers both of the provider's header-level refusals: Bun's 413 body-limit
+ * rejection, and the 401 the auth gate returns before the body is read.
  */
-function rejectedUploadStatus(port: number, body: string): Promise<number> {
+function rejectedUploadStatus(
+  port: number,
+  body: string,
+  key = MESSAGES_FIXTURE_KEY,
+): Promise<number> {
   return new Promise((resolve, reject) => {
     const socket = createConnection({ host: "127.0.0.1", port });
     let headers = "";
@@ -79,7 +85,7 @@ function rejectedUploadStatus(port: number, body: string): Promise<number> {
         [
           "POST /v1/responses HTTP/1.1",
           `Host: 127.0.0.1:${port}`,
-          `Authorization: Bearer ${MESSAGES_FIXTURE_KEY}`,
+          `Authorization: Bearer ${key}`,
           "Content-Type: application/json",
           `Content-Length: ${Buffer.byteLength(body)}`,
           "Connection: close",
@@ -185,9 +191,12 @@ describe("Codex screenshot history across the real HTTP body limit", () => {
     const audit = captureAuditEvents();
     const run = loopback();
     try {
-      const response = await run.post(codexBody(), "invalid-fixture-key");
-      expect(response.status).toBe(401);
-      await response.text();
+      // The auth gate answers 401 on headers, before the body is read, so a
+      // fetch that is still uploading megabytes can see the close as a reset
+      // instead of the status. Read it over a raw socket like the 413 cases do.
+      expect(
+        await rejectedUploadStatus(run.server.port as number, codexBody(), "invalid-fixture-key"),
+      ).toBe(401);
       expect(audit.events("request_admission_acquired")).toHaveLength(0);
       expect(run.inputs).toHaveLength(0);
       const recovered = await run.post(codexBody());

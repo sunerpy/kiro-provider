@@ -101,16 +101,19 @@ Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
 `400 unsupported_structured_output`，切换模型和本 profile 都不代表 prompt hook
 已完整兼容。Fable 行映射到 `claude-fable-5-1[1m]`，
 实际 Kiro wire ID 为 `claude-fable-5.1`。启动器还会在 picker 中加入
-`claude-opus-5[1m]`、`gpt-5.6-sol[1m]`、`gpt-5.6-terra[1m]` 和
-`gpt-5.6-luna[1m]`。
+`claude-opus-5-5[1m]`、`claude-opus-5[1m]`、`gpt-5.6-sol[1m]`、
+`gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
 
 `claude-opus-5-5` 对应的 Kiro wire ID 是 `claude-opus-5.5`，与不带点的 Opus 5
 不同，它保留了带点的小版本号。其活体目录条目声明 1M 输入窗口、128K 输出、图像
 输入、2.0x 倍率、prompt caching，以及把 `output_config.effort` 声明为完整
 `low|medium|high|xhigh|max` 枚举、`max_tokens` 取值 1,024 到 128,000 的
 `additionalModelRequestFieldsSchema`。Kiro 仍将其标注为实验性预览版。内置 Opus
-行是本启动器每次启动唯一会钉住的 Claude 行，因此由它承载当前旗舰；Opus 5 仍可
-通过 picker 行和 `KIROCLAUDE_OPUS5_MODEL` 访问。
+行指向它，使 `opus` 家族别名解析到当前旗舰；同一个 ID 还会作为一行标名
+`Claude Opus 5.5` 的 picker 行再声明一次，启动器钉住的会话模型也是这一行。两行
+指向同一个模型是有意的：正是这一行标名的 picker 行让客户端显示确切版本，而不是
+笼统的 Opus 标签。Opus 5 仍可通过自己的 picker 行和 `KIROCLAUDE_OPUS5_MODEL`
+访问，`KIROCLAUDE_MODEL=opus` 则选择家族别名。
 
 ### 会话标题与 `output_config.format`
 
@@ -143,15 +146,15 @@ thinking 已关闭时仍返回的上游 reasoning、超过 64 KiB 的输出，�
 标题；升级 Provider 也不会改写既有 transcript。
 
 Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthropic`
-的模型，所以这三个 GPT 行需要显式声明。Opus 5 行本身能通过该过滤，但仍显式声明，
-否则自动发现的行会使用默认窗口而不是 `[1m]` 声明的窗口。所有显式声明的 picker
+的模型，所以这三个 GPT 行需要显式声明。两个 Claude Opus 行本身能通过该过滤，但
+仍显式声明，否则自动发现的行会使用默认窗口而不是 `[1m]` 声明的窗口。所有显式声明的 picker
 行都以 `behavesAs: "claude-opus-5"` 作为客户端能力模板，从而获得 adaptive
 thinking 和左右切换 effort 的能力，无需为每个 effort 档位重复模型。`[1m]` 后缀让
 Claude Code 使用声明的 1M 窗口，客户端发请求前会去掉后缀。已用实际安装的客户端
 核对它能发出的七个不同 1M 模型 ID（`claude-opus-5-5`、`claude-opus-5`、
-`claude-sonnet-5`、`claude-fable-5-1` 和三个 GPT 行）；small-fast 行继承 Sonnet
-的 1M 窗口。仅有服务端模型目录不会自动改变客户端窗口，输出预留仍会减少可用输入
-预算。
+`claude-sonnet-5`、`claude-fable-5-1` 和三个 GPT 行），家族别名和钉为会话模型的
+确切 ID 两条路径都已核对；small-fast 行继承 Sonnet 的 1M 窗口。仅有服务端模型
+目录不会自动改变客户端窗口，输出预留仍会减少可用输入预算。
 
 Kiro overlay 同时设置 `autoCompactWindow: 1000000`，让网关模型主动压缩；
 Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。仍可使用
@@ -159,9 +162,10 @@ Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间�
 原生设置文件与独立 Bedrock overlay 不受影响。
 
 显式 `KIROCLAUDE_*_MODEL` 覆盖值会原样保留；自定义 ID 确实支持更大窗口时，
-请在覆盖值中带上 `[1m]`。`KIROCLAUDE_OPUS_MODEL` 改写内置 Opus 行，
-`KIROCLAUDE_OPUS5_MODEL` 改写 Opus 5 的 picker 行，因此
-`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` 可恢复原先的默认值。
+请在覆盖值中带上 `[1m]`。`KIROCLAUDE_OPUS_MODEL` 会同时改写内置 Opus 行、标名
+`Claude Opus 5.5` 的 picker 行和默认会话模型，因此
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` 可恢复 3.6.0 之前的默认值；
+`KIROCLAUDE_OPUS5_MODEL` 只改写 Opus 5 那一行。
 `KIROCLAUDE_HAIKU_MODEL` 仍是显式逃生口，但目标模型必须接受 Claude Code 必填的
 正整数 `max_tokens`，否则 prompt hook 仍会失败。这一变化仅适用于 Kiro 启动器，
 独立 Bedrock 模式不变。

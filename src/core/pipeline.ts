@@ -593,6 +593,15 @@ const VERIFIED_PORTABLE_REPLAY_CELLS = new Set([
   // 2026-09-16: Opus 5 at xhigh, signed reasoning + complete tool result,
   // source-account -> another account/new conversation passed 3/3.
   "anthropic-messages:claude-opus-5:us-east-1:kiro-runtime:profile:reasoning_text",
+  // 2026-09-26: Opus 5.5 admitted on family parity with the Opus 5 cell above,
+  // by explicit maintainer decision, NOT by its own probe. Its catalog schema
+  // matches Opus 5's adaptive-thinking/effort/max_tokens shape and it emits the
+  // same signed reasoning envelopes. The dedicated A->B run is still owed:
+  //   bun run scripts/probe-replay-portability.ts --confirm \
+  //     --model claude-opus-5.5 --effort max
+  // Re-run it once two un-rate-limited same-region accounts are available and
+  // record the result in docs/audits/opus-5-5-catalog-probe-2026-09-26.zh.md.
+  "anthropic-messages:claude-opus-5-5:us-east-1:kiro-runtime:profile:reasoning_text",
 ]);
 
 const VERIFIED_SAME_PROFILE_REPLAY_CELLS = new Set([

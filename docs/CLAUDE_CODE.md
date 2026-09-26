@@ -112,8 +112,9 @@ properties, boolean types) is outside that profile and still returns
 `400 unsupported_structured_output`, so neither the model mapping nor this
 profile claims complete prompt-hook compatibility. The built-in
 Fable row maps to `claude-fable-5-1[1m]`, whose Kiro wire id is
-`claude-fable-5.1`. The launcher also adds `claude-opus-5[1m]`,
-`gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and `gpt-5.6-luna[1m]` to the picker.
+`claude-fable-5.1`. The launcher also adds `claude-opus-5-5[1m]`,
+`claude-opus-5[1m]`, `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
+`gpt-5.6-luna[1m]` to the picker.
 
 `claude-opus-5-5` carries the Kiro wire id `claude-opus-5.5`, which keeps its
 dotted minor version even though plain Opus 5 does not. Its live catalog entry
@@ -121,9 +122,13 @@ advertises a 1M input window, 128K output, image input, a 2.0x rate multiplier,
 prompt caching, and an `additionalModelRequestFieldsSchema` declaring
 `output_config.effort` as the full `low|medium|high|xhigh|max` enum plus
 `max_tokens` from 1,024 through 128,000. Kiro still describes it as an
-experimental preview. The built-in Opus row is the only Claude row this launcher
-pins on every run, so it carries the current flagship; Opus 5 stays reachable as
-an explicit picker row and through `KIROCLAUDE_OPUS5_MODEL`.
+experimental preview. The built-in Opus row carries it so the `opus` family
+alias resolves to the current flagship, and the same ID is declared a second time
+as a picker row labelled `Claude Opus 5.5`, which is also what the launcher pins
+as the session model. Those two rows resolve to one model on purpose: the named
+row is what makes the exact version visible in the client instead of a generic
+Opus label. Opus 5 stays reachable as its own picker row and through
+`KIROCLAUDE_OPUS5_MODEL`, and `KIROCLAUDE_MODEL=opus` selects the family alias.
 
 ### Session titles and `output_config.format`
 
@@ -164,16 +169,17 @@ Code never asks for one in that case, and upgrading the provider does not rewrit
 existing transcripts.
 
 Claude Code's gateway discovery filters out model IDs without `claude` or
-`anthropic`, so the GPT rows must be declared explicitly. The Opus 5 row passes
-that filter on its own but is still declared so its `[1m]` suffix applies rather
-than a discovered default window. Every declared picker row uses
+`anthropic`, so the GPT rows must be declared explicitly. The two Claude Opus
+rows pass that filter on their own but are still declared so their `[1m]` suffix
+applies rather than a discovered default window. Every declared picker row uses
 `behavesAs: "claude-opus-5"` as the client-side capability template. This
 exposes adaptive thinking and the left/right effort control without duplicating
 each model at every effort level. The `[1m]` suffix makes Claude Code use
 the advertised 1M context window; Claude strips it before sending the model
 ID. The actual installed client was checked for all seven distinct 1M model IDs
 it can send (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`,
-`claude-fable-5-1`, and the three GPT rows), and the small-fast row inherits
+`claude-fable-5-1`, and the three GPT rows), both through the family alias and
+through the exact ID pinned as the session model, and the small-fast row inherits
 Sonnet's 1M window. A provider catalog alone does not change the client window,
 and output reserves still reduce the available input budget.
 
@@ -185,9 +191,10 @@ files and the separate Bedrock overlay are not changed.
 
 Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `[1m]` yourself when pinning a custom ID that supports the larger window.
-`KIROCLAUDE_OPUS_MODEL` repoints the built-in Opus row and
-`KIROCLAUDE_OPUS5_MODEL` repoints the Opus 5 picker row, so
-`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` restores the previous default.
+`KIROCLAUDE_OPUS_MODEL` repoints the built-in Opus row, the named
+`Claude Opus 5.5` picker row, and the default session model together, so
+`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` restores the pre-3.6.0 default.
+`KIROCLAUDE_OPUS5_MODEL` repoints only the Opus 5 picker row.
 `KIROCLAUDE_HAIKU_MODEL` remains an explicit escape hatch, but its target must
 accept Claude Code's required positive `max_tokens` or prompt hooks will fail.
 This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
