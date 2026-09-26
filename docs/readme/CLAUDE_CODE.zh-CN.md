@@ -52,7 +52,7 @@ Release installer 目前不安装这些辅助脚本。临时测试可直接从 c
 | 网关根地址             | `http://127.0.0.1:8787`，不能带 `/v1`             |
 | Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`          |
 | 模型                   | Opus 5.5，客户端上下文窗口 1M                     |
-| 推理模式               | Ultra，即 `effortLevel: "max"`、`ultracode: true` |
+| 推理模式               | Ultra，即 Ultracode：`xhigh` 加 workflow 编排     |
 | 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖            |
 | 离开后的 recap         | 关闭                                              |
 | 标题、分类等非必要流量 | 关闭                                              |
@@ -69,10 +69,18 @@ KIROCLAUDE_EFFORT=high \
 PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-`KIROCLAUDE_EFFORT=ultra` 是默认值，会设置 `effortLevel: "max"` 并启用
-Ultracode。Claude Code 2.1.270 会将该 Ultra 选择序列化为
-`output_config.effort: "xhigh"`。设置为 `low`、`medium`、`high`、`xhigh` 或
-`max` 时，则使用对应的普通 effort 档位并关闭 Ultracode。
+`KIROCLAUDE_EFFORT=ultra` 是默认值，启用 Claude Code 的 Ultracode：以
+`output_config.effort: "xhigh"` 运行，并常驻动态 workflow 编排；启动器同时写入
+一致的 `effortLevel: "xhigh"`。设置为 `low`、`medium`、`high` 或 `xhigh` 时，
+写入对应的 `effortLevel` 并关闭 Ultracode。
+
+`max` 同样关闭 Ultracode，但 Claude Code 2.1.280 的持久化 `effortLevel` 只接受
+`low` 到 `xhigh`，其他值会被静默丢弃；此前写入的 `effortLevel: "max"` 因此在
+wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会话级参数
+`--effort max`。子 agent 继承这一会话档位；命令行里更靠后的显式 `--effort`
+仍然优先，因为 Claude 以最后一个为准。任何显式会话 effort 都会关闭 Ultracode，
+所以 Ultra 不会附加该参数。已安装客户端的结果见
+[修复前后的 effort 矩阵](../audits/evidence/kiroclaude-max-effort-2026-09-26/effort-matrix.json)。
 
 启动器默认不提升权限，而是继承 Claude 原生权限策略。只有显式设置
 `KIROCLAUDE_PERMISSION_MODE` 时才覆盖，可选 `acceptEdits`、`auto`、
@@ -177,12 +185,16 @@ bun scripts/probe-client-context.mjs --claude-bin /path/to/claude
 bun scripts/probe-client-context.mjs --claude-bin /path/to/claude \
   --thresholds --cases 1m-old-threshold,1m-above
 bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --tool-loop
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --effort-matrix
 ```
 
 脚本使用本地假 API、假凭据和临时 Claude 状态，不调用真实模型；检查模型 ID、
 有效窗口、大输入是否完整发出，以及自动压缩事件。输出仅含元数据和计数；
 上游实际容量仍需独立实测。
 `--tool-loop` 会执行两次无副作用的 `Bash true`，比较已发送前缀与下一轮历史。
+`--effort-matrix` 检查每个 `KIROCLAUDE_EFFORT` 取值在 wire 上的 effort 与
+Ultracode 状态、命令行 `--effort` 覆盖，以及一个 max 档位的合成子 agent；加上
+`--launcher /path/to/kiroclaude` 可检查已安装的副本。
 
 Kiro overlay 使用 `CLAUDE_CODE_TOASTY_THIMBLE=0` 和
 `CLAUDE_CODE_GENTLE_PARASOL=0`，关闭 Claude Code 2.1.270 中不保留在后续历史里的
@@ -231,7 +243,8 @@ Kiro 不可用或明确需要 AWS 原生通道时，可使用独立进程启动 
 PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
 ```
 
-该模式使用同一个共享 Claude home、`model: "fable"`、max effort、
+该模式使用同一个共享 Claude home、`model: "fable"`、以 `--effort max` 传入的
+max effort、
 `AWS_PROFILE=us-claude`、`AWS_REGION=us-east-2` 和
 `ANTHROPIC_DEFAULT_FABLE_MODEL=us.anthropic.claude-fable-5-1`，不会设置 Kiro token
 helper 或 `ANTHROPIC_BASE_URL`。对应覆盖项为 `KIROCLAUDE_AWS_PROFILE`、

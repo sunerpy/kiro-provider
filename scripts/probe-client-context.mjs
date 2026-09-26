@@ -2,6 +2,9 @@
 // bun scripts/probe-client-context.mjs --claude-bin /path/to/claude
 // Add --thresholds for a synthetic large-history compaction check.
 // --tool-loop checks signed-prefix stability across two harmless Bash true calls.
+// --effort-matrix checks that every KIROCLAUDE_EFFORT value reaches the wire as
+// the effort it names, including one synthetic Agent subagent at max.
+// --launcher /path/to/kiroclaude checks an installed copy instead of ./kiroclaude.
 // --native-comparison compares native default/[1m]/environment behavior.
 // Installed Claude Code against a synthetic loopback API. No real model calls.
 // All requests and outputs remain in memory; only enums/counts are reported.
@@ -18,18 +21,45 @@ const option = (name, fallback) => {
   return index < 0 ? fallback : process.argv[index + 1];
 };
 const binary = option("--claude-bin", process.env.CLAUDE_CONTEXT_TEST_BINARY ?? "claude");
-const launcher = fileURLToPath(new URL("./kiroclaude", import.meta.url));
+const launcher = option("--launcher", fileURLToPath(new URL("./kiroclaude", import.meta.url)));
 const thresholdMode = process.argv.includes("--thresholds");
 const toolLoop = process.argv.includes("--tool-loop");
+const effortMatrix = process.argv.includes("--effort-matrix");
 const caseFilter = option("--cases", "");
 const root = await mkdtemp(join(tmpdir(), "claude-context-fixture-"));
 const useLauncher = !process.argv.includes("--native-comparison");
+if (effortMatrix && !useLauncher) throw new Error("--effort-matrix requires the launcher");
 const tokenHelper = join(root, "fixture-token");
 if (useLauncher) {
   await Bun.write(tokenHelper, "#!/bin/sh\nprintf '%s\\n' 'fixture-only'\n");
   await chmod(tokenHelper, 0o700);
 }
-const cases = toolLoop
+// The subagent prompt carries this marker so the fixture can tell its request
+// apart from the parent's.
+const subagentMarker = "EFFORT_SUBAGENT_FIXTURE";
+const effortCase = (name, effort, expectedEffort, extra = {}) => ({
+  name,
+  model: "claude-opus-5-5[1m]",
+  env: effort === undefined ? {} : { KIROCLAUDE_EFFORT: effort },
+  expectedEffort,
+  expectedUltracode: false,
+  ...extra,
+});
+const cases = effortMatrix
+  ? [
+      effortCase("effort-default", undefined, "xhigh", { expectedUltracode: true }),
+      effortCase("effort-ultra", "ultra", "xhigh", { expectedUltracode: true }),
+      effortCase("effort-low", "low", "low"),
+      effortCase("effort-medium", "medium", "medium"),
+      effortCase("effort-high", "high", "high"),
+      effortCase("effort-xhigh", "xhigh", "xhigh"),
+      effortCase("effort-max", "max", "max"),
+      // A later explicit client flag still wins over the launcher's max.
+      effortCase("effort-max-cli-override", "max", "high", { args: ["--effort", "high"] }),
+      // Subagents inherit the session effort rather than a persisted setting.
+      effortCase("effort-max-subagent", "max", "max", { agentLoop: true }),
+    ]
+  : toolLoop
   ? [
       {
         name: "tool-prefix",
@@ -148,6 +178,17 @@ async function runCase(test) {
               .filter((block) => block.type === "text")
               .map((block) => block.text.length),
       );
+      const serializedMessages = JSON.stringify(body.messages ?? []);
+      // Only a subagent opens with the marker; the parent later carries it in
+      // its Agent tool_use input, so the whole history cannot be used.
+      const subagent =
+        test.agentLoop === true &&
+        JSON.stringify(body.messages?.[0] ?? {}).includes(subagentMarker);
+      const hasToolResult = (body.messages ?? []).some(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((block) => block.type === "tool_result"),
+      );
       requests.push({
         model: body.model,
         maxTokens: body.max_tokens,
@@ -156,6 +197,12 @@ async function runCase(test) {
         effort: body.output_config?.effort ?? null,
         thinking: body.thinking ?? null,
         largestMessageTextChars: textLengths.reduce((max, length) => Math.max(max, length), 0),
+        ...(effortMatrix
+          ? {
+              role: subagent ? "subagent" : "main",
+              ultracode: serializedMessages.includes("Ultracode is on"),
+            }
+          : {}),
       });
       if (toolLoop) {
         const adapted = adaptAnthropicMessagesRequest(body, {}, "v3-auto");
@@ -194,7 +241,8 @@ async function runCase(test) {
         }
       }
       if (requests.length > 5) return new Response("fixture request limit", { status: 400 });
-      const useTool = toolLoop && ++replies <= 2;
+      const useAgent = test.agentLoop === true && !subagent && !hasToolResult;
+      const useTool = useAgent || (toolLoop && ++replies <= 2);
       const message = {
         id: `msg_context_fixture_${requests.length}`,
         type: "message",
@@ -218,7 +266,12 @@ async function runCase(test) {
             type: "content_block_start",
             index: 0,
             content_block: useTool
-              ? { type: "tool_use", id: `fixture_tool_${replies}`, name: "Bash", input: {} }
+              ? {
+                  type: "tool_use",
+                  id: `fixture_tool_${useAgent ? "agent" : replies}`,
+                  name: useAgent ? "Agent" : "Bash",
+                  input: {},
+                }
               : { type: "text", text: "" },
           },
         ],
@@ -230,7 +283,13 @@ async function runCase(test) {
             delta: useTool
               ? {
                   type: "input_json_delta",
-                  partial_json: '{"command":"true","description":"Synthetic no-op fixture"}',
+                  partial_json: useAgent
+                    ? JSON.stringify({
+                        description: "Effort fixture",
+                        prompt: `${subagentMarker}: return FIXTURE_OK.`,
+                        subagent_type: "general-purpose",
+                      })
+                    : '{"command":"true","description":"Synthetic no-op fixture"}',
                 }
               : { type: "text_delta", text: "FIXTURE_OK" },
           },
@@ -282,7 +341,8 @@ async function runCase(test) {
   const child = spawn(
     useLauncher ? launcher : binary,
     [
-      ...(test.usage || toolLoop ? ["--disable-slash-commands"] : ["--bare"]),
+      ...(test.args ?? []),
+      ...(test.usage || toolLoop || effortMatrix ? ["--disable-slash-commands"] : ["--bare"]),
       "-p",
       "--output-format",
       "stream-json",
@@ -297,9 +357,9 @@ async function runCase(test) {
       "--model",
       test.model,
       "--tools",
-      toolLoop ? "Bash" : "",
+      toolLoop ? "Bash" : test.agentLoop ? "Agent" : "",
       "--permission-mode",
-      toolLoop ? "bypassPermissions" : "dontAsk",
+      toolLoop || test.agentLoop ? "bypassPermissions" : "dontAsk",
       ...(test.usage ? ["--input-format", "stream-json"] : ["Return FIXTURE_OK."]),
     ],
     { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] },
@@ -419,6 +479,19 @@ async function runCase(test) {
             }),
         }
       : {}),
+    ...(effortMatrix
+      ? {
+          expectedEffort: test.expectedEffort,
+          expectedUltracode: test.expectedUltracode,
+          effortMatches:
+            requests.length > 0 &&
+            requests.every(
+              (item) =>
+                item.effort === test.expectedEffort && item.ultracode === test.expectedUltracode,
+            ),
+          subagentRequests: requests.filter((item) => item.role === "subagent").length,
+        }
+      : {}),
     stderrBytes,
     realUpstreamRequests: 0,
   };
@@ -442,7 +515,9 @@ try {
       (test.usage !== undefined &&
         (result.requests[0]?.largestMessageTextChars ?? 0) < test.usage * 4) ||
       (useLauncher && test.name === "1m-old-threshold" && result.compactionBoundaries !== 0) ||
-      (useLauncher && test.name === "1m-above" && result.compactionBoundaries < 1)
+      (useLauncher && test.name === "1m-above" && result.compactionBoundaries < 1) ||
+      (effortMatrix &&
+        (!result.effortMatches || (test.agentLoop === true && result.subagentRequests < 1)))
     )
       process.exitCode = 1;
   }

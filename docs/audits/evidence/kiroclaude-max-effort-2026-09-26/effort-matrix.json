@@ -1,0 +1,354 @@
+{
+  "date": "2026-09-26",
+  "client": "Claude Code 2.1.280 (installed binary)",
+  "command": "bun scripts/probe-client-context.mjs --effort-matrix [--launcher <path>]",
+  "fixture": "loopback fake Anthropic API; dummy credentials; temporary Claude state; no real model calls",
+  "before": {
+    "launcher": "scripts/kiroclaude at 40645b9 (effortLevel: \"max\" in --settings)",
+    "exitCode": 1,
+    "cases": [
+      {
+        "case": "effort-default",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": true
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": true
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-ultra",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": true
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": true
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-low",
+        "expected": {
+          "effort": "low",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "low",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-medium",
+        "expected": {
+          "effort": "medium",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-high",
+        "expected": {
+          "effort": "high",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "high",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-xhigh",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max",
+        "expected": {
+          "effort": "max",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          }
+        ],
+        "matches": false,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max-cli-override",
+        "expected": {
+          "effort": "high",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "high",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max-subagent",
+        "expected": {
+          "effort": "max",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          },
+          {
+            "role": "subagent",
+            "effort": "medium",
+            "ultracode": false
+          },
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          },
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          }
+        ],
+        "matches": false,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      }
+    ]
+  },
+  "after": {
+    "launcher": "scripts/kiroclaude with max passed as --effort max",
+    "exitCode": 0,
+    "cases": [
+      {
+        "case": "effort-default",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": true
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": true
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-ultra",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": true
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": true
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-low",
+        "expected": {
+          "effort": "low",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "low",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-medium",
+        "expected": {
+          "effort": "medium",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "medium",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-high",
+        "expected": {
+          "effort": "high",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "high",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-xhigh",
+        "expected": {
+          "effort": "xhigh",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "xhigh",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max",
+        "expected": {
+          "effort": "max",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "max",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max-cli-override",
+        "expected": {
+          "effort": "high",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "high",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      },
+      {
+        "case": "effort-max-subagent",
+        "expected": {
+          "effort": "max",
+          "ultracode": false
+        },
+        "requests": [
+          {
+            "role": "main",
+            "effort": "max",
+            "ultracode": false
+          },
+          {
+            "role": "subagent",
+            "effort": "max",
+            "ultracode": false
+          },
+          {
+            "role": "main",
+            "effort": "max",
+            "ultracode": false
+          },
+          {
+            "role": "main",
+            "effort": "max",
+            "ultracode": false
+          }
+        ],
+        "matches": true,
+        "clientSuccess": true,
+        "realUpstreamRequests": 0
+      }
+    ]
+  }
+}

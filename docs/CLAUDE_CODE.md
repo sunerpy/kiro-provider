@@ -57,7 +57,7 @@ checkout for tests, or copy/link them after deciding to keep this launcher.
 | Gateway root                          | `http://127.0.0.1:8787` (no `/v1` suffix)            |
 | Claude state                          | Shared native `~/.claude` and `~/.claude.json`       |
 | Model                                 | Opus 5.5, 1M client context window                   |
-| Reasoning                             | Ultra: `effortLevel: "max"`, `ultracode: true`       |
+| Reasoning                             | Ultra: `xhigh` plus Ultracode orchestration          |
 | Permission mode                       | Inherit native Claude settings; no launcher override |
 | Away recap                            | Disabled                                             |
 | Nonessential title/classifier traffic | Disabled                                             |
@@ -74,10 +74,20 @@ KIROCLAUDE_EFFORT=high \
 PATH="$PWD/scripts:$PATH" kiroclaude
 ```
 
-`KIROCLAUDE_EFFORT=ultra` is the default and sets `effortLevel: "max"` with
-Ultracode enabled. Claude Code 2.1.270 serializes this Ultra selection as
-`output_config.effort: "xhigh"`. `low`, `medium`, `high`, `xhigh`, and `max`
-select the corresponding ordinary effort level and disable Ultracode.
+`KIROCLAUDE_EFFORT=ultra` is the default. It enables Claude Code's Ultracode,
+which runs at `output_config.effort: "xhigh"` with standing dynamic-workflow
+orchestration, and writes the matching `effortLevel: "xhigh"`. `low`, `medium`,
+`high`, and `xhigh` write that `effortLevel` and disable Ultracode.
+
+`max` also disables Ultracode, but Claude Code 2.1.280 persists only `low`
+through `xhigh` and silently drops any other `effortLevel`; the earlier
+`effortLevel: "max"` therefore reached the wire as `medium`. The launcher passes
+max as the session flag `--effort max` ahead of your arguments instead.
+Subagents inherit that session level, and a later explicit `--effort` on the
+command line still wins because Claude keeps the last one. Any explicit session
+effort turns Ultracode off, so Ultra never adds the flag. The
+[before/after effort matrix](audits/evidence/kiroclaude-max-effort-2026-09-26/effort-matrix.json)
+records the installed-client result.
 
 The launcher does not elevate permissions by default. It inherits the native
 Claude permission policy. Set `KIROCLAUDE_PERMISSION_MODE` explicitly to
@@ -206,6 +216,7 @@ bun scripts/probe-client-context.mjs --claude-bin /path/to/claude
 bun scripts/probe-client-context.mjs --claude-bin /path/to/claude \
   --thresholds --cases 1m-old-threshold,1m-above
 bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --tool-loop
+bun scripts/probe-client-context.mjs --claude-bin /path/to/claude --effort-matrix
 ```
 
 It uses a loopback fake API, dummy credentials, and temporary Claude state.
@@ -213,7 +224,10 @@ The probe checks model IDs, effective windows, complete large-input delivery,
 and auto-compaction events without calling a real model. Its output contains
 only metadata and counts; real upstream capacity still needs a separate probe.
 The tool-loop check runs two harmless `Bash` commands (`true`) and compares
-the submitted prefix with the next request's history.
+the submitted prefix with the next request's history. The effort matrix checks
+the wire effort and Ultracode state for every `KIROCLAUDE_EFFORT` value, a
+command-line `--effort` override, and one synthetic subagent at max. Add
+`--launcher /path/to/kiroclaude` to check an installed copy.
 
 The Kiro overlay disables Claude Code 2.1.270's ephemeral batching and secondary
 reminders with `CLAUDE_CODE_TOASTY_THIMBLE=0` and
@@ -281,7 +295,8 @@ is unavailable or an AWS-native route is required:
 PATH="$PWD/scripts:$PATH" kiroclaude --bedrock-fable
 ```
 
-This mode uses the same shared Claude home, `model: "fable"`, max effort,
+This mode uses the same shared Claude home, `model: "fable"`, max effort
+passed as `--effort max`,
 `AWS_PROFILE=us-claude`, `AWS_REGION=us-east-2`, and
 `ANTHROPIC_DEFAULT_FABLE_MODEL=us.anthropic.claude-fable-5-1`. It does not set
 the Kiro token helper or `ANTHROPIC_BASE_URL`. Override those values with
