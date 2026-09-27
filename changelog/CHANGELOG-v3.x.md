@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.7.2](https://github.com/sunerpy/kiro-provider/compare/v3.7.1...v3.7.2) (2026-09-27)
+
+
+### Bug Fixes
+
+* **reasoning:** 修复 Opus 5.5 空签名推理前缀冲突 ([4e9fd2b](https://github.com/sunerpy/kiro-provider/commit/4e9fd2b56df27d08b755fc215aed6f6a9f80137a))
+* **reasoning:** 修复 Opus 5.5 空签名推理前缀冲突 ([d471dd7](https://github.com/sunerpy/kiro-provider/commit/d471dd70e5c52e82aca10197b6a3d490a6fe3cdc))
+
 ## [3.7.1](https://github.com/sunerpy/kiro-provider/compare/v3.7.0...v3.7.1) (2026-09-26)
 
 
