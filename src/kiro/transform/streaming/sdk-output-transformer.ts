@@ -9,6 +9,7 @@ import {
   isFable51Model,
   isGpt56Model,
   isGpt56ReasoningPlaceholder,
+  supportsReasoningPrefixOmission,
 } from "../../models.js";
 import { type ReasoningReplayDecision, readReasoningPrefix } from "./reasoning-prefix.js";
 import {
@@ -56,7 +57,7 @@ export interface TransformSdkOutputOptions {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly bufferLateGptReasoning?: boolean;
-  readonly prefetchFableReasoning?: boolean;
+  readonly prefetchOmittedReasoning?: boolean;
   readonly reasoningReplayDecision?: ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
@@ -172,9 +173,9 @@ export async function* transformSdkOutputStream(
 
   try {
     if (
-      options.prefetchFableReasoning === true &&
+      options.prefetchOmittedReasoning === true &&
       options.emitAnthropicReasoningMetadata === true &&
-      isFable51Model(model)
+      supportsReasoningPrefixOmission(model)
     ) {
       const prefix = await readReasoningPrefix(async () => {
         const next = await nextSdkEvent(iterator, signal);
@@ -190,7 +191,7 @@ export async function* transformSdkOutputStream(
           options.reasoningReplayDecision.mode = "conflict-omitted";
         }
         auditLog("warn", "anthropic_output_reasoning_conflict_omitted", {
-          model: "claude-fable-5-1",
+          model: isFable51Model(model) ? "claude-fable-5-1" : "claude-opus-5-5",
           direction: "output",
           reasoning_event_count: prefix.reasoningEvents,
           prefix_event_count: prefix.prefixEvents,

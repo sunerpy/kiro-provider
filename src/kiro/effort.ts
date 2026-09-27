@@ -83,18 +83,20 @@ export function buildEffortRequestFields(
   return { output_config: { effort } };
 }
 
-/** Probe-backed adaptive-thinking controls for models whose schema requires them. */
+/** Adaptive-thinking controls supported by the evidenced model schemas. */
 export function buildThinkingRequestFields(
   kiroModel: string,
   enabled: boolean,
   display?: "omitted" | "summarized",
 ): Record<string, unknown> | undefined {
-  if (kiroModel !== "claude-fable-5.1" || !enabled) return undefined;
+  if (!enabled || (kiroModel !== "claude-fable-5.1" && kiroModel !== "claude-opus-5.5")) {
+    return undefined;
+  }
   return {
     thinking: {
       type: "adaptive",
-      // Fable's native default carries reasoning in the signature. Do not
-      // request streamed summary blocks unless the caller asks for them.
+      // Preserve signed reasoning without requesting streamed summary blocks.
+      // Opus 5.5 declares the same display controls in its model schema.
       display: display ?? "omitted",
     },
   };
