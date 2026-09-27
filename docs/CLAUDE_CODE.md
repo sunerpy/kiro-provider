@@ -281,12 +281,22 @@ Fable uses the stateless Responses projection because Kiro's native
 use the provider-owned continuation and replay state rather than the native
 upstream continuation id.
 
-Messages requests with adaptive thinking use Fable's native `omitted` display
-by default. Signed reasoning is still retained and replayed through the opaque
-signature. An explicit `thinking.display: "summarized"` is preserved. Kiro can
+Messages requests with adaptive thinking use native `omitted` display by default
+for Fable 5.1 and Opus 5.5. Signed reasoning is normally retained and replayed
+through the opaque signature. An explicit `thinking.display: "summarized"` is
+preserved for Fable; Opus 5.5 summarized display remains unsupported. Kiro can
 return multiple independently signed summary segments; the gateway rejects
 that unsupported shape rather than concatenating signatures or discarding
 reasoning.
+
+For either model, a conflicting prefix containing only empty signed reasoning
+may be omitted after the entire prefix is validated within 128 events and 1 MiB.
+The response carries `x-kiro-reasoning-replay-mode: conflict-omitted`, and the audit
+contains counts only. This recovery loses opaque reasoning replay for that output
+but preserves visible text, tool calls, subsequent tool results, and `max` effort.
+Exact duplicate signatures retain normal replay. Nonempty, redacted, mixed,
+oversized, or late conflicts remain errors; an accepted generation is never
+retried by the gateway to recover this shape.
 
 The native Bedrock fallback remains available as a separate process when Kiro
 is unavailable or an AWS-native route is required:

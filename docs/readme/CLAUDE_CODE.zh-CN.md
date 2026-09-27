@@ -47,16 +47,16 @@ Release installer 目前不安装这些辅助脚本。临时测试可直接从 c
 
 ### 默认值与覆盖方式
 
-| 设置                   | 默认值                                            |
-| ---------------------- | ------------------------------------------------- |
-| 网关根地址             | `http://127.0.0.1:8787`，不能带 `/v1`             |
-| Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`          |
-| 模型                   | Opus 5.5，客户端上下文窗口 1M                     |
-| 推理模式               | Ultra，即 Ultracode：`xhigh` 加 workflow 编排     |
-| 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖            |
-| 离开后的 recap         | 关闭                                              |
-| 标题、分类等非必要流量 | 关闭                                              |
-| Experimental betas     | 开启                                              |
+| 设置                   | 默认值                                        |
+| ---------------------- | --------------------------------------------- |
+| 网关根地址             | `http://127.0.0.1:8787`，不能带 `/v1`         |
+| Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`      |
+| 模型                   | Opus 5.5，客户端上下文窗口 1M                 |
+| 推理模式               | Ultra，即 Ultracode：`xhigh` 加 workflow 编排 |
+| 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖        |
+| 离开后的 recap         | 关闭                                          |
+| 标题、分类等非必要流量 | 关闭                                          |
+| Experimental betas     | 开启                                          |
 
 需要调整时，只覆盖当前进程。仅在明确需要隔离 Claude home 时设置
 `KIROCLAUDE_CONFIG_DIR`：
@@ -232,10 +232,18 @@ Kiro 已通过 `/v1/responses` 和 `/v1/messages` 提供 Fable 5.1。它使用�
 Responses 投影，因为 Kiro 原生 `CreateResponse` 当前拒绝该模型；已存储续轮
 仍由 Provider 自有 continuation 和 replay 状态支持。
 
-Messages 的 adaptive thinking 默认采用 Fable 原生的 `omitted` 显示方式，
-仍保留并通过 opaque signature 回放签名推理。显式
-`thinking.display: "summarized"` 会原样保留。Kiro 可能返回多段分别签名的摘要；
+Fable 5.1 与 Opus 5.5 的 Messages adaptive thinking 默认采用原生 `omitted`
+显示方式，通常仍保留并通过 opaque signature 回放签名推理。Fable 的显式
+`thinking.display: "summarized"` 会原样保留；Opus 5.5 的 summarized 显示仍不支持。
+Kiro 可能返回多段分别签名的摘要；
 网关会拒绝这个尚不支持的形态，不会拼接签名或丢弃推理来绕过错误。
+
+这两个模型如果只在空签名推理前缀中发生冲突，网关会先完整校验前缀，限额为
+128 个事件和 1 MiB，再省略整个冲突前缀。响应带
+`x-kiro-reasoning-replay-mode: conflict-omitted`，审计只记录计数。此恢复会丢失该次
+输出的不透明推理回放，保留可见文本、工具调用、后续工具结果和 `max` 推理级别。
+完全相同的重复签名仍正常回放；非空、redacted、混合、超限或迟到的冲突仍报错，
+网关不会通过重试已经接受的生成来恢复。
 
 Kiro 不可用或明确需要 AWS 原生通道时，可使用独立进程启动 Bedrock 备用后端：
 

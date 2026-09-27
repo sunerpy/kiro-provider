@@ -33,7 +33,7 @@ export interface PipelineStreamResult {
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
   readonly bufferLateGptReasoning?: boolean;
-  readonly prefetchFableReasoning?: boolean;
+  readonly prefetchOmittedReasoning?: boolean;
   readonly reasoningReplayDecision?: import("../kiro/transform/streaming/reasoning-prefix.js").ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
@@ -473,7 +473,7 @@ export function prepareCanonicalStream(
       emitEncryptedReasoning: result.emitEncryptedReasoning,
       emitAnthropicReasoningMetadata: result.emitAnthropicReasoningMetadata,
       bufferLateGptReasoning: result.bufferLateGptReasoning,
-      prefetchFableReasoning: result.prefetchFableReasoning,
+      prefetchOmittedReasoning: result.prefetchOmittedReasoning,
       reasoningReplayDecision: result.reasoningReplayDecision,
       ...(result.fingerprintOutput ? { fingerprintOutput: result.fingerprintOutput } : {}),
       ...(result.captureOutput ? { captureOutput: result.captureOutput } : {}),

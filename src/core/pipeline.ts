@@ -24,7 +24,7 @@ import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
-import { isFable51Model, isGpt56Model } from "../kiro/models.js";
+import { isGpt56Model, supportsReasoningPrefixOmission } from "../kiro/models.js";
 import type { ReasoningReplayDecision } from "../kiro/transform/streaming/reasoning-prefix.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
@@ -131,7 +131,7 @@ type CompletionResult =
       readonly emitEncryptedReasoning: boolean;
       readonly emitAnthropicReasoningMetadata: boolean;
       readonly bufferLateGptReasoning: boolean;
-      readonly prefetchFableReasoning: boolean;
+      readonly prefetchOmittedReasoning: boolean;
       readonly reasoningReplayDecision: ReasoningReplayDecision;
       readonly fingerprintOutput?: SdkOutputFingerprint;
       readonly captureOutput?: SdkOutputCaptureHandler;
@@ -842,7 +842,7 @@ function reasoningCaptureOptions(
   readonly emitEncryptedReasoning: boolean;
   readonly emitAnthropicReasoningMetadata: boolean;
   readonly bufferLateGptReasoning: boolean;
-  readonly prefetchFableReasoning: boolean;
+  readonly prefetchOmittedReasoning: boolean;
   readonly reasoningReplayDecision: ReasoningReplayDecision;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
@@ -857,11 +857,11 @@ function reasoningCaptureOptions(
     emitAnthropicReasoningMetadata &&
     canonical.thinking?.enabled === true &&
     isGpt56Model(canonical.model);
-  const prefetchFableReasoning =
+  const prefetchOmittedReasoning =
     emitAnthropicReasoningMetadata &&
     canonical.thinking?.enabled === true &&
     canonical.thinking.display !== "summarized" &&
-    isFable51Model(canonical.model);
+    supportsReasoningPrefixOmission(canonical.model);
   const reasoningReplayDecision: ReasoningReplayDecision = {};
   const captureOutput =
     options.lineage && options.affinityStore
@@ -892,7 +892,7 @@ function reasoningCaptureOptions(
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
       bufferLateGptReasoning,
-      prefetchFableReasoning,
+      prefetchOmittedReasoning,
       reasoningReplayDecision,
       fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
       ...(captureOutput ? { captureOutput } : {}),
@@ -924,7 +924,7 @@ function reasoningCaptureOptions(
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
     bufferLateGptReasoning,
-    prefetchFableReasoning,
+    prefetchOmittedReasoning,
     reasoningReplayDecision,
     fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
     ...(captureOutput ? { captureOutput } : {}),
@@ -2543,7 +2543,7 @@ async function runStreamAttempt(
     context.abortUpstream,
   );
   if (prefetch.kind === "failed") {
-    if (captureOptions.prefetchFableReasoning) {
+    if (captureOptions.prefetchOmittedReasoning) {
       return {
         kind: "result",
         leaseTransferred: false,
@@ -2581,7 +2581,7 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
   let upstreamCleanup = Promise.resolve();
   const collectAbort = new AbortController();
   const collectSignal = AbortSignal.any([signal, collectAbort.signal]);
-  const stopIdleWatch = captureOptions.prefetchFableReasoning
+  const stopIdleWatch = captureOptions.prefetchOmittedReasoning
     ? telemetry.watchIdle(options.config.stream_idle_timeout_ms, () => {
         const error = new StreamIdleTimeoutError(options.config.stream_idle_timeout_ms);
         collectAbort.abort(error);
@@ -2627,7 +2627,7 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     context.abortUpstream(collectError);
     await boundedCleanup(() => upstreamCleanup);
     if (aborted) throw abortReason(signal);
-    if (captureOptions.prefetchFableReasoning) {
+    if (captureOptions.prefetchOmittedReasoning) {
       return {
         kind: "result",
         leaseTransferred: false,

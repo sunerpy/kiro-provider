@@ -50,6 +50,16 @@ export function isFable51Model(model: string): boolean {
   }
 }
 
+/** Models with evidenced adaptive omitted display and bounded prefix recovery. */
+export function supportsReasoningPrefixOmission(model: string): boolean {
+  try {
+    const wireId = resolveModelVariant(model).wireId;
+    return wireId === "claude-fable-5.1" || wireId === "claude-opus-5.5";
+  } catch {
+    return false;
+  }
+}
+
 export function isKnownModel(model: string): boolean {
   try {
     resolveModelVariant(model);
