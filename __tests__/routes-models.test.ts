@@ -39,14 +39,17 @@ describe("GET /v1/models", () => {
       owned_by: string;
     }>;
     const catalogIds = new Set<string>(EXPECTED_PUBLIC_MODEL_IDS);
+    const codexCatalogIds = new Set(
+      [...catalogIds].filter((id) => !/-(low|medium|high|xhigh|max|thinking)$/.test(id)),
+    );
     const responseIds = new Set(entries.map((entry) => entry.id));
     const codexIds = new Set(body.models.map((entry) => entry.slug));
 
     expect(responseIds.size).toBe(catalogIds.size);
-    expect(codexIds.size).toBe(catalogIds.size);
+    expect(codexIds.size).toBe(codexCatalogIds.size);
     for (const id of catalogIds) {
       expect(responseIds.has(id)).toBe(true);
-      expect(codexIds.has(id)).toBe(true);
+      expect(codexIds.has(id)).toBe(codexCatalogIds.has(id));
     }
     for (const entry of entries) {
       expect(catalogIds.has(entry.id)).toBe(true);
@@ -96,9 +99,8 @@ describe("GET /v1/models", () => {
         { effort: "max" },
       ],
     });
-    expect(body.models.find((entry) => entry.slug === "claude-opus-5-5-xhigh")).toMatchObject({
-      default_reasoning_level: "xhigh",
-    });
+    expect(body.models.find((entry) => entry.slug === "claude-opus-5-5-xhigh")).toBeUndefined();
+    expect(responseIds.has("claude-opus-5-5-xhigh")).toBe(true);
 
     const fable = entries.find((entry) => entry.id === "claude-fable-5-1") as
       | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
@@ -147,7 +149,7 @@ describe("GET /v1/models", () => {
     }
   });
 
-  test("advertises Codex Ultra only for Sol/Terra/Fable, including effort aliases", async () => {
+  test("advertises Codex Ultra on base Sol/Terra/Fable while preserving standard OpenAI aliases", async () => {
     const body = (await (await handleModels()).json()) as {
       models: Array<{
         slug: string;
@@ -168,6 +170,10 @@ describe("GET /v1/models", () => {
     }
     // Ultra is a Codex orchestration choice, not a new Kiro model/wire effort.
     expect(body.data.some((model) => model.id.endsWith("-ultra"))).toBe(false);
+    expect(
+      body.models.some((model) => /-(low|medium|high|xhigh|max|thinking)$/.test(model.slug)),
+    ).toBe(false);
+    expect(body.data.some((model) => model.id.endsWith("-max"))).toBe(true);
   });
 
   test("runs due quota recovery before excluding still-exhausted accounts from catalog refresh", async () => {

@@ -181,6 +181,108 @@ describe("Claude Bash history normalization with authenticated working-directory
     }
   });
 
+  test.each([false, true])(
+    "splits Claude Code text-image-text input into ordered Kiro user turns (stream=%s)",
+    async (stream) => {
+      const audit = captureAuditEvents();
+      const f = fidelityFixture();
+      let dispatches = 0;
+      let commandInput: unknown;
+      const app = createApp(f.config, {
+        accountManager: f.dependencies.accountManager,
+        tokenRefresher: f.dependencies.tokenRefresher,
+        makeClient: () => ({
+          async send(command) {
+            dispatches += 1;
+            commandInput = command.input;
+            return {
+              generateAssistantResponseResponse: {
+                async *[Symbol.asyncIterator](): AsyncGenerator<SdkStreamEvent> {
+                  yield { assistantResponseEvent: { content: "IMAGE_OK" } };
+                  yield {
+                    metadataEvent: {
+                      tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    },
+                  };
+                },
+              },
+            };
+          },
+        }),
+      });
+      const body = JSON.stringify({
+        model: "claude-opus-5-5",
+        max_tokens: 1024,
+        stream,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "typed" },
+              { type: "text", text: "client-before" },
+              { type: "text", text: "context-before" },
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "AQID" },
+              },
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/jpeg", data: "BAUG" },
+              },
+              { type: "text", text: "client-after" },
+            ],
+          },
+        ],
+      });
+      const send = (normalized: boolean) =>
+        app(
+          new Request("http://fixture/v1/messages", {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${f.config.api_keys[0]}`,
+              "content-type": "application/json",
+              ...(normalized
+                ? {
+                    "x-kiro-client-normalization": "claude-code-bash-v1",
+                    "x-kiro-working-directory-hash": cwdHash(cwd),
+                  }
+                : {}),
+            },
+            body,
+          }),
+        );
+      try {
+        const strict = await send(false);
+        expect(strict.status).toBe(400);
+        expect(await strict.text()).toContain("cannot preserve their ordering");
+        expect(dispatches).toBe(0);
+
+        const response = await send(true);
+        expect(response.status).toBe(200);
+        expect(dispatches).toBe(1);
+        expect(response.headers.get("x-kiro-client-normalization")).toBe("claude-code-bash-v1");
+        expect(commandInput).toMatchObject({
+          conversationState: {
+            history: [
+              { userInputMessage: { content: "typedclient-beforecontext-before" } },
+              {
+                userInputMessage: {
+                  content: "",
+                  images: [{ format: "png" }, { format: "jpeg" }],
+                },
+              },
+            ],
+            currentMessage: { userInputMessage: { content: "client-after" } },
+          },
+        });
+        await response.text();
+      } finally {
+        f.database.close();
+        audit.restore();
+      }
+    },
+  );
+
   test("replays an omitted-thinking tool turn after the real client's redundant cd rewrite", async () => {
     const result = await roundTrip({ normalized: true });
     expect(result.status).toBe(200);

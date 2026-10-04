@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "model": "claude-opus-5-5",
+      "stream": false,
+      "replay": false,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-opus-5-5",
+      "stream": false,
+      "replay": true,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-opus-5-5",
+      "stream": true,
+      "replay": false,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-opus-5-5",
+      "stream": true,
+      "replay": true,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-fable-5-1",
+      "stream": false,
+      "replay": false,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-fable-5-1",
+      "stream": false,
+      "replay": true,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-fable-5-1",
+      "stream": true,
+      "replay": false,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    },
+    {
+      "model": "claude-fable-5-1",
+      "stream": true,
+      "replay": true,
+      "order_preserved": true,
+      "signed_thinking": true,
+      "pass": true
+    }
+  ]
+}

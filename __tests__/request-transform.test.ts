@@ -349,6 +349,59 @@ describe("transformToSdkRequest instruction and text fidelity", () => {
     expect((caught as RequestTransformError).param).toBe("messages.0.content.2");
   });
 
+  test("keeps reasoning replay on its assistant after Claude image-run splitting", () => {
+    const prepared = transformToSdkRequest(
+      request(
+        [
+          message(
+            "user",
+            [
+              textPart("before", "messages.0.content.0"),
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                path: "messages.0.content.1",
+              },
+              textPart("after", "messages.0.content.2"),
+            ],
+            "messages.0",
+          ),
+          message("assistant", "answer", "messages.1"),
+          message("user", "next", "messages.2"),
+        ],
+        { protocol: "anthropic-messages", projectionMode: "v3-auto" },
+      ),
+      MODEL,
+      auth,
+      false,
+      20_000,
+      {
+        splitInterleavedUserImages: true,
+        resolvedReasoningReplays: [
+          {
+            insertBeforeMessage: 1,
+            content: {
+              kind: "reasoning_text",
+              text: "private",
+              signature: "signature",
+            },
+          },
+        ],
+      },
+    );
+
+    expect(prepared.conversationState.history).toHaveLength(4);
+    expect(prepared.conversationState.history?.[0]?.userInputMessage?.content).toBe("before");
+    expect(prepared.conversationState.history?.[1]?.userInputMessage?.images).toHaveLength(1);
+    expect(prepared.conversationState.history?.[2]?.userInputMessage?.content).toBe("after");
+    expect(
+      prepared.conversationState.history?.[3]?.assistantResponseMessage?.reasoningContent,
+    ).toEqual({
+      reasoningText: { text: "private", signature: "signature" },
+    });
+    expect(currentUserInput(prepared).content).toBe("next");
+  });
+
   test("projects one contiguous text run beside non-text content", () => {
     const image = {
       type: "image" as const,

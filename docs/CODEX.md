@@ -2,8 +2,9 @@
 
 [简体中文](readme/CODEX.zh-CN.md) · English
 
-**Latest local validation:** Codex CLI 0.156.1 automatic titles and large image
-history on 2026-09-23; the broader V3 smoke below was checked with 0.154.0.
+**Latest focused validation:** Codex CLI 0.159.3 model/effort switching and the
+real `/model` picker on 2026-10-04. Earlier automatic-title/image validation
+used 0.156.1; the broader V3 smoke below used 0.154.0.
 
 kiro-provider V3 exposes the OpenAI Responses wire API used by a Codex custom
 `model_provider`.
@@ -11,6 +12,37 @@ kiro-provider V3 exposes the OpenAI Responses wire API used by a Codex custom
 For a persistent `kirocodex` command that leaves the native Codex home intact,
 see [separate client launchers](CLIENT_LAUNCHERS.md). It includes command-backed
 authentication, model-catalog context windows, Ultra, and per-account concurrency.
+
+## Model and effort switching
+
+The Codex `models` projection lists base IDs. Reasoning effort travels through
+`supported_reasoning_levels`; standard OpenAI `data` retains legacy suffix
+aliases. Fetch this catalog into a temporary file and configure
+`model_catalog_json` before starting Codex. Custom providers do not automatically
+replace Codex's bundled picker catalog.
+
+Same-wire base/effort/thinking aliases share authenticated replay identity. In
+default compatible mode, changing the actual wire model authenticates old
+provider tokens before omitting their opaque reasoning. Visible messages and
+tool call/result history remain intact. The response reports
+`x-kiro-reasoning-model-replay-mode: incompatible-omitted`.
+See [model-switch configuration](CONFIGURATION.md#switching-models-and-reasoning-effort)
+for strict mode and bounded v3 token reads.
+
+Use the real CLI capture gate with an **isolated** gateway, key and state:
+
+```bash
+bun scripts/probe-client-model-switch.ts --client codex \
+  --codex-bin /absolute/path/to/codex \
+  --base-url http://127.0.0.1:TEST_PORT \
+  --provider-config /private/probe/config.json --out /private/probe/codex.json
+```
+
+The harness authenticates capture traffic, proves the selected port before
+forwarding generation, loads the gateway catalog, and tests base effort,
+base/suffix, suffix/base, suffix/suffix and GPT-to-Claude resumes with signed
+reasoning and a completed tool turn. It emits enums/counts/verdicts, cleans up
+client state, and never accepts production port 8787.
 
 ## Run with an isolated profile
 

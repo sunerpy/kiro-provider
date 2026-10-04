@@ -118,6 +118,7 @@ export const ConfigSchema = z.object({
   reasoning_replay_key_path: OptionalPathSchema,
   reasoning_replay_keys: z.array(z.string().trim().min(1)).default([]),
   reasoning_replay_token_format: z.enum(["portable-v2", "database-v1"]).default("portable-v2"),
+  reasoning_replay_model_switch: z.enum(["compatible", "strict"]).default("compatible"),
   reasoning_replay_account_failover: z.enum(["verified", "strict"]).default("verified"),
   reasoning_replay_legacy_account_failover: z
     .enum(["strict", "verified-current-cell"])

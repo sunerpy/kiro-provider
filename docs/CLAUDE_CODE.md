@@ -2,7 +2,10 @@
 
 [简体中文](readme/CLAUDE_CODE.zh-CN.md) · English
 
-**Last validated client:** Claude Code 2.1.270. Newer releases may add beta
+**Last broad validation:** Claude Code 2.1.270. Focused 2.1.285 capture/resume
+validation on 2026-10-04 passed Opus 5.5 max→low and Fable→Opus 5.5 signed
+thinking/tool turns. Opus 5.5→Opus 5 still has an upstream stream-completion
+gap; it is not a replay-context rejection. Newer releases may add beta
 headers or request fields; validate their wire shape before extending this
 support claim.
 
@@ -39,9 +42,18 @@ available to both `claude` and `kiroclaude`.
 
 The launcher supplies one process-local `--settings` overlay. Kiro mode
 explicitly disables inherited Bedrock, Vertex, Foundry, and Mantle routing,
-clears inherited Anthropic credentials, and then selects the local gateway and
-model aliases. It does not edit the native settings files, so an ordinary
-`claude` process keeps its existing provider.
+clears inherited Anthropic and Bedrock bearer credentials, and then selects the
+local gateway and model aliases. It does not edit the native settings files, so
+an ordinary `claude` process keeps its existing provider.
+
+If an orchestrator appends another `--settings` file or inline
+object, the launcher merges its non-routing fields before applying the Kiro
+overlay. Launcher-owned routing and authentication therefore remain
+authoritative over caller overlays for the main session and its subagents.
+Administrator-managed settings retain their higher precedence. Merged file
+contents travel through an anonymous owner-only file descriptor instead of the
+process command line, so credentials in a caller settings file are not exposed
+through `ps`.
 
 Shared history does not make provider-specific signatures portable. Start a
 new session when switching between native Bedrock and Kiro if the old
@@ -50,7 +62,40 @@ continuation contains signed thinking that the other provider cannot replay.
 The release installer does not install these helper scripts. Run them from a
 checkout for tests, or copy/link them after deciding to keep this launcher.
 
-### Defaults and overrides
+### Isolated real-client capture gate
+
+`KIROCLAUDE_BASE_URL` and `--settings` cannot override an administrator-managed
+`ANTHROPIC_BASE_URL`. A native-client live probe must first prove that its
+capture proxy received the request. A failed gate stops before forwarding any
+inference. Keep the installed service and managed policy untouched; use a
+separate container/namespace when the host policy pins production. Preserve
+policy permissions and provider restrictions in the isolated copy, and pin
+that copy to the temporary capture endpoint with `--managed-policy-copy`. This
+option accepts only a real, non-symlinked file under the temporary directory.
+
+```bash
+bun scripts/probe-client-model-switch.ts --client claude \
+  --claude-bin /absolute/path/to/claude \
+  --base-url http://127.0.0.1:TEST_PORT \
+  --provider-config /private/probe/config.json --out /private/probe/claude.json
+```
+
+Use an isolated key/account-state copy and a fresh client config directory. The
+harness verifies signed thinking plus a completed tool turn before each resume.
+It records native signature presence separately from provider `kr2_` replay,
+because Claude may filter old thinking when the actual model changes. Claude
+2.1.285 also probes per-message `output_config`: this unsupported field is
+typed-rejected before dispatch, and the client then makes its ordinary request.
+The report keeps that rejection count; it does not count it as inference.
+
+`probe-image-run-order.ts` checks model-observed text/image order on an isolated
+gateway, in streaming/non-streaming Messages and a signed reasoning replay. The
+2026-10-04 Opus 5.5/Fable probes completed with a 16,000 output budget. One
+2,048-budget sample ended before visible output; budget exhaustion remains an
+inference rather than a proven cause. Keep max effort unchanged. These
+results cover those models, not every future catalog entry.
+
+## Defaults and overrides
 
 | Setting                               | Default                                              |
 | ------------------------------------- | ---------------------------------------------------- |

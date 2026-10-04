@@ -16,6 +16,7 @@ import {
   isClientNormalization,
 } from "../protocol/client-normalization.js";
 import type { ReasoningReplayKey, ReasoningReplayKeyring } from "./keyring.js";
+import { replayAuthenticationModels, replayModelIdentity } from "./model-identity.js";
 
 export const PORTABLE_REPLAY_PREFIX = "kr2_";
 export const LEGACY_REPLAY_PREFIX = "kr1_";
@@ -24,13 +25,14 @@ export const MAX_PORTABLE_REPLAY_TOKEN_BYTES = 4 * 1024 * 1024;
 // authenticated headers, nonce and tag always fit the 4 MiB public token cap.
 const MAX_PORTABLE_REPLAY_PLAINTEXT_BYTES = 3_000_000;
 const LEGACY_TOKEN_VERSION = 2;
-const TOKEN_VERSION = 3;
+const PUBLIC_MODEL_TOKEN_VERSION = 3;
+const TOKEN_VERSION = 4;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 const CONTEXT_DIGEST_BYTES = 32;
 const PADDING_BUCKET_BYTES = 1024;
 const LEGACY_AAD_DOMAIN = "kiro-provider-reasoning-replay-v2";
-const AAD_DOMAIN = "kiro-provider-reasoning-replay-v3";
+const AAD_DOMAIN = "kiro-provider-reasoning-replay-v4";
 
 export interface PortableReplayCapture {
   readonly text: string;
@@ -77,12 +79,15 @@ interface PortableReplayEnvelope
   extends PortableReplayOrigin,
     PortableReplayMintProvenance,
     ReplayMaterial {
-  readonly version: 3;
+  readonly version: 3 | 4;
+  readonly replayModelIdentity?: string;
 }
 
 export type DecodedPortableReplayToken = PortableReplayOrigin & {
   readonly content: KiroReasoningContent;
   readonly keyId: string;
+  /** Authenticated source identity, never inferred from client metadata. */
+  readonly replayModelIdentity: string;
 } & (
     | { readonly legacy: true }
     | { readonly legacy: false; readonly provenance: PortableReplayMintProvenance }
@@ -120,7 +125,13 @@ function lengthPrefixed(value: string): Buffer {
 
 function aad(context: PortableReplayContext, keyId: string, version: number): Buffer {
   return Buffer.concat([
-    lengthPrefixed(version === LEGACY_TOKEN_VERSION ? LEGACY_AAD_DOMAIN : AAD_DOMAIN),
+    lengthPrefixed(
+      version === LEGACY_TOKEN_VERSION
+        ? LEGACY_AAD_DOMAIN
+        : version === PUBLIC_MODEL_TOKEN_VERSION
+          ? "kiro-provider-reasoning-replay-v3"
+          : AAD_DOMAIN,
+    ),
     lengthPrefixed(String(version)),
     lengthPrefixed(keyId),
     lengthPrefixed(context.tenantId),
@@ -194,6 +205,7 @@ function envelopeFor(
   }
   return {
     version: TOKEN_VERSION,
+    replayModelIdentity: context.model,
     ...origin,
     ...provenance,
     ...replayMaterial(capture, context),
@@ -216,10 +228,7 @@ function paddedPlaintext(envelope: PortableReplayEnvelope): Buffer {
 }
 
 function contextDigest(domain: string, value: string, version: number): Buffer {
-  const prefix =
-    version === LEGACY_TOKEN_VERSION
-      ? `kiro-provider-replay-v2-${domain}\0`
-      : `kiro-provider-replay-v3-${domain}\0`;
+  const prefix = `kiro-provider-replay-v${version}-${domain}\0`;
   return createHash("sha256").update(prefix).update(value).digest();
 }
 
@@ -252,6 +261,7 @@ export function encodePortableReplayToken(
   provenance: PortableReplayMintProvenance,
   key: ReasoningReplayKey,
 ): string {
+  context = { ...context, model: replayModelIdentity(context.model) };
   const envelope = envelopeFor(capture, context, origin, provenance);
   const nonce = randomBytes(NONCE_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key.key, nonce);
@@ -300,7 +310,9 @@ function replayEnvelope(value: unknown): LegacyPortableReplayEnvelope | Portable
     typeof value !== "object" ||
     value === null ||
     !("version" in value) ||
-    (value.version !== LEGACY_TOKEN_VERSION && value.version !== TOKEN_VERSION) ||
+    (value.version !== LEGACY_TOKEN_VERSION &&
+      value.version !== PUBLIC_MODEL_TOKEN_VERSION &&
+      value.version !== TOKEN_VERSION) ||
     !("accountId" in value) ||
     typeof value.accountId !== "string" ||
     !("conversationId" in value) ||
@@ -317,6 +329,10 @@ function replayEnvelope(value: unknown): LegacyPortableReplayEnvelope | Portable
   }
   if (value.version === LEGACY_TOKEN_VERSION) return value as LegacyPortableReplayEnvelope;
   if (
+    (value.version === TOKEN_VERSION &&
+      (!("replayModelIdentity" in value) ||
+        typeof value.replayModelIdentity !== "string" ||
+        value.replayModelIdentity.length === 0)) ||
     !("protocol" in value) ||
     (value.protocol !== "responses" &&
       value.protocol !== "anthropic-messages" &&
@@ -412,6 +428,7 @@ export function decodePortableReplayToken(
   context: PortableReplayContext,
   keyring: ReasoningReplayKeyring,
   now: number = Date.now(),
+  modelSwitchMode: "strict" | "compatible" = "strict",
 ): DecodedPortableReplayToken {
   const bytes = decodeTokenBytes(token);
   if (bytes.byteLength < 2 + 1 + 3 * CONTEXT_DIGEST_BYTES + NONCE_BYTES + TAG_BYTES) {
@@ -426,7 +443,9 @@ export function decodePortableReplayToken(
   const nonceStart = contextStart + 3 * CONTEXT_DIGEST_BYTES;
   const headerLength = nonceStart + NONCE_BYTES;
   if (
-    (version !== LEGACY_TOKEN_VERSION && version !== TOKEN_VERSION) ||
+    (version !== LEGACY_TOKEN_VERSION &&
+      version !== PUBLIC_MODEL_TOKEN_VERSION &&
+      version !== TOKEN_VERSION) ||
     keyIdLength === 0 ||
     bytes.byteLength < headerLength + TAG_BYTES
   ) {
@@ -443,6 +462,23 @@ export function decodePortableReplayToken(
       "reasoning_replay_key_unavailable",
     );
   }
+  // Header digests only select a bounded candidate. The selected identity must
+  // still authenticate the entire ciphertext, output, provenance and expiry.
+  const sourceDigest = bytes.subarray(
+    contextStart + CONTEXT_DIGEST_BYTES,
+    contextStart + 2 * CONTEXT_DIGEST_BYTES,
+  );
+  const candidates = replayAuthenticationModels(context.model, modelSwitchMode);
+  const authenticatedModel = candidates
+    .map((candidate) => (version === TOKEN_VERSION ? replayModelIdentity(candidate) : candidate))
+    .find((candidate) => timingSafeEqual(sourceDigest, contextDigest("model", candidate, version)));
+  if (authenticatedModel === undefined) {
+    throw new PortableReplayTokenError(
+      "Reasoning replay context does not match tenant, model, or assistant output",
+      "reasoning_replay_context_mismatch",
+    );
+  }
+  context = { ...context, model: authenticatedModel };
   const expectedDigests = [
     contextDigest("tenant", context.tenantId, version),
     contextDigest("model", context.model, version),
@@ -476,7 +512,11 @@ export function decodePortableReplayToken(
     );
   }
   const envelope = parseEnvelope(plaintext);
-  if (envelope.version !== version || envelope.outputFingerprint !== context.outputFingerprint) {
+  if (
+    envelope.version !== version ||
+    envelope.outputFingerprint !== context.outputFingerprint ||
+    (envelope.version === TOKEN_VERSION && envelope.replayModelIdentity !== authenticatedModel)
+  ) {
     throw new PortableReplayTokenError(
       "Reasoning replay output fingerprint does not match",
       "reasoning_replay_context_mismatch",
@@ -487,6 +527,7 @@ export function decodePortableReplayToken(
     conversationId: envelope.conversationId,
     content: contentFromEnvelope(envelope),
     keyId,
+    replayModelIdentity: replayModelIdentity(authenticatedModel),
   };
   if (envelope.version === LEGACY_TOKEN_VERSION) return { ...base, legacy: true };
   if (envelope.expiresAt <= now) {

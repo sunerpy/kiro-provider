@@ -6,6 +6,7 @@ import {
   encodePortableReplayToken as encodeReplayToken,
   isProviderReplayToken,
   MAX_PORTABLE_REPLAY_TOKEN_BYTES,
+  type PortableReplayContext,
   PortableReplayTokenError,
 } from "../src/reasoning/replay-token.js";
 
@@ -51,24 +52,31 @@ function lengthPrefixed(value: string): Buffer {
   return Buffer.concat([length, bytes]);
 }
 
-function legacyV2Token(): { readonly token: string; readonly ring: ReasoningReplayKeyring } {
+function legacyV2Token(
+  version: 2 | 3 = 2,
+  replayContext: PortableReplayContext = context,
+): { readonly token: string; readonly ring: ReasoningReplayKeyring } {
   const ring = keyring(key(9, "legacy-v2"));
   const nonce = Buffer.alloc(12, 7);
   const digest = (domain: string, value: string) =>
-    createHash("sha256").update(`kiro-provider-replay-v2-${domain}\0`).update(value).digest();
+    createHash("sha256")
+      .update(`kiro-provider-replay-v${version}-${domain}\0`)
+      .update(value)
+      .digest();
   const header = Buffer.concat([
-    Buffer.from([2, Buffer.byteLength(ring.active.id)]),
+    Buffer.from([version, Buffer.byteLength(ring.active.id)]),
     Buffer.from(ring.active.id),
-    digest("tenant", context.tenantId),
-    digest("model", context.model),
-    digest("output", context.outputFingerprint),
+    digest("tenant", replayContext.tenantId),
+    digest("model", replayContext.model),
+    digest("output", replayContext.outputFingerprint),
     nonce,
   ]);
   const envelope = Buffer.from(
     JSON.stringify({
-      version: 2,
+      version,
+      ...(version === 3 ? provenance : {}),
       ...origin,
-      outputFingerprint: context.outputFingerprint,
+      outputFingerprint: replayContext.outputFingerprint,
       kind: "reasoning_text",
       text: "legacy reasoning",
       signature: "legacy signature",
@@ -85,12 +93,12 @@ function legacyV2Token(): { readonly token: string; readonly ring: ReasoningRepl
   const cipher = createCipheriv("aes-256-gcm", ring.active.key, nonce);
   cipher.setAAD(
     Buffer.concat([
-      lengthPrefixed("kiro-provider-reasoning-replay-v2"),
-      lengthPrefixed("2"),
+      lengthPrefixed(`kiro-provider-reasoning-replay-v${version}`),
+      lengthPrefixed(String(version)),
       lengthPrefixed(ring.active.id),
-      lengthPrefixed(context.tenantId),
-      lengthPrefixed(context.model),
-      lengthPrefixed(context.outputFingerprint),
+      lengthPrefixed(replayContext.tenantId),
+      lengthPrefixed(replayContext.model),
+      lengthPrefixed(replayContext.outputFingerprint),
     ]),
   );
   return {
@@ -114,6 +122,7 @@ describe("portable reasoning replay tokens", () => {
       expect(decodePortableReplayToken(token, context, ring, provenance.issuedAt + 1)).toEqual({
         ...origin,
         keyId: ring.active.id,
+        replayModelIdentity: context.model,
         legacy: false,
         provenance,
         content: { kind: "reasoning_text", text, signature: "native-signature" },
@@ -192,6 +201,7 @@ describe("portable reasoning replay tokens", () => {
     expect(decodePortableReplayToken(token, context, ring)).toEqual({
       ...origin,
       keyId: "legacy-v2",
+      replayModelIdentity: context.model,
       legacy: true,
       content: {
         kind: "reasoning_text",
@@ -199,6 +209,85 @@ describe("portable reasoning replay tokens", () => {
         signature: "legacy signature",
       },
     });
+  });
+
+  test("v4 authenticates a stable wire identity across base/effort/thinking aliases", () => {
+    const ring = keyring(key(9));
+    const token = encodePortableReplayToken(
+      { text: "opaque", signature: "signed" },
+      { ...context, model: "claude-opus-5-5-max" },
+      origin,
+      ring.active,
+    );
+    expect(Buffer.from(token.slice(4), "base64url")[0]).toBe(4);
+    for (const model of [
+      "claude-opus-5-5",
+      "claude-opus-5-5-low",
+      "claude-opus-5-5-thinking",
+      "claude-opus-5.5",
+    ]) {
+      expect(
+        decodePortableReplayToken(token, { ...context, model }, ring, provenance.issuedAt + 1)
+          .replayModelIdentity,
+      ).toBe("claude-opus-5.5");
+    }
+  });
+
+  test("v3 authenticates the original public slug using only bounded server aliases", () => {
+    const { token, ring } = legacyV2Token(3, { ...context, model: "gpt-5.6-sol-max" });
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-sol-low"]) {
+      expect(
+        decodePortableReplayToken(token, { ...context, model }, ring, provenance.issuedAt + 1),
+      ).toMatchObject({ legacy: false, replayModelIdentity: context.model, provenance });
+    }
+    expect(() =>
+      decodePortableReplayToken(
+        token,
+        { ...context, model: "claude-opus-5-5" },
+        ring,
+        provenance.issuedAt + 1,
+      ),
+    ).toThrow("does not match");
+    expect(
+      decodePortableReplayToken(
+        token,
+        { ...context, model: "claude-opus-5-5" },
+        ring,
+        provenance.issuedAt + 1,
+        "compatible",
+      ).replayModelIdentity,
+    ).toBe(context.model);
+    expect(() =>
+      decodePortableReplayToken(
+        token,
+        { ...context, model: "claude-opus-5-5", tenantId: "foreign" },
+        ring,
+        provenance.issuedAt + 1,
+        "compatible",
+      ),
+    ).toThrow("does not match");
+    expect(() =>
+      decodePortableReplayToken(
+        token,
+        { ...context, model: "claude-opus-5-5" },
+        ring,
+        provenance.expiresAt,
+        "compatible",
+      ),
+    ).toThrow("expired");
+  });
+
+  test("an unregistered historical alias cannot authenticate during cross-model compatibility", () => {
+    const { token, ring } = legacyV2Token(3, { ...context, model: "gpt-5.6-sol-arbitrary" });
+    expect(() =>
+      decodePortableReplayToken(
+        token,
+        { ...context, model: "claude-opus-5-5" },
+        ring,
+        provenance.issuedAt + 1,
+        "compatible",
+      ),
+    ).toThrow("does not match");
   });
 
   test("rejects tampering, mixed content and oversized wire input", () => {

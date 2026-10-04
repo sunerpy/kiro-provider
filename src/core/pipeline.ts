@@ -140,9 +140,11 @@ type CompletionResult =
       readonly abortUpstream: (reason?: unknown) => void;
       /** Canonical stream prefetched up to its first semantic event. */
       readonly prepared: PreparedCanonicalStream;
+      readonly reasoningModelOmitted?: true;
     };
 
 interface ReplayState {
+  readonly modelOmittedCount?: number;
   /** Owner-bound replay account. Only provenance-authenticated cells omit it. */
   readonly accountId?: string;
   readonly conversationId?: string;
@@ -632,6 +634,7 @@ function resolveReplayState(
   let preferredAccountId = binding?.accountId;
   let preferredConversationId = binding?.conversationId;
   let portableCount = 0;
+  let modelOmittedCount = 0;
   let legacyPortableCount = 0;
   let portableRegion: string | undefined;
   let portableRuntimeProtocol: "codewhisperer" | "kiro-runtime" | undefined;
@@ -663,6 +666,11 @@ function resolveReplayState(
         context: {
           tenantId: options.tenantId,
           model: options.body.model,
+          modelSwitchMode:
+            options.body.protocol === "responses" &&
+            options.config.responses_fidelity_mode === "strict"
+              ? "strict"
+              : options.config.reasoning_replay_model_switch,
           outputFingerprint: replay.outputFingerprint,
           ...replayNormalization(options, replay.insertBeforeMessage),
           ...(replay.compatibleOutputFingerprints !== undefined
@@ -744,6 +752,35 @@ function resolveReplayState(
         "reasoning_replay_not_found",
       );
     }
+    if (resolved.modelMismatch === true) {
+      // Every token in the batch has authenticated before any material is
+      // omitted. Preserve the visible/tool history and its frozen projection;
+      // incompatible reasoning grants no account/conversation ownership.
+      const legacyFablePrefix =
+        resolved.replay.instructionProjection === undefined &&
+        resolved.portable === true &&
+        resolved.sourceModelIdentity === "claude-fable-5.1" &&
+        resolved.provenance?.protocol === "anthropic-messages" &&
+        resolved.provenance.runtimeProtocol === "kiro-runtime" &&
+        options.body.protocol === "anthropic-messages" &&
+        options.body.projectionMode === "v3-auto" &&
+        replay.insertBeforeMessage > 0;
+      replays.push({
+        ...resolved.replay,
+        modelOmitted: true,
+        ...(legacyFablePrefix
+          ? ({
+              instructionProjection: {
+                version: 1,
+                legacyPrefixMessages: replay.insertBeforeMessage,
+              },
+              legacyProjectionUnversioned: true,
+            } as const)
+          : {}),
+      });
+      modelOmittedCount += 1;
+      continue;
+    }
     const verified = verifiedPortableReplay(options, resolved, legacyOrigins);
     if (verified !== undefined) {
       if (
@@ -812,7 +849,11 @@ function resolveReplayState(
       replay_count: legacyPortableCount,
     });
   }
+  if (modelOmittedCount > 0) {
+    auditLog("warn", "reasoning_replay_model_omitted", { replay_count: modelOmittedCount });
+  }
   return {
+    modelOmittedCount,
     ...(accountId !== undefined ? { accountId } : {}),
     ...(conversationId !== undefined ? { conversationId } : {}),
     ...(preferredAccountId !== undefined ? { preferredAccountId } : {}),
@@ -1937,6 +1978,7 @@ async function runAttempt(
       conversationId: state.requestConversationId,
       nativeSystemPromptEnabled,
       resolvedReasoningReplays: state.replayState.replays,
+      splitInterleavedUserImages: options.clientNormalization?.kind === "claude-code-bash-v1",
       promptCaching: {
         mode: options.config.kiro_prompt_cache_mode,
         supported: promptCaching?.supportsPromptCaching === true,
@@ -3114,6 +3156,15 @@ async function executeLoop(
       const outcome = await runAttempt(options, signal, state, selection.selected, releaseAccount);
       if (outcome.kind === "result") {
         accountLeaseOwned = !outcome.leaseTransferred;
+        if ((state.replayState.modelOmittedCount ?? 0) > 0) {
+          if (outcome.result.kind === "stream")
+            return { ...outcome.result, reasoningModelOmitted: true };
+          if (outcome.result.response.ok)
+            outcome.result.response.headers.set(
+              "x-kiro-reasoning-model-replay-mode",
+              "incompatible-omitted",
+            );
+        }
         return outcome.result;
       }
       if (outcome.kind === "model-unavailable") {
@@ -3209,6 +3260,8 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     releaseAccount = undefined;
     releaseSession = undefined;
     streamOwnsResources = true;
+    if (result.reasoningModelOmitted)
+      response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
     return await diagnostics.response(response);
   } catch (error) {
     if (error instanceof RequestTransformError) {

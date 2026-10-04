@@ -14,6 +14,7 @@ import type {
 import { supportsEffort, supportsXHighEffort } from "../../kiro/effort.js";
 import { isQuotaExhausted } from "../../kiro/health.js";
 import { MODEL_CATALOG, type ModelCatalogEntry } from "../../kiro/model-catalog.js";
+import { stripModelSuffix } from "../../kiro/models.js";
 
 const CATALOG_CREATED_AT = 1_700_000_000;
 const REASONING_SUFFIX = /-(low|medium|high|xhigh|max)$/;
@@ -159,7 +160,8 @@ export async function handleModels(
     ...(entry.description !== undefined ? { description: entry.description } : {}),
     ...(entry.rateMultiplier !== undefined ? { rate_multiplier: entry.rateMultiplier } : {}),
   }));
-  const models = catalog.map((entry, index) => codexModel(entry, index, catalog.length));
+  const codexCatalog = catalog.filter((entry) => stripModelSuffix(entry.id) === entry.id);
+  const models = codexCatalog.map((entry, index) => codexModel(entry, index, codexCatalog.length));
 
   return new Response(JSON.stringify({ object: "list", data, models }), {
     status: 200,

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "binarySha256": "0647713b21d34a8ddee8b54ce1e33ae99fa2a054c9fddc4eeb96ad849199216e",
+  "liveUpstreamRequests": 0,
+  "syntheticUpstreamCalls": 4,
+  "maxPreserved": true,
+  "omittedForwarded": true,
+  "omissionAudits": [
+    {
+      "model": "claude-opus-5-5",
+      "reasoningEvents": 2,
+      "prefixEvents": 2,
+      "prefixBytes": 126
+    },
+    {
+      "model": "claude-opus-5-5",
+      "reasoningEvents": 2,
+      "prefixEvents": 2,
+      "prefixBytes": 126
+    }
+  ],
+  "results": [
+    {
+      "case": "empty-conflict-json",
+      "status": 200,
+      "omitted": true,
+      "outputSeen": true,
+      "leaked": false,
+      "success": true
+    },
+    {
+      "case": "empty-conflict-sse",
+      "status": 200,
+      "omitted": true,
+      "outputSeen": true,
+      "leaked": false,
+      "success": true
+    },
+    {
+      "case": "nonempty-conflict-json",
+      "status": 502,
+      "omitted": false,
+      "outputSeen": false,
+      "leaked": false,
+      "success": true
+    },
+    {
+      "case": "nonempty-conflict-sse",
+      "status": 502,
+      "omitted": false,
+      "outputSeen": false,
+      "leaked": false,
+      "success": true
+    }
+  ],
+  "passed": true
+}

@@ -13,6 +13,7 @@ reasoning, account databases, or unsanitized wire captures.
 
 | Date | Record | Scope |
 | --- | --- | --- |
+| 2026-10-04 | [Model switching and image ordering](model-switch-replay-2026-10-04.zh.md) | Authenticated wire-model replay identity, bounded v3 compatibility, real Codex/Claude resume and picker checks, model-observed image order, and the OPEN Opus 5 completed-tool-history limit; [sanitized evidence](evidence/model-switch-replay-2026-10-04/validation.json). |
 | 2026-09-26 | [kiroclaude max effort fix](kiroclaude-max-effort-2026-09-26.zh.md) | `KIROCLAUDE_EFFORT=max` reached the wire as `medium` because Claude Code drops a persisted `effortLevel: "max"`; max now travels as `--effort max`, verified on Claude Code 2.1.280 for the main thread and a subagent; [sanitized evidence](evidence/kiroclaude-max-effort-2026-09-26/effort-matrix.json). |
 | 2026-09-26 | [Claude Opus 5.5 catalog and request fields](opus-5-5-catalog-probe-2026-09-26.zh.md) | New `claude-opus-5.5` wire model: catalog schema, five-level effort, probed 1,024–128,000 `max_tokens` bounds, installed-client windows, and the unverified cross-account replay cell; [sanitized evidence](evidence/opus-5-5-catalog-probe-2026-09-26/). |
 | 2026-09-14 | [Responses usage and context](responses-usage-2026-09-14.zh.md) | Usage normalization, current context versus cumulative consumption, Codex compaction, and Zuno context validation; [sanitized evidence](evidence/responses-usage-2026-09-14/validation.json). |

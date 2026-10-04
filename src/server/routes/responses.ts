@@ -991,6 +991,11 @@ async function handleResponsesCore(
           ),
       });
       streamOwnsRouteResources = true;
+      if (
+        pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+        "incompatible-omitted"
+      )
+        streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
       return streaming;
     }
     if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
@@ -1030,6 +1035,10 @@ async function handleResponsesCore(
         }
         return Response.json(publicState, {
           headers: {
+            ...(pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+            "incompatible-omitted"
+              ? { "x-kiro-reasoning-model-replay-mode": "incompatible-omitted" }
+              : {}),
             "X-Kiro-Usage-Policy":
               config.responses_fidelity_mode === "strict"
                 ? "measured-only"
