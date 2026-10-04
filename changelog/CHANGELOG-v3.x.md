@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.3](https://github.com/sunerpy/kiro-provider/compare/v3.7.2...v3.7.3) (2026-10-04)
+
+
+### Bug Fixes
+
+* **replay:** 修复模型切换续接 ([#120](https://github.com/sunerpy/kiro-provider/issues/120)) ([557091b](https://github.com/sunerpy/kiro-provider/commit/557091b05dd223553341d5da80e08f82783f68cf))
+
 ## [3.7.2](https://github.com/sunerpy/kiro-provider/compare/v3.7.1...v3.7.2) (2026-09-27)
 
 
