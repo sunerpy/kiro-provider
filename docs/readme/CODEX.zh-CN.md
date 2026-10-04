@@ -2,14 +2,42 @@
 
 简体中文 · [English](../CODEX.md)
 
-**最近一次本地验收：**Codex CLI 0.156.1，2026-09-23，覆盖自动标题和大图片历史。
-下方较完整的 V3 smoke 记录使用 0.154.0。
+**最近一次专项验收：**Codex CLI 0.159.3，2026-10-04，覆盖模型/effort 切换和
+真实 `/model` 菜单。此前自动标题/图片历史验收使用 0.156.1；下方 V3 smoke 使用 0.154.0。
 
 kiro-provider V3 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
 wire API。
 
 长期使用且希望保留原生 Codex home 时，参见[独立客户端入口示例](CLIENT_LAUNCHERS.zh-CN.md)，
 其中包含 `kirocodex`、命令鉴权、模型目录窗口、Ultra 和账号并发配置。
+
+## 切换模型与推理等级
+
+Codex `models` 投影只展示 base ID，通过 `supported_reasoning_levels` 表达
+effort；标准 OpenAI `data` 保留旧后缀别名。启动 Codex 前，先把网关模型目录
+保存为临时文件并设置 `model_catalog_json`。自定义 provider 不会自动替换
+Codex 内置的模型菜单目录。
+
+同一 wire model 的 base/effort/thinking 别名共享认证 replay identity。默认
+compatible 模式下，切换实际 wire model 时，先认证旧 provider token，再仅省略
+其 opaque reasoning；完整保留可见消息和 tool call/result 历史，并返回
+`x-kiro-reasoning-model-replay-mode: incompatible-omitted`。
+严格模式和旧 v3 token 的有界认证见
+[模型切换配置](CONFIGURATION.zh-CN.md#切换模型与推理等级)。
+
+对隔离网关、key 和状态执行真实 CLI capture 门禁：
+
+```bash
+bun scripts/probe-client-model-switch.ts --client codex \
+  --codex-bin /absolute/path/to/codex \
+  --base-url http://127.0.0.1:TEST_PORT \
+  --provider-config /private/probe/config.json --out /private/probe/codex.json
+```
+
+该脚本先鉴权并证明请求到达指定 capture 端口，再放行推理；加载网关目录后，
+覆盖 base effort、base/suffix、suffix/base、suffix/suffix、GPT→Claude 的 resume，
+各组包含 signed reasoning 和已完成的 tool turn。证据只记录枚举/计数/判定，
+结束后清理客户端状态；脚本拒绝生产端口 8787。
 
 ## 使用隔离配置运行
 

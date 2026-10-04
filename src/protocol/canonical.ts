@@ -124,6 +124,8 @@ export function isInstructionReplayProjection(
 export interface ResolvedReasoningReplay {
   readonly insertBeforeMessage: number;
   readonly content: KiroReasoningContent;
+  /** Authenticated incompatible material; keep its frozen projection only. */
+  readonly modelOmitted?: true;
   readonly instructionProjection?: InstructionReplayProjection;
   /** Compatibility hint for an authenticated token predating projection metadata. */
   readonly legacyProjectionUnversioned?: true;

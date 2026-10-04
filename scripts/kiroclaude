@@ -187,6 +187,8 @@ settings = {
         "CLAUDE_CODE_GENTLE_PARASOL": "0",
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_AUTH_TOKEN": "",
+        "AWS_BEARER_TOKEN_BEDROCK": "",
+        "BEDROCK_API_KEY": "",
         "ANTHROPIC_BEDROCK_BASE_URL": "",
         "ANTHROPIC_VERTEX_BASE_URL": "",
         "ANTHROPIC_FOUNDRY_BASE_URL": "",
@@ -256,6 +258,8 @@ settings = {
         "ANTHROPIC_VERTEX_BASE_URL": "",
         "ANTHROPIC_FOUNDRY_BASE_URL": "",
         "ANTHROPIC_AWS_BASE_URL": "",
+        "AWS_BEARER_TOKEN_BEDROCK": "",
+        "BEDROCK_API_KEY": "",
         "AWS_PROFILE": profile,
         "AWS_REGION": region,
         "AWS_DEFAULT_REGION": region,
@@ -287,10 +291,18 @@ unset ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_AWS_BASE_URL
 unset ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES
 unset CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY CLAUDE_CODE_USE_MANTLE
 unset CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ENABLE_TOOL_SEARCH
+# A Bedrock bearer token selects the native Bedrock transport before Claude has
+# applied settings-file overlays. Never let ambient direct credentials cross
+# either launcher lane; the explicit Bedrock Fable lane uses AWS_PROFILE.
+unset AWS_BEARER_TOKEN_BEDROCK BEDROCK_API_KEY
 
 if [ "$backend" = kiro ]; then
   export KIRO_PROVIDER_CONFIG="$provider_config"
-  unset CLAUDE_CODE_USE_BEDROCK
+  # Export the route as process environment as well as --settings. Claude
+  # resolves provider authentication early, so settings alone are not a safe
+  # isolation boundary when the parent process had native Bedrock configured.
+  export CLAUDE_CODE_USE_BEDROCK=0
+  export ANTHROPIC_BASE_URL=${base_url%/}
   unset ANTHROPIC_DEFAULT_FABLE_MODEL
 else
   unset KIRO_PROVIDER_CONFIG
@@ -307,4 +319,92 @@ if [ -n "$resolved_session_effort" ]; then
   set -- --effort "$resolved_session_effort" "$@"
 fi
 
-exec "$claude_bin" --settings "$settings" "$@"
+# Orchestrators may append their own --settings argument. Claude
+# treats the last occurrence as a complete replacement rather than a merge, so
+# passing our overlay first can silently discard the Kiro route. Normalize every
+# caller settings object into one final object, while keeping launcher-owned
+# routing, authentication, model, effort, and permission fields authoritative.
+# Load this Python shim from fd 3 instead of stdin. The shim execs into Claude,
+# whose interactive input must remain attached to the caller's original stdin.
+exec python3 /dev/fd/3 "$claude_bin" "$settings" "$@" 3<<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+claude_bin, launcher_json, *arguments = sys.argv[1:]
+
+
+def fail(message):
+    print(f"kiroclaude: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def merge(base, override):
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = merge(merged.get(key), value)
+        return merged
+    return override
+
+
+def load_settings(value):
+    try:
+        if value.lstrip().startswith("{"):
+            loaded = json.loads(value)
+        else:
+            loaded = json.loads(Path(value).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot read caller --settings: {error}")
+    if not isinstance(loaded, dict):
+        fail("caller --settings must contain a JSON object")
+    return loaded
+
+
+caller_settings = {}
+forwarded = []
+index = 0
+while index < len(arguments):
+    argument = arguments[index]
+    if argument == "--":
+        forwarded.extend(arguments[index:])
+        break
+    if argument == "--settings":
+        if index + 1 >= len(arguments):
+            fail("--settings requires a JSON object or file path")
+        caller_settings = merge(caller_settings, load_settings(arguments[index + 1]))
+        index += 2
+        continue
+    if argument.startswith("--settings="):
+        caller_settings = merge(caller_settings, load_settings(argument[len("--settings="):]))
+        index += 1
+        continue
+    forwarded.append(argument)
+    index += 1
+
+try:
+    launcher_settings = json.loads(launcher_json)
+except json.JSONDecodeError as error:
+    fail(f"generated invalid launcher settings: {error}")
+
+effective_settings = merge(caller_settings, launcher_settings)
+# A caller settings file may contain credentials. Keep the merged bytes out of
+# the process command line by passing an anonymous owner-only file descriptor.
+settings_file = tempfile.TemporaryFile(prefix="kiroclaude-settings-")
+settings_file.write(json.dumps(effective_settings, separators=(",", ":")).encode())
+settings_file.flush()
+settings_file.seek(0)
+settings_fd = settings_file.fileno()
+os.set_inheritable(settings_fd, True)
+try:
+    os.close(3)
+except OSError:
+    pass
+os.execvpe(
+    claude_bin,
+    [claude_bin, "--settings", f"/dev/fd/{settings_fd}", *forwarded],
+    os.environ,
+)
+PY

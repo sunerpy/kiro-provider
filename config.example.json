@@ -51,6 +51,7 @@
   "reasoning_replay_key_path": null,
   "reasoning_replay_keys": [],
   "reasoning_replay_token_format": "portable-v2",
+  "reasoning_replay_model_switch": "compatible",
   "reasoning_replay_account_failover": "verified",
   "reasoning_replay_legacy_account_failover": "strict",
   "reasoning_replay_ttl_ms": 86400000,

@@ -284,6 +284,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_REASONING_REPLAY_MODEL_SWITCH",
+    field: "reasoning_replay_model_switch",
+    kind: "string",
+  },
+  {
     env: "KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER",
     field: "reasoning_replay_account_failover",
     kind: "string",

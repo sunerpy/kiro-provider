@@ -2,7 +2,9 @@
 
 简体中文 · [English](../CLAUDE_CODE.md)
 
-**最近验证的客户端：**Claude Code 2.1.270。后续版本可能增加 beta header 或请求
+**最近完整验收的客户端：**Claude Code 2.1.270。2026-10-04 的 2.1.285 专项
+capture/resume 验收通过 Opus 5.5 max→low、Fable→Opus 5.5 的 signed thinking/tool
+续接；Opus 5.5→Opus 5 仍有上游流完成缺口，并非 replay context 拒绝。后续版本可能增加 beta header 或请求
 字段；要扩大兼容声明，需先重新验证真实请求形态。
 
 kiro-provider 提供 Claude Code 所需的两个 Anthropic 兼容端点：
@@ -35,9 +37,14 @@ PATH="$PWD/scripts:$PATH" kiroclaude -p 'Reply with exactly: KIROCLAUDE_OK'
 历史和会话因此可同时用于 `claude` 与 `kiroclaude`。
 
 启动器只为当前进程传入高优先级 `--settings` overlay。Kiro 模式会明确关闭继承的
-Bedrock、Vertex、Foundry 和 Mantle 路由，清空继承的 Anthropic 凭据，再选择本地
-网关与模型别名。它不会修改原生 settings 文件，所以普通 `claude` 进程仍使用原有
-provider。
+Bedrock、Vertex、Foundry 和 Mantle 路由，清空继承的 Anthropic 与 Bedrock bearer
+凭据，再选择本地网关与模型别名。它不会修改原生 settings 文件，所以普通
+`claude` 进程仍使用原有 provider。
+
+如果编排器在参数末尾追加其他 `--settings` 文件或内联对象，启动器会先
+合并其中与路由无关的字段，再应用 Kiro overlay。这样主会话及其子 agent 的路由与
+认证始终以启动器配置为准。合并后的文件内容通过仅 owner 可读的匿名文件描述符
+传递，不进入进程命令行，避免 caller settings 中的凭据被 `ps` 暴露。
 
 共享历史不代表 provider 专用签名可以互通。如果旧续轮包含另一个 provider 无法
 回放的 signed thinking，在原生 Bedrock 与 Kiro 之间切换时应新建会话。
@@ -45,7 +52,34 @@ provider。
 Release installer 目前不安装这些辅助脚本。临时测试可直接从 checkout 运行；确定
 长期使用后再自行复制或建立链接。
 
-### 默认值与覆盖方式
+### 隔离真实客户端 capture 门禁
+
+`KIROCLAUDE_BASE_URL` 和 `--settings` 不能覆盖管理员 managed settings 中的
+`ANTHROPIC_BASE_URL`。活体探针必须先证明 capture proxy 收到了请求，门禁失败
+即停止转发推理。保留已安装服务与宿主策略；宿主策略锁定生产端口时，使用
+单独容器/namespace，保留策略权限和 provider 限制，仅将临时策略副本的 endpoint
+指向 capture 端口。`--managed-policy-copy` 只接受临时目录下无符号链接的真实副本。
+
+```bash
+bun scripts/probe-client-model-switch.ts --client claude \
+  --claude-bin /absolute/path/to/claude \
+  --base-url http://127.0.0.1:TEST_PORT \
+  --provider-config /private/probe/config.json --out /private/probe/claude.json
+```
+
+使用独立 key/账号状态副本与新的客户端配置目录。脚本在 resume 前验证已返回
+signed thinking 和完成的 tool turn；区分原生 signature 与 provider `kr2_`，因为
+Claude 切换实际模型时可能过滤旧 thinking。2.1.285 还会探测消息级 `output_config`：
+该未支持字段在派发前按 typed error 拒绝，客户端随后发出普通请求。报告保留
+拒绝次数，不能把该探测算作推理请求。
+
+`probe-image-run-order.ts` 使用隔离网关检验模型实际观察到的文字/图片顺序，覆盖
+stream/非 stream Messages 与 signed reasoning 续接。2026-10-04 的 Opus 5.5/Fable
+探针使用 16000 输出预算并完成；2048 的一次样本在可见输出前截断，预算耗尽仍是
+尚未独立证明的推断。保留 max effort。
+这些结果仅覆盖上述模型，不代表整个未来模型目录。
+
+## 默认值与覆盖方式
 
 | 设置                   | 默认值                                        |
 | ---------------------- | --------------------------------------------- |

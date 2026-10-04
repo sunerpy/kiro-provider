@@ -345,6 +345,11 @@ export async function handleMessages(
         ...compatibility,
       });
       streamOwnsRouteResources = true;
+      if (
+        pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+        "incompatible-omitted"
+      )
+        streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
       if (clientNormalization)
         streaming.headers.set("x-kiro-client-normalization", clientNormalization.kind);
       return streaming;
@@ -357,6 +362,11 @@ export async function handleMessages(
           adapted.value.body.model,
           compatibility,
         );
+        if (
+          pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+          "incompatible-omitted"
+        )
+          response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
         if (clientNormalization)
           response.headers.set("x-kiro-client-normalization", clientNormalization.kind);
         return response;

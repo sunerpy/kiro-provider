@@ -19,6 +19,7 @@ import {
 } from "../protocol/client-normalization.js";
 import type { AccountsDatabase, ReasoningReplayRecord } from "../storage/accounts-db.js";
 import { loadReasoningReplayKeyring, type ReasoningReplayKeyring } from "./keyring.js";
+import { replayModelIdentity } from "./model-identity.js";
 import {
   decodePortableReplayToken,
   encodePortableReplayToken,
@@ -62,6 +63,7 @@ export interface ReasoningCaptureContext {
 export interface ReasoningReplayContext {
   readonly tenantId: string;
   readonly model: string;
+  readonly modelSwitchMode?: "strict" | "compatible";
   readonly outputFingerprint: string;
   readonly compatibleOutputFingerprints?: readonly string[];
   readonly normalizedOutputFingerprint?: string;
@@ -74,6 +76,9 @@ export interface ReasoningReplayContext {
 export interface ReasoningReplayResolution {
   readonly accountId: string;
   readonly conversationId: string;
+  /** Original material was authenticated but cannot be rendered on this model. */
+  readonly modelMismatch?: true;
+  readonly sourceModelIdentity?: string;
   /** Only provenance-authenticated portable replay may enter a verified cell. */
   readonly portable?: true;
   readonly provenance?: PortableReplayMintProvenance;
@@ -458,6 +463,9 @@ export class ReasoningReplayStore {
               accountId: decoded.accountId,
               conversationId: decoded.conversationId,
               legacyPortable: true as const,
+              ...(decoded.replayModelIdentity !== replayModelIdentity(context.model)
+                ? { modelMismatch: true as const, sourceModelIdentity: decoded.replayModelIdentity }
+                : {}),
               replay: { insertBeforeMessage, content: decoded.content },
             };
           }
@@ -467,6 +475,9 @@ export class ReasoningReplayStore {
             accountId: decoded.accountId,
             conversationId: decoded.conversationId,
             portable: true as const,
+            ...(decoded.replayModelIdentity !== replayModelIdentity(context.model)
+              ? { modelMismatch: true as const, sourceModelIdentity: decoded.replayModelIdentity }
+              : {}),
             provenance: decoded.provenance,
             replay: {
               insertBeforeMessage,
@@ -525,6 +536,9 @@ export class ReasoningReplayStore {
         accountId: record.accountId,
         conversationId: record.conversationId,
         databaseLegacy: true as const,
+        ...(replayModelIdentity(record.model) !== replayModelIdentity(context.model)
+          ? { modelMismatch: true as const, sourceModelIdentity: replayModelIdentity(record.model) }
+          : {}),
         replay: {
           insertBeforeMessage,
           content: replayContent(envelope),
@@ -624,7 +638,11 @@ export class ReasoningReplayStore {
     const mismatches = (
       [
         ["tenant", !constantEqual(record.tenantId, context.tenantId)],
-        ["model", record.model !== context.model],
+        [
+          "model",
+          context.modelSwitchMode !== "compatible" &&
+            replayModelIdentity(record.model) !== replayModelIdentity(context.model),
+        ],
         ["output", !outputMatches],
         ["account", context.accountId !== undefined && record.accountId !== context.accountId],
         [
@@ -700,6 +718,7 @@ export class ReasoningReplayStore {
         },
         this.#keyring,
         context.now ?? Date.now(),
+        context.modelSwitchMode,
       );
     let decoded: ReturnType<typeof decodePortableReplayToken>;
     let normalized = false;

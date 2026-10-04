@@ -51,6 +51,7 @@ keys = [
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "ENABLE_TOOL_SEARCH",
   "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_ENABLE_AWAY_SUMMARY",
   "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_API_KEY",
 ]
 def merge(base, override):
     if isinstance(base, dict) and isinstance(override, dict):
@@ -65,10 +66,36 @@ native_path = os.path.join(config_dir, "settings.json")
 if os.path.isfile(native_path):
     with open(native_path, encoding="utf-8") as source:
         native_settings = json.load(source)
-overlay = json.loads(arguments[arguments.index("--settings") + 1])
+setting_values = []
+index = 0
+while index < len(arguments):
+    argument = arguments[index]
+    if argument == "--settings":
+        setting_values.append(arguments[index + 1])
+        index += 2
+        continue
+    if argument.startswith("--settings="):
+        setting_values.append(argument[len("--settings="):])
+    index += 1
+if not setting_values:
+    raise SystemExit("missing --settings")
+value = setting_values[-1]
+settings_mode = None
+if value.lstrip().startswith("{"):
+    overlay = json.loads(value)
+else:
+    settings_mode = os.stat(value).st_mode & 0o777
+    with open(value, encoding="utf-8") as source:
+        overlay = json.load(source)
+normalized_arguments = list(arguments)
+normalized_arguments[arguments.index("--settings") + 1] = json.dumps(
+    overlay, separators=(",", ":")
+)
 with open(path, "w", encoding="utf-8") as output:
     json.dump({
-        "arguments": arguments,
+        "arguments": normalized_arguments,
+        "rawArguments": arguments,
+        "settingsMode": settings_mode,
         "env": {key: os.environ.get(key) for key in keys},
         "effectiveSettings": merge(native_settings, overlay),
     }, output)
@@ -108,6 +135,9 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
   return {
     ...process.env,
     HOME: root,
+    KIROCLAUDE_BACKEND: "kiro",
+    KIROCLAUDE_EFFORT: "ultra",
+    KIROCLAUDE_PERMISSION_MODE: "",
     KIROCLAUDE_CLAUDE_BIN: fake.executable,
     KIROCLAUDE_TEST_CAPTURE: fake.capture,
     KIROCLAUDE_PROVIDER_CONFIG: providerConfig(root),
@@ -126,6 +156,8 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
     AWS_REGION: "shell-region",
     AWS_DEFAULT_REGION: "shell-default-region",
     ANTHROPIC_DEFAULT_FABLE_MODEL: "must-not-leak",
+    AWS_BEARER_TOKEN_BEDROCK: "must-not-leak",
+    BEDROCK_API_KEY: "must-not-leak",
   } as Record<string, string>;
 }
 
@@ -232,17 +264,19 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     for (const key of [
       "ANTHROPIC_API_KEY",
       "ANTHROPIC_AUTH_TOKEN",
-      "ANTHROPIC_BASE_URL",
-      "CLAUDE_CODE_USE_BEDROCK",
       "CLAUDE_CODE_USE_VERTEX",
       "CLAUDE_CODE_USE_FOUNDRY",
       "CLAUDE_CODE_USE_MANTLE",
       "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
       "ENABLE_TOOL_SEARCH",
       "ANTHROPIC_CUSTOM_HEADERS",
+      "AWS_BEARER_TOKEN_BEDROCK",
+      "BEDROCK_API_KEY",
     ]) {
       expect(capture.env[key]).toBeNull();
     }
+    expect(capture.env.CLAUDE_CODE_USE_BEDROCK).toBe("0");
+    expect(capture.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8787");
     expect(capture.arguments.slice(-2)).toEqual(["--print", "hello"]);
     expect(capture.arguments[0]).toBe("--settings");
     const settings = JSON.parse(capture.arguments[1] as string) as {
@@ -353,6 +387,99 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(readFileSync(join(root, ".claude", "skills", "shared-skill.md"), "utf8")).toBe(
       "shared\n",
     );
+  });
+
+  test("merges caller settings while keeping the Kiro route authoritative", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const callerSettings = join(root, "caller-settings.json");
+    writeFileSync(
+      callerSettings,
+      JSON.stringify({
+        fastMode: true,
+        callerOnly: { fromFile: true },
+        privateFixture: "file-value-must-not-appear-in-argv",
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: "1",
+          ANTHROPIC_BASE_URL: "https://must-not-win.example.test",
+        },
+      }),
+    );
+    const result = Bun.spawnSync(
+      [
+        "sh",
+        launcher,
+        "--settings",
+        callerSettings,
+        `--settings=${JSON.stringify({
+          fastMode: false,
+          callerOnly: { fromInline: true },
+          env: {
+            AWS_BEARER_TOKEN_BEDROCK: "must-not-win",
+            BEDROCK_API_KEY: "must-not-win",
+          },
+        })}`,
+        "--print",
+        "hello",
+      ],
+      { env: environment(root, fake) },
+    );
+
+    expect(result.exitCode).toBe(0);
+    const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+      rawArguments: string[];
+      settingsMode: number;
+      env: Record<string, string | null>;
+      effectiveSettings: {
+        fastMode: boolean;
+        privateFixture: string;
+        callerOnly: { fromFile: boolean; fromInline: boolean };
+        env: Record<string, string>;
+      };
+    };
+    expect(capture.arguments.filter((argument) => argument === "--settings")).toHaveLength(1);
+    expect(capture.arguments.some((argument) => argument.startsWith("--settings="))).toBe(false);
+    expect(capture.arguments.slice(2)).toEqual(["--print", "hello"]);
+    expect(capture.rawArguments[1]).toMatch(/^\/dev\/fd\/\d+$/);
+    expect(capture.settingsMode).toBe(0o600);
+    expect(JSON.stringify(capture.rawArguments)).not.toContain(
+      "file-value-must-not-appear-in-argv",
+    );
+    expect(capture.effectiveSettings.fastMode).toBe(false);
+    expect(capture.effectiveSettings.privateFixture).toBe("file-value-must-not-appear-in-argv");
+    expect(capture.effectiveSettings.callerOnly).toEqual({ fromFile: true, fromInline: true });
+    expect(capture.effectiveSettings.env.CLAUDE_CODE_USE_BEDROCK).toBe("0");
+    expect(capture.effectiveSettings.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8787");
+    expect(capture.effectiveSettings.env.AWS_BEARER_TOKEN_BEDROCK).toBe("");
+    expect(capture.effectiveSettings.env.BEDROCK_API_KEY).toBe("");
+    expect(capture.env.CLAUDE_CODE_USE_BEDROCK).toBe("0");
+    expect(capture.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8787");
+    expect(capture.env.AWS_BEARER_TOKEN_BEDROCK).toBeNull();
+    expect(capture.env.BEDROCK_API_KEY).toBeNull();
+  });
+
+  test("preserves caller stdin while normalizing settings", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const input = join(root, "stdin.txt");
+    writeFileSync(input, "STDIN_SURVIVES\n");
+    writeFileSync(
+      fake.executable,
+      `#!/bin/sh
+IFS= read -r line || exit 70
+printf '%s\n' "$line" >"$KIROCLAUDE_TEST_CAPTURE"
+`,
+      { mode: 0o755 },
+    );
+
+    const result = Bun.spawnSync(["sh", launcher, "--print", "hello"], {
+      env: environment(root, fake),
+      stdio: [Bun.file(input), "pipe", "pipe"],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(fake.capture, "utf8")).toBe("STDIN_SURVIVES\n");
   });
 
   test("supports isolated endpoint and model overrides without appending /v1", () => {
@@ -474,6 +601,8 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(capture.env.AWS_REGION).toBe("us-east-2");
     expect(capture.env.AWS_DEFAULT_REGION).toBe("us-east-2");
     expect(capture.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("us.anthropic.claude-fable-5-1");
+    expect(capture.env.AWS_BEARER_TOKEN_BEDROCK).toBeNull();
+    expect(capture.env.BEDROCK_API_KEY).toBeNull();
     expect(settings).not.toHaveProperty("apiKeyHelper");
     // The Bedrock default is max, which Claude Code accepts only per session.
     expect(settings).not.toHaveProperty("effortLevel");
@@ -507,6 +636,8 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
         ANTHROPIC_VERTEX_BASE_URL: "",
         ANTHROPIC_FOUNDRY_BASE_URL: "",
         ANTHROPIC_AWS_BASE_URL: "",
+        AWS_BEARER_TOKEN_BEDROCK: "",
+        BEDROCK_API_KEY: "",
         AWS_PROFILE: "us-claude",
         AWS_REGION: "us-east-2",
         AWS_DEFAULT_REGION: "us-east-2",
@@ -520,6 +651,8 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(capture.effectiveSettings.env.ANTHROPIC_BASE_URL).toBe("");
     expect(capture.effectiveSettings.env.ANTHROPIC_BEDROCK_BASE_URL).toBe("");
     expect(capture.effectiveSettings.env.ANTHROPIC_API_KEY).toBe("");
+    expect(capture.effectiveSettings.env.AWS_BEARER_TOKEN_BEDROCK).toBe("");
+    expect(capture.effectiveSettings.env.BEDROCK_API_KEY).toBe("");
     expect(capture.arguments.slice(-2)).toEqual(["--print", "hello"]);
   });
 
@@ -689,7 +822,12 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       `#!/usr/bin/env python3
 import json, os, subprocess, sys
 arguments = sys.argv[1:]
-settings = json.loads(arguments[arguments.index("--settings") + 1])
+settings_value = arguments[arguments.index("--settings") + 1]
+if settings_value.lstrip().startswith("{"):
+    settings = json.loads(settings_value)
+else:
+    with open(settings_value, encoding="utf-8") as source:
+        settings = json.load(source)
 result = subprocess.run(settings["apiKeyHelper"], shell=True, env=os.environ, text=True, capture_output=True)
 if result.returncode != 0:
     sys.stderr.write(result.stderr)

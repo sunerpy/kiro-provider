@@ -122,7 +122,7 @@ function asUserInput(
 function replayContent(
   replay: ResolvedReasoningReplay | undefined,
 ): AssistantResponse["reasoningContent"] | undefined {
-  if (replay === undefined) return undefined;
+  if (replay === undefined || replay.modelOmitted === true) return undefined;
   return replay.content.kind === "reasoning_text"
     ? {
         reasoningText: {

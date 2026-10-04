@@ -12,6 +12,8 @@ export interface EffortConfig {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
+  /** Authenticated Claude Code compatibility for user text/image run splitting. */
+  readonly splitInterleavedUserImages?: boolean;
   readonly promptCaching?: {
     readonly mode: "server-auto" | "explicit-checkpoints" | "off";
     readonly supported: boolean;
@@ -36,6 +38,7 @@ export function transformToSdkRequest(
       conversationId: effortConfig?.conversationId,
       nativeSystemPromptEnabled: effortConfig?.nativeSystemPromptEnabled,
       resolvedReasoningReplays: effortConfig?.resolvedReasoningReplays,
+      splitInterleavedUserImages: effortConfig?.splitInterleavedUserImages,
       promptCaching: effortConfig?.promptCaching,
     },
   );

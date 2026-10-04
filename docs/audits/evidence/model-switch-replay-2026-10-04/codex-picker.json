@@ -1,0 +1,14 @@
+{
+  "client": "0.159.3",
+  "catalog_loaded": true,
+  "picker_model": "claude-opus-5-5",
+  "picker_effort": "low",
+  "actual_responses": [
+    {
+      "model": "claude-opus-5-5",
+      "effort": "low",
+      "assistant_marker_count": 1,
+      "transcript_sha256": "55e50203e73db46194de59f4c1c983dc2ae5109275a90915b8689826c86ab8bb"
+    }
+  ]
+}

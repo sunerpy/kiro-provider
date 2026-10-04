@@ -36,6 +36,8 @@ export interface RequestTransformIdentity {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
+  /** Authenticated Claude Code compatibility for user text/image run splitting. */
+  readonly splitInterleavedUserImages?: boolean;
   readonly promptCaching?: {
     readonly mode: "server-auto" | "explicit-checkpoints" | "off";
     readonly supported: boolean;
@@ -128,25 +130,72 @@ function nativeInstructionProjection(
   };
 }
 
-function validateContentBlockProjection(messages: readonly CanonicalMessage[]): void {
-  for (const message of messages) {
-    if (message.role === "system" || message.role === "developer") continue;
-    let textRunStarted = false;
-    let nonTextAfterText = false;
-    for (const part of message.content) {
-      if (part.type === "text") {
-        if (nonTextAfterText) {
-          throw new RequestTransformError(
-            `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
-            "unsupported_content_block_projection",
-            part.path,
-          );
-        }
-        textRunStarted = true;
-      } else if (textRunStarted) {
-        nonTextAfterText = true;
-      }
+const MAX_CLIENT_CONTENT_RUNS = 16;
+
+function interleavedTextPart(
+  message: CanonicalMessage,
+): CanonicalMessage["content"][number] | undefined {
+  if (message.role === "system" || message.role === "developer") return undefined;
+  let textRunStarted = false;
+  let nonTextAfterText = false;
+  for (const part of message.content) {
+    if (part.type === "text") {
+      if (nonTextAfterText) return part;
+      textRunStarted = true;
+    } else if (textRunStarted) {
+      nonTextAfterText = true;
     }
+  }
+  return undefined;
+}
+
+function clientImageRuns(message: CanonicalMessage): CanonicalMessage[] | undefined {
+  if (
+    message.role !== "user" ||
+    message.toolCalls.length > 0 ||
+    message.content.some((part) => part.type !== "text" && part.type !== "image")
+  ) {
+    return undefined;
+  }
+  const runs: Array<CanonicalMessage["content"][number][]> = [];
+  for (const part of message.content) {
+    const current = runs.at(-1);
+    if (current === undefined || current[0]?.type !== part.type) runs.push([{ ...part }]);
+    else current.push({ ...part });
+  }
+  if (runs.length > MAX_CLIENT_CONTENT_RUNS) return undefined;
+  const { cachePoint, ...base } = message;
+  return runs.map((content, index) => ({
+    ...base,
+    content,
+    toolCalls: [],
+    ...(cachePoint && index === runs.length - 1 ? { cachePoint: true } : {}),
+  }));
+}
+
+function contentBlockMessages(
+  message: CanonicalMessage,
+  splitInterleavedUserImages: boolean,
+): CanonicalMessage[] {
+  if (!splitInterleavedUserImages || interleavedTextPart(message) === undefined) {
+    return [cloneMessage(message)];
+  }
+  return clientImageRuns(message) ?? [cloneMessage(message)];
+}
+
+function validateContentBlockProjection(
+  messages: readonly CanonicalMessage[],
+  splitInterleavedUserImages: boolean,
+): void {
+  for (const message of messages) {
+    const interleaved = interleavedTextPart(message);
+    if (interleaved === undefined) continue;
+    if (splitInterleavedUserImages && clientImageRuns(message) !== undefined) continue;
+    throw new RequestTransformError(
+      `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
+      "unsupported_content_block_projection",
+      interleaved.path,
+    );
   }
 }
 
@@ -169,6 +218,7 @@ function projectLegacyReplayPrefix(
   nativeSystemPromptEnabled: boolean,
   boundary: number,
   unversioned: boolean,
+  splitInterleavedUserImages: boolean,
 ): ReturnType<typeof projectMessages> | undefined {
   if (
     !Number.isSafeInteger(boundary) ||
@@ -220,9 +270,13 @@ function projectLegacyReplayPrefix(
   for (const [index, message] of prefix.entries()) {
     if (isInstruction(message)) continue;
     projectedIndexByOriginal.set(index, messages.length);
-    messages.push(cloneMessage(message));
+    messages.push(...contentBlockMessages(message, splitInterleavedUserImages));
   }
-  const suffix = projectMessages({ ...request, messages: request.messages.slice(boundary) }, false);
+  const suffix = projectMessages(
+    { ...request, messages: request.messages.slice(boundary) },
+    false,
+    splitInterleavedUserImages,
+  );
   for (const [index, projected] of suffix.projectedIndexByOriginal)
     projectedIndexByOriginal.set(index + boundary, projected + messages.length);
   messages.push(...suffix.messages);
@@ -244,6 +298,7 @@ function projectLegacyReplayPrefix(
 function projectMessages(
   request: CanonicalRequest,
   nativeSystemPromptEnabled: boolean,
+  splitInterleavedUserImages: boolean,
 ): {
   readonly messages: CanonicalMessage[];
   readonly projectedIndexByOriginal: ReadonlyMap<number, number>;
@@ -286,7 +341,7 @@ function projectMessages(
     for (const [index, message] of request.messages.entries()) {
       if (isInstruction(message)) continue;
       projectedIndexByOriginal.set(index, messages.length);
-      messages.push(cloneMessage(message));
+      messages.push(...contentBlockMessages(message, splitInterleavedUserImages));
     }
     const systemPrompt = nativeProjection.systemPrompt;
     return {
@@ -412,7 +467,12 @@ function projectMessages(
       } else appendInstructionTurn();
     }
     projectedIndexByOriginal.set(index, messages.length);
-    messages.push(projected);
+    messages.push(
+      ...contentBlockMessages(
+        projected,
+        splitInterleavedUserImages && interleavedTextPart(message) !== undefined,
+      ),
+    );
   }
   appendInstructionTurn(trailingInstructions.length > 0);
 
@@ -619,7 +679,8 @@ export function buildCodeWhispererRequest(
   if (canonical.messages.length === 0) {
     throw new RequestTransformError("No messages", "empty_input");
   }
-  validateContentBlockProjection(canonical.messages);
+  const splitInterleavedUserImages = identity.splitInterleavedUserImages === true;
+  validateContentBlockProjection(canonical.messages, splitInterleavedUserImages);
   let resolved: string;
   let variantEffort: ReturnType<typeof resolveModelVariant>["effort"];
   try {
@@ -657,8 +718,14 @@ export function buildCodeWhispererRequest(
               (replay) => replay.instructionProjection?.legacyPrefixMessages === legacyBoundary,
             )
             .every((replay) => replay.legacyProjectionUnversioned === true),
+          splitInterleavedUserImages,
         )
-      : undefined) ?? projectMessages(canonical, identity.nativeSystemPromptEnabled === true);
+      : undefined) ??
+    projectMessages(
+      canonical,
+      identity.nativeSystemPromptEnabled === true,
+      splitInterleavedUserImages,
+    );
   if (projection.messages.length === 0) {
     throw new RequestTransformError("No executable messages", "empty_input");
   }

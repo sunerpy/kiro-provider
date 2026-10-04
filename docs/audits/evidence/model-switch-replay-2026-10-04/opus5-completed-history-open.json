@@ -1,0 +1,24 @@
+[
+  {
+    "phase": "initial",
+    "status": 200,
+    "signed": true,
+    "tool": true
+  },
+  {
+    "phase": "tool-result",
+    "status": 200
+  },
+  {
+    "phase": "completed-history",
+    "keep_signed": true,
+    "status": 502,
+    "marker_preserved": false
+  },
+  {
+    "phase": "completed-history",
+    "keep_signed": false,
+    "status": 502,
+    "marker_preserved": false
+  }
+]

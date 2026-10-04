@@ -176,6 +176,7 @@ describe("ConfigSchema", () => {
       reasoning_replay_key_path: null,
       reasoning_replay_keys: [],
       reasoning_replay_token_format: "portable-v2",
+      reasoning_replay_model_switch: "compatible",
       reasoning_replay_account_failover: "verified",
       reasoning_replay_legacy_account_failover: "strict",
       reasoning_replay_ttl_ms: 86400000,
@@ -473,6 +474,7 @@ describe("loadConfig", () => {
         KIRO_PROVIDER_REASONING_REPLAY_KEYS:
           "active:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,old:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         KIRO_PROVIDER_REASONING_REPLAY_TOKEN_FORMAT: "database-v1",
+        KIRO_PROVIDER_REASONING_REPLAY_MODEL_SWITCH: "strict",
         KIRO_PROVIDER_REASONING_REPLAY_ACCOUNT_FAILOVER: "strict",
         KIRO_PROVIDER_REASONING_REPLAY_LEGACY_ACCOUNT_FAILOVER: "verified-current-cell",
         KIRO_PROVIDER_REASONING_REPLAY_TTL_MS: "7200000",
@@ -540,6 +542,7 @@ describe("loadConfig", () => {
         "old:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
       ],
       reasoning_replay_token_format: "database-v1",
+      reasoning_replay_model_switch: "strict",
       reasoning_replay_account_failover: "strict",
       reasoning_replay_legacy_account_failover: "verified-current-cell",
       reasoning_replay_ttl_ms: 7200000,
