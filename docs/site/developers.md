@@ -42,7 +42,8 @@ Coverage is a release gate: `make coverage-gate` holds the line coverage at 93%,
 it.
 
 Live checks against Kiro use their own configuration, port and copy of the accounts, never the gateway you use day to
-day. The probe scripts in `scripts/` refuse port 8787 for that reason.
+day. Several probe scripts in `scripts/`, such as `prepare-web-search-gateway.ts` and `probe-web-search-live.ts`,
+refuse the default port 8787 for that reason.
 
 ## Pull requests and releases
 

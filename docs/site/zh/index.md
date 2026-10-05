@@ -137,7 +137,7 @@ home:
         body: 先在 config.json 的 api_keys 中写入一个私有密钥，没有密钥时网关拒绝启动。
       - title: 连接客户端
         command: http://127.0.0.1:8787/v1
-        body: 在 Codex CLI、Claude Code、Zuno 或 SDK 中填入这个地址和你的密钥。
+        body: 这是 Codex CLI、Zuno 和 OpenAI SDK 的基础 URL；Claude Code 和 Anthropic SDK 使用不带 /v1 的 http://127.0.0.1:8787。
 
   protocols:
     columns: [路由, 协议, 默认状态]

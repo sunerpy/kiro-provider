@@ -1,11 +1,12 @@
 # Data and network
 
-This page lists everything kiro-provider writes to your disk and every host it connects to.
+This page lists the data kiro-provider writes to your disk and every host it connects to.
 
 ## What it writes
 
-All of it is in one directory: `$XDG_CONFIG_HOME/kiro-provider` or `~/.config/kiro-provider` on Linux and macOS,
-`%APPDATA%\kiro-provider` on Windows.
+Everything except the executable, which `self-update` replaces where it is installed, is in one directory:
+`$XDG_CONFIG_HOME/kiro-provider` or `~/.config/kiro-provider` on Linux and macOS, `%APPDATA%\kiro-provider` on
+Windows.
 
 | File                         | Contents                                                                                                                                            |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,15 +35,16 @@ Removing an account with `accounts remove` deletes its bindings and stored reaso
 
 ## What it sends, and where
 
-| Host                                                    | When                                        | What goes there                                                                             |
-| ------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `oidc.<region>.amazonaws.com`                           | `login`, `relogin`, token renewal           | The device-code sign-in and refresh of AWS Builder ID and IAM Identity Center tokens.       |
-| `prod.<region>.auth.desktop.kiro.dev`                   | Token renewal                               | The refresh of accounts that signed in with Kiro's own sign-in, such as some imported ones. |
-| `management.<region>.kiro.dev`                          | `login`, `relogin`                          | The lookup of the identity's Kiro profiles, in `us-east-1` and `eu-central-1`.              |
-| `runtime.<region>.kiro.dev`, `q.<region>.amazonaws.com` | Every model request, usage check and search | Your prompts, tools and history, with the account that serves them.                         |
-| `api.github.com`, `github.com`                          | `--version --check`, `self-update`          | A release lookup and the download of a release binary.                                      |
+| Host                                                    | Region in the name                                                                  | When                                                                           | What goes there                                                     |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `oidc.<region>.amazonaws.com`                           | The sign-in region: `--region` at `login`, otherwise `default_region` (`us-east-1`) | `login`, `relogin`, renewal of Builder ID and IAM Identity Center tokens       | The device-code sign-in and the token refresh.                      |
+| `management.<region>.kiro.dev`                          | `us-east-1` and `eu-central-1`, or the region of the ARN given with `--profile-arn` | `login`, and `relogin` when it has to find or check the profile                | The lookup of the identity's Kiro profiles.                         |
+| `runtime.<region>.kiro.dev`, `q.<region>.amazonaws.com` | The account's runtime region, taken from its Kiro profile                           | Every model request, usage check and search                                    | Your prompts, tools and history, with the account that serves them. |
+| `prod.<region>.auth.desktop.kiro.dev`                   | The account's runtime region                                                        | Token renewal for accounts from Kiro's own sign-in, such as some imported ones | The token refresh.                                                  |
+| `api.github.com`, `github.com`                          | None                                                                                | `--version --check`, `self-update`                                             | A release lookup and the download of a release binary.              |
 
-`<region>` is the account's region. Nothing else is contacted: there is no telemetry, and the gateway never checks for
+The sign-in region and the runtime region are stored separately and can differ: an identity center in one region can
+hold a Kiro profile in another. Nothing else is contacted: there is no telemetry, and the gateway never checks for
 updates by itself. With `proxy_url` set, every AWS and Kiro connection above goes through that proxy.
 
 Clients reach the gateway on `127.0.0.1:8787` by default, over plain HTTP. Nothing outside your machine can connect

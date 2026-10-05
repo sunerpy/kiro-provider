@@ -1,10 +1,10 @@
 # 数据与网络
 
-本页列出 kiro-provider 写入磁盘的所有内容，以及它连接的每个主机。
+本页列出 kiro-provider 写入磁盘的数据，以及它连接的每个主机。
 
 ## 写入什么
 
-所有内容都在一个目录中：Linux 和 macOS 上是 `$XDG_CONFIG_HOME/kiro-provider` 或 `~/.config/kiro-provider`，Windows 上是 `%APPDATA%\kiro-provider`。
+除了由 `self-update` 在原目录中替换的可执行文件，所有数据都在一个目录中：Linux 和 macOS 上是 `$XDG_CONFIG_HOME/kiro-provider` 或 `~/.config/kiro-provider`，Windows 上是 `%APPDATA%\kiro-provider`。
 
 | 文件                         | 内容                                                                                                         |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -27,15 +27,15 @@
 
 ## 发送什么、发往哪里
 
-| 主机                                                    | 何时                               | 发送的内容                                                         |
-| ------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ |
-| `oidc.<region>.amazonaws.com`                           | `login`、`relogin`、令牌续期       | AWS Builder ID 和 IAM Identity Center 的设备码登录与令牌刷新。     |
-| `prod.<region>.auth.desktop.kiro.dev`                   | 令牌续期                           | 通过 Kiro 自身登录方式登录的账号（例如部分导入的账号）的令牌刷新。 |
-| `management.<region>.kiro.dev`                          | `login`、`relogin`                 | 在 `us-east-1` 和 `eu-central-1` 查询该身份的 Kiro profile。       |
-| `runtime.<region>.kiro.dev`、`q.<region>.amazonaws.com` | 每个模型请求、用量查询和搜索       | 你的提示词、工具和历史，以及处理它们的账号。                       |
-| `api.github.com`、`github.com`                          | `--version --check`、`self-update` | 查询版本信息，并下载发布的二进制。                                 |
+| 主机                                                    | 名称中的区域                                                                  | 何时                                                                  | 发送的内容                                   |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
+| `oidc.<region>.amazonaws.com`                           | 登录区域：`login` 时的 `--region`，未指定时为 `default_region`（`us-east-1`） | `login`、`relogin`，以及 Builder ID 和 IAM Identity Center 令牌的续期 | 设备码登录与令牌刷新。                       |
+| `management.<region>.kiro.dev`                          | `us-east-1` 和 `eu-central-1`，或 `--profile-arn` 所给 ARN 的区域             | `login`，以及需要查找或核对 profile 时的 `relogin`                    | 查询该身份可用的 Kiro profile。              |
+| `runtime.<region>.kiro.dev`、`q.<region>.amazonaws.com` | 账号的运行区域，取自其 Kiro profile                                           | 每个模型请求、用量查询和搜索                                          | 你的提示词、工具和历史，以及处理它们的账号。 |
+| `prod.<region>.auth.desktop.kiro.dev`                   | 账号的运行区域                                                                | 通过 Kiro 自身登录方式登录的账号（例如部分导入的账号）的令牌续期      | 令牌刷新。                                   |
+| `api.github.com`、`github.com`                          | 无                                                                            | `--version --check`、`self-update`                                    | 查询版本信息，并下载发布的二进制。           |
 
-`<region>` 是账号所在的区域。除此之外不连接任何地方：没有遥测，网关也从不自行检查更新。设置 `proxy_url` 后，上面所有连接 AWS 和 Kiro 的请求都经过该代理。
+登录区域和运行区域分别保存，两者可以不同：位于一个区域的身份中心可以对应另一个区域的 Kiro profile。除此之外不连接任何地方：没有遥测，网关也从不自行检查更新。设置 `proxy_url` 后，上面所有连接 AWS 和 Kiro 的请求都经过该代理。
 
 客户端默认通过明文 HTTP 连接 `127.0.0.1:8787` 上的网关。除非你把 `host` 设为其他地址，本机以外的任何东西都无法连接。
 

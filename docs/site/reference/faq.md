@@ -46,7 +46,7 @@ by itself when its quota resets. [Accounts](../guide/accounts.md#see-your-accoun
 
 ## Does it keep my prompts?
 
-Only what a client asks it to keep. A Responses request without `store: false` is stored locally for 30 days so the
+It keeps what the APIs store by default. A Responses request without `store: false` is stored locally for 30 days so the
 client can retrieve and continue it, and conversations keep encrypted reasoning for their next turn. All of it is in
 `accounts.db` on your machine. The log never contains prompts. [Data and network](../privacy.md)
 

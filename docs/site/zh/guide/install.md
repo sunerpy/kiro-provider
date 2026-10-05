@@ -95,5 +95,5 @@ kiro-provider --version
 ## 卸载
 
 1. **停止网关。** 如果它作为服务运行，先停止并删除服务；[后台服务指南](../../../readme/SERVICE.zh-CN.md)介绍了 systemd 和 Windows 计划任务的做法。
-2. **删除数据**（如果不打算再使用）。kiro-provider 写入的所有内容都在一个目录中：Linux 和 macOS 上是 `~/.config/kiro-provider`（或 `$XDG_CONFIG_HOME/kiro-provider`），Windows 上是 `%APPDATA%\kiro-provider`。其中包括 `config.json`、存有账号令牌的 `accounts.db`，以及加密推理内容所用的密钥文件。删除该目录即可全部移除。
+2. **删除数据**（如果不打算再使用）。kiro-provider 的所有数据都在一个目录中：Linux 和 macOS 上是 `~/.config/kiro-provider`（或 `$XDG_CONFIG_HOME/kiro-provider`），Windows 上是 `%APPDATA%\kiro-provider`。其中包括 `config.json`、存有账号令牌的 `accounts.db`，以及加密推理内容所用的密钥文件。删除该目录即可全部移除。
 3. **删除可执行文件**：`~/.local/bin/kiro-provider`、`%USERPROFILE%\.local\bin\kiro-provider.exe`，或你通过 `KIRO_PROVIDER_INSTALL_DIR` 指定的目录中的文件。Bun 安装用 `bun remove -g @sunerpy/kiro-provider` 卸载。

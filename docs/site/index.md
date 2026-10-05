@@ -137,7 +137,7 @@ home:
         body: Put a private key in api_keys in config.json first; the gateway refuses to start without one.
       - title: Point a client at it
         command: http://127.0.0.1:8787/v1
-        body: Use that base URL and your key in Codex CLI, Claude Code, Zuno or an SDK.
+        body: That is the base URL for Codex CLI, Zuno and the OpenAI SDKs. Claude Code and the Anthropic SDKs take http://127.0.0.1:8787, without /v1.
 
   protocols:
     columns: [Route, Speaks, Default]

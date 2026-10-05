@@ -10,15 +10,15 @@ references they link into the site; do not edit the copies there.
 
 ## What is published
 
-| Source                                                                               | Published at                                                                                    |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `docs/site/<path>.md`                                                                | `/kiro-provider/<path>`                                                                         |
-| `docs/site/zh/<path>.md`                                                             | `/kiro-provider/zh/<path>`                                                                      |
-| `docs/CODEX.md`, `docs/readme/CODEX.zh-CN.md` and the other client guides            | `/clients/codex` and so on, in both languages                                                   |
-| `docs/SERVICE.md`, `docs/TROUBLESHOOTING.md`                                         | `/operate/service`, `/operate/troubleshooting`                                                  |
-| `docs/CONFIGURATION.md`, `docs/PROTOCOL_COMPATIBILITY.md`, `docs/RESPONSES_USAGE.md` | `/reference/configuration`, `/reference/protocol`, `/reference/usage`                           |
-| `docs/STREAM_ERROR_CONTRACT.md`, `docs/HISTORICAL_TOOLS.md`, `docs/ARCHITECTURE.md`  | `/reference/streaming-errors`, `/reference/historical-tools`, `/dev/architecture`, English only |
-| `docs/site/public/kiro-provider-logo.svg`                                            | The site's logo and favicon                                                                     |
+| Source                                                                               | Published at                                                                                                                              |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `docs/site/<path>.md`                                                                | `/kiro-provider/<path>`                                                                                                                   |
+| `docs/site/zh/<path>.md`                                                             | `/kiro-provider/zh/<path>`                                                                                                                |
+| `docs/CODEX.md`, `docs/readme/CODEX.zh-CN.md` and the other client guides            | `/kiro-provider/clients/codex` and so on, in both languages                                                                               |
+| `docs/SERVICE.md`, `docs/TROUBLESHOOTING.md`                                         | `/kiro-provider/operate/service`, `/kiro-provider/operate/troubleshooting`                                                                |
+| `docs/CONFIGURATION.md`, `docs/PROTOCOL_COMPATIBILITY.md`, `docs/RESPONSES_USAGE.md` | `/kiro-provider/reference/configuration`, `/kiro-provider/reference/protocol`, `/kiro-provider/reference/usage`                           |
+| `docs/STREAM_ERROR_CONTRACT.md`, `docs/HISTORICAL_TOOLS.md`, `docs/ARCHITECTURE.md`  | `/kiro-provider/reference/streaming-errors`, `/kiro-provider/reference/historical-tools`, `/kiro-provider/dev/architecture`, English only |
+| `docs/site/public/kiro-provider-logo.svg`                                            | The site's logo and favicon                                                                                                               |
 
 The sync script in FirLab (`kiro-provider/scripts/sync-kiro-provider-docs.sh`) holds the exact mapping. Adding a
 reference to the site means adding it there and to the sidebars in the same FirLab change.
