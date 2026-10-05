@@ -1,7 +1,7 @@
 # OpenCode
 
-[OpenCode](https://opencode.ai) reaches kiro-provider through Anthropic Messages, with the `@ai-sdk/anthropic`
-package it installs on its own. One provider entry serves the Claude and the GPT-5.6 models.
+[OpenCode](https://opencode.ai) installs the `@ai-sdk/anthropic` package on its own, so kiro-provider joins it as an
+Anthropic Messages provider. One entry covers the Claude and the GPT-5.6 models.
 
 ## Add the provider
 
@@ -60,10 +60,10 @@ opencode run -m kiro-provider/gpt-5.6-sol "Reply with exactly: KIRO_OK"
 
 ## Which models work
 
-Every Messages request carries `max_tokens`. kiro-provider passes it on to Kiro for `claude-opus-5-5`, `claude-opus-5`,
-`claude-sonnet-5` and `claude-fable-5-1`, from 1,024 to 128,000, and with the header above it serves `gpt-5.6-sol`,
-`gpt-5.6-terra` and `gpt-5.6-luna` as well. Other models are refused with an `invalid_request_error` about
-`max_tokens`; use them from a Responses client such as [Pi](pi.md).
+Every Messages request carries `max_tokens`. kiro-provider passes it on to Kiro for four Claude models:
+`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5` and `claude-fable-5-1`, from 1,024 to 128,000. With the header
+above, `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna` work too. Any other model is refused with an
+`invalid_request_error` about `max_tokens`; use it from a Responses client such as [Pi](pi.md).
 
 Add a model under `models` with the numbers `GET /v1/models` reports, `toolStreaming: false` for a Claude model and
 `thinking` for a GPT-5.6 model:
@@ -75,12 +75,12 @@ curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_
 
 ## The Responses provider
 
-OpenCode can also reach the gateway with `@ai-sdk/openai` at the same `baseURL`. Claude models work through it, but
-OpenCode then sends `max_output_tokens` on every request, the advisory header applies to Messages only, and the GPT-5.6
-models fail with `unsupported_output_token_limit`. The Messages setup above covers both families.
+OpenCode can also reach the gateway with `@ai-sdk/openai` at the same `baseURL`. Claude models work that way; GPT-5.6
+does not. Through that package OpenCode sends `max_output_tokens` on every request, and the advisory header applies to
+Messages only, so a GPT-5.6 request fails with `unsupported_output_token_limit`. The Messages setup above covers both.
 
 ## Accounts from opencode-kiro-auth
 
-If OpenCode reached Kiro through the `opencode-kiro-auth` plugin so far, copy those accounts into kiro-provider once
-and stop using the plugin's provider: two programs renewing one refresh token race each other.
+If you have been using Kiro in OpenCode through the `opencode-kiro-auth` plugin, copy those accounts into kiro-provider
+once and stop using the plugin's provider: two programs renewing one refresh token race each other.
 [Accounts](../guide/accounts.md#import-from-opencode) covers the import.

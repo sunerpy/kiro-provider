@@ -101,7 +101,7 @@ home:
             status: available
             link: /zh/clients/claude-code
           - title: OpenCode、Pi 和 Crush
-            body: 在各个 Agent 自己的配置文件中写一个 provider 条目，加上各自需要的少数几项设置。
+            body: 在 opencode.json、Pi 的 models.json 或 crush.json 中加一个 provider 条目，并写上各自需要的设置。
             status: available
             link: /zh/clients/
           - title: Zuno

@@ -101,7 +101,7 @@ home:
             status: available
             link: /clients/claude-code
           - title: OpenCode, Pi and Crush
-            body: One provider entry in each agent's own config file, with the few settings each of them needs.
+            body: A provider entry in opencode.json, Pi's models.json or crush.json, with the settings each one needs.
             status: available
             link: /clients/
           - title: Zuno

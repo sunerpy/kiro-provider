@@ -1,6 +1,6 @@
 # OpenCode
 
-[OpenCode](https://opencode.ai) 通过 Anthropic Messages 连接 kiro-provider，使用它自己安装的 `@ai-sdk/anthropic` 包。一个 provider 条目即可同时提供 Claude 和 GPT-5.6 模型。
+[OpenCode](https://opencode.ai) 会自己安装 `@ai-sdk/anthropic` 包，所以 kiro-provider 以 Anthropic Messages provider 的身份接入。一个条目同时覆盖 Claude 和 GPT-5.6 模型。
 
 ## 添加 provider
 
@@ -58,7 +58,7 @@ opencode run -m kiro-provider/gpt-5.6-sol "Reply with exactly: KIRO_OK"
 
 ## 可用的模型
 
-每个 Messages 请求都带 `max_tokens`。kiro-provider 只为 `claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1` 把它传给 Kiro，范围是 1,024 到 128,000；加上前面的 header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也可以使用。其他模型会以关于 `max_tokens` 的 `invalid_request_error` 被拒绝，请在 [Pi](pi.md) 这样的 Responses 客户端中使用它们。
+每个 Messages 请求都带 `max_tokens`。kiro-provider 只为四个 Claude 模型把它传给 Kiro：`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1`，范围是 1,024 到 128,000。加上前面的 header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也能使用。其他模型会以关于 `max_tokens` 的 `invalid_request_error` 被拒绝，请改用 [Pi](pi.md) 这样的 Responses 客户端。
 
 在 `models` 下添加模型时，填入 `GET /v1/models` 报告的数值；Claude 模型加上 `toolStreaming: false`，GPT-5.6 模型加上 `thinking`：
 
@@ -69,8 +69,8 @@ curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_
 
 ## Responses provider
 
-OpenCode 也可以用 `@ai-sdk/openai` 以同样的 `baseURL` 连接网关。Claude 模型可以这样使用，但此时 OpenCode 的每个请求都带 `max_output_tokens`，而 advisory header 只对 Messages 生效，GPT-5.6 模型会以 `unsupported_output_token_limit` 失败。上面的 Messages 配置能同时覆盖两类模型。
+OpenCode 也可以用 `@ai-sdk/openai` 以同样的 `baseURL` 连接网关。这样 Claude 模型能用，GPT-5.6 不能：通过这个包，OpenCode 的每个请求都带 `max_output_tokens`，而 advisory header 只对 Messages 生效，所以 GPT-5.6 的请求会以 `unsupported_output_token_limit` 失败。上面的 Messages 配置能同时覆盖两类模型。
 
 ## 来自 opencode-kiro-auth 的账号
 
-如果 OpenCode 此前通过 `opencode-kiro-auth` 插件连接 Kiro，请把这些账号一次性复制到 kiro-provider，并停止使用该插件的 provider：两个程序同时续期同一个刷新令牌会相互冲突。导入方法见[账号](../guide/accounts.md#从-opencode-导入)。
+如果你此前在 OpenCode 中通过 `opencode-kiro-auth` 插件使用 Kiro，请把这些账号一次性复制到 kiro-provider，并停止使用该插件的 provider：两个程序同时续期同一个刷新令牌会相互冲突。导入方法见[账号](../guide/accounts.md#从-opencode-导入)。
