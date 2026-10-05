@@ -21,7 +21,7 @@
 ---
 
 kiro-provider 是运行在你自己机器上的网关。它登录 AWS Kiro，保管你添加的每个账号的令牌，并以 OpenAI Responses 和
-Anthropic Messages 接口提供这些账号，Codex CLI、Claude Code、Zuno 和官方 SDK 只需配置一个地址和一个密钥即可使用。
+Anthropic Messages 接口提供这些账号，Codex CLI、Claude Code、OpenCode、Pi、Crush、Zuno 和官方 SDK 只需配置一个地址和一个密钥即可使用。
 
 ## 特性
 
@@ -123,14 +123,17 @@ bun add -g @sunerpy/kiro-provider
 
 ## 接入 Agent 客户端
 
-| 客户端      | 接口                  | 指南                                                             |
-| ----------- | --------------------- | ---------------------------------------------------------------- |
-| Codex CLI   | OpenAI Responses      | [隔离配置与模型切换](CODEX.zh-CN.md)                             |
-| Claude Code | Anthropic Messages    | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
-| Zuno        | OpenAI Responses      | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md)                    |
-| 其他 SDK    | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)                  |
+| 客户端      | 接口                  | 指南                                                               |
+| ----------- | --------------------- | ------------------------------------------------------------------ |
+| Codex CLI   | OpenAI Responses      | [隔离配置与模型切换](CODEX.zh-CN.md)                               |
+| Claude Code | Anthropic Messages    | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md)   |
+| OpenCode    | Anthropic Messages    | [`opencode.json` 中的 provider](../site/zh/clients/opencode.md)    |
+| Pi          | OpenAI Responses      | [`models.json` 中的 provider 与推理等级](../site/zh/clients/pi.md) |
+| Crush       | Anthropic Messages    | [`crush.json` 中的 provider](../site/zh/clients/crush.md)          |
+| Zuno        | OpenAI Responses      | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md)                      |
+| 其他 SDK    | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)                    |
 
-需要长期使用、各自拥有独立状态的 `kirocodex` 和 `kiroclaude` 命令时，参见[启动器示例](CLIENT_LAUNCHERS.zh-CN.md)。各指南注明了最近一次验证的客户端版本；这些版本是带日期的实测记录，不代表未来版本一定保持相同的请求格式。
+需要长期使用、各自拥有独立状态的 `kirocodex` 和 `kiroclaude` 命令时，参见[启动器示例](CLIENT_LAUNCHERS.zh-CN.md)。
 
 ## 兼容方式
 

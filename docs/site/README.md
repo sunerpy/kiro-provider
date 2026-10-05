@@ -40,6 +40,8 @@ The sync stops before it writes anything when:
 - Commands, field names, routes, error codes and file names go in code spans.
 - Every number, version and output on a page comes from the code, a release or a recorded run. Output shown as a
   program's output is copied from that program, not typed by hand.
+- Leave out how a page was checked: no "validated with", "recorded on" or test-port notes. That evidence belongs in
+  the pull request.
 - Chinese pages are written in Chinese, not translated word for word, and keep the English names of commands, fields
   and products.
 
@@ -64,20 +66,21 @@ GitHub a page shows them as plain tags, so keep them to the two home pages.
 `index.md` and `zh/index.md` carry their content in the `home:` frontmatter, which the theme lays out. The build fails
 when a field is missing, misspelt or of the wrong shape (`theme/data/home-schema.ts` in FirLab).
 
-| Field                            | Holds                                                                                                                                                                       |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `facts`                          | Two to four `term` and `text` rows under the tagline.                                                                                                                       |
-| `visual`                         | The terminal session in the hero: a `label` for screen readers, the `transcript` lines (`command`, `continuation` for a command's further lines, `output`) and a `caption`. |
-| `index`                          | Groups of features, each with `title`, `body`, `status` (`available` or `opt-in`) and an optional `link`.                                                                   |
-| `steps`                          | Four steps, each with `title`, `body` and an optional `command`.                                                                                                            |
-| `protocols`, `clients`, `search` | The tables beside the three splits: `columns`, `rows` of `cells`, `code` (the indexes of the columns shown as code) and a `caption`.                                        |
-| `platforms`                      | The platform table: `columns`, and `rows` with `name`, `status` and one cell per remaining column.                                                                          |
-| `privacy`                        | What goes where: `sendsLabel` and `modes` with `name`, `sends` and `detail`.                                                                                                |
-| `scope`                          | What kiro-provider does not do, as `items`.                                                                                                                                 |
+| Field                            | Holds                                                                                                                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `facts`                          | Two to four `term` and `text` rows under the tagline.                                                                                                                                 |
+| `visual`                         | The terminal session in the hero: a `label` for screen readers, the `transcript` lines (`command`, `continuation` for a command's further lines, `output`) and an optional `caption`. |
+| `index`                          | Groups of features, each with `title`, `body`, `status` (`available` or `opt-in`) and an optional `link`.                                                                             |
+| `steps`                          | Four steps, each with `title`, `body` and an optional `command`.                                                                                                                      |
+| `protocols`, `clients`, `search` | The tables beside the three splits: `columns`, `rows` of `cells`, `code` (the indexes of the columns shown as code) and an optional `caption`.                                        |
+| `platforms`                      | The platform table: `columns`, and `rows` with `name`, `status` and one cell per remaining column.                                                                                    |
+| `privacy`                        | What goes where: `sendsLabel` and `modes` with `name`, `sends` and `detail`.                                                                                                          |
+| `scope`                          | What kiro-provider does not do, as `items`.                                                                                                                                           |
 
-The transcript is a real run. To record a new one, start a gateway with its own configuration, port and copy of the
-accounts, never the gateway you use day to day, run the commands exactly as the page shows them, and copy the output.
-Name the version, the date and the port in the caption.
+The transcript is a real run against the default address, `http://127.0.0.1:8787`, so it needs no caption. To record
+a new one, start a gateway with its own configuration and copy of the accounts in a network namespace of its own, such
+as a container, where it can listen on 8787 without touching the gateway you use day to day. Run the commands exactly
+as the page shows them and copy the output.
 
 ## Preview
 

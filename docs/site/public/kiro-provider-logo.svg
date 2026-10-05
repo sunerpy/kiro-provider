@@ -1,9 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="kiro-provider">
-  <!-- A request (the orange dot) inside the loopback brackets of [::1], the gateway's local
-       boundary, drawn on FirLab's navy app tile in its pale and orange marks. The same drawing
-       is the catalog icon on firlab.app (AppIcon.astro). -->
+  <!-- A four-point spark, the model, at the centre of a ring with three connection points, the
+       clients a provider serves, on FirLab's navy app tile in its pale and teal marks. The same
+       drawing is the catalog icon on firlab.app (AppIcon.astro). -->
   <rect width="100" height="100" rx="22" fill="#0B1220" />
-  <path d="M40 28 H30 V72 H40" fill="none" stroke="#E7EDF5" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
-  <path d="M60 28 H70 V72 H60" fill="none" stroke="#E7EDF5" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
-  <circle cx="50" cy="50" r="7" fill="#F97316" />
+  <circle cx="50" cy="50" r="31" fill="none" stroke="#E7EDF5" stroke-width="5" />
+  <circle cx="50" cy="19" r="7" fill="#E7EDF5" />
+  <circle cx="76.85" cy="65.5" r="7" fill="#E7EDF5" />
+  <circle cx="23.15" cy="65.5" r="7" fill="#E7EDF5" />
+  <path d="M50 32 Q52.4 47.6 68 50 Q52.4 52.4 50 68 Q47.6 52.4 32 50 Q47.6 47.6 50 32 Z" fill="#14B8A6" />
 </svg>

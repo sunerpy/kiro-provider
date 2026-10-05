@@ -2,12 +2,12 @@
 layout: home
 title: "kiro-provider：用 OpenAI Responses 和 Anthropic Messages 接口使用你的 Kiro 账号"
 titleTemplate: false
-description: kiro-provider 是运行在你自己机器上的网关。它登录 AWS Kiro，在你的多个账号之间分配请求，并以 OpenAI Responses 和 Anthropic Messages 接口对外提供服务，供 Codex CLI、Claude Code、Zuno 和官方 SDK 使用。
+description: kiro-provider 是运行在你自己机器上的网关。它登录 AWS Kiro，在你的多个账号之间分配请求，并以 OpenAI Responses 和 Anthropic Messages 接口对外提供服务，供 Codex CLI、Claude Code、OpenCode、Pi、Crush、Zuno 和官方 SDK 使用。
 
 hero:
   name: kiro-provider
   text: 让你常用的 Agent 直接使用 Kiro 账号
-  tagline: 运行在你自己机器上的网关。它登录 AWS Kiro，以 OpenAI Responses 和 Anthropic Messages 接口提供你的账号，Codex CLI、Claude Code、Zuno 和官方 SDK 只需配置一个地址和一个密钥。
+  tagline: 运行在你自己机器上的网关。它登录 AWS Kiro，以 OpenAI Responses 和 Anthropic Messages 接口提供你的账号，Codex CLI、Claude Code 等 Agent 只需配置一个地址和一个密钥。
   actions:
     - theme: brand
       text: 安装
@@ -27,10 +27,10 @@ home:
       text: 通过 AWS Builder ID 或 IAM Identity Center 登录。令牌保存在本地数据库中，只会发送给 AWS 和 Kiro。
 
   visual:
-    label: 一段终端会话。一个请求以 gpt-5.6-sol 发往 OpenAI Responses 路由，另一个以 claude-opus-5-5 发往 Anthropic Messages 路由，kiro-provider 3.8.0 对两者都返回 KIRO_OK。
+    label: 一段终端会话。一个请求以 gpt-5.6-sol 发往 OpenAI Responses 路由，另一个以 claude-opus-5-5 发往 Anthropic Messages 路由，kiro-provider 对两者都返回 KIRO_OK。
     transcript:
       - kind: command
-        text: export KP=http://127.0.0.1:18879/v1 KEY=$KIRO_GATEWAY_API_KEY
+        text: export KP=http://127.0.0.1:8787/v1 KEY=$KIRO_GATEWAY_API_KEY
       - kind: command
         text: "curl -s $KP/responses -H \"Authorization: Bearer $KEY\" --json '{"
       - kind: continuation
@@ -53,7 +53,6 @@ home:
         text: "  jq -r '.content[0].text'"
       - kind: output
         text: KIRO_OK
-    caption: 2026-10-05 用 kiro-provider 3.8.0 在测试端口上录制，另一个终端中运行着 kiro-provider serve。默认地址是 http://127.0.0.1:8787。
 
   index:
     title: kiro-provider 能做什么
@@ -101,6 +100,10 @@ home:
             body: kiroclaude 启动器让 Claude Code 连接网关，不修改你的 Claude 设置。
             status: available
             link: /zh/clients/claude-code
+          - title: OpenCode、Pi 和 Crush
+            body: 在各个 Agent 自己的配置文件中写一个 provider 条目，加上各自需要的少数几项设置。
+            status: available
+            link: /zh/clients/
           - title: Zuno
             body: 使用 Zuno 自带的 Responses 传输，并根据其会话元数据路由。
             status: available
@@ -137,7 +140,7 @@ home:
         body: 先在 config.json 的 api_keys 中写入一个私有密钥，没有密钥时网关拒绝启动。
       - title: 连接客户端
         command: http://127.0.0.1:8787/v1
-        body: 这是 Codex CLI、Zuno 和 OpenAI SDK 的基础 URL；Claude Code 和 Anthropic SDK 使用不带 /v1 的 http://127.0.0.1:8787。
+        body: 这是 Codex CLI、OpenCode、Pi、Zuno 和 OpenAI SDK 的基础 URL；Claude Code、Crush 和 Anthropic SDK 使用不带 /v1 的 http://127.0.0.1:8787。
 
   protocols:
     columns: [路由, 协议, 默认状态]
@@ -155,9 +158,11 @@ home:
     rows:
       - cells: [Codex CLI, Responses, config.toml 中的 model_provider]
       - cells: [Claude Code, Messages, kiroclaude 启动器]
+      - cells: [OpenCode, Messages, opencode.json 中的 provider]
+      - cells: [Pi, Responses, models.json 中的 provider]
+      - cells: [Crush, Messages, crush.json 中的 provider]
       - cells: [Zuno, Responses, Zuno 配置中的 provider]
       - cells: [OpenAI 与 Anthropic SDK, Responses 或 Messages, 一个地址和一个 API 密钥]
-    caption: 最近一次验证于 2026-10-05，使用 Codex CLI 0.159.3 和 Claude Code 2.1.285。各客户端指南写明了验证的内容。
 
   search:
     columns: [接口, 工具, 回答中包含]
@@ -232,7 +237,7 @@ Responses 和 Messages 由同一个进程、同一组账号提供服务。Kiro �
 
 ## 客户端无需改动
 
-Codex CLI 和 Zuno 使用 Responses，Claude Code 使用 Messages。每个客户端只需配置一个地址和你的一个密钥，不需要插件，也不需要修改客户端。启动器会在你现有命令旁边增加一个单独的
+Codex CLI、Pi 和 Zuno 使用 Responses，Claude Code、OpenCode 和 Crush 使用 Messages。每个客户端只需配置一个地址和你的一个密钥，不需要插件，也不需要修改客户端。启动器会在你现有命令旁边增加一个单独的
 `kirocodex` 或 `kiroclaude` 命令。
 
 [选择客户端](clients/index.md) · [客户端启动器](../../readme/CLIENT_LAUNCHERS.zh-CN.md)

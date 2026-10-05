@@ -4,7 +4,7 @@
 
 以下 Linux／macOS／WSL 示例保留普通 `claude`、`codex` 命令及其用户配置目录。
 需要已运行的 kiro-provider、Python 3、Claude Code 2.1.270 或 Codex 0.154.0，
-并在与 provider 版本匹配的 checkout 中操作。其他客户端版本需另行验证。
+并在与 provider 版本匹配的 checkout 中操作。
 
 需要区分连接覆盖与状态隔离。仓库自带的 `kiroclaude` 默认共享原生 Claude
 状态，只为当前进程叠加连接与模型设置；个人 `kirocodex` 若仍使用 `~/.codex`，

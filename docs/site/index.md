@@ -2,7 +2,7 @@
 layout: home
 title: "kiro-provider: your Kiro accounts behind OpenAI Responses and Anthropic Messages"
 titleTemplate: false
-description: kiro-provider is a gateway that runs on your own machine. It signs in to AWS Kiro, spreads requests across your accounts and serves them through OpenAI Responses and Anthropic Messages, for Codex CLI, Claude Code, Zuno and the official SDKs.
+description: kiro-provider is a gateway that runs on your own machine. It signs in to AWS Kiro, spreads requests across your accounts and serves them through OpenAI Responses and Anthropic Messages, for Codex CLI, Claude Code, OpenCode, Pi, Crush, Zuno and the official SDKs.
 
 hero:
   name: kiro-provider
@@ -27,10 +27,10 @@ home:
       text: Signed in with AWS Builder ID or IAM Identity Center. Tokens stay in a local database and go only to AWS and Kiro.
 
   visual:
-    label: A terminal session. One request goes to the OpenAI Responses route with gpt-5.6-sol and one to the Anthropic Messages route with claude-opus-5-5; kiro-provider 3.8.0 answers both with KIRO_OK.
+    label: A terminal session. One request goes to the OpenAI Responses route with gpt-5.6-sol and one to the Anthropic Messages route with claude-opus-5-5; kiro-provider answers both with KIRO_OK.
     transcript:
       - kind: command
-        text: export KP=http://127.0.0.1:18879/v1 KEY=$KIRO_GATEWAY_API_KEY
+        text: export KP=http://127.0.0.1:8787/v1 KEY=$KIRO_GATEWAY_API_KEY
       - kind: command
         text: "curl -s $KP/responses -H \"Authorization: Bearer $KEY\" --json '{"
       - kind: continuation
@@ -53,7 +53,6 @@ home:
         text: "  jq -r '.content[0].text'"
       - kind: output
         text: KIRO_OK
-    caption: Recorded on 2026-10-05 with kiro-provider 3.8.0 on a test port, with kiro-provider serve running in another terminal. The default address is http://127.0.0.1:8787.
 
   index:
     title: What kiro-provider does
@@ -101,6 +100,10 @@ home:
             body: The kiroclaude launcher points Claude Code at the gateway without editing your Claude settings.
             status: available
             link: /clients/claude-code
+          - title: OpenCode, Pi and Crush
+            body: One provider entry in each agent's own config file, with the few settings each of them needs.
+            status: available
+            link: /clients/
           - title: Zuno
             body: Zuno's own Responses transport, with session routing from its metadata.
             status: available
@@ -137,7 +140,7 @@ home:
         body: Put a private key in api_keys in config.json first; the gateway refuses to start without one.
       - title: Point a client at it
         command: http://127.0.0.1:8787/v1
-        body: That is the base URL for Codex CLI, Zuno and the OpenAI SDKs. Claude Code and the Anthropic SDKs take http://127.0.0.1:8787, without /v1.
+        body: That is the base URL for Codex CLI, OpenCode, Pi, Zuno and the OpenAI SDKs. Claude Code, Crush and the Anthropic SDKs take http://127.0.0.1:8787, without /v1.
 
   protocols:
     columns: [Route, Speaks, Default]
@@ -155,9 +158,11 @@ home:
     rows:
       - cells: [Codex CLI, Responses, A model_provider in config.toml]
       - cells: [Claude Code, Messages, The kiroclaude launcher]
+      - cells: [OpenCode, Messages, A provider in opencode.json]
+      - cells: [Pi, Responses, A provider in models.json]
+      - cells: [Crush, Messages, A provider in crush.json]
       - cells: [Zuno, Responses, A provider in Zuno's config]
       - cells: [OpenAI and Anthropic SDKs, Responses or Messages, A base URL and an API key]
-    caption: Last validated on 2026-10-05 with Codex CLI 0.159.3 and Claude Code 2.1.285. Each guide lists what was checked.
 
   search:
     columns: [API, Tool, The answer carries]
@@ -234,8 +239,8 @@ quietly dropping it.
 
 ## Your agent stays as it is
 
-Codex CLI and Zuno speak Responses; Claude Code speaks Messages. Each is configured with a base URL and one of your
-keys, with no plugin and no patched client. The launchers add a separate command, `kirocodex` or `kiroclaude`, next to
+Codex CLI, Pi and Zuno speak Responses; Claude Code, OpenCode and Crush speak Messages. Each is configured with a base
+URL and one of your keys, with no plugin and no patched client. The launchers add a separate command, `kirocodex` or `kiroclaude`, next to
 the one you already have.
 
 [Choose a client](clients/index.md) · [Client launchers](../CLIENT_LAUNCHERS.md)

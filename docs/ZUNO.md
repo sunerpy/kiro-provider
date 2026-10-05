@@ -84,11 +84,6 @@ check the tool side effect or result, the final answer, the stored continuation,
 and that the tool was not executed again on resume. HTTP 200 alone is not an
 end-to-end pass.
 
-The latest checked-in evidence covers Zuno 0.10.39 with a max-effort shell tool
-loop and cold continuation, plus separate current-context and cumulative-usage
-checks. Treat those versions and results as dated evidence, not a promise about
-future Zuno request shapes.
-
 ## Related documentation
 
 - [Protocol compatibility](PROTOCOL_COMPATIBILITY.md)

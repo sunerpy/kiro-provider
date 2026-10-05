@@ -2,11 +2,6 @@
 
 简体中文 · [English](../CLAUDE_CODE.md)
 
-**最近完整验收的客户端：**Claude Code 2.1.270。2026-10-04 的 2.1.285 专项
-capture/resume 验收通过 Opus 5.5 max→low、Fable→Opus 5.5 的 signed thinking/tool
-续接；Opus 5.5→Opus 5 仍有上游流完成缺口，并非 replay context 拒绝。后续版本可能增加 beta header 或请求
-字段；要扩大兼容声明，需先重新验证真实请求形态。
-
 kiro-provider 提供 Claude Code 所需的两个 Anthropic 兼容端点：
 
 - `POST /v1/messages`
@@ -74,10 +69,8 @@ Claude 切换实际模型时可能过滤旧 thinking。2.1.285 还会探测消�
 拒绝次数，不能把该探测算作推理请求。
 
 `probe-image-run-order.ts` 使用隔离网关检验模型实际观察到的文字/图片顺序，覆盖
-stream/非 stream Messages 与 signed reasoning 续接。2026-10-04 的 Opus 5.5/Fable
-探针使用 16000 输出预算并完成；2048 的一次样本在可见输出前截断，预算耗尽仍是
-尚未独立证明的推断。保留 max effort。
-这些结果仅覆盖上述模型，不代表整个未来模型目录。
+stream/非 stream Messages 与 signed reasoning 续接。请以 max effort 和 16000 的输出预算
+运行：预算为 2048 时，运行可能在可见输出之前结束。
 
 ## 默认值与覆盖方式
 
@@ -339,13 +332,14 @@ caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。
 
 ## 排障
 
-| 现象                                     | 处理方式                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------- |
-| Token helper 报文件权限不安全            | 运行 `chmod 600 ~/.config/kiro-provider/config.json`，并确认文件属于当前用户。  |
-| `capability_rejected:context_management` | 客户端请求了支持范围外的 destructive edit。不要用未经审计的删字段代理隐藏错误。 |
-| Picker 中没有 Kiro GPT 模型              | 通过 `kiroclaude` 启动；单靠 gateway discovery 会过滤这些 ID。                  |
-| 普通 `claude` 使用了错误后端             | 检查普通 `~/.claude` 配置；`kiroclaude` 不会修改它。                            |
-| 恢复会话时报 provider 签名无效           | 在 Kiro 与原生 Bedrock 之间切换后新建会话。                                     |
+| 现象                                     | 处理方式                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Token helper 报文件权限不安全            | 运行 `chmod 600 ~/.config/kiro-provider/config.json`，并确认文件属于当前用户。                   |
+| `capability_rejected:context_management` | 客户端请求了支持范围外的 destructive edit。不要用未经审计的删字段代理隐藏错误。                  |
+| Picker 中没有 Kiro GPT 模型              | 通过 `kiroclaude` 启动；单靠 gateway discovery 会过滤这些 ID。                                   |
+| 普通 `claude` 使用了错误后端             | 检查普通 `~/.claude` 配置；`kiroclaude` 不会修改它。                                             |
+| 恢复会话时报 provider 签名无效           | 在 Kiro 与原生 Bedrock 之间切换后新建会话。                                                      |
+| 会话从 Opus 5.5 切换到 Opus 5 后回复中断 | Kiro 在这种切换下不会正常结束流，这不是 replay 拒绝。请继续使用 Opus 5.5，或为 Opus 5 新建会话。 |
 
 参考资料：[Messages API](https://platform.claude.com/docs/en/api/messages/create)、
 [Claude Code settings](https://code.claude.com/docs/en/settings)、
