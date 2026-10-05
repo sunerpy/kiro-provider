@@ -1,0 +1,633 @@
+{
+  "schema_version": 1,
+  "phase": "resume",
+  "label": "packaged",
+  "revision": {
+    "head": "0691fafd3b665bd556baf4a40368f84c2ef3a785",
+    "worktree_sha256": "ba9fc0ecef394c4831b316db6b6389577b1c8aed6cd1c6d71ee0c41c0f5393c1",
+    "untracked_files": 48
+  },
+  "gateway": {
+    "port": 18879
+  },
+  "models": [
+    "gpt-5.6-sol",
+    "claude-opus-5-5"
+  ],
+  "rows": [
+    {
+      "case": "responses:responses:gpt-5.6-sol:json:follow-up",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:json:codex-shape",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:json:effort-alias",
+      "ok": true,
+      "target_model": "gpt-5.6-sol-low",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:json:model-switch",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "reasoning",
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 1,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:json:tampered",
+      "ok": true,
+      "status": 400
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:stream:follow-up",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:stream:codex-shape",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:stream:effort-alias",
+      "ok": true,
+      "target_model": "gpt-5.6-sol-low",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:stream:model-switch",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "reasoning",
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 1,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "responses:responses:gpt-5.6-sol:stream:tampered",
+      "ok": true,
+      "status": 400
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:json:follow-up",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:json:effort-alias",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol-low",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:json:model-switch",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "text",
+        "text",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 2,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:json:tampered",
+      "ok": true,
+      "status": 400,
+      "had_entries": true
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:stream:follow-up",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:stream:effort-alias",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol-low",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:stream:model-switch",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "messages:messages:gpt-5.6-sol:stream:tampered",
+      "ok": true,
+      "status": 400,
+      "had_entries": true
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:json:follow-up",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:json:codex-shape",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:json:effort-alias",
+      "ok": true,
+      "target_model": "claude-opus-5-5-low",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:json:model-switch",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message",
+        "reasoning"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 1,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:json:tampered",
+      "ok": true,
+      "status": 400
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:stream:follow-up",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:stream:codex-shape",
+      "ok": true,
+      "target_model": "claude-opus-5-5",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:stream:effort-alias",
+      "ok": true,
+      "target_model": "claude-opus-5-5-low",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:stream:model-switch",
+      "ok": true,
+      "target_model": "gpt-5.6-sol",
+      "status": "completed",
+      "output_types": [
+        "message"
+      ],
+      "search_statuses": {},
+      "sources": 0,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 0,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": "stateless",
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "responses:responses:claude-opus-5-5:stream:tampered",
+      "ok": true,
+      "status": 400
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:json:follow-up",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:json:effort-alias",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5-low",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:json:model-switch",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:json:tampered",
+      "ok": true,
+      "status": 400,
+      "had_entries": true
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:stream:follow-up",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:stream:effort-alias",
+      "ok": true,
+      "status": 200,
+      "target_model": "claude-opus-5-5-low",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 0,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:stream:model-switch",
+      "ok": true,
+      "status": 200,
+      "target_model": "gpt-5.6-sol",
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 0,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 0,
+      "marker_seen": false,
+      "model_replay_mode": "incompatible-omitted"
+    },
+    {
+      "case": "messages:messages:claude-opus-5-5:stream:tampered",
+      "ok": true,
+      "status": 400,
+      "had_entries": true
+    }
+  ],
+  "passed": 36,
+  "failed": [],
+  "gateway_events": {
+    "web_search_call_finished": {
+      "responses:success": 19,
+      "anthropic-messages:success": 21,
+      "anthropic-messages:error:unavailable": 2,
+      "responses:error:unavailable": 1
+    },
+    "web_search_rejected": {
+      "web_search_replay_invalid": 4
+    },
+    "web_search_turn_deferred": {
+      "mixed_tool_group": 2
+    },
+    "responses_route_selected": {
+      "stateless:hosted_web_search": 32
+    }
+  }
+}

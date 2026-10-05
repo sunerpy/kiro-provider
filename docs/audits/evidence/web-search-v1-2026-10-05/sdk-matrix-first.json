@@ -1,0 +1,495 @@
+{
+  "schema_version": 1,
+  "phase": "first",
+  "label": "packaged",
+  "revision": {
+    "head": "0691fafd3b665bd556baf4a40368f84c2ef3a785",
+    "worktree_sha256": "ba9fc0ecef394c4831b316db6b6389577b1c8aed6cd1c6d71ee0c41c0f5393c1",
+    "untracked_files": 48
+  },
+  "gateway": {
+    "port": 18879
+  },
+  "models": [
+    "gpt-5.6-sol",
+    "claude-opus-5-5"
+  ],
+  "rows": [
+    {
+      "case": "responses:gpt-5.6-sol:search:json",
+      "ok": true,
+      "duration_ms": 24260,
+      "status": "completed",
+      "output_types": [
+        "reasoning",
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "message",
+        "reasoning"
+      ],
+      "search_statuses": {
+        "completed": 3
+      },
+      "sources": 12,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 4,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": null,
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:gpt-5.6-sol:search:stream",
+      "ok": true,
+      "duration_ms": 40886,
+      "status": "completed",
+      "output_types": [
+        "reasoning",
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "message",
+        "reasoning"
+      ],
+      "search_statuses": {
+        "completed": 3
+      },
+      "sources": 21,
+      "citations": 1,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 4,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": null,
+      "model_replay_mode": null,
+      "event_counts": {
+        "response.created": 1,
+        "response.in_progress": 1,
+        "response.output_item.added": 8,
+        "response.web_search_call.in_progress": 3,
+        "response.web_search_call.searching": 3,
+        "response.web_search_call.completed": 3,
+        "response.output_item.done": 8,
+        "response.content_part.added": 1,
+        "response.output_text.delta": 47,
+        "response.output_text.annotation.added": 1,
+        "response.output_text.done": 1,
+        "response.content_part.done": 1,
+        "response.completed": 1
+      },
+      "sequence_monotonic": true,
+      "terminals": 1
+    },
+    {
+      "case": "responses:gpt-5.6-sol:mixed",
+      "ok": true,
+      "function_calls": 1,
+      "mixed_group": true,
+      "first": {
+        "status": "completed",
+        "output_types": [
+          "message",
+          "web_search_call",
+          "function_call"
+        ],
+        "search_statuses": {
+          "completed": 1
+        },
+        "sources": 0,
+        "citations": 0,
+        "cited_urls_are_sources": true,
+        "reasoning_tokens": 0,
+        "function_calls": 1,
+        "has_text": true,
+        "marker_seen": false,
+        "transport": null,
+        "model_replay_mode": null
+      },
+      "continuation": {
+        "status": "completed",
+        "output_types": [
+          "message",
+          "web_search_call",
+          "reasoning",
+          "reasoning",
+          "web_search_call",
+          "message",
+          "reasoning"
+        ],
+        "search_statuses": {
+          "completed": 2
+        },
+        "sources": 0,
+        "citations": 1,
+        "cited_urls_are_sources": true,
+        "reasoning_tokens": 3,
+        "function_calls": 0,
+        "has_text": true,
+        "marker_seen": true,
+        "transport": null,
+        "model_replay_mode": null
+      }
+    },
+    {
+      "case": "messages:gpt-5.6-sol:search:json",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 25230,
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 22,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 5,
+      "web_search_requests": 4,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:gpt-5.6-sol:search:stream",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 45325,
+      "stop_reason": "end_turn",
+      "block_types": [
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 21,
+      "result_errors": [],
+      "citations": 1,
+      "sealed_entries": true,
+      "thinking_tokens": 4,
+      "web_search_requests": 3,
+      "marker_seen": false,
+      "model_replay_mode": null,
+      "message_stops": 1,
+      "errors": 0
+    },
+    {
+      "case": "messages:gpt-5.6-sol:mixed",
+      "ok": true,
+      "client_calls": 1,
+      "deferred": true,
+      "first": {
+        "stop_reason": "tool_use",
+        "block_types": [
+          "text",
+          "server_tool_use",
+          "tool_use"
+        ],
+        "result_entries": 0,
+        "result_errors": [],
+        "citations": 0,
+        "sealed_entries": true,
+        "thinking_tokens": 0,
+        "web_search_requests": 0,
+        "marker_seen": false,
+        "model_replay_mode": null
+      },
+      "continuation": {
+        "status": 200,
+        "stop_reason": "end_turn",
+        "block_types": [
+          "web_search_tool_result",
+          "thinking",
+          "text",
+          "server_tool_use",
+          "web_search_tool_result",
+          "thinking",
+          "server_tool_use",
+          "web_search_tool_result",
+          "thinking",
+          "text",
+          "text",
+          "text"
+        ],
+        "result_entries": 11,
+        "result_errors": [
+          "unavailable"
+        ],
+        "citations": 1,
+        "sealed_entries": true,
+        "thinking_tokens": 3,
+        "web_search_requests": 2,
+        "marker_seen": true,
+        "model_replay_mode": null
+      },
+      "continuation_starts_with_result": true
+    },
+    {
+      "case": "responses:claude-opus-5-5:search:json",
+      "ok": true,
+      "duration_ms": 18909,
+      "status": "completed",
+      "output_types": [
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "message"
+      ],
+      "search_statuses": {
+        "completed": 2
+      },
+      "sources": 20,
+      "citations": 2,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 1,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": null,
+      "model_replay_mode": null
+    },
+    {
+      "case": "responses:claude-opus-5-5:search:stream",
+      "ok": true,
+      "duration_ms": 19084,
+      "status": "completed",
+      "output_types": [
+        "web_search_call",
+        "reasoning",
+        "web_search_call",
+        "reasoning",
+        "message"
+      ],
+      "search_statuses": {
+        "completed": 2
+      },
+      "sources": 20,
+      "citations": 2,
+      "cited_urls_are_sources": true,
+      "reasoning_tokens": 2,
+      "function_calls": 0,
+      "has_text": true,
+      "marker_seen": false,
+      "transport": null,
+      "model_replay_mode": null,
+      "event_counts": {
+        "response.created": 1,
+        "response.in_progress": 1,
+        "response.output_item.added": 5,
+        "response.web_search_call.in_progress": 2,
+        "response.web_search_call.searching": 2,
+        "response.web_search_call.completed": 2,
+        "response.output_item.done": 5,
+        "response.reasoning_summary_part.added": 2,
+        "response.reasoning_summary_text.delta": 23,
+        "response.reasoning_summary_text.done": 2,
+        "response.reasoning_summary_part.done": 2,
+        "response.content_part.added": 1,
+        "response.output_text.delta": 24,
+        "response.output_text.annotation.added": 2,
+        "response.output_text.done": 1,
+        "response.content_part.done": 1,
+        "response.completed": 1
+      },
+      "sequence_monotonic": true,
+      "terminals": 1
+    },
+    {
+      "case": "responses:claude-opus-5-5:mixed",
+      "ok": true,
+      "function_calls": 1,
+      "mixed_group": true,
+      "first": {
+        "status": "completed",
+        "output_types": [
+          "web_search_call",
+          "function_call"
+        ],
+        "search_statuses": {
+          "failed": 1
+        },
+        "sources": 0,
+        "citations": 0,
+        "cited_urls_are_sources": true,
+        "reasoning_tokens": 0,
+        "function_calls": 1,
+        "has_text": false,
+        "marker_seen": false,
+        "transport": null,
+        "model_replay_mode": null
+      },
+      "continuation": {
+        "status": "completed",
+        "output_types": [
+          "reasoning",
+          "web_search_call",
+          "reasoning",
+          "message"
+        ],
+        "search_statuses": {
+          "completed": 1
+        },
+        "sources": 0,
+        "citations": 2,
+        "cited_urls_are_sources": true,
+        "reasoning_tokens": 2,
+        "function_calls": 0,
+        "has_text": true,
+        "marker_seen": true,
+        "transport": null,
+        "model_replay_mode": null
+      }
+    },
+    {
+      "case": "messages:claude-opus-5-5:search:json",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 18474,
+      "stop_reason": "end_turn",
+      "block_types": [
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+        "text",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 20,
+      "result_errors": [],
+      "citations": 2,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 2,
+      "marker_seen": false,
+      "model_replay_mode": null
+    },
+    {
+      "case": "messages:claude-opus-5-5:search:stream",
+      "ok": true,
+      "status": 200,
+      "duration_ms": 17443,
+      "stop_reason": "end_turn",
+      "block_types": [
+        "server_tool_use",
+        "web_search_tool_result",
+        "thinking",
+        "server_tool_use",
+        "web_search_tool_result",
+        "text",
+        "text",
+        "text",
+        "text",
+        "text"
+      ],
+      "result_entries": 20,
+      "result_errors": [],
+      "citations": 2,
+      "sealed_entries": true,
+      "thinking_tokens": 1,
+      "web_search_requests": 2,
+      "marker_seen": false,
+      "model_replay_mode": null,
+      "message_stops": 1,
+      "errors": 0
+    },
+    {
+      "case": "messages:claude-opus-5-5:mixed",
+      "ok": true,
+      "client_calls": 1,
+      "deferred": true,
+      "first": {
+        "stop_reason": "tool_use",
+        "block_types": [
+          "server_tool_use",
+          "tool_use"
+        ],
+        "result_entries": 0,
+        "result_errors": [],
+        "citations": 0,
+        "sealed_entries": true,
+        "thinking_tokens": 0,
+        "web_search_requests": 0,
+        "marker_seen": false,
+        "model_replay_mode": null
+      },
+      "continuation": {
+        "status": 200,
+        "stop_reason": "end_turn",
+        "block_types": [
+          "web_search_tool_result",
+          "thinking",
+          "server_tool_use",
+          "web_search_tool_result",
+          "thinking",
+          "text",
+          "text",
+          "text",
+          "text",
+          "text"
+        ],
+        "result_entries": 10,
+        "result_errors": [
+          "unavailable"
+        ],
+        "citations": 2,
+        "sealed_entries": true,
+        "thinking_tokens": 2,
+        "web_search_requests": 1,
+        "marker_seen": true,
+        "model_replay_mode": null
+      },
+      "continuation_starts_with_result": true
+    }
+  ],
+  "passed": 12,
+  "failed": [],
+  "gateway_events": {
+    "web_search_call_finished": {
+      "responses:success": 14,
+      "anthropic-messages:success": 14,
+      "anthropic-messages:error:unavailable": 2,
+      "responses:error:unavailable": 1
+    },
+    "web_search_rejected": {},
+    "web_search_turn_deferred": {
+      "mixed_tool_group": 2
+    },
+    "responses_route_selected": {
+      "stateless:hosted_web_search": 8
+    }
+  }
+}

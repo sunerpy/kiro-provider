@@ -308,6 +308,33 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     field: "reasoning_replay_max_entries",
     kind: "integer",
   },
+  { env: "KIRO_PROVIDER_WEB_SEARCH_ENABLED", field: "web_search_enabled", kind: "boolean" },
+  { env: "KIRO_PROVIDER_WEB_SEARCH_MAX_CALLS", field: "web_search_max_calls", kind: "integer" },
+  {
+    env: "KIRO_PROVIDER_WEB_SEARCH_TIMEOUT_MS",
+    field: "web_search_timeout_ms",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_WEB_SEARCH_MAX_RESULT_BYTES",
+    field: "web_search_max_result_bytes",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_WEB_SEARCH_MAX_HISTORY_BYTES",
+    field: "web_search_max_history_bytes",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_WEB_SEARCH_REPLAY_TTL_MS",
+    field: "web_search_replay_ttl_ms",
+    kind: "integer",
+  },
+  {
+    env: "KIRO_PROVIDER_WEB_SEARCH_MAX_CACHE_BYTES",
+    field: "web_search_max_cache_bytes",
+    kind: "integer",
+  },
   { env: "KIRO_PROVIDER_EFFORT", field: "effort", kind: "string" },
   {
     env: "KIRO_PROVIDER_AUTO_EFFORT_MAPPING",

@@ -389,7 +389,12 @@ The adapter accepts the request shapes observed from Claude Code 2.1.270:
 - the lossless `clear_thinking_20251015` / `keep: "all"`
   `context_management` form, reported with `applied_edits: []`;
 - Anthropic SSE ordering, stream errors, backpressure, silence-period `ping`
-  events, and `x-claude-code-session-id` affinity.
+  events, and `x-claude-code-session-id` affinity;
+- with `web_search_enabled` on, the WebSearch tool's one-shot side request
+  (`web_search_20250305`, `max_uses`, `tool_choice: auto`): the provider runs
+  the search itself and returns `server_tool_use`, `web_search_tool_result` and
+  cited text. `claude --bare` disables WebSearch. See
+  [Web search](CONFIGURATION.md#web-search).
 
 Kiro tool-result content carries text/JSON only, so tool-result images are lifted
 to the containing Kiro user turn. For multiple image-bearing results the wire

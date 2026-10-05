@@ -141,8 +141,11 @@ reasoning envelope 或 prompt 正文。
 
 ## 限制
 
-- KiroRuntime 不提供 OpenAI 托管的 Web Search、File Search、Computer Use 或托管
-  MCP 工具。
+- 托管 Web Search 只提供实时搜索，并限于[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)
+  列出的已验证模型/区域单元。启用 `web_search_enabled` 后，Codex 需配置
+  `web_search = "live"`（或 `-c web_search=live`）；默认的缓存模式声明
+  `external_web_access: false`，会被拒绝。KiroRuntime 不提供 OpenAI 托管的
+  File Search、Computer Use 或托管 MCP 工具。
 - `background`、Responses `conversation`、任意 Structured Outputs/JSON mode、
   `/responses/compact` 与精确 `/responses/input_tokens` 会被拒绝。只有 compatible
   模式下的单字符串元数据 profile 在本地执行；工具、continuation、复杂 Schema 和

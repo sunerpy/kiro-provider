@@ -12,7 +12,15 @@ import {
   CANONICAL_OUTPUT_STREAM_MEDIA_TYPE,
   parseCanonicalCompletion,
 } from "../../protocol/output.js";
+import { parseCanonicalCompletionV2 } from "../../protocol/output-v2.js";
+import { WebSearchError } from "../../web-search/errors.js";
+import { restoreHostedHistory } from "../../web-search/history.js";
+import { type HostedRequestPreparation, prepareHostedRequest } from "../../web-search/request.js";
 import { type AnthropicErrorType, anthropicError } from "../anthropic/errors.js";
+import {
+  anthropicHostedMessageResponse,
+  anthropicHostedSseAdapter,
+} from "../anthropic/hosted-response.js";
 import { adaptAnthropicMessagesRequest } from "../anthropic/request-adapter.js";
 import {
   type AnthropicCompatibilityOptions,
@@ -273,6 +281,33 @@ export async function handleMessages(
     });
   }
   const lineage = canonicalSessionLineage(adapted.value.body, dependencies.tenantId);
+  let hosted: HostedRequestPreparation;
+  try {
+    const admission = dependencies.requestAdmission;
+    hosted = prepareHostedRequest({
+      protocol: "anthropic-messages",
+      body: adapted.value.body,
+      ...(adapted.value.hostedWebSearch ? { declaration: adapted.value.hostedWebSearch } : {}),
+      history: adapted.value.hostedHistory,
+      config,
+      ...(dependencies.webSearch ? { webSearch: dependencies.webSearch } : {}),
+      ...(dependencies.tenantId !== undefined ? { tenantId: dependencies.tenantId } : {}),
+      ...(admission ? { reserveBytes: (bytes: number) => admission.reserveBytes(bytes) } : {}),
+      deadlineAt: ingress.signals.deadlineAt ?? Date.now() + config.request_timeout_ms,
+      includeSources: true,
+    });
+  } catch (error) {
+    ingress.finalize();
+    if (!(error instanceof WebSearchError)) throw error;
+    auditLog("warn", "web_search_rejected", {
+      request_id: ingress.requestId,
+      protocol: "anthropic-messages",
+      code: error.code,
+      status: error.status,
+      ...(error.param !== undefined ? { param: error.param } : {}),
+    });
+    return anthropicError(error.status, error.message, pipelineErrorType(error.status));
+  }
 
   let streamOwnsRouteResources = false;
   try {
@@ -281,7 +316,7 @@ export async function handleMessages(
       ...buildPipelineOptions({
         requestId: ingress.requestId,
         diagnostics: ingress.diagnostics,
-        body: adapted.value.body,
+        body: hosted.body,
         model: adapted.value.body.model,
         stream: adapted.value.source.stream,
         config,
@@ -291,6 +326,8 @@ export async function handleMessages(
         deadlineSignal: ingress.signals.combined,
       }),
       ...(clientNormalization ? { clientNormalization } : {}),
+      ...(hosted.session ? { hostedSearch: hosted.session } : {}),
+      ...(hosted.ownerLock ? { ownerLock: hosted.ownerLock } : {}),
       ...(localStructuredOutputProfile !== undefined
         ? {
             maxUpstreamDispatches: 1,
@@ -327,6 +364,59 @@ export async function handleMessages(
         reasoningReplayMode: "conflict-omitted",
         outputReasoningOmitted: true,
       };
+    }
+    if (hosted.session !== undefined) {
+      // A generation that omitted its conflicting prefix simply carries no
+      // thinking block; the other generations keep their own reasoning.
+      const { outputReasoningOmitted: _perGeneration, ...hostedCompatibility } = compatibility;
+      compatibility = hostedCompatibility;
+      const modelOmitted =
+        pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+        "incompatible-omitted";
+      if (adapted.value.source.stream) {
+        if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
+          void boundedCleanup(() => pipelineResponse.body?.cancel());
+          return anthropicError(
+            502,
+            "Pipeline returned an unsupported streaming response",
+            "api_error",
+          );
+        }
+        const streaming = anthropicHostedSseAdapter(pipelineResponse, {
+          model: adapted.value.body.model,
+          inputTokens: estimateInputTokens(hosted.body),
+          signals: ingress.signals,
+          finalize: ingress.finalize,
+          ...compatibility,
+        });
+        streamOwnsRouteResources = true;
+        if (modelOmitted)
+          streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (clientNormalization)
+          streaming.headers.set("x-kiro-client-normalization", clientNormalization.kind);
+        return streaming;
+      }
+      const completion = contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)
+        ? parseCanonicalCompletionV2(await pipelineResponse.json())
+        : undefined;
+      if (completion === undefined) {
+        void boundedCleanup(() => pipelineResponse.body?.cancel());
+        return anthropicError(
+          502,
+          "Pipeline returned an invalid non-streaming response",
+          "api_error",
+        );
+      }
+      const response = anthropicHostedMessageResponse(
+        completion,
+        adapted.value.body.model,
+        compatibility,
+      );
+      if (modelOmitted)
+        response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+      if (clientNormalization)
+        response.headers.set("x-kiro-client-normalization", clientNormalization.kind);
+      return response;
     }
     if (adapted.value.source.stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
@@ -388,6 +478,7 @@ export async function handleMessageTokenCount(
   request: Request,
   config: Config,
   requestAdmission?: import("../request-admission.js").RequestAdmissionLease,
+  hostedHistory?: Pick<MessagesDependencies, "webSearch" | "tenantId">,
 ): Promise<Response> {
   const ingress = createIngress(request, config, undefined, undefined, requestAdmission);
   try {
@@ -420,7 +511,40 @@ export async function handleMessageTokenCount(
         image_count: adapted.value.toolResultImageBlocks,
       });
     }
-    const inputTokens = estimateInputTokens(adapted.value.body);
+    let counted = adapted.value.body;
+    const history = adapted.value.hostedHistory;
+    if (history.calls.length > 0 || history.citations.length > 0) {
+      // Count the search results the model would actually see; nothing runs.
+      const webSearch = hostedHistory?.webSearch;
+      const tenantId = hostedHistory?.tenantId;
+      try {
+        if (webSearch === undefined || tenantId === undefined) {
+          throw new WebSearchError(
+            "Web search history storage is unavailable",
+            "web_search_store_unavailable",
+            503,
+          );
+        }
+        counted = restoreHostedHistory({
+          body: adapted.value.body,
+          history,
+          protocol: "anthropic-messages",
+          tenantId,
+          store: webSearch.store,
+          keyring: webSearch.keyring,
+          maxHistoryBytes: config.web_search_max_history_bytes,
+          // Decrypted history shares the request's admitted byte budget.
+          ...(requestAdmission
+            ? { reserveBytes: (bytes: number) => requestAdmission.reserveBytes(bytes) }
+            : {}),
+          ...(adapted.value.hostedWebSearch ? { declaration: adapted.value.hostedWebSearch } : {}),
+        }).body;
+      } catch (error) {
+        if (!(error instanceof WebSearchError)) throw error;
+        return anthropicError(error.status, error.message, pipelineErrorType(error.status));
+      }
+    }
+    const inputTokens = estimateInputTokens(counted);
     return Response.json(
       { input_tokens: inputTokens },
       {

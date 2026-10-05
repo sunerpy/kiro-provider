@@ -150,7 +150,9 @@ need the migration described in the [Codex guide](CODEX.md#long-sessions-with-sc
 Do not carry that override to a smaller model. Ultra is a client orchestration
 preset that sends inference effort `max`, not a Kiro model alias or a wire
 effort named `ultra`. This example leaves permissions at the native client's
-defaults and disables unavailable hosted Web Search. See the
+defaults and disables hosted Web Search, which the provider runs only when
+`web_search_enabled` is on; then set `web_search = "live"` (the cached mode is
+rejected, see [Web search](CONFIGURATION.md#web-search)). See the
 [Codex guide](CODEX.md) and the
 [official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 for

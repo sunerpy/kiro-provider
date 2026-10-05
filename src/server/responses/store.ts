@@ -15,7 +15,7 @@ import {
 } from "./continuation.js";
 import { canonicalUsageFromResponse, type ResponseStateObject } from "./state.js";
 
-const RESPONSE_STORE_TTL_MS = 30 * 24 * 60 * 60_000;
+export const RESPONSE_STORE_TTL_MS = 30 * 24 * 60 * 60_000;
 const RESPONSE_STORE_MAX_ENTRIES = 10_000;
 const BYTE_MARKER = "__kiro_provider_bytes_v1";
 

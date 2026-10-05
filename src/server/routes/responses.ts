@@ -11,6 +11,9 @@ import {
   type CanonicalCompletion,
   parseCanonicalCompletion,
 } from "../../protocol/output.js";
+import { parseCanonicalCompletionV2 } from "../../protocol/output-v2.js";
+import { WebSearchError, webSearchErrorType } from "../../web-search/errors.js";
+import { type HostedRequestPreparation, prepareHostedRequest } from "../../web-search/request.js";
 import { openAiError } from "../errors.js";
 import {
   buildPipelineOptions,
@@ -34,12 +37,19 @@ import type {
   ResponseOutputItem,
   ResponseToolCallItem,
 } from "../responses/events.js";
+import {
+  HostedResponsesOutputError,
+  hostedCompletedResponse,
+  hostedResponsesSseAdapter,
+} from "../responses/hosted-output.js";
 import { prepareNativeAdaptation } from "../responses/native-adaptation.js";
 import { proxyNativeResponses } from "../responses/native-transport.js";
 import { isGpt56ReasoningPlaceholder } from "../responses/reasoning.js";
 import {
   adaptResponsesRequest,
+  isHostedWebSearchTool,
   type ResponsesPreviousContext,
+  WEB_SEARCH_SOURCES_INCLUDE,
 } from "../responses/request-adapter.js";
 import {
   fidelityRejection,
@@ -53,6 +63,7 @@ import {
 } from "../responses/request-policy.js";
 import { responsesSseAdapter } from "../responses/sse-adapter.js";
 import {
+  type ResponseHostedSearchTool,
   type ResponseRequestConfiguration,
   type ResponseStateObject,
   responseConfigurationFromCanonical,
@@ -61,6 +72,7 @@ import {
 } from "../responses/state.js";
 import {
   canonicalCompletionFromResponse,
+  RESPONSE_STORE_TTL_MS,
   responseInputItems,
   responseStoreTenant,
   type StoredResponse,
@@ -90,7 +102,8 @@ type StatelessV3Reason =
   | "encrypted_reasoning"
   | "collaboration_input"
   | "native_instruction_role_unsupported"
-  | "native_model_unsupported";
+  | "native_model_unsupported"
+  | "hosted_web_search";
 
 type StatelessV3Requirement = {
   readonly reason: StatelessV3Reason;
@@ -147,9 +160,32 @@ function unsupportedNativeInstructionRole(
   return undefined;
 }
 
+/**
+ * Provider-executed search runs only on the stateless lane: native KiroRuntime
+ * Responses cannot execute or replay it.
+ */
+function hostedWebSearchRequirement(
+  body: Readonly<Record<string, unknown>>,
+): StatelessV3Requirement | undefined {
+  if (Array.isArray(body.tools)) {
+    const index = body.tools.findIndex(
+      (tool) =>
+        isRecord(tool) && typeof tool.type === "string" && tool.type.startsWith("web_search"),
+    );
+    if (index >= 0) return { reason: "hosted_web_search", param: `tools.${index}` };
+  }
+  if (Array.isArray(body.input)) {
+    const index = body.input.findIndex((item) => isRecord(item) && item.type === "web_search_call");
+    if (index >= 0) return { reason: "hosted_web_search", param: `input.${index}` };
+  }
+  return undefined;
+}
+
 function requiresStatelessV3(
   body: Readonly<Record<string, unknown>>,
 ): StatelessV3Requirement | undefined {
+  const hosted = hostedWebSearchRequirement(body);
+  if (hosted !== undefined) return hosted;
   if (body.store === false) return { reason: "store_false", param: "store" };
   const modelRequirement = unsupportedNativeModel(body.model);
   if (modelRequirement !== undefined) return modelRequirement;
@@ -631,7 +667,8 @@ async function handleResponsesCore(
   const adaptation =
     localStructuredOutputProfile === undefined &&
     config.protocol_projection_mode === "v3-auto" &&
-    storedPrevious?.transport !== "stateless"
+    storedPrevious?.transport !== "stateless" &&
+    hostedWebSearchRequirement(normalizedBody as Readonly<Record<string, unknown>>) === undefined
       ? prepareNativeAdaptation(
           normalizedBody,
           config,
@@ -857,8 +894,52 @@ async function handleResponsesCore(
       adapted.param,
     );
   }
+  const includeSources = (parsed.value.include ?? []).includes(WEB_SEARCH_SOURCES_INCLUDE);
+  let hosted: HostedRequestPreparation;
+  try {
+    const admission = dependencies.requestAdmission;
+    const deadlineAt = ingress.signals.deadlineAt ?? Date.now() + config.request_timeout_ms;
+    hosted = prepareHostedRequest({
+      protocol: "responses",
+      body: adapted.body,
+      ...(adapted.hostedWebSearch ? { declaration: adapted.hostedWebSearch } : {}),
+      history: adapted.hostedHistory,
+      config,
+      ...(dependencies.webSearch ? { webSearch: dependencies.webSearch } : {}),
+      ...(dependencies.tenantId !== undefined ? { tenantId: dependencies.tenantId } : {}),
+      ...(admission ? { reserveBytes: (bytes: number) => admission.reserveBytes(bytes) } : {}),
+      deadlineAt,
+      includeSources,
+      // A stored response must never outlive the search history it replays.
+      ...(adapted.body.store !== false && dependencies.responseStore
+        ? { minimumExpiresAt: deadlineAt + RESPONSE_STORE_TTL_MS }
+        : {}),
+    });
+  } catch (error) {
+    ingress.finalize();
+    if (!(error instanceof WebSearchError)) throw error;
+    auditLog("warn", "web_search_rejected", {
+      request_id: ingress.requestId,
+      protocol: "responses",
+      code: error.code,
+      status: error.status,
+      ...(error.param !== undefined ? { param: error.param } : {}),
+    });
+    return openAiError(
+      error.status,
+      error.message,
+      webSearchErrorType(error.status),
+      error.code,
+      error.param,
+    );
+  }
+  const hostedTools = (parsed.value.tools ?? []).filter(isHostedWebSearchTool);
+  const canonicalConfiguration = responseConfigurationFromCanonical(adapted.body);
   const responseConfiguration: ResponseRequestConfiguration = {
-    ...responseConfigurationFromCanonical(adapted.body),
+    ...canonicalConfiguration,
+    ...(hostedTools.length > 0
+      ? { tools: [...canonicalConfiguration.tools, ...(hostedTools as ResponseHostedSearchTool[])] }
+      : {}),
     ...(localStructuredOutputProfile !== undefined
       ? {
           textFormat: localStructuredOutputProfile.requestedFormat,
@@ -886,7 +967,7 @@ async function handleResponsesCore(
       ...buildPipelineOptions({
         requestId: ingress.requestId,
         diagnostics: ingress.diagnostics,
-        body: adapted.body,
+        body: hosted.body,
         model: adapted.body.model,
         stream,
         config,
@@ -895,6 +976,8 @@ async function handleResponsesCore(
         lineage,
         deadlineSignal: ingress.signals.combined,
       }),
+      ...(hosted.session ? { hostedSearch: hosted.session } : {}),
+      ...(hosted.ownerLock ? { ownerLock: hosted.ownerLock } : {}),
       ...(localStructuredOutputProfile !== undefined
         ? {
             maxUpstreamDispatches: 1,
@@ -957,6 +1040,99 @@ async function handleResponsesCore(
         }
       }
       return await withRetryAfter(pipelineResponse);
+    }
+    if (hosted.session !== undefined) {
+      const modelOmitted =
+        pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
+        "incompatible-omitted";
+      const hostedOptions = {
+        model: adapted.body.model,
+        bridge: adapted.bridge,
+        includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
+        captureEncryptedReasoning: adapted.body.store !== false,
+        includeSources,
+      };
+      const identity = {
+        responseId,
+        createdAt,
+        configuration: responseConfiguration,
+        usageMode: config.responses_fidelity_mode,
+      };
+      if (stream) {
+        if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {
+          void boundedCleanup(() => pipelineResponse.body?.cancel());
+          return openAiError(
+            500,
+            "Pipeline returned an unsupported streaming response",
+            "internal_error",
+            "invalid_pipeline_response",
+          );
+        }
+        const streaming = hostedResponsesSseAdapter(pipelineResponse, {
+          ...hostedOptions,
+          ...identity,
+          signals: ingress.signals,
+          finalize: ingress.finalize,
+          onCompleted: (state) =>
+            persistResponse(
+              dependencies,
+              tenantId,
+              publicResponseState(state, adapted.body.includeEncryptedReasoning),
+              inputItems,
+              adapted.body,
+              continuation(state),
+            ),
+        });
+        streamOwnsRouteResources = true;
+        if (modelOmitted)
+          streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        return streaming;
+      }
+      const completion = contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)
+        ? parseCanonicalCompletionV2(await pipelineResponse.json())
+        : undefined;
+      if (completion === undefined) {
+        void boundedCleanup(() => pipelineResponse.body?.cancel());
+        return openAiError(
+          500,
+          "Pipeline returned an invalid non-streaming response",
+          "internal_error",
+          "invalid_pipeline_response",
+        );
+      }
+      let state: ResponseStateObject;
+      try {
+        state = hostedCompletedResponse(completion, hostedOptions, identity);
+      } catch (error) {
+        if (!(error instanceof HostedResponsesOutputError)) throw error;
+        return openAiError(502, error.message, "upstream_error", error.code);
+      }
+      const publicState = publicResponseState(state, adapted.body.includeEncryptedReasoning);
+      try {
+        persistResponse(
+          dependencies,
+          tenantId,
+          publicState,
+          inputItems,
+          adapted.body,
+          continuation(state),
+        );
+      } catch {
+        return openAiError(
+          502,
+          "Response continuation could not be stored",
+          "upstream_error",
+          "response_state_store_failed",
+        );
+      }
+      return Response.json(publicState, {
+        headers: {
+          ...(modelOmitted ? { "x-kiro-reasoning-model-replay-mode": "incompatible-omitted" } : {}),
+          "X-Kiro-Usage-Policy":
+            config.responses_fidelity_mode === "strict" ? "measured-only" : "compatible-estimates",
+          "X-Reasoning-Included": "true",
+        },
+      });
     }
     if (stream) {
       if (!contentType.includes(CANONICAL_OUTPUT_STREAM_MEDIA_TYPE)) {

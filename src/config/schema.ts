@@ -125,6 +125,24 @@ export const ConfigSchema = z.object({
     .default("strict"),
   reasoning_replay_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
   reasoning_replay_max_entries: z.number().int().min(1).max(1_000_000).default(10_000),
+  // Provider-executed KiroRuntime InvokeMCP web search for hosted Responses and
+  // Messages search tools. Off by default; turning it off blocks new searches
+  // only, while already authenticated search history stays readable.
+  web_search_enabled: z.boolean().default(false),
+  // Searches dispatched for one public request, across every generation round.
+  web_search_max_calls: z.number().int().min(1).max(100).default(20),
+  // One InvokeMCP call; the remaining request deadline still applies.
+  web_search_timeout_ms: z.number().int().min(1).max(2_147_483_647).default(15_000),
+  web_search_max_result_bytes: z.number().int().min(1_024).max(16_777_216).default(262_144),
+  // Decrypted search snapshots restored for one request's history.
+  web_search_max_history_bytes: z.number().int().min(1_024).max(67_108_864).default(1_048_576),
+  web_search_replay_ttl_ms: z.number().int().min(1).max(2_147_483_647).default(86_400_000),
+  web_search_max_cache_bytes: z
+    .number()
+    .int()
+    .min(1_048_576)
+    .max(1_099_511_627_776)
+    .default(268_435_456),
   effort: EffortSchema.nullable().default(null),
   auto_effort_mapping: z.boolean().default(true),
   log_level: z.enum(["debug", "info", "warn", "error"]).default("info"),

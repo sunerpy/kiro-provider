@@ -14,6 +14,7 @@ import type {
 import { RequestDiagnostics } from "../core/request-diagnostics.js";
 import { boundedCleanup, runCleanupSteps } from "../core/stream-cleanup.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
+import type { WebSearchDependencies } from "../web-search/session.js";
 import { anthropicError } from "./anthropic/errors.js";
 import {
   anthropicInternalError,
@@ -45,6 +46,7 @@ export type RouteDependencies = {
   readonly responseStore?: PipelineResponseStore;
   readonly nativeResponsesFetch?: NativeResponsesFetch;
   readonly makeClient?: PipelineClientFactory;
+  readonly webSearch?: WebSearchDependencies;
   readonly createRequestIdleTimeoutLease?: () => RequestIdleTimeoutLease | undefined;
   readonly runPipeline?: (options: RunChatCompletionOptions) => Promise<Response>;
 };

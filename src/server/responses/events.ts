@@ -7,6 +7,7 @@ import type {
   ResponseStateObject,
   ResponseUsage,
   SummaryText,
+  UrlCitationAnnotation,
 } from "./state.js";
 import { responseState } from "./state.js";
 
@@ -21,6 +22,8 @@ export type {
   ResponseToolCallItem,
   ResponseUsage,
   SummaryText,
+  UrlCitationAnnotation,
+  WebSearchCallOutputItem,
 } from "./state.js";
 
 export const CODEX_RECOGNIZED_TYPES = [
@@ -193,7 +196,30 @@ export type CustomToolCallInputDoneEvent = {
   readonly input: string;
 };
 
+/** Hosted web search progress for one `web_search_call` item. */
+export type WebSearchCallProgressEvent = {
+  readonly type:
+    | "response.web_search_call.in_progress"
+    | "response.web_search_call.searching"
+    | "response.web_search_call.completed";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+};
+
+export type OutputTextAnnotationAddedEvent = {
+  readonly type: "response.output_text.annotation.added";
+  readonly sequence_number: number;
+  readonly item_id: string;
+  readonly output_index: number;
+  readonly content_index: number;
+  readonly annotation_index: number;
+  readonly annotation: UrlCitationAnnotation;
+};
+
 export type ResponsesEvent =
+  | WebSearchCallProgressEvent
+  | OutputTextAnnotationAddedEvent
   | ResponseCreatedEvent
   | ResponseInProgressEvent
   | OutputItemAddedEvent
@@ -522,6 +548,39 @@ export function customToolCallInputDone(input: {
     item_id: input.itemId,
     output_index: input.outputIndex,
     input: input.input,
+  };
+}
+
+export function webSearchCallProgress(input: {
+  readonly phase: "in_progress" | "searching" | "completed";
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly sequenceNumber: number;
+}): WebSearchCallProgressEvent {
+  return {
+    type: `response.web_search_call.${input.phase}`,
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+  };
+}
+
+export function outputTextAnnotationAdded(input: {
+  readonly itemId: string;
+  readonly outputIndex: number;
+  readonly contentIndex: number;
+  readonly annotationIndex: number;
+  readonly annotation: UrlCitationAnnotation;
+  readonly sequenceNumber: number;
+}): OutputTextAnnotationAddedEvent {
+  return {
+    type: "response.output_text.annotation.added",
+    sequence_number: input.sequenceNumber,
+    item_id: input.itemId,
+    output_index: input.outputIndex,
+    content_index: input.contentIndex,
+    annotation_index: input.annotationIndex,
+    annotation: input.annotation,
   };
 }
 

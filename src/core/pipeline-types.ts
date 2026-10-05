@@ -9,6 +9,8 @@ import type { Effort, KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { CanonicalRequest } from "../protocol/canonical.js";
 import type { ClientNormalization } from "../protocol/client-normalization.js";
 import type { ReasoningReplayStore } from "../reasoning/replay-store.js";
+import type { HostedOwnerLock } from "../web-search/history.js";
+import type { HostedSearchSession } from "../web-search/session.js";
 import type { AffinityStallTracker } from "./affinity-stall.js";
 import type { createPipelineStreamResponse } from "./pipeline-stream.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
@@ -167,4 +169,20 @@ export interface RunChatCompletionOptions {
   readonly unexpectedToolCallFailure?: UnexpectedToolCallFailure;
   /** Optional byte ceiling while collecting non-stream visible output. */
   readonly collectedTextLimit?: CollectedTextLimit;
+  /**
+   * Provider-executed hosted web search for this request. Present only when the
+   * request declares a hosted search tool or carries hosted search history.
+   */
+  readonly hostedSearch?: HostedSearchSession;
+  /**
+   * Hosted search history is owned by the account, region, profile and
+   * conversation that recorded it; the request is pinned there like an
+   * owner-bound replay.
+   */
+  readonly ownerLock?: HostedOwnerLock;
+  /**
+   * Internal: a hosted continuation of an already committed public stream
+   * cannot announce a reasoning-prefix omission, so a conflict stays fatal.
+   */
+  readonly reasoningPrefixOmission?: false;
 }

@@ -16,6 +16,16 @@ import {
 } from "../../protocol/canonical.js";
 import { isLegacyReplayToken, isProviderReplayToken } from "../../reasoning/replay-token.js";
 import {
+  type HostedWebSearchDeclaration,
+  parseResponsesWebSearchTool,
+} from "../../web-search/declarations.js";
+import { hostedSegmentFingerprint } from "../../web-search/fingerprint.js";
+import {
+  HOSTED_CALL_METADATA,
+  type HostedHistory,
+  type HostedHistoryCall,
+} from "../../web-search/history.js";
+import {
   allowedKeysValidator,
   type ProtocolResult,
   protocolFailure,
@@ -45,6 +55,10 @@ export type ResponsesRequestAdaptationResult =
       readonly ok: true;
       readonly body: CanonicalRequest;
       readonly bridge: ResponsesToolBridge;
+      /** Current hosted search declaration: the only authorization for new searches. */
+      readonly hostedWebSearch?: HostedWebSearchDeclaration;
+      /** Hosted search calls in history, restored from snapshots before dispatch. */
+      readonly hostedHistory: HostedHistory;
     }
   | {
       readonly ok: false;
@@ -197,6 +211,124 @@ function isAdditionalToolsItem(item: ResponsesInputItem): item is ResponsesAddit
 
 function isReasoningItem(item: ResponsesInputItem): item is ResponsesReasoningItem {
   return item.type === "reasoning";
+}
+
+/** A provider-executed search from an earlier response (unknown to the schema). */
+function isWebSearchCallItem(item: ResponsesInputItem): boolean {
+  return item.type === "web_search_call";
+}
+
+/** Hosted search declarations are typed `web_search*`; everything else is ordinary. */
+export function isHostedWebSearchTool(tool: { readonly type: string }): boolean {
+  return tool.type.startsWith("web_search");
+}
+
+export const WEB_SEARCH_SOURCES_INCLUDE = "web_search_call.action.sources";
+
+/** The single declared hosted search tool, already validated by validateToolDeclarations. */
+export function responsesHostedDeclaration(
+  request: Pick<ResponsesRequest, "tools">,
+): HostedWebSearchDeclaration | undefined {
+  for (const [index, tool] of (request.tools ?? []).entries()) {
+    if (!isHostedWebSearchTool(tool)) continue;
+    const parsed = parseResponsesWebSearchTool(tool, `tools.${index}`);
+    return parsed.ok ? parsed.declaration : undefined;
+  }
+  return undefined;
+}
+
+type WebSearchCallReplay = {
+  readonly callId: string;
+  readonly query: string;
+  readonly publicState: HostedHistoryCall["publicState"];
+};
+
+function webSearchReplayKeys(
+  value: Readonly<Record<string, unknown>>,
+  path: string,
+  allowed: ReadonlySet<string>,
+): ProtocolResult<undefined> {
+  for (const key of Object.keys(value)) {
+    if (allowed.has(key)) continue;
+    return protocolFailure(
+      "web_search_replay_invalid",
+      `Responses field ${path}.${key} is not supported on a replayed web_search_call`,
+      `${path}.${key}`,
+    );
+  }
+  return { ok: true, value: undefined };
+}
+
+function mapWebSearchCallItem(
+  item: Readonly<Record<string, unknown>>,
+  path: string,
+): ProtocolResult<WebSearchCallReplay> {
+  const invalid = (message: string, param = path) =>
+    protocolFailure("web_search_replay_invalid", message, param);
+  const keys = webSearchReplayKeys(item, path, new Set(["type", "id", "status", "action"]));
+  if (!keys.ok) return keys;
+  if (typeof item.id !== "string" || item.id.length === 0) {
+    return invalid("web_search_call requires the id it was published with", `${path}.id`);
+  }
+  if (item.status !== "completed" && item.status !== "failed") {
+    return invalid("Only a completed or failed web_search_call can be replayed", `${path}.status`);
+  }
+  const action = item.action;
+  if (!isRecord(action) || action.type !== "search") {
+    return invalid("web_search_call.action must be a search action", `${path}.action`);
+  }
+  const actionKeys = webSearchReplayKeys(
+    action,
+    `${path}.action`,
+    new Set(["type", "query", "queries", "sources"]),
+  );
+  if (!actionKeys.ok) return actionKeys;
+  const queries = action.queries;
+  if (
+    queries !== undefined &&
+    (!Array.isArray(queries) || queries.length !== 1 || typeof queries[0] !== "string")
+  ) {
+    return invalid(
+      "web_search_call.action.queries must hold its single query",
+      `${path}.action.queries`,
+    );
+  }
+  const query =
+    typeof action.query === "string"
+      ? action.query
+      : Array.isArray(queries) && typeof queries[0] === "string"
+        ? queries[0]
+        : undefined;
+  if (query === undefined || (Array.isArray(queries) && queries[0] !== query)) {
+    return invalid("web_search_call.action requires its query", `${path}.action.query`);
+  }
+  let sources: { url: string; title: string }[] | undefined;
+  if (action.sources !== undefined) {
+    if (!Array.isArray(action.sources)) {
+      return invalid("web_search_call.action.sources must be an array", `${path}.action.sources`);
+    }
+    sources = [];
+    for (const [index, source] of action.sources.entries()) {
+      const sourcePath = `${path}.action.sources.${index}`;
+      if (!isRecord(source) || source.type !== "url" || typeof source.url !== "string") {
+        return invalid("web_search_call source must be a url source", sourcePath);
+      }
+      const sourceKeys = webSearchReplayKeys(source, sourcePath, new Set(["type", "url"]));
+      if (!sourceKeys.ok) return sourceKeys;
+      sources.push({ url: source.url, title: "" });
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      callId: item.id,
+      query,
+      publicState:
+        item.status === "completed"
+          ? { kind: "completed", ...(sources !== undefined ? { sources } : {}) }
+          : { kind: "failed" },
+    },
+  };
 }
 
 function mapInputImagePart(
@@ -559,7 +691,72 @@ function isAssistantOutputItem(item: ResponsesInputItem): boolean {
 }
 
 function isTurnGroupItem(item: ResponsesInputItem): boolean {
-  return isReasoningItem(item) || isAssistantOutputItem(item);
+  return isReasoningItem(item) || isAssistantOutputItem(item) || isWebSearchCallItem(item);
+}
+
+type MutableCanonicalMessage = Omit<CanonicalMessage, "content" | "toolCalls"> & {
+  content: CanonicalContentPart[];
+  toolCalls: CanonicalMessage["toolCalls"][number][];
+};
+
+/**
+ * Splits the input into generations (maximal runs of adjacent turn-group
+ * items) and returns, for every item of a run that made a hosted search, the
+ * run's bounds.
+ */
+function hostedGenerationRuns(
+  items: readonly ResponsesInputItem[],
+): Map<number, { readonly start: number; readonly end: number }> {
+  const runs = new Map<number, { readonly start: number; readonly end: number }>();
+  let index = 0;
+  while (index < items.length) {
+    const start = index;
+    if (!isTurnGroupItem(items[start] as ResponsesInputItem)) {
+      index += 1;
+      continue;
+    }
+    while (
+      index + 1 < items.length &&
+      isTurnGroupItem(items[index + 1] as ResponsesInputItem) &&
+      !startsNextGeneration(items, index + 1)
+    ) {
+      index += 1;
+    }
+    const run = { start, end: index };
+    if (items.slice(start, index + 1).some(isWebSearchCallItem)) {
+      for (let position = start; position <= index; position += 1) runs.set(position, run);
+    }
+    index += 1;
+  }
+  return runs;
+}
+
+/** Items of one hosted search generation share the key embedded in their ids. */
+const GENERATION_ITEM_ID = /^(?:ws|rs|msg|fc)_([0-9a-f]{16})[0-9a-f]{16}$/;
+
+function generationKeyOf(item: ResponsesInputItem): string | undefined {
+  const id = (item as { readonly id?: unknown }).id;
+  return typeof id === "string" ? GENERATION_ITEM_ID.exec(id)?.[1] : undefined;
+}
+
+/**
+ * A hosted search turn spans several generations, each one replay group with
+ * its own reasoning envelope. Clients replay its items either in output order
+ * or in the order the items completed, so the generation key in the item ids
+ * decides the split. Without keys, reasoning or a message right after a
+ * web_search_call starts the generation that read its result.
+ */
+function startsNextGeneration(items: readonly ResponsesInputItem[], index: number): boolean {
+  const previous = items[index - 1];
+  const item = items[index];
+  if (previous === undefined || item === undefined) return false;
+  const previousKey = generationKeyOf(previous);
+  const key = generationKeyOf(item);
+  if (previousKey !== undefined && key !== undefined) return previousKey !== key;
+  return (
+    isWebSearchCallItem(previous) &&
+    (isReasoningItem(item) || (isMessageItem(item) && item.role === "assistant"))
+  );
 }
 
 type ReplayGroup = {
@@ -577,19 +774,19 @@ function replayGroupAt(items: readonly ResponsesInputItem[], reasoningIndex: num
   let start = reasoningIndex;
   while (start > 0) {
     const previous = items[start - 1];
-    if (!previous || !isTurnGroupItem(previous)) break;
+    if (!previous || !isTurnGroupItem(previous) || startsNextGeneration(items, start)) break;
     start -= 1;
   }
   let end = reasoningIndex;
   while (end + 1 < items.length) {
     const next = items[end + 1];
-    if (!next || !isTurnGroupItem(next)) break;
+    if (!next || !isTurnGroupItem(next) || startsNextGeneration(items, end + 1)) break;
     end += 1;
   }
   let firstOutputIndex: number | undefined;
   for (let index = start; index <= end; index += 1) {
     const item = items[index];
-    if (item && isAssistantOutputItem(item)) {
+    if (item && (isAssistantOutputItem(item) || isWebSearchCallItem(item))) {
       firstOutputIndex = index;
       break;
     }
@@ -626,10 +823,26 @@ function groupOutputFingerprint(
 ): ProtocolResult<{ readonly current: string; readonly legacy: string }> {
   let text = "";
   const toolCalls: Array<{ id: string; name: string; input: string }> = [];
+  const hostedCalls: string[] = [];
   let outputSeen = false;
   for (let index = group.start; index <= group.end; index += 1) {
     const item = items[index];
     if (!item) continue;
+    if (isWebSearchCallItem(item)) {
+      const call = mapWebSearchCallItem(
+        item as Readonly<Record<string, unknown>>,
+        `input.${index}`,
+      );
+      if (!call.ok) return call;
+      toolCalls.push({
+        id: call.value.callId,
+        name: "web_search",
+        input: JSON.stringify({ query: call.value.query }),
+      });
+      hostedCalls.push(call.value.callId);
+      outputSeen = true;
+      continue;
+    }
     if (isMessageItem(item)) {
       const content = mapMessageContent(item.content, `input.${index}.content`);
       if (!content.ok) return content;
@@ -663,6 +876,12 @@ function groupOutputFingerprint(
     );
   }
   const output = { text, toolCalls };
+  if (hostedCalls.length > 0) {
+    // A generation that ran hosted searches binds its reasoning to the
+    // versioned hosted-segment projection, never to an ordinary tool turn.
+    const hosted = hostedSegmentFingerprint(output, hostedCalls);
+    return { ok: true, value: { current: hosted, legacy: hosted } };
+  }
   return {
     ok: true,
     value: {
@@ -776,7 +995,21 @@ export function validateToolDeclarations(request: ResponsesRequest): ProtocolRes
     return { ok: true, value: undefined };
   };
 
+  let hostedPath: string | undefined;
   for (const [index, tool] of (request.tools ?? []).entries()) {
+    if (isHostedWebSearchTool(tool)) {
+      const parsed = parseResponsesWebSearchTool(tool, `tools.${index}`);
+      if (!parsed.ok) return protocolFailure(parsed.code, parsed.message, parsed.param);
+      if (hostedPath !== undefined) {
+        return protocolFailure(
+          "invalid_web_search_declaration",
+          `Only one web_search tool may be declared; ${hostedPath} already declares it`,
+          `tools.${index}`,
+        );
+      }
+      hostedPath = `tools.${index}`;
+      continue;
+    }
     const result = validateTool(tool, `tools.${index}`, false);
     if (!result.ok) return result;
   }
@@ -907,7 +1140,9 @@ export function adaptResponsesRequest(
     );
   }
   const include = request.include ?? [];
-  const unsupportedInclude = include.find((value) => value !== "reasoning.encrypted_content");
+  const unsupportedInclude = include.find(
+    (value) => value !== "reasoning.encrypted_content" && value !== WEB_SEARCH_SOURCES_INCLUDE,
+  );
   if (unsupportedInclude !== undefined) {
     return protocolFailure(
       "unsupported_parameter",
@@ -928,8 +1163,16 @@ export function adaptResponsesRequest(
   const toolValidation = validateToolDeclarations(request);
   if (!toolValidation.ok) return toolValidation;
 
+  const hostedWebSearch = responsesHostedDeclaration(request);
+  const hostedHistoryPresent =
+    typeof request.input !== "string" && request.input.some(isWebSearchCallItem);
   const reprojectLogicalHistory = previous?.legacyRequest === undefined;
   const bridgeResult = createResponsesToolBridge(request, previous?.items, {
+    // The hosted search keeps the backend's wire name; a client function that
+    // shares it travels under a private alias.
+    ...(hostedWebSearch !== undefined || hostedHistoryPresent
+      ? { reservedWireNames: ["web_search"] }
+      : {}),
     // Stateless execution reprojects the complete logical history. Private
     // aliases can therefore be rebuilt from public identities; old declarations
     // are not needed and must not become authorization for new calls.
@@ -987,6 +1230,88 @@ export function adaptResponsesRequest(
 
   let executableInputSeen = false;
   const canonicalIndexByInput = new Map<number, number>();
+  // A replayed hosted call is followed by a placeholder result once its tool
+  // group ends; restoration fills it from the authenticated snapshot.
+  const hostedCalls: HostedHistoryCall[] = [];
+  let groupHosted: Array<
+    WebSearchCallReplay & { readonly path: string; readonly assistantMessage: number }
+  > = [];
+  // One hosted search generation projects as the assistant turn and the result
+  // turn the execution loop sent Kiro: its text, hosted and client calls in one
+  // message, then every result of the group in one message. Restoration puts
+  // both back in wire order.
+  const hostedRuns =
+    typeof request.input === "string" ? new Map() : hostedGenerationRuns(request.input);
+  let hostedTurn:
+    | {
+        readonly end: number;
+        message?: { readonly index: number; readonly value: MutableCanonicalMessage };
+        readonly clients: string[];
+      }
+    | undefined;
+  let awaitingOutputs:
+    | { readonly value: MutableCanonicalMessage; readonly calls: Set<string>; images: number }
+    | undefined;
+  const flushHosted = (path: string): MutableCanonicalMessage | undefined => {
+    if (groupHosted.length === 0) return undefined;
+    const messageIndex = messages.length;
+    const message: MutableCanonicalMessage = {
+      role: "tool",
+      content: groupHosted.map((call) => ({
+        type: "tool_result" as const,
+        toolCallId: call.callId,
+        content: [],
+        isError: false,
+        path: call.path,
+        sourceMetadata: { [HOSTED_CALL_METADATA]: true },
+      })),
+      toolCalls: [],
+      path,
+    };
+    messages.push(message);
+    for (const [part, call] of groupHosted.entries()) {
+      hostedCalls.push({
+        callId: call.callId,
+        query: call.query,
+        assistantMessage: call.assistantMessage,
+        result: { message: messageIndex, part },
+        publicState: call.publicState,
+        path: call.path,
+      });
+    }
+    groupHosted = [];
+    return message;
+  };
+  const endHostedTurn = (path: string): void => {
+    if (hostedTurn === undefined) return;
+    const results = flushHosted(path);
+    if (results !== undefined && hostedTurn.clients.length > 0) {
+      awaitingOutputs = { value: results, calls: new Set(hostedTurn.clients), images: 0 };
+    }
+    hostedTurn = undefined;
+  };
+  const turnMessage = (
+    path: string,
+  ): { readonly index: number; readonly value: MutableCanonicalMessage } => {
+    if (hostedTurn === undefined) throw new TypeError("Hosted generation turn is not open");
+    if (hostedTurn.message === undefined) {
+      const value: MutableCanonicalMessage = {
+        role: "assistant",
+        content: [],
+        toolCalls: [],
+        path,
+      };
+      hostedTurn.message = { index: messages.length, value };
+      messages.push(value);
+    }
+    return hostedTurn.message;
+  };
+  const missingOutputs = (calls: ReadonlySet<string>, path: string) =>
+    protocolFailure(
+      "invalid_tool_history",
+      `No tool output found for function call ${[...calls].join(", ")}`,
+      path,
+    );
   const replayByGroup = new Map<number, { readonly token: string; readonly path: string }>();
   if (typeof request.input === "string") {
     messages.push({
@@ -999,6 +1324,60 @@ export function adaptResponsesRequest(
   } else {
     for (const [index, item] of request.input.entries()) {
       const path = `input.${index}`;
+      if (hostedTurn !== undefined && index > hostedTurn.end) endHostedTurn(path);
+      if (awaitingOutputs !== undefined) {
+        // A group's client calls are answered before anything else continues it.
+        if (
+          !(isFunctionCallOutputItem(item) || isCustomToolCallOutputItem(item)) ||
+          !awaitingOutputs.calls.has(item.call_id)
+        ) {
+          return missingOutputs(awaitingOutputs.calls, path);
+        }
+        const shape = validateInputItemShape(item, path);
+        if (!shape.ok) return shape;
+        const content = outputContentParts(item.output, `${path}.output`);
+        if (!content.ok) return content;
+        if (content.value.images.length > 0 && ++awaitingOutputs.images > 1) {
+          return protocolFailure(
+            "unsupported_tool_result_content",
+            "A hosted search tool group may return at most one image-bearing tool output so the lifted image keeps its Kiro tool association",
+            `${path}.output`,
+          );
+        }
+        awaitingOutputs.value.content.push(
+          {
+            type: "tool_result",
+            toolCallId: item.call_id,
+            content: content.value.text,
+            isError: false,
+            ...canonicalSource(item, path),
+          },
+          ...content.value.images,
+        );
+        awaitingOutputs.calls.delete(item.call_id);
+        if (awaitingOutputs.calls.size === 0) awaitingOutputs = undefined;
+        executableInputSeen = true;
+        continue;
+      }
+      const run = hostedRuns.get(index);
+      if (run !== undefined && hostedTurn === undefined) {
+        hostedTurn = { end: run.end, clients: [] };
+      }
+      if (isWebSearchCallItem(item)) {
+        const call = mapWebSearchCallItem(item as Readonly<Record<string, unknown>>, path);
+        if (!call.ok) return call;
+        const turn = turnMessage(path);
+        canonicalIndexByInput.set(index, turn.index);
+        groupHosted.push({ ...call.value, path, assistantMessage: turn.index });
+        turn.value.toolCalls.push({
+          id: call.value.callId,
+          name: "web_search",
+          input: { query: call.value.query },
+          path,
+          sourceMetadata: { [HOSTED_CALL_METADATA]: true },
+        });
+        continue;
+      }
       const shape = validateInputItemShape(item, path);
       if (!shape.ok) return shape;
       if (isReasoningItem(item)) {
@@ -1092,21 +1471,27 @@ export function adaptResponsesRequest(
             path,
           );
         }
+        const toolCall = {
+          id: item.call_id,
+          name: lowered.function.name,
+          input,
+          ...canonicalSource(item, path),
+        };
+        executableInputSeen = true;
+        if (run !== undefined) {
+          const turn = turnMessage(path);
+          canonicalIndexByInput.set(index, turn.index);
+          turn.value.toolCalls.push(toolCall);
+          hostedTurn?.clients.push(item.call_id);
+          continue;
+        }
         canonicalIndexByInput.set(index, messages.length);
         messages.push({
           role: "assistant",
           content: [],
-          toolCalls: [
-            {
-              id: item.call_id,
-              name: lowered.function.name,
-              input,
-              ...canonicalSource(item, path),
-            },
-          ],
+          toolCalls: [toolCall],
           ...canonicalSource(item, path),
         });
-        executableInputSeen = true;
         continue;
       }
       if (isMessageItem(item)) {
@@ -1119,6 +1504,13 @@ export function adaptResponsesRequest(
         }
         const content = mapMessageContent(item.content, `${path}.content`);
         if (!content.ok) return content;
+        executableInputSeen = true;
+        if (run !== undefined) {
+          const turn = turnMessage(path);
+          canonicalIndexByInput.set(index, turn.index);
+          turn.value.content.push(...content.value);
+          continue;
+        }
         canonicalIndexByInput.set(index, messages.length);
         messages.push({
           role: item.role,
@@ -1172,6 +1564,8 @@ export function adaptResponsesRequest(
         path,
       );
     }
+    endHostedTurn("input");
+    if (awaitingOutputs !== undefined) return missingOutputs(awaitingOutputs.calls, "input");
   }
   if (!executableInputSeen) {
     return protocolFailure("empty_input", "input produced no executable messages", "input");
@@ -1233,5 +1627,7 @@ export function adaptResponsesRequest(
       ...(request.user !== undefined ? { user: request.user } : {}),
     },
     bridge,
+    ...(hostedWebSearch !== undefined ? { hostedWebSearch } : {}),
+    hostedHistory: { calls: hostedCalls, citations: [] },
   };
 }

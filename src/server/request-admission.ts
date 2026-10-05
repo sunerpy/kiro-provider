@@ -7,6 +7,12 @@ export interface RequestAdmissionLease {
   bodyRead(bytes: number): void;
   /** The returned function is called after execution and upstream teardown. */
   retainExecution(): () => void;
+  /**
+   * Charges additional in-flight bytes held by this request (retrieved search
+   * results, decrypted search history) against the shared body budget. They
+   * are released with the lease. Returns false when the budget cannot hold them.
+   */
+  reserveBytes(bytes: number): boolean;
   wrapResponse(response: Response, client: AbortSignal): Promise<Response>;
 }
 
@@ -80,6 +86,19 @@ export class RequestAdmissionGate {
           const retained = Math.min(bytes, Math.max(0, actual));
           this.#bytes -= bytes - retained;
           bytes = retained;
+        },
+        reserveBytes: (extra) => {
+          if (released || !Number.isSafeInteger(extra) || extra < 0) return false;
+          if (this.#bytes + extra > this.config.max_inflight_request_body_bytes) {
+            auditLog("warn", "request_admission_reservation_rejected", {
+              reserved_body_bytes: this.#bytes,
+              requested_bytes: extra,
+            });
+            return false;
+          }
+          this.#bytes += extra;
+          bytes += extra;
+          return true;
         },
         retainExecution: () => {
           execution++;

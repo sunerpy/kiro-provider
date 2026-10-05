@@ -70,6 +70,11 @@ export interface ToolBridgeOptions {
   readonly allowHistoricalWithoutDeclarations?: boolean;
   /** Require saved names when continuing an upstream-persisted wire history. */
   readonly requireHistoricalBindings?: boolean;
+  /**
+   * Wire names owned by provider-executed tools. A client function with such a
+   * name keeps its public identity but travels under a private alias.
+   */
+  readonly reservedWireNames?: readonly string[];
 }
 type BridgeErrorCode =
   | "invalid_tool_declaration"
@@ -146,6 +151,7 @@ type HistoricalCall = {
 
 const CUSTOM_ALIAS_PREFIX = "kiro_custom_";
 const NAMESPACE_ALIAS_PREFIX = "kiro_ns_";
+const FUNCTION_ALIAS_PREFIX = "kiro_fn_";
 
 function identityKey(identity: PublicToolIdentity): string {
   switch (identity.kind) {
@@ -672,12 +678,19 @@ export function createResponsesToolBridge(
   };
   const internalTools: InternalTool[] = [];
   const bridgedDeclarations: BridgedToolDeclaration[] = [];
+  const reserved = new Set(options.reservedWireNames ?? []);
+  const functionWireName = (
+    identity: PublicToolIdentity & { readonly kind: "function" },
+  ): string =>
+    reserved.has(identity.name)
+      ? `${FUNCTION_ALIAS_PREFIX}${canonicalFingerprint(identity).slice(0, 40)}`
+      : identity.name;
   const allocate = (identity: PublicToolIdentity): string => {
     const key = identityKey(identity);
     return (
       wireNameByIdentity.get(key) ??
       (identity.kind === "function"
-        ? identity.name
+        ? functionWireName(identity)
         : options.stable || options.stableAliases
           ? `${identity.kind === "namespace" ? NAMESPACE_ALIAS_PREFIX : CUSTOM_ALIAS_PREFIX}${canonicalFingerprint(identity).slice(0, 40)}`
           : nextAlias(identity.kind))
@@ -711,7 +724,8 @@ export function createResponsesToolBridge(
         : declaration.identity.name;
     // The caller's public identity must remain model-visible even with an opaque wire name.
     const description =
-      (options.stable || options.stableAliases) && declaration.identity.kind !== "function"
+      ((options.stable || options.stableAliases) && declaration.identity.kind !== "function") ||
+      (declaration.identity.kind === "function" && wireName !== publicName)
         ? descriptions(publicName, declaration.tool.function.description)
         : declaration.tool.function.description;
     const declarationDescription =
@@ -744,8 +758,9 @@ export function createResponsesToolBridge(
     });
   }
   for (const name of ordinaryNames) {
-    const identity: PublicToolIdentity = { kind: "function", name };
-    const prior = identityByWireName.get(name);
+    const identity = { kind: "function", name } as const;
+    const wireName = wireNameByIdentity.get(identityKey(identity)) ?? functionWireName(identity);
+    const prior = identityByWireName.get(wireName);
     if (prior && identityKey(prior) !== identityKey(identity)) {
       return {
         ok: false,
@@ -753,8 +768,8 @@ export function createResponsesToolBridge(
         message: "Tool name collides with a stored alias",
       };
     }
-    wireNameByIdentity.set(identityKey(identity), name);
-    identityByWireName.set(name, identity);
+    wireNameByIdentity.set(identityKey(identity), wireName);
+    identityByWireName.set(wireName, identity);
   }
 
   return {

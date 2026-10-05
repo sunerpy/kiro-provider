@@ -12,6 +12,7 @@ export type RequestPhase =
   | "upstream_stream"
   | "retry_backoff"
   | "projection"
+  | "web_search"
   | "unknown";
 
 export type CancelSource =

@@ -24,7 +24,11 @@ import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
-import { isGpt56Model, supportsReasoningPrefixOmission } from "../kiro/models.js";
+import {
+  isGpt56Model,
+  resolveModelVariant,
+  supportsReasoningPrefixOmission,
+} from "../kiro/models.js";
 import type { ReasoningReplayDecision } from "../kiro/transform/streaming/reasoning-prefix.js";
 import { boundedCleanup, runCleanupSteps } from "./stream-cleanup.js";
 import { KiroTokenRefreshError } from "../kiro/errors.js";
@@ -100,6 +104,19 @@ import { sendAcceptedStream } from "./upstream-acceptance.js";
 import { RequestDiagnostics } from "./request-diagnostics.js";
 import { toolOutputValidator } from "./tool-output-validation.js";
 import { isSelectableAccount } from "./account-selection.js";
+import { isVerifiedWebSearchCell } from "../web-search/declarations.js";
+import { WebSearchError, webSearchErrorType } from "../web-search/errors.js";
+import {
+  collectHostedCompletion,
+  createHostedStreamResponse,
+  type HostedGeneration,
+  hostedSearchEvents,
+} from "../web-search/execution.js";
+import {
+  type ExecutedHostedCall,
+  HOSTED_WEB_SEARCH_ARGUMENT_SCHEMA,
+  HOSTED_WEB_SEARCH_WIRE_NAME,
+} from "../web-search/session.js";
 
 export type {
   PipelineAccountManager,
@@ -141,10 +158,29 @@ type CompletionResult =
       /** Canonical stream prefetched up to its first semantic event. */
       readonly prepared: PreparedCanonicalStream;
       readonly reasoningModelOmitted?: true;
+      /** Hosted search: the owner cell and request the execution loop continues from. */
+      readonly hosted?: HostedAttemptState;
     };
+
+/** What a hosted search execution loop needs from the accepted first attempt. */
+interface HostedAttemptState {
+  readonly account: ManagedAccount;
+  readonly region: string;
+  readonly profileArn?: string;
+  readonly wireModel: string;
+  /** Request of the accepted generation, pending results filled, hosted tool not appended. */
+  readonly body: CanonicalRequest;
+  readonly replays: readonly ResolvedReasoningReplay[];
+  readonly prelude: readonly ExecutedHostedCall[];
+  readonly state: LoopState;
+  /** Set when any generation omitted a conflicting reasoning prefix. */
+  readonly decisions: { conflictOmitted: boolean };
+}
 
 interface ReplayState {
   readonly modelOmittedCount?: number;
+  /** Set when a pending hosted search call, not reasoning, pins the owner. */
+  readonly lockReason?: "web_search";
   /** Owner-bound replay account. Only provenance-authenticated cells omit it. */
   readonly accountId?: string;
   readonly conversationId?: string;
@@ -339,6 +375,37 @@ function runtimeEndpoint(options: RunChatCompletionOptions, region: string): str
     : undefined;
 }
 
+/** Client tool calls under their public names, custom inputs unwrapped. */
+function restorePublicToolCalls(
+  request: CanonicalRequest,
+): (output: CanonicalAssistantOutput) => CanonicalAssistantOutput {
+  const toolsByWireName = new Map(request.tools.map((tool) => [tool.wireName, tool] as const));
+  return (output) => ({
+    text: output.text,
+    toolCalls: output.toolCalls.map((call) => {
+      const declaration = toolsByWireName.get(call.name);
+      if (!declaration) return call;
+      if (declaration.publicType !== "custom") {
+        return { ...call, name: declaration.name };
+      }
+      let input = call.input;
+      try {
+        const parsed: unknown = JSON.parse(call.input);
+        if (
+          isRecord(parsed) &&
+          Object.keys(parsed).length === 1 &&
+          typeof parsed.input === "string"
+        ) {
+          input = parsed.input;
+        }
+      } catch {
+        // The Responses bridge will report malformed custom output; preserve raw input here.
+      }
+      return { ...call, name: declaration.name, input };
+    }),
+  });
+}
+
 function canonicalOutputFingerprint(
   request: CanonicalRequest,
   normalization?: ClientNormalization,
@@ -451,6 +518,28 @@ function replayLockedSelectionResult(
   eligibleAccountIds: ReadonlySet<string>,
 ): SelectionOutcome {
   const bound = accounts.find((account) => account.id === state.boundAccountId);
+  if (state.replayState.lockReason === "web_search") {
+    // A pending hosted call can only continue on its owner; report it as such.
+    const now = Date.now();
+    const waitMs =
+      bound?.isHealthy && bound.rateLimitResetTime > now
+        ? bound.rateLimitResetTime - now
+        : undefined;
+    const remainingMs = options.config.request_timeout_ms - (now - state.startedAt);
+    if (waitMs !== undefined && waitMs <= remainingMs) return { kind: "wait", waitMs };
+    return {
+      kind: "result",
+      result: {
+        kind: "response",
+        response: openAiError(
+          503,
+          "The account that owns this web search history is currently unavailable",
+          "service_unavailable",
+          "web_search_replay_owner_unavailable",
+        ),
+      },
+    };
+  }
   if (!bound) {
     return { kind: "result", result: replayUnavailable() };
   }
@@ -614,7 +703,43 @@ const VERIFIED_SAME_PROFILE_REPLAY_CELLS = new Set([
   "anthropic-messages:claude-fable-5-1:us-east-1:kiro-runtime:profile:reasoning_text",
 ]);
 
+/**
+ * Pending hosted calls must continue in the account and conversation that
+ * generated them. That pin composes with reasoning ownership: two different
+ * owners for one request are a typed conflict, never a guess.
+ */
 function resolveReplayState(
+  options: RunChatCompletionOptions,
+  binding:
+    | {
+        readonly accountId: string;
+        readonly conversationId: string;
+      }
+    | undefined,
+): ReplayState {
+  const resolved = resolveReasoningReplayState(options, binding);
+  const owner = options.ownerLock;
+  if (owner === undefined) return resolved;
+  if (
+    (resolved.accountId !== undefined && resolved.accountId !== owner.accountId) ||
+    (resolved.conversationId !== undefined && resolved.conversationId !== owner.conversationId)
+  ) {
+    throw new ReasoningReplayError(
+      "Pending web search and signed reasoning replay are bound to different owners",
+      "reasoning_replay_context_mismatch",
+    );
+  }
+  return {
+    ...resolved,
+    ...(resolved.accountId === undefined ? { lockReason: "web_search" as const } : {}),
+    accountId: owner.accountId,
+    conversationId: owner.conversationId,
+    preferredAccountId: owner.accountId,
+    preferredConversationId: owner.conversationId,
+  };
+}
+
+function resolveReasoningReplayState(
   options: RunChatCompletionOptions,
   binding:
     | {
@@ -899,6 +1024,7 @@ function reasoningCaptureOptions(
     canonical.thinking?.enabled === true &&
     isGpt56Model(canonical.model);
   const prefetchOmittedReasoning =
+    options.reasoningPrefixOmission !== false &&
     emitAnthropicReasoningMetadata &&
     canonical.thinking?.enabled === true &&
     canonical.thinking.display !== "summarized" &&
@@ -928,20 +1054,34 @@ function reasoningCaptureOptions(
           });
         }
       : undefined;
+  const ordinaryFingerprint = canonicalOutputFingerprint(canonical, options.clientNormalization);
+  const hosted = options.hostedSearch;
+  const fingerprintOutput: SdkOutputFingerprint = hosted
+    ? (output) => hosted.fingerprint(output, restorePublicToolCalls(canonical), ordinaryFingerprint)
+    : ordinaryFingerprint;
   if (!options.reasoningReplayStore || !options.tenantId) {
     return {
+      ...(hosted
+        ? {
+            captureReasoning: (capture: Parameters<SdkReasoningCaptureHandler>[0]) => {
+              hosted.recordCapture(capture);
+              return undefined;
+            },
+          }
+        : {}),
       emitEncryptedReasoning,
       emitAnthropicReasoningMetadata,
       bufferLateGptReasoning,
       prefetchOmittedReasoning,
       reasoningReplayDecision,
-      fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
+      fingerprintOutput,
       ...(captureOutput ? { captureOutput } : {}),
     };
   }
   return {
-    captureReasoning: (capture, outputFingerprint) =>
-      options.reasoningReplayStore?.store(capture, {
+    captureReasoning: (capture, outputFingerprint) => {
+      hosted?.recordCapture(capture);
+      return options.reasoningReplayStore?.store(capture, {
         tenantId: options.tenantId as string,
         model: canonical.model,
         accountId,
@@ -961,13 +1101,14 @@ function reasoningCaptureOptions(
             ? { legacyPrefixMessages: mint.legacyPrefixMessages }
             : {}),
         },
-      }),
+      });
+    },
     emitEncryptedReasoning,
     emitAnthropicReasoningMetadata,
     bufferLateGptReasoning,
     prefetchOmittedReasoning,
     reasoningReplayDecision,
-    fingerprintOutput: canonicalOutputFingerprint(canonical, options.clientNormalization),
+    fingerprintOutput,
     ...(captureOutput ? { captureOutput } : {}),
   };
 }
@@ -1016,6 +1157,8 @@ interface LoopState {
   readonly reportedQuotaExhaustedAccountIds: Set<string>;
   readonly refreshNetworkRetriedAccountIds: Set<string>;
   readonly modelRejectedAccountIds: Set<string>;
+  /** Some candidate was rejected only because it cannot serve hosted search. */
+  webSearchCellRejected: boolean;
   lastAuthenticationFailure: NormalizedSdkError | undefined;
   lastQuotaFailure: NormalizedSdkError | undefined;
   lastRefreshFailure: RefreshFailure | undefined;
@@ -1101,7 +1244,12 @@ type AttemptOutcome =
       /** True when a stream result now owns the account lease. */
       readonly leaseTransferred: boolean;
     }
-  | { readonly kind: "model-unavailable"; readonly account: ManagedAccount }
+  | {
+      readonly kind: "model-unavailable";
+      readonly account: ManagedAccount;
+      /** The account's region is not a verified hosted search cell. */
+      readonly webSearchCell?: true;
+    }
   | {
       readonly kind: "failed";
       readonly account: ManagedAccount;
@@ -1274,6 +1422,7 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     reportedQuotaExhaustedAccountIds: new Set<string>(),
     refreshNetworkRetriedAccountIds: new Set<string>(),
     modelRejectedAccountIds: new Set<string>(),
+    webSearchCellRejected: false,
     lastAuthenticationFailure: undefined,
     lastQuotaFailure: undefined,
     lastRefreshFailure: undefined,
@@ -1692,6 +1841,21 @@ function selectAttemptAccount(
   if (candidateAccountIds.length === 0 && state.lastRefreshFailure !== undefined) {
     return { kind: "result", result: refreshFailureResponse() };
   }
+  if (state.webSearchCellRejected && candidateAccountIds.length === 0) {
+    return {
+      kind: "result",
+      result: {
+        kind: "response",
+        response: openAiError(
+          400,
+          `Web search is not available for model ${options.model} in the region of any usable account`,
+          "invalid_request_error",
+          "unsupported_web_search_model",
+          "model",
+        ),
+      },
+    };
+  }
   if (
     state.modelRejectedAccountIds.size > 0 ||
     (cachedEligible !== undefined && eligibleAccountIds.size === 0)
@@ -1901,6 +2065,8 @@ async function runAttempt(
   state: LoopState,
   selected: ManagedAccount,
   releaseAccount: () => void,
+  /** A later generation of a hosted search loop: fixed owner, extended replays. */
+  continuation?: { readonly replays: readonly ResolvedReasoningReplay[] },
 ): Promise<AttemptOutcome> {
   const { think, budget } = thinkingOptions(options.body, options.model);
   let account = selected;
@@ -1971,13 +2137,78 @@ async function runAttempt(
       }
       nativeSystemPromptEnabled = capability.status === "available";
     }
+    // Hosted search: the backend's own tool declaration for this owner account,
+    // and (first generation only) the pending calls this continuation carries.
+    let attemptBody = options.body;
+    let hostedPrelude: readonly ExecutedHostedCall[] = [];
+    let hostedBaseBody = options.body;
+    const hostedRegion = extractRegionFromArn(auth.profileArn) ?? auth.region;
+    const owner = options.ownerLock;
+    if (
+      owner !== undefined &&
+      (owner.region !== hostedRegion ||
+        (owner.profileArn !== undefined && owner.profileArn !== auth.profileArn))
+    ) {
+      // The owner account no longer serves the region and profile that
+      // recorded this history; it is never continued elsewhere.
+      throw new WebSearchError(
+        "The account that owns this web search history no longer serves its region and profile",
+        "web_search_replay_owner_unavailable",
+        503,
+      );
+    }
+    if (options.hostedSearch) {
+      options.diagnostics?.phase("web_search");
+      let wireModel: string | undefined;
+      try {
+        wireModel = resolveModelVariant(options.model).wireId;
+      } catch {
+        wireModel = undefined;
+      }
+      if (
+        wireModel === undefined ||
+        !isVerifiedWebSearchCell(options.body.protocol, wireModel, hostedRegion)
+      ) {
+        // Only verified protocol/model/region cells may execute hosted search.
+        auditLog("warn", "web_search_cell_unavailable", {
+          request_id: options.requestId,
+          account_hash: auditHash(account.id),
+          region: hostedRegion,
+        });
+        return { kind: "model-unavailable", account, webSearchCell: true };
+      }
+      if (continuation === undefined && options.hostedSearch.pending.length > 0) {
+        hostedPrelude = await abortable(
+          options.hostedSearch.executePending(account, auth, hostedRegion, signal),
+          signal,
+        );
+        attemptBody = options.hostedSearch.withPendingResults(attemptBody, hostedPrelude);
+      }
+      hostedBaseBody = attemptBody;
+      if (attemptBody.toolChoice === "auto" && options.hostedSearch.declaration !== undefined) {
+        if (attemptBody.tools.some((tool) => tool.wireName === HOSTED_WEB_SEARCH_WIRE_NAME)) {
+          throw new RequestTransformError(
+            "A client tool cannot use the hosted web_search wire name",
+            "invalid_tool_declaration",
+          );
+        }
+        const declaration = await abortable(
+          options.hostedSearch.toolDeclaration(account, auth, hostedRegion, signal),
+          signal,
+        );
+        if (declaration !== undefined) {
+          attemptBody = { ...attemptBody, tools: [...attemptBody.tools, declaration] };
+        }
+      }
+    }
+    const attemptReplays = continuation?.replays ?? state.replayState.replays;
     const parsedEffort = EffortSchema.safeParse(options.config.effort);
     const promptCaching = options.modelCapabilities?.promptCaching?.(account.id, options.model);
-    const prepared = transformToSdkRequest(options.body, options.model, auth, think, budget, {
+    const prepared = transformToSdkRequest(attemptBody, options.model, auth, think, budget, {
       autoEffortMapping: options.config.auto_effort_mapping,
       conversationId: state.requestConversationId,
       nativeSystemPromptEnabled,
-      resolvedReasoningReplays: state.replayState.replays,
+      resolvedReasoningReplays: attemptReplays,
       splitInterleavedUserImages: options.clientNormalization?.kind === "claude-code-bash-v1",
       promptCaching: {
         mode: options.config.kiro_prompt_cache_mode,
@@ -2180,6 +2411,21 @@ async function runAttempt(
         account.id,
         options.model,
       ),
+      ...(options.hostedSearch
+        ? {
+            hosted: {
+              account,
+              region: prepared.region,
+              ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
+              wireModel: prepared.effectiveModel,
+              body: hostedBaseBody,
+              replays: attemptReplays,
+              prelude: hostedPrelude,
+              state,
+              decisions: { conflictOmitted: false },
+            },
+          }
+        : {}),
     };
     state.streamAttempts += 1;
     return options.stream
@@ -2192,6 +2438,7 @@ async function runAttempt(
 }
 
 interface AttemptStreamContext {
+  readonly hosted?: HostedAttemptState;
   readonly inputTokenEstimate: () => number;
   readonly contextUsageWindow: number | undefined;
   readonly options: RunChatCompletionOptions;
@@ -2601,7 +2848,11 @@ async function runStreamAttempt(
   }
   // The first semantic event is on hand: Kiro accepted this history here.
   commitPendingMigration(context);
-  return { kind: "result", leaseTransferred: true, result: { ...streamResult, prepared } };
+  return {
+    kind: "result",
+    leaseTransferred: true,
+    result: { ...streamResult, prepared, ...(context.hosted ? { hosted: context.hosted } : {}) },
+  };
 }
 
 /**
@@ -3091,6 +3342,119 @@ async function applyClassification(
 }
 
 /**
+ * One more generation of a hosted search loop on the already accepted owner
+ * cell. The account lease belongs to the loop, so nothing is selected,
+ * rebound or failed over: only pre-acceptance failures on this same account
+ * are retried, within the ordinary attempt and dispatch budgets.
+ */
+async function runContinuationAttempt(
+  options: RunChatCompletionOptions,
+  signal: AbortSignal,
+  hosted: HostedAttemptState,
+  body: CanonicalRequest,
+  replays: readonly ResolvedReasoningReplay[],
+  publicStream: boolean,
+): Promise<HostedGeneration> {
+  const continuationOptions: RunChatCompletionOptions = {
+    ...options,
+    body,
+    stream: true,
+    ...(publicStream ? { reasoningPrefixOmission: false as const } : {}),
+  };
+  const state = hosted.state;
+  let streamAttempts = 0;
+  let serverRetries = 0;
+  let forcedRefresh = false;
+  while (true) {
+    if (signal.aborted) throw abortReason(signal);
+    if (!hasRemainingUpstreamDispatchBudget(options, state)) {
+      reportUpstreamDispatchBudgetExhausted(options, state, "hosted-continuation");
+      throw new SdkStreamProtocolError(
+        "Upstream inference dispatch budget was exhausted",
+        "upstream_stream_error",
+      );
+    }
+    streamAttempts += 1;
+    const outcome = await runAttempt(
+      continuationOptions,
+      signal,
+      state,
+      hosted.account,
+      () => undefined,
+      { replays },
+    );
+    if (outcome.kind === "result") {
+      if (outcome.result.kind === "stream") {
+        if (outcome.result.reasoningReplayDecision.mode === "conflict-omitted") {
+          hosted.decisions.conflictOmitted = true;
+        }
+        return {
+          prepared: outcome.result.prepared,
+          abortUpstream: outcome.result.abortUpstream,
+          conversationId: outcome.result.conversationId,
+        };
+      }
+      throw new SdkStreamProtocolError(
+        "Hosted search continuation could not be dispatched",
+        "upstream_stream_error",
+      );
+    }
+    if (outcome.kind === "model-unavailable") {
+      throw new WebSearchError(
+        "The model is no longer available on the account that owns this search turn",
+        "web_search_replay_owner_unavailable",
+        503,
+      );
+    }
+    if (outcome.kind === "empty-completion") {
+      throw new SemanticStreamTruncationError();
+    }
+    if (outcome.kind === "stream-failed") {
+      if (signal.aborted) throw abortReason(signal);
+      if (
+        outcome.failure.disposition === "retryable" &&
+        streamAttempts < options.config.stream_max_attempts
+      ) {
+        auditLog("warn", "web_search_continuation_retry", {
+          request_id: options.requestId,
+          attempt: streamAttempts,
+          error_code: outcome.failure.code,
+        });
+        await abortableSleep(
+          streamRetryDelayMs(options.config.rate_limit_retry_delay_ms, streamAttempts),
+          signal,
+        );
+        continue;
+      }
+      throw outcome.caught;
+    }
+    if (signal.aborted) throw abortReason(signal);
+    if (!outcome.upstreamStarted) throw outcome.caught;
+    const error = normalizeSdkError(outcome.caught);
+    if (
+      (error.status === 401 || (error.status === 403 && isAccessTokenError(error.message))) &&
+      !forcedRefresh
+    ) {
+      forcedRefresh = true;
+      await abortable(options.tokenRefresher.forceRefresh(hosted.account, signal), signal);
+      continue;
+    }
+    if (
+      isRetryableServerStatus(error.status) &&
+      serverRetries < options.config.rate_limit_max_retries
+    ) {
+      serverRetries += 1;
+      await abortableSleep(
+        streamRetryDelayMs(options.config.rate_limit_retry_delay_ms, serverRetries),
+        signal,
+      );
+      continue;
+    }
+    throw outcome.caught;
+  }
+}
+
+/**
  * Orchestrates one request: resolve bindings, then repeat select -> bind ->
  * attempt -> classify until a terminal result, a stream hand-off, or an abort.
  */
@@ -3176,6 +3540,7 @@ async function executeLoop(
           );
         }
         state.modelRejectedAccountIds.add(outcome.account.id);
+        if (outcome.webSearchCell) state.webSearchCellRejected = true;
         forgetPreferredAccount(state);
         continue;
       }
@@ -3217,22 +3582,134 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       );
     }
     diagnostics.phase("request_validation");
+    const hostedSearch = tracedOptions.hostedSearch;
+    const hostedDeclared =
+      hostedSearch?.declaration !== undefined && options.body.toolChoice === "auto";
     const validateToolArguments = toolOutputValidator(
-      options.body.tools.map((tool) => ({
-        name: tool.wireName,
-        schema: tool.inputSchema,
-        path: tool.path,
-        publicType: tool.publicType,
-      })),
+      [
+        ...options.body.tools.map((tool) => ({
+          name: tool.wireName,
+          schema: tool.inputSchema,
+          path: tool.path,
+          publicType: tool.publicType,
+        })),
+        ...(hostedDeclared && hostedSearch?.declaration
+          ? [
+              {
+                name: HOSTED_WEB_SEARCH_WIRE_NAME,
+                schema: HOSTED_WEB_SEARCH_ARGUMENT_SCHEMA,
+                path: hostedSearch.declaration.path,
+                publicType: "function" as const,
+              },
+            ]
+          : []),
+      ],
       options.body.toolChoice !== "none",
       options.unexpectedToolCallFailure,
     );
-    const result = await executeLoop({ ...tracedOptions, validateToolArguments }, deadline.signal);
+    // Hosted search always consumes generations as streams: the execution loop
+    // needs each complete tool group, and a non-stream public response is
+    // assembled from the same ordered events.
+    const loopOptions: RunChatCompletionOptions = {
+      ...tracedOptions,
+      validateToolArguments,
+      ...(hostedSearch ? { stream: true } : {}),
+    };
+    const result = await executeLoop(loopOptions, deadline.signal);
     if (result.kind === "response") return await diagnostics.response(result.response);
 
     releaseAccount = result.releaseAccount;
     const streamAccountRelease = releaseAccount;
     const streamSessionRelease = releaseSession;
+    if (hostedSearch !== undefined && result.hosted !== undefined) {
+      const hosted = result.hosted;
+      // Every later generation continues the accepted owner conversation.
+      hosted.state.requestConversationId = result.conversationId;
+      // One cancellation chain for the loop: the request deadline and client,
+      // plus a consumer that cancels the public stream.
+      const loopAbort = new AbortController();
+      const loopSignal = AbortSignal.any([deadline.signal, loopAbort.signal]);
+      const events = hostedSearchEvents(
+        {
+          session: hostedSearch,
+          body: hosted.body,
+          replays: hosted.replays,
+          prelude: hosted.prelude,
+          historySources: hostedSearch.historySources,
+          account: hosted.account,
+          region: hosted.region,
+          ...(hosted.profileArn !== undefined ? { profileArn: hosted.profileArn } : {}),
+          wireModel: hosted.wireModel,
+          idleTimeoutMs: tracedOptions.config.stream_idle_timeout_ms,
+          signal: loopSignal,
+          requestId,
+          authFor: async (signal) => {
+            const refreshed = await abortable(
+              loopOptions.tokenRefresher.refreshIfNeeded(
+                hosted.account,
+                loopOptions.accountManager.toAuthDetails(hosted.account),
+                signal,
+              ),
+              signal,
+            );
+            return loopOptions.accountManager.toAuthDetails(refreshed);
+          },
+          continueWith: (body, replays, signal) =>
+            runContinuationAttempt(
+              loopOptions,
+              signal,
+              hosted,
+              body,
+              replays,
+              tracedOptions.stream,
+            ),
+        },
+        {
+          prepared: result.prepared,
+          abortUpstream: result.abortUpstream,
+          conversationId: result.conversationId,
+        },
+      );
+      if (result.reasoningReplayDecision.mode === "conflict-omitted") {
+        hosted.decisions.conflictOmitted = true;
+      }
+      const markHosted = (response: Response): Response => {
+        if (result.reasoningModelOmitted)
+          response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (hosted.decisions.conflictOmitted)
+          response.headers.set("x-kiro-reasoning-replay-mode", "conflict-omitted");
+        return response;
+      };
+      if (!options.stream) {
+        // The lease, queue and admission stay held until every generation and
+        // its upstream teardown ended; `finally` releases them afterwards.
+        return await diagnostics.response(markHosted(await collectHostedCompletion(events)));
+      }
+      const control = {
+        abort: (reason: unknown) => {
+          loopAbort.abort(reason);
+          // A body cancelled before its first read never starts the loop, so
+          // its first generation is torn down here as well (idempotent).
+          return abandonPreparedStream(result.prepared, result.abortUpstream, reason);
+        },
+        settle: () => hostedSearch.abandonActive(),
+      };
+      const response = createHostedStreamResponse(events, deadline.signal, control, (cleanup) => {
+        deadline.dispose();
+        const release = (): void => {
+          streamAccountRelease();
+          streamSessionRelease?.();
+          diagnostics.cleanup();
+          runCleanupSteps(() => tracedOptions.onCleanup?.());
+        };
+        void cleanup.then(release, release);
+      });
+      releaseAccount = undefined;
+      releaseSession = undefined;
+      streamOwnsResources = true;
+      // Later generations of a committed stream cannot omit (see runContinuationAttempt).
+      return await diagnostics.response(markHosted(response));
+    }
     let response: Response;
     try {
       response = (tracedOptions.createStreamResponse ?? createPipelineStreamResponse)(
@@ -3284,6 +3761,23 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
         error.code,
       );
     }
+    if (error instanceof WebSearchError) {
+      auditLog("warn", "web_search_rejected", {
+        request_id: requestId,
+        protocol: tracedOptions.body.protocol,
+        code: error.code,
+        status: error.status,
+      });
+      return await diagnostics.response(
+        openAiError(
+          error.status,
+          error.message,
+          webSearchErrorType(error.status),
+          error.code,
+          error.param,
+        ),
+      );
+    }
     if (deadline.signal.aborted) {
       diagnostics.cancel(
         deadline.signal.reason instanceof Error && deadline.signal.reason.name === "TimeoutError"
@@ -3300,6 +3794,19 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
           clientAbort ? "request_aborted" : "timeout_error",
           clientAbort ? "client_disconnected" : "request_timeout",
         ),
+      );
+    }
+    if (
+      tracedOptions.hostedSearch !== undefined &&
+      (isStreamFailureError(error) || error instanceof StreamIdleTimeoutError)
+    ) {
+      // A non-stream hosted execution failed inside a generation it had already
+      // accepted; that generation is not replayed.
+      const failure = classifyStreamFailure(error);
+      diagnostics.failure(error, "upstream_stream");
+      const terminal = streamFailureResult(error, failure);
+      return await diagnostics.response(
+        terminal.kind === "response" ? terminal.response : openAiInternalError(requestId),
       );
     }
     const normalized = normalizeSdkError(error);

@@ -64,6 +64,12 @@ profile 之外的 Structured Outputs（见第 4 节的 Anthropic Messages 变体
 Anthropic block 顺序，并在静默期发送 `ping`。`x-claude-code-session-id` 只作为
 租户隔离的 affinity key 使用，不记录原文。
 
+启用 `web_search_enabled` 后，基础版 `web_search_20250305` server tool 由 provider
+执行：响应包含 `server_tool_use`、`web_search_tool_result` 与带引用的文本；同组混合
+server/client 工具时以 `tool_use` 结束，稳定检查点可能以 `pause_turn` 结束。Claude
+Code 的 WebSearch 工具在一次性子请求中正是使用这一形状；`--bare` 会禁用
+WebSearch。见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)。
+
 GPT-5.6 Sol/Terra/Luna 的 Anthropic `max_tokens` 默认继续 fail closed。调用方
 只有显式发送 `x-kiro-output-token-limit-mode: advisory` 才会进入兼容路径；且仅
 这三个 GPT wire model 会在调用 Kiro 前省略 Claude Code 的必填 limit，在响应中
@@ -278,7 +284,8 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 | `previous_response_id`                               | 支持本地镜像中的原生或 stateless Response。                                                                          |
 | Responses `conversation` 对象                        | 返回 `unsupported_stateful_responses`。                                                                              |
 | Structured Outputs / JSON schema                     | 仅本地执行 `single-string-object-v1`：Responses 在 compatible 模式下从 strict `text.format` 识别，Messages 从 `output_config.format` 识别且不受保真模式限制；任意复杂 Schema 与 JSON mode 返回 `unsupported_structured_output`。 |
-| 内置 Web Search、File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。                                                                                  |
+| 托管 Web Search（`web_search`、`web_search_2025_08_26`） | 启用 `web_search_enabled` 后由 provider 通过 KiroRuntime `InvokeMCP` 执行实时搜索，仅走 stateless lane，仅限已验证模型/区域单元；缓存搜索、preview 工具、地理位置与图片搜索被拒绝。见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)。 |
+| File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。 |
 | 远程图片 URL 与 OpenAI `file_id`                     | 拒绝；应发送 data URL 或内联文件数据。                                                                               |
 | `background: true`                                   | 拒绝。                                                                                                               |
 | Prompt template、moderation、context management      | 拒绝。                                                                                                               |

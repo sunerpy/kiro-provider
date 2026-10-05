@@ -203,6 +203,42 @@ const numericFields: NumericField[] = [
     min: 1,
     max: 1_000_000,
   },
+  {
+    field: "web_search_max_calls",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_MAX_CALLS",
+    min: 1,
+    max: 100,
+  },
+  {
+    field: "web_search_timeout_ms",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_TIMEOUT_MS",
+    min: 1,
+    max: 2_147_483_647,
+  },
+  {
+    field: "web_search_max_result_bytes",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_MAX_RESULT_BYTES",
+    min: 1_024,
+    max: 16_777_216,
+  },
+  {
+    field: "web_search_max_history_bytes",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_MAX_HISTORY_BYTES",
+    min: 1_024,
+    max: 67_108_864,
+  },
+  {
+    field: "web_search_replay_ttl_ms",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_REPLAY_TTL_MS",
+    min: 1,
+    max: 2_147_483_647,
+  },
+  {
+    field: "web_search_max_cache_bytes",
+    envName: "KIRO_PROVIDER_WEB_SEARCH_MAX_CACHE_BYTES",
+    min: 1_048_576,
+    max: 1_099_511_627_776,
+  },
 ];
 
 describe("ConfigSchema numeric bounds", () => {
