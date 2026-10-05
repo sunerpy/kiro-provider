@@ -1,6 +1,6 @@
 # 已知限制
 
-本页列出 kiro-provider 有意拒绝的内容、Kiro 没有提供的能力，以及已知的未解决问题。这里列出的每一项被拒绝时，都会以写明字段的带类型错误失败，不存在接受之后再忽略的情况。
+本页列出 kiro-provider 有意拒绝的内容、Kiro 没有提供的能力，以及已知的未解决问题。前两部分列出的内容被拒绝时，都会以写明字段的带类型错误失败。另有少数字段会被接受，但 Kiro 无法保证其效果，第三部分列出了它们。
 
 ## OpenAI Responses 中拒绝的内容
 
@@ -24,6 +24,7 @@
 ## Kiro 没有提供的能力
 
 - 接受 `parallel_tool_calls: false`，但 Kiro 不保证严格逐个执行工具。
+- 接受 `text.verbosity` 作为兼容性元数据，但 Kiro 没有可以对应的详略控制。
 - `DELETE /v1/responses/{id}` 删除的是 kiro-provider 在本地的副本。Kiro 没有提供删除其服务端响应状态的方式，网关因此无法对此作出保证。
 - `store: false` 关闭网关在本地的副本，但这不是 AWS 的零数据保留承诺。
 - 联网搜索只在 `gpt-5.6-sol` 和 `claude-opus-5.5` 下、在位于 `us-east-1` 的账号上执行，这些是经过测试的组合。[联网搜索](guide/web-search.md)

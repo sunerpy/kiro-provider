@@ -36,7 +36,7 @@ bun run build:binary                  # dist/kiro-provider
 
 覆盖率是发布门槛：`make coverage-gate` 要求行覆盖率不低于 93%，pull request 除了 `CI Success` 之外，还需要 `codecov/project` 和 `codecov/patch` 两项检查通过。修复缺陷时要附带一个没有该修复就会失败的测试。
 
-针对 Kiro 的实测使用单独的配置、端口和账号副本，绝不使用你日常使用的网关。`scripts/` 中的探针脚本因此拒绝使用 8787 端口。
+针对 Kiro 的实测使用单独的配置、端口和账号副本，绝不使用你日常使用的网关。`scripts/` 中的部分探针脚本（例如 `prepare-web-search-gateway.ts` 和 `probe-web-search-live.ts`）因此拒绝使用默认的 8787 端口。
 
 ## Pull request 与发布
 

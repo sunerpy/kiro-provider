@@ -1,7 +1,5 @@
 # 运维 kiro-provider
 
-本页概述长期运行 kiro-provider 需要了解的内容：每个用户一个网关、健康检查、日志，以及文件的存放位置。
-
 ## 每个用户一个网关
 
 为每个操作系统用户运行一个长期存活的 kiro-provider，并让该用户的所有客户端都连接它。为每个 Agent 或每段对话单独启动网关，会失去长期进程才有的东西：让对话留在原账号上的绑定、与 Kiro 的连接，以及在客户端之间分配账号的队列。配置目录中的锁文件会阻止第二个网关在同一目录上启动（`service_instance_already_running`）。
@@ -36,7 +34,7 @@ journalctl --user -u kiro-provider.service -n 200 --no-pager
 
 ## 文件
 
-kiro-provider 写入的所有内容都在一个目录中：Linux 和 macOS 上是 `$XDG_CONFIG_HOME/kiro-provider` 或 `~/.config/kiro-provider`，Windows 上是 `%APPDATA%\kiro-provider`。
+kiro-provider 的所有数据都在一个目录中：Linux 和 macOS 上是 `$XDG_CONFIG_HOME/kiro-provider` 或 `~/.config/kiro-provider`，Windows 上是 `%APPDATA%\kiro-provider`。
 
 | 文件                         | 内容                                                         |
 | ---------------------------- | ------------------------------------------------------------ |

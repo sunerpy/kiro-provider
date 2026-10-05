@@ -1,8 +1,5 @@
 # Operate kiro-provider
 
-This page is the overview for running kiro-provider for the long term: one gateway per user, health checks, the log,
-and where its files live.
-
 ## One gateway per user
 
 Run one long-lived kiro-provider for each operating-system user and point every client of that user at it. Starting a
@@ -47,7 +44,7 @@ a log event, and says what it means and what to do.
 
 ## Files
 
-Everything kiro-provider writes is in one directory: `$XDG_CONFIG_HOME/kiro-provider` or `~/.config/kiro-provider` on
+All of kiro-provider's data is in one directory: `$XDG_CONFIG_HOME/kiro-provider` or `~/.config/kiro-provider` on
 Linux and macOS, `%APPDATA%\kiro-provider` on Windows.
 
 | File                         | Holds                                                                                         |

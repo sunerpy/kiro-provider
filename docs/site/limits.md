@@ -1,7 +1,8 @@
 # Known limits
 
 This page lists what kiro-provider refuses on purpose, what Kiro does not offer, and the open problems it knows of.
-Everything refused here fails with a typed error that names the field; nothing is accepted and then ignored.
+Everything in the two lists of refusals fails with a typed error that names the field. A few fields are accepted
+without an effect Kiro can guarantee; the third list names them.
 
 ## Refused in OpenAI Responses
 
@@ -28,6 +29,7 @@ Prompt-cache markers are hints for Kiro, not a guarantee.
 ## What Kiro does not offer
 
 - `parallel_tool_calls: false` is accepted, but Kiro does not promise to run tools strictly one at a time.
+- `text.verbosity` is accepted as compatibility metadata; Kiro has no verbosity control to pass it to.
 - `DELETE /v1/responses/{id}` removes kiro-provider's local copy. Kiro offers no way to delete its own server-side
   state for a response, so the gateway cannot promise that.
 - `store: false` turns off the gateway's local copy; it is not a zero data retention promise from AWS.

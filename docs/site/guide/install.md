@@ -107,7 +107,7 @@ Then continue with the [quick start](quick-start.md).
 
 1. **Stop the gateway.** If it runs as a service, stop and remove the service first; the
    [service guide](../../SERVICE.md) shows how for systemd and for the Windows scheduled task.
-2. **Remove its data**, if you do not plan to come back. Everything kiro-provider writes is in one directory:
+2. **Remove its data**, if you do not plan to come back. All of kiro-provider's data is in one directory:
    `~/.config/kiro-provider` (or `$XDG_CONFIG_HOME/kiro-provider`) on Linux and macOS, `%APPDATA%\kiro-provider` on
    Windows. It holds `config.json`, `accounts.db` with your account tokens, and the key file for stored reasoning.
    Delete the directory to remove all of it.

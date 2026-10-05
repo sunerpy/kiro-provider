@@ -1,7 +1,5 @@
 # Choose a client
 
-This page lists the clients kiro-provider has been validated with, what each one needs, and how to connect an SDK.
-
 Every client needs the same two things: the gateway's address and one of the keys in your `api_keys`. Nothing is
 installed into the client.
 
