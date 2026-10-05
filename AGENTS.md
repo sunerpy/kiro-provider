@@ -68,7 +68,7 @@ bun run build
 bun run build:binary
 ```
 
-`make fmt-check` and Markdown/YAML/JSON formatting require the CI-pinned `oxfmt` version documented in `README.md`. Format only files owned by the change; do not rewrite unrelated files in a dirty worktree.
+`make fmt-check` and Markdown/YAML/JSON formatting require the `oxfmt` version pinned in `package.json`. Format only files owned by the change; do not rewrite unrelated files in a dirty worktree.
 
 Apply these coverage expectations:
 

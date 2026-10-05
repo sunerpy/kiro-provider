@@ -1,41 +1,89 @@
----
-title: Choose a client
-description: Pick the kiro-provider integration that matches your agent or SDK.
-aside: false
----
-
 # Choose a client
 
-Use the protocol the client already speaks. Transport selection between native KiroRuntime Responses and the stateless adapter remains a gateway concern.
+This page lists the clients kiro-provider has been validated with, what each one needs, and how to connect an SDK.
 
-<section class="kp-index-section" aria-labelledby="client-guides-heading">
-  <h2 id="client-guides-heading">Agent guides</h2>
-  <ul class="kp-index-list">
-    <li class="kp-index-row">
-      <a href="/clients/codex">Codex CLI</a>
-      <p>OpenAI Responses through an isolated custom provider, with real-client coverage for tools, recovery, compaction, Ultra reasoning, and collaboration.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/clients/claude-code">Claude Code</a>
-      <p>Anthropic Messages through an isolated profile with explicit model-picker, signed-thinking, token-limit, and Bedrock fallback boundaries.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/clients/zuno">Zuno</a>
-      <p>Native OpenAI provider configuration with stable session metadata, stored continuation, and account-affinity guidance.</p>
-    </li>
-  </ul>
-</section>
+Every client needs the same two things: the gateway's address and one of the keys in your `api_keys`. Nothing is
+installed into the client.
 
-<section class="kp-index-section" aria-labelledby="other-clients-heading">
-  <h2 id="other-clients-heading">Other clients</h2>
-  <ul class="kp-index-list">
-    <li class="kp-index-row">
-      <a href="/reference/protocol">Responses or Messages SDK</a>
-      <p>Start with the protocol contract, then use the loopback base URL and your private gateway key. Unsupported semantics fail with typed errors.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/reference/configuration">Legacy Chat Completions</a>
-      <p>Enable only when a client supports neither primary API. The route is disabled by default through <code>enable_legacy_chat_completions</code>.</p>
-    </li>
-  </ul>
-</section>
+| Client         | API                | Base URL                   | Guide                               |
+| -------------- | ------------------ | -------------------------- | ----------------------------------- |
+| Codex CLI      | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [Codex CLI](../../CODEX.md)         |
+| Claude Code    | Anthropic Messages | `http://127.0.0.1:8787`    | [Claude Code](../../CLAUDE_CODE.md) |
+| Zuno           | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [Zuno](../../ZUNO.md)               |
+| OpenAI SDKs    | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [below](#sdks)                      |
+| Anthropic SDKs | Anthropic Messages | `http://127.0.0.1:8787`    | [below](#sdks)                      |
+
+Each guide records the client version it was last validated with. A newer client release can change the requests it
+sends; if a field it adds is not supported yet, the gateway names it in a typed error instead of ignoring it.
+
+## The key
+
+The gateway accepts the key as `Authorization: Bearer <key>` or as `x-api-key: <key>` on every route, so both SDK
+families work unchanged. Each key is a tenant of its own: stored responses, session bindings and reasoning history
+made with one key are invisible to requests with another. Giving each client its own key keeps them apart; a
+conversation has to continue with the key that started it.
+
+## Model names
+
+`GET /v1/models` lists the models your accounts can use. Besides the plain names, such as `gpt-5.6-sol` or
+`claude-opus-5-5`, it lists `auto` and one name per effort level for models that have levels, such as
+`claude-opus-5-5-high`. Codex CLI reads the effort levels from the same list for its `/model` picker; the
+[Codex guide](../../CODEX.md#model-and-effort-switching) shows how to load it.
+
+Switching model or effort in the middle of a conversation works: the visible history and tool calls carry over, and
+reasoning that the new model cannot read is left out and reported in a response header. The
+[configuration reference](../../CONFIGURATION.md#switching-models-and-reasoning-effort) explains the rules.
+
+## SDKs
+
+The OpenAI SDK for JavaScript:
+
+```ts
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  baseURL: "http://127.0.0.1:8787/v1",
+  apiKey: process.env.KIRO_GATEWAY_API_KEY,
+});
+
+const response = await openai.responses.create({
+  model: "gpt-5.6-sol",
+  store: false,
+  input: "Reply with exactly: KIRO_OK",
+});
+console.log(response.output_text);
+```
+
+The Anthropic SDK for JavaScript. Its base URL has no `/v1`, because the SDK adds it:
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const anthropic = new Anthropic({
+  baseURL: "http://127.0.0.1:8787",
+  apiKey: process.env.KIRO_GATEWAY_API_KEY,
+});
+
+const message = await anthropic.messages.create({
+  model: "claude-opus-5-5",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Reply with exactly: KIRO_OK" }],
+});
+console.log(message.content[0].type === "text" ? message.content[0].text : "");
+```
+
+Claude models check `max_tokens` against the range Kiro accepts, 1,024 to 128,000 for `claude-opus-5-5`; a value
+outside it is refused rather than changed.
+
+## Separate commands for Kiro
+
+The [client launchers](../../CLIENT_LAUNCHERS.md) set up a `kirocodex` and a `kiroclaude` command next to the `codex`
+and `claude` you already have, each with its own home directory, so your usual sessions and settings stay as they
+are.
+
+## Other clients
+
+Any client that speaks OpenAI Responses or Anthropic Messages can try the same base URLs. The
+[protocol compatibility](../../PROTOCOL_COMPATIBILITY.md) reference lists which request fields are supported. Clients
+that only speak Chat Completions need the route turned on with `enable_legacy_chat_completions`; it does not carry
+Responses session metadata.

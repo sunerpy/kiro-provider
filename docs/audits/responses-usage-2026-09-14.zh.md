@@ -114,7 +114,7 @@ Codex 的后续请求还会加入工具信息，不能只用最初的用户 padd
 ## Zuno 验收
 
 使用已安装 Zuno 0.10.39，保留
-`ZUNO_CONFIG_DIR=/config/.config/zuno/profiles/kiro`，在隔离 XDG 目录和数据库中覆写
+`ZUNO_CONFIG_DIR=~/.config/zuno/profiles/kiro`，在隔离 XDG 目录和数据库中覆写
 Provider 地址至测试端口。模型为 `kiro-local/gpt-5.6-sol`，思考等级 max。
 
 - 第一轮实际调用一次 shell，取得 `ZUNO_USAGE_REPLAY_OK`，再正确返回该标记。

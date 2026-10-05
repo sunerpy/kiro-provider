@@ -1,4 +1,4 @@
-# Using kiro-provider with Zuno
+# Use kiro-provider with Zuno
 
 [简体中文](readme/ZUNO.zh-CN.md) · English
 

@@ -1,4 +1,4 @@
-# Use kiro-provider V3 with Codex CLI
+# Use kiro-provider with Codex CLI
 
 [简体中文](readme/CODEX.zh-CN.md) · English
 
@@ -6,7 +6,7 @@
 real `/model` picker on 2026-10-04. Earlier automatic-title/image validation
 used 0.156.1; the broader V3 smoke below used 0.154.0.
 
-kiro-provider V3 exposes the OpenAI Responses wire API used by a Codex custom
+kiro-provider exposes the OpenAI Responses wire API used by a Codex custom
 `model_provider`.
 
 For a persistent `kirocodex` command that leaves the native Codex home intact,
@@ -191,7 +191,7 @@ envelopes, and prompt text are not persisted.
 - `store: false` disables the provider's local response mirror; it is not an AWS
   Zero Data Retention guarantee.
 
-For the complete wire contract, see [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md).
+For the complete wire contract, see [protocol compatibility](PROTOCOL_COMPATIBILITY.md).
 The dated [initial V3 validation](audits/kiro-provider-v3-openai-responses-validation-2026-09-05.md)
 and [replay/compaction validation](audits/responses-replay-delivery-2026-09-14.zh.md)
 record the corresponding evidence.

@@ -1,49 +1,18 @@
----
-title: Reference
-description: Protocol, configuration, architecture, usage, and replay contracts for kiro-provider.
-aside: false
----
-
 # Reference
 
-These pages define the current gateway contract. Dated audits record how a claim was verified; they do not replace the current reference.
+The pages in this section are the contracts the code is held to. The guide pages explain how to do something; these
+say exactly what is accepted, what is refused and why.
 
-<section class="kp-index-section" aria-labelledby="contract-reference-heading">
-  <h2 id="contract-reference-heading">Contract</h2>
-  <ul class="kp-index-list">
-    <li class="kp-index-row">
-      <a href="/reference/protocol">Protocol compatibility</a>
-      <p>Request routing, stored Responses, unsupported semantics, model controls, and client evidence.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/reference/configuration">Configuration</a>
-      <p>Every supported field, default, environment variable, CLI override, range, and file location.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/reference/usage">Usage and context</a>
-      <p>Measured, estimated, and unknown usage fields, cache counts, reasoning counts, and context accounting.</p>
-    </li>
-  </ul>
-</section>
+| Page                                                      | Covers                                                                                  |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [Command line](cli.md)                                    | Every command and option of `kiro-provider`.                                            |
+| [Configuration](../../CONFIGURATION.md)                   | Every field of `config.json`, its environment variable, default and limits.             |
+| [Protocol compatibility](../../PROTOCOL_COMPATIBILITY.md) | The routes, the two Responses paths, and which request fields each API accepts.         |
+| [Usage and context](../../RESPONSES_USAGE.md)             | How token usage is reported, and why a client's context gauge differs from consumption. |
+| [Streaming errors](../../STREAM_ERROR_CONTRACT.md)        | What a client receives when a stream fails after it has started. English only.          |
+| [Historical tool calls](../../HISTORICAL_TOOLS.md)        | Why a tool call in the history is not permission to call that tool now. English only.   |
+| [Frequently asked questions](faq.md)                      | Short answers, with links to the page that has the detail.                              |
+| [Data and network](../privacy.md)                         | Every file kiro-provider writes and every host it talks to.                             |
 
-<section class="kp-index-section" aria-labelledby="implementation-reference-heading">
-  <h2 id="implementation-reference-heading">Implementation</h2>
-  <ul class="kp-index-list">
-    <li class="kp-index-row">
-      <a href="/reference/architecture">Architecture</a>
-      <p>Ingress, protocol contracts, native and stateless lanes, scheduling, storage, replay, and lifecycle.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/reference/streaming-errors">Streaming errors</a>
-      <p>Failure phases, retry causality, terminal events, cancellation, timeout, and cleanup behavior.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/reference/historical-tools">Historical tools</a>
-      <p>How stored tool identity is replayed without authorizing a tool call on the current turn.</p>
-    </li>
-    <li class="kp-index-row">
-      <a href="/audits/">Audit index</a>
-      <p>Dated protocol, client, runtime, account, and release validation records.</p>
-    </li>
-  </ul>
-</section>
+The dated evidence behind these contracts, probes, client validations and reviews, is kept in the repository's
+[audit index](../../audits/README.md).

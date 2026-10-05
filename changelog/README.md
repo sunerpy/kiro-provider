@@ -1,24 +1,21 @@
 # Changelog
 
-This `changelog/` directory is the single source of truth for the project's
-changelog. Per-major-version files live here, one Markdown file per major series:
+This directory holds the project's changelog, one Markdown file per major series:
 
-- `CHANGELOG-v0.x.md` — the `0.x` series
-- `CHANGELOG-v1.x.md` — the `1.x` series
-- `CHANGELOG-v3.x.md` — the `3.x` series
-- …
+- [`CHANGELOG-v3.x.md`](CHANGELOG-v3.x.md) — the current `3.x` series
+- [`CHANGELOG-v0.x.md`](CHANGELOG-v0.x.md) — the `0.x` series
+
+There was no `1.x` or `2.x` series: the project went from `0.x` to `3.0.0`.
 
 **How updates work:**
 
-- The active changelog file (currently `CHANGELOG-v3.x.md`) is maintained
-  automatically by release-please in its release PR. The
+- release-please maintains the active file in its release pull request.
   [`release-please-config.json`](../release-please-config.json) sets
   `"changelog-path": "changelog/CHANGELOG-v3.x.md"`. When a new major series
   begins, create `CHANGELOG-vN.x.md` and update `changelog-path`.
-- GitHub Release notes are rendered separately by
-  [git-cliff](https://git-cliff.org) using
-  [`cliff.toml`](../cliff.toml) in the release workflow.
+- The GitHub Release notes are the same entry: release-please writes it into
+  the draft release it creates, and the release workflow publishes that draft
+  once the binaries and the npm package are out.
 
-**Do not hand-edit:** These files are generated. The `changelog/` directory and
-root `CHANGELOG*` files must be excluded from `oxfmt` so formatting does not
-cause spurious release-PR diffs.
+**Do not hand-edit:** these files are generated. The `changelog/` directory is
+excluded from `oxfmt` so formatting does not cause spurious release-PR diffs.

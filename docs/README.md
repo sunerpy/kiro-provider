@@ -1,6 +1,7 @@
 # Documentation
 
-The rendered site is [kiro-provider.firlab.app](https://kiro-provider.firlab.app/).
+The rendered site is [firlab.app/kiro-provider](https://firlab.app/kiro-provider/); its pages live in
+[`site/`](site/README.md).
 The root [README](../README.md) is the install and five-minute quickstart. Use
 this index for the complete operator, protocol, integration, and evidence set.
 Simplified Chinese translations live in [`docs/readme/`](readme/); audit records
@@ -27,7 +28,7 @@ keep their original language because they are immutable, dated evidence.
 
 - [Architecture](ARCHITECTURE.md) — request flow, authentication authority,
   scheduling, transport lifecycle, and source map.
-- [V3 protocol compatibility](PROTOCOL_COMPATIBILITY.md) ·
+- [Protocol compatibility](PROTOCOL_COMPATIBILITY.md) ·
   [简体中文](readme/PROTOCOL_COMPATIBILITY.zh-CN.md) — public routes, native versus
   stateless selection, stored Responses, capability matrix, and data retention.
 - [Responses usage and context accounting](RESPONSES_USAGE.md) ·

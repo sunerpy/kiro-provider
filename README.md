@@ -1,8 +1,10 @@
 <div align="center">
 
+<img src="./docs/site/public/kiro-provider-logo.svg" alt="" width="72" />
+
 # kiro-provider
 
-Use your AWS Kiro accounts from clients that speak OpenAI Responses or Anthropic Messages.
+### Use your AWS Kiro accounts from clients that speak OpenAI Responses or Anthropic Messages
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/sunerpy/kiro-provider)](https://github.com/sunerpy/kiro-provider/releases)
@@ -10,57 +12,39 @@ Use your AWS Kiro accounts from clients that speak OpenAI Responses or Anthropic
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-[Quickstart](#quickstart) · [Clients](#use-it-with-an-agent) · [Compatibility](#compatibility-model) · [Documentation](#documentation)
+[Website](https://firlab.app/kiro-provider/) · [Install](#install) · [Quick start](#quick-start) · [Clients](#use-it-with-an-agent) · [Documentation](#documentation)
 
 [**English**](./README.md) · [简体中文](./docs/readme/README.zh-CN.md)
 
 </div>
 
-## What it does
+---
 
-kiro-provider is a loopback HTTP gateway and credential owner. It signs in to
-Kiro, discovers the models available to each account, schedules requests across
-those accounts, and presents two client-facing APIs:
+kiro-provider is a gateway you run on your own machine. It signs in to AWS Kiro, keeps the tokens of every account you
+add, and serves those accounts through OpenAI Responses and Anthropic Messages, so Codex CLI, Claude Code, Zuno and
+the official SDKs work with a base URL and a key.
 
-| API                      | Route                                         | Default                                                |
-| ------------------------ | --------------------------------------------- | ------------------------------------------------------ |
-| OpenAI Responses         | `POST /v1/responses`                          | Enabled                                                |
-| Anthropic Messages       | `POST /v1/messages`                           | Enabled                                                |
-| Anthropic token estimate | `POST /v1/messages/count_tokens`              | Enabled                                                |
-| OpenAI Chat Completions  | `POST /v1/chat/completions`                   | Disabled; opt in with `enable_legacy_chat_completions` |
-| Models and readiness     | `GET /v1/models`, `GET /health`, `GET /ready` | Enabled                                                |
+## Features
 
-Responses also has local retrieve, delete, input-items, cancel, and continuation
-support. The gateway chooses a native KiroRuntime Responses call when it can
-preserve the request exactly. Otherwise it uses its stateless adapter. If
-neither path can preserve a requested feature, the request fails with a typed
-error instead of quietly losing fields.
+- **Two APIs, one gateway.** `POST /v1/responses` and `POST /v1/messages`, streaming and non-streaming, with tools,
+  images and reasoning effort. Chat Completions is available as an opt-in legacy route.
+- **Direct sign-in.** Device-code login for AWS Builder ID and IAM Identity Center. kiro-provider discovers the Kiro
+  profile itself; Kiro CLI is not involved.
+- **Many accounts, one endpoint.** Requests go to the least busy eligible account; tokens are renewed and usage is
+  refreshed in the background, and an exhausted account sits out until its quota resets.
+- **Fails closed.** A field that cannot reach Kiro intact fails the request with a typed error that names it; nothing
+  is dropped quietly.
+- **Conversations that survive.** Stored responses and encrypted reasoning replay let clients continue, switch model
+  or effort, and resume after a restart.
+- **Web search, if you want it.** The hosted web search tool of both APIs, run by kiro-provider through your own
+  account. Off by default.
+- **Verifiable releases.** Standalone binaries for Linux, macOS and Windows with `SHA256SUMS` and build attestations,
+  and a `self-update` that replaces the binary only after its checksum matches.
 
 ## Install
 
-Choose one command. The examples below use `kiro-provider`; if you run through
-`bunx`, substitute `bunx @sunerpy/kiro-provider`.
-
-### Bun
-
-The npm package uses Bun APIs and does not run under Node.js or `npx`.
-
-```bash
-bun add -g @sunerpy/kiro-provider
-kiro-provider --version
-```
-
-For a one-off run:
-
-```bash
-bunx @sunerpy/kiro-provider --help
-```
-
-### Standalone binary
-
-Each GitHub release contains binaries for Linux x64/arm64, macOS x64/arm64, and
-Windows x64. The installers verify the downloaded binary against the release's
-`SHA256SUMS` before placing it in `~/.local/bin` by default.
+The install scripts download the release binary for your platform, verify it against the release's `SHA256SUMS`, and
+place it in `~/.local/bin` (set `KIRO_PROVIDER_INSTALL_DIR` to change that).
 
 Linux or macOS:
 
@@ -74,202 +58,145 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
-For a service install, set `KIRO_PROVIDER_VERSION` to a release version instead
-of following `latest`. See the [service guide](docs/SERVICE.md) for a pinned,
-long-lived setup.
-
-### Check the version and upgrade
-
-`--version` prints the installed version only. Add `--check` to look up the
-newest GitHub release, and `--json` for machine-readable output.
+With [Bun](https://bun.sh); the npm package uses Bun's APIs and does not run under Node.js or `npx`:
 
 ```bash
-kiro-provider --version
-kiro-provider --version --check
+bun add -g @sunerpy/kiro-provider
 ```
 
-A standalone binary can replace itself. `self-update` downloads the release
-asset for this platform, verifies it against the release's `SHA256SUMS`, and
-only then swaps the binary in place; a digest mismatch leaves the installed
-copy untouched.
+Set `KIRO_PROVIDER_VERSION` to pin a release, as a long-lived service should. The
+[install guide](https://firlab.app/kiro-provider/guide/install) covers pinning, checking the build attestation,
+building from source and uninstalling.
 
-```bash
-kiro-provider self-update --check          # report what would be installed
-kiro-provider self-update                  # ask, then replace
-kiro-provider self-update --yes            # non-interactive
-kiro-provider self-update --tag 3.3.1      # pin a release, including a downgrade
-```
+## Quick start
 
-npm installs are upgraded with the package manager instead
-(`bun add -g @sunerpy/kiro-provider@latest`); `self-update` refuses them and
-says so. Both commands accept `--proxy <url>` and otherwise honour
-`KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`; `--proxy ""` selects
-no proxy instead of falling through to those variables. Bun's `fetch` reads
-`HTTPS_PROXY`/`HTTP_PROXY` itself, so unset them for a fully direct connection.
-Replacing the binary needs write access to the install directory, not to the
-binary itself, so a hardened read-only install still updates. Neither command
-loads the gateway config, so a broken `config.json` cannot block an upgrade.
-Restart the service after updating a service install.
+1. Choose a key for your clients. The gateway refuses to start without one:
 
-## Quickstart
+   ```bash
+   mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
+   cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF_CONFIG'
+   {
+     "api_keys": ["sk-replace-with-a-private-random-key"]
+   }
+   EOF_CONFIG
+   chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
+   ```
 
-### 1. Create the gateway config
+   On Windows the file is `%APPDATA%\kiro-provider\config.json`.
 
-Only `api_keys` is required. Use a private random value; this key authenticates
-local clients to the gateway.
+2. Sign in to Kiro. Add `--start-url <url> --region <region>` for IAM Identity Center, and `--profile-arn <arn>` when
+   the identity has several profiles:
 
-```bash
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
-cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF_CONFIG'
-{
-  "api_keys": ["sk-replace-with-a-private-random-key"]
-}
-EOF_CONFIG
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
-```
+   ```bash
+   kiro-provider login
+   ```
 
-On Windows the default directory is `%APPDATA%\kiro-provider`. Pass
-`--config <path>` to `login` and `serve` when using another file.
+   Accounts from `opencode-kiro-auth` can be copied once with `kiro-provider accounts import`.
 
-### 2. Sign in to Kiro
+3. Start the gateway and check that an account is ready:
 
-```bash
-# AWS Builder ID / default device flow
-kiro-provider login
+   ```bash
+   kiro-provider serve
+   ```
 
-# IAM Identity Center
-kiro-provider login \
-  --start-url https://example.awsapps.com/start \
-  --region us-east-1
-```
+   ```bash
+   export KIRO_GATEWAY_API_KEY='sk-replace-with-a-private-random-key'
+   curl -fsS http://127.0.0.1:8787/health
+   curl -fsS http://127.0.0.1:8787/ready -H "Authorization: Bearer $KIRO_GATEWAY_API_KEY"
+   ```
 
-Direct login discovers and persists the Kiro profile itself; it does not require
-Kiro CLI or any Kiro CLI state. If the identity has multiple profiles and the
-start URL does not select one uniquely, rerun with `--profile-arn <arn>`.
-The login/OIDC region and selected profile's runtime region may differ; the
-provider discovers across Kiro's current commercial profile control planes
-(`us-east-1` and `eu-central-1`) and stores both values separately.
+4. Send a request:
 
-If you already used `opencode-kiro-auth`, copy those accounts into the
-provider-owned store once:
+   ```ts
+   import OpenAI from "openai";
 
-```bash
-kiro-provider accounts import
-```
+   const client = new OpenAI({
+     baseURL: "http://127.0.0.1:8787/v1",
+     apiKey: process.env.KIRO_GATEWAY_API_KEY,
+   });
 
-The import is not a live link. After it finishes, kiro-provider owns token and
-usage refresh for its copy of the accounts.
+   const response = await client.responses.create({
+     model: "gpt-5.6-sol",
+     store: false,
+     input: "Reply with exactly: KIRO_OK",
+   });
 
-### 3. Start the gateway
+   console.log(response.output_text);
+   ```
 
-```bash
-kiro-provider serve
-```
+   `store: false` sends the request through kiro-provider's own conversion, the way Codex CLI does. Without it the
+   request goes to Kiro's native Responses operation, which Kiro can refuse for an account with `403 access_denied`.
+   `GET /v1/models` lists the model names your accounts can use.
 
-The default address is `http://127.0.0.1:8787`. In another terminal, confirm
-both process health and authenticated readiness:
-
-```bash
-export KIRO_GATEWAY_API_KEY='sk-replace-with-a-private-random-key'
-curl -fsS http://127.0.0.1:8787/health
-curl -fsS http://127.0.0.1:8787/ready \
-  -H "Authorization: Bearer $KIRO_GATEWAY_API_KEY"
-```
-
-### 4. Send a Responses request
-
-```ts
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  baseURL: "http://127.0.0.1:8787/v1",
-  apiKey: process.env.KIRO_GATEWAY_API_KEY,
-});
-
-const response = await client.responses.create({
-  model: "auto",
-  input: "Reply with exactly: KIRO_OK",
-});
-
-console.log(response.output_text);
-```
-
-Model IDs come from the accounts currently ready in the local pool. Query
-`GET /v1/models` rather than hard-coding a catalog copied from another account
-or region.
+The [quick start](https://firlab.app/kiro-provider/guide/quick-start) on the website walks through each step, with
+an Anthropic Messages request as well.
 
 ## Use it with an agent
 
 | Client      | API                   | Guide                                                                         |
 | ----------- | --------------------- | ----------------------------------------------------------------------------- |
-| Zuno        | OpenAI Responses      | [Native provider configuration and session routing](docs/ZUNO.md)             |
-| Codex CLI   | OpenAI Responses      | [Isolated profile and compatibility checks](docs/CODEX.md)                    |
+| Codex CLI   | OpenAI Responses      | [Isolated profile and model switching](docs/CODEX.md)                         |
 | Claude Code | Anthropic Messages    | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
+| Zuno        | OpenAI Responses      | [Native provider configuration and session routing](docs/ZUNO.md)             |
 | Other SDKs  | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md)                      |
 
-For persistent `kirocodex` and `kiroclaude` commands with separate state, follow
-[the launcher examples](docs/CLIENT_LAUNCHERS.md). The repository's `kiroclaude`
-shares native Claude state by default and applies a process-local provider/model
-overlay; separate command names alone do not isolate history. The guides record the exact
-client versions last tested; treat them as dated evidence, not a promise about
-future request shapes.
+For persistent `kirocodex` and `kiroclaude` commands with their own state, follow
+[the launcher examples](docs/CLIENT_LAUNCHERS.md). The guides record the client versions last tested; treat them as
+dated evidence, not a promise about future request shapes.
+
+## Compatibility
+
+| Route                                                               | Default                                                |
+| ------------------------------------------------------------------- | ------------------------------------------------------ |
+| `POST /v1/responses`, plus retrieve, delete, input items and cancel | Enabled                                                |
+| `POST /v1/messages`, `POST /v1/messages/count_tokens` (an estimate) | Enabled                                                |
+| `POST /v1/chat/completions`                                         | Disabled; opt in with `enable_legacy_chat_completions` |
+| `GET /v1/models`, `GET /health`, `GET /ready`                       | Enabled                                                |
+
+In the default `v3-auto` mode, a Responses request that Kiro's native Responses operation can preserve exactly goes
+there; `store: false`, max effort, reasoning replay and the other stateless-only shapes use the provider's stateless
+path, as do all Messages requests. Unsupported semantics, such as hosted tools other than web search, background
+responses, conversation objects and arbitrary JSON Schema output, are rejected with field-level errors. This is not
+a promise of full OpenAI or Anthropic parity: [protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md) is the
+current contract, and the [audit index](docs/audits/README.md) holds the dated probe evidence.
 
 ## Configuration
 
-Configuration precedence is CLI flag, environment variable, JSON file, then
-schema default. Unknown keys and invalid values fail at startup. Start from
-[`config.example.json`](config.example.json), then use the
-[configuration reference](docs/CONFIGURATION.md) for every field, environment
-variable, timeout, file location, and protocol switch.
-
-## Compatibility model
-
-The default `protocol_projection_mode: "v3-auto"` keeps transport selection in
-the gateway:
-
-- ordinary Responses requests use KiroRuntime's native Responses operation;
-- requests that need stateless-only semantics, including `store: false`, max
-  effort, provider reasoning replay, custom grammar, collaboration items, or the
-  bounded local `single-string-object-v1` output profile, use the canonical
-  stateless path;
-- Anthropic Messages requests are projected directly into the Kiro contract,
-  with signed thinking replay kept opaque to the client;
-- unsupported semantics are rejected with field-level errors.
-
-This is not a promise of full OpenAI or Anthropic parity. The provider locally
-enforces only a bounded `single-string-object-v1` JSON Schema profile for
-one-shot text metadata requests: Responses `text.format` in compatible mode
-(Codex thread titles) and Anthropic Messages `output_config.format` regardless
-of `responses_fidelity_mode` (Claude Code session titles). Current tool
-declarations are preserved, but output calls are rejected with an explicit
-compatibility diagnostic. Arbitrary Structured Outputs, JSON mode, tool
-histories, continuations, and strict-fidelity Responses use remain fail-closed;
-this local envelope is not evidence that Kiro natively enforces JSON Schema. Hosted tools, background Responses,
-Responses conversation objects, remote file references, exact input-token
-counting, and destructive context edits are also outside the supported surface. The
-[compatibility guide](docs/PROTOCOL_COMPATIBILITY.md) is the current contract;
-the [audit index](docs/audits/README.md) contains dated probe evidence.
+Configuration precedence is CLI flag, environment variable, JSON file, then schema default. Unknown keys and invalid
+values fail at startup. Start from [`config.example.json`](config.example.json); the
+[configuration reference](docs/CONFIGURATION.md) lists every field, environment variable, timeout, file location and
+protocol switch.
 
 ## State and security
 
-- The server refuses to start without a non-empty `api_keys` entry and binds to
-  `127.0.0.1` by default.
-- `auth_source: "local"` stores credentials and account state in the platform
-  config directory. The database and its WAL/SHM files are created owner-only;
-  keep the JSON config owner-only as well.
-- A single-instance lock prevents two provider processes from splitting local
-  account capacity, branch ordering, and continuation state.
-- Reasoning replay is encrypted with AES-256-GCM. Logs exclude credentials,
-  prompts, tool arguments, signatures, and raw reasoning.
-- A configured `proxy_url` applies to model calls, login, token refresh, and
-  quota probes together.
+- The server refuses to start without a non-empty `api_keys` entry and binds to `127.0.0.1` by default.
+- Credentials and account state live in `accounts.db` in the platform config directory. The database and its WAL/SHM
+  files are created owner-only; keep the JSON config owner-only as well.
+- A single-instance lock stops two gateways on one config directory from splitting account capacity and conversation
+  state.
+- Reasoning replay is encrypted with AES-256-GCM. Logs exclude credentials, prompts, tool arguments, signatures and
+  raw reasoning.
+- A configured `proxy_url` applies to model calls, login, token refresh and quota probes together.
 
-Use only Kiro accounts you control. The project is not intended to share or
-resell access or to bypass account-level usage limits.
+Use only Kiro accounts you control. The project is not intended to share or resell access or to bypass account-level
+usage limits.
+
+## Updates
+
+```bash
+kiro-provider --version --check    # look up the latest release
+kiro-provider self-update          # replace a standalone binary after verifying it
+bun add -g @sunerpy/kiro-provider@latest
+```
+
+`self-update` refuses npm installs and never reads the gateway config. Restart the gateway after updating it; the
+[service guide](docs/SERVICE.md#upgrading-the-service-binary) has the sequence for systemd and the Windows scheduled
+task.
 
 ## Documentation
 
-Browse the rendered documentation at [kiro-provider.firlab.app](https://kiro-provider.firlab.app/), use the [repository index](docs/README.md), or go directly to:
+The website, [firlab.app/kiro-provider](https://firlab.app/kiro-provider/), has the guides in English and Chinese.
+In this repository:
 
 - [Configuration reference](docs/CONFIGURATION.md)
 - [Background service](docs/SERVICE.md)
@@ -277,9 +204,9 @@ Browse the rendered documentation at [kiro-provider.firlab.app](https://kiro-pro
 - [Responses usage and context accounting](docs/RESPONSES_USAGE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Audit and validation records](docs/audits/README.md)
-- [Changelog](changelog/README.md)
+- [Changelog](changelog/CHANGELOG-v3.x.md)
 
-Simplified Chinese versions are linked from the documentation index.
+The [documentation index](docs/README.md) links every document and its Simplified Chinese version.
 
 ## Development
 
@@ -287,15 +214,14 @@ Simplified Chinese versions are linked from the documentation index.
 git clone https://github.com/sunerpy/kiro-provider.git
 cd kiro-provider
 bun install --frozen-lockfile
-make ci
+make check
 make coverage-gate
 bun run build:binary
 ```
 
-`make pre-ci` runs the full local pull-request gate. Coverage is enforced at
-93% for both the repository-owned gate and Codecov; `codecov/project` and
-`codecov/patch` are required merge checks. See [AGENTS.md](AGENTS.md) for the
-repository's implementation, security, and release rules.
+`make pre-ci` runs the full local pull-request gate. Coverage is enforced at 93% for both the repository-owned gate
+and Codecov; `codecov/project` and `codecov/patch` are required merge checks. See [AGENTS.md](AGENTS.md) for the
+repository's implementation, security and release rules.
 
 ## License
 
