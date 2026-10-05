@@ -319,7 +319,11 @@ provider，还应新建会话，不能在已有会话中当作普通模型切换
 - 无损的 `clear_thinking_20251015` / `keep: "all"` `context_management`，返回
   `applied_edits: []`；
 - Anthropic SSE 顺序、流内错误、背压、上游静默期间的 `ping`，以及
-  `x-claude-code-session-id` affinity。
+  `x-claude-code-session-id` affinity；
+- 启用 `web_search_enabled` 后，WebSearch 工具的一次性子请求
+  （`web_search_20250305`、`max_uses`、`tool_choice: auto`）由 provider 自行执行
+  搜索，并返回 `server_tool_use`、`web_search_tool_result` 与带引用的文本。
+  `claude --bare` 会禁用 WebSearch。见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)。
 
 Kiro tool result 内容只支持 text/JSON，因此其中的图片会按稳定顺序提升到同一个
 Kiro user turn。多个含图结果会保留每个 tool result、状态、文本与图片字节，但 wire

@@ -73,6 +73,23 @@ Tool restoration codes are shared by the Responses SSE path (`response.failed`) 
 non-stream Responses path, which returns HTTP 502 with
 `error.type=upstream_error` and the same `error.code`.
 
+### Hosted web search failures
+
+A request that declares hosted web search may run several generations and
+searches after its response is committed. A failure at that point ends the
+stream with one terminal carrying these codes; before commitment the same
+condition is a typed HTTP error. A search the backend answered with an error is
+not a stream failure: it reaches the model and the client as a search error
+result.
+
+| Code                                  | Disposition | Meaning                                                                                                                 |
+| ------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `web_search_unavailable`              | retryable   | The owner account could not provide the hosted search declaration or session.                                          |
+| `web_search_store_unavailable`        | retryable   | A search snapshot could not be written; the call's outcome is recorded as uncertain and is never resumed.              |
+| `web_search_cache_full`               | retryable   | Snapshot capacity cannot hold a new call; no search was dispatched for it.                                              |
+| `web_search_replay_owner_unavailable` | retryable   | The account that owns the turn can no longer serve its next generation; the turn is never moved to a guessed account. |
+| `web_search_iteration_limit`          | fatal       | Responses reached `web_search_max_calls + 1` generations. Messages pauses with `pause_turn` instead.                   |
+
 `unknown_upstream_tool` and `invalid_custom_tool_input` are model-output
 failures rather than transport or provider-protocol failures. They keep the
 fatal disposition for now: retrying may repeat the same output, and the alias

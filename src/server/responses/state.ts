@@ -15,10 +15,19 @@ import {
 } from "../../protocol/usage.js";
 import type { LocalStructuredOutputFormat } from "./structured-output.js";
 
+/** A cited span of output text; offsets count Unicode code points. */
+export type UrlCitationAnnotation = {
+  readonly type: "url_citation";
+  readonly start_index: number;
+  readonly end_index: number;
+  readonly url: string;
+  readonly title: string;
+};
+
 export type OutputTextContent = {
   readonly type: "output_text";
   readonly text: string;
-  readonly annotations: readonly [];
+  readonly annotations: readonly UrlCitationAnnotation[];
   readonly logprobs?: readonly [];
 };
 
@@ -65,7 +74,25 @@ export type CustomToolCallOutputItem = {
 
 export type ResponseToolCallItem = FunctionCallOutputItem | CustomToolCallOutputItem;
 
-export type ResponseOutputItem = MessageOutputItem | ReasoningOutputItem | ResponseToolCallItem;
+/** A search the provider actually executed (only the `search` action exists). */
+export type WebSearchCallOutputItem = {
+  readonly id: string;
+  readonly type: "web_search_call";
+  readonly status: "in_progress" | "searching" | "completed" | "failed";
+  readonly action: {
+    readonly type: "search";
+    readonly query: string;
+    readonly queries: readonly string[];
+    /** Present when the request includes `web_search_call.action.sources`. */
+    readonly sources?: readonly { readonly type: "url"; readonly url: string }[];
+  };
+};
+
+export type ResponseOutputItem =
+  | MessageOutputItem
+  | ReasoningOutputItem
+  | ResponseToolCallItem
+  | WebSearchCallOutputItem;
 
 export type ResponseUsage = {
   readonly input_tokens: number;
@@ -331,7 +358,12 @@ export type ResponseCustomTool = {
   readonly description?: string;
 };
 
-export type ResponseTool = ResponseFunctionTool | ResponseCustomTool;
+/** A hosted search declaration, echoed exactly as the request declared it. */
+export type ResponseHostedSearchTool = Readonly<Record<string, unknown>> & {
+  readonly type: string;
+};
+
+export type ResponseTool = ResponseFunctionTool | ResponseCustomTool | ResponseHostedSearchTool;
 
 export type ResponseTextFormat = { readonly type: "text" } | LocalStructuredOutputFormat;
 

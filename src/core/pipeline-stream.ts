@@ -508,6 +508,11 @@ function cleanupPreparedStream(prepared: PreparedCanonicalStream): Promise<void>
   });
 }
 
+/** Normal end of a consumed prepared stream: closes it within the bounded cleanup grace. */
+export function finishPreparedStream(prepared: PreparedCanonicalStream): Promise<void> {
+  return cleanupPreparedStream(prepared);
+}
+
 /**
  * Tears down a prepared stream the pipeline will not publish: unblocks the
  * transformer, destroys the upstream socket, and closes the iterator within

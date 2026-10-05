@@ -135,7 +135,9 @@ kirocodex --model gpt-5.6-sol -c model_context_window=1000000
 
 切换到小窗口模型时不要沿用这项覆盖。Ultra 是客户端编排预设，实际推理 effort
 为 `max`，不是 Kiro 的模型别名或名为 `ultra` 的 wire effort。
-示例保留客户端默认权限，并关闭当前上游不提供的托管 Web Search。
+示例保留客户端默认权限，并关闭托管 Web Search：provider 仅在启用
+`web_search_enabled` 后执行搜索，届时改为 `web_search = "live"`（缓存模式会被拒绝，
+见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)）。
 更多接口细节见 [Codex 接入说明](CODEX.zh-CN.md)；自定义 provider 鉴权与
 `CODEX_HOME` 规则以 [Codex 官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)为准。
 

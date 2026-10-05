@@ -15,12 +15,25 @@ import {
   type CanonicalTextPart,
   type CanonicalToolCall,
   type CanonicalToolDeclaration,
+  type CanonicalToolResultPart,
   legacyAssistantOutputFingerprint,
   type ProtocolProjectionMode,
   textFromParts,
 } from "../../protocol/canonical.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { isLegacyReplayToken, isProviderReplayToken } from "../../reasoning/replay-token.js";
+import {
+  type HostedWebSearchDeclaration,
+  parseMessagesWebSearchTool,
+} from "../../web-search/declarations.js";
+import { hostedSegmentFingerprint } from "../../web-search/fingerprint.js";
+import {
+  HOSTED_CALL_METADATA,
+  type HostedHistory,
+  type HostedHistoryCall,
+  type HostedHistoryCitation,
+  type HostedHistorySourceView,
+} from "../../web-search/history.js";
 import { isGpt56Model } from "../responses/reasoning.js";
 import {
   ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
@@ -42,6 +55,7 @@ const MessageSchema = z
 const ToolSchema = z
   .object({
     name: z.string().min(1),
+    type: z.string().min(1).optional(),
     description: z.string().optional(),
     input_schema: z.record(z.unknown()).optional(),
   })
@@ -116,6 +130,10 @@ export type AdaptedAnthropicRequest = {
   readonly toolResultImageBlocks?: number;
   /** Recognized `output_config.format`; the schema itself is never projected upstream. */
   readonly localStructuredOutputProfile?: AnthropicLocalStructuredOutputProfile;
+  /** Current hosted search declaration: the only authorization for new searches. */
+  readonly hostedWebSearch?: HostedWebSearchDeclaration;
+  /** Hosted search calls and citations in history, restored from snapshots later. */
+  readonly hostedHistory: HostedHistory;
 };
 
 export type AdaptAnthropicRequestResult =
@@ -774,12 +792,500 @@ function mapMessage(
   };
 }
 
-function mapTools(
-  tools: AnthropicMessagesRequest["tools"],
-): AnthropicFailure | readonly CanonicalToolDeclaration[] {
+const HOSTED_BLOCK_TYPES = new Set(["server_tool_use", "web_search_tool_result"]);
+
+/** True when an assistant message carries hosted search blocks or cited text. */
+function hasHostedContent(message: AnthropicMessagesRequest["messages"][number]): boolean {
+  return (
+    message.role === "assistant" &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (block) =>
+        HOSTED_BLOCK_TYPES.has(block.type) ||
+        (block.type === "text" && Object.hasOwn(block, "citations")),
+    )
+  );
+}
+
+type HostedCallDraft = {
+  readonly callId: string;
+  readonly query: string;
+  readonly path: string;
+  publicState?: HostedHistoryCall["publicState"];
+  /** Canonical assistant message holding the call and its placeholder result. */
+  assistantMessage?: number;
+  result?: { readonly message: number; readonly part: number };
+};
+
+function hostedPlaceholder(call: HostedCallDraft): CanonicalToolResultPart {
+  // Restored from the authenticated snapshot later; never trusted from the client.
+  return {
+    type: "tool_result",
+    toolCallId: call.callId,
+    content: [],
+    isError: false,
+    path: call.path,
+    sourceMetadata: { [HOSTED_CALL_METADATA]: true },
+  };
+}
+
+function segmentOutputFingerprint(segment: HostedSegment): {
+  readonly current: string;
+  readonly legacy: string;
+} {
+  const output = {
+    text: textFromParts(segment.content),
+    toolCalls: segment.toolCalls.map((call) => ({
+      id: call.id,
+      name: call.name,
+      input: JSON.stringify(call.input),
+    })),
+  };
+  if (segment.hosted.length === 0) {
+    return {
+      current: assistantOutputFingerprint(output),
+      legacy: legacyAssistantOutputFingerprint(output),
+    };
+  }
+  const fingerprint = hostedSegmentFingerprint(
+    output,
+    segment.hosted.map((call) => call.callId),
+  );
+  return { current: fingerprint, legacy: fingerprint };
+}
+
+type HostedSegment = {
+  readonly content: CanonicalContentPart[];
+  readonly toolCalls: CanonicalToolCall[];
+  readonly hosted: HostedCallDraft[];
+  replay?: CanonicalReasoningReplay["lookup"];
+  replaySourceSignature?: string;
+  reasoningBlocks: number;
+  conflictBlocks: number;
+  cachePoint: boolean;
+  readonly path: string;
+};
+
+function parseCitations(
+  value: unknown,
+  path: string,
+): AnthropicFailure | readonly HostedHistoryCitation[] {
+  if (value === null || value === undefined) return [];
+  if (!Array.isArray(value)) {
+    return failure(`Invalid request: ${path} must be an array`, "web_search_replay_invalid", path);
+  }
+  const citations: HostedHistoryCitation[] = [];
+  for (const [index, citation] of value.entries()) {
+    const citationPath = `${path}.${index}`;
+    if (!isRecord(citation) || citation.type !== "web_search_result_location") {
+      return failure(
+        `Invalid request: ${citationPath} must be a web_search_result_location citation`,
+        "unsupported_content_part",
+        citationPath,
+      );
+    }
+    const keys = validateAllowedKeys(
+      citation,
+      citationPath,
+      new Set(["type", "url", "title", "encrypted_index", "cited_text"]),
+      "web_search_replay_invalid",
+    );
+    if (keys) return keys;
+    if (
+      typeof citation.url !== "string" ||
+      typeof citation.title !== "string" ||
+      typeof citation.cited_text !== "string"
+    ) {
+      return failure(
+        `Invalid request: ${citationPath} requires url, title and cited_text`,
+        "web_search_replay_invalid",
+        citationPath,
+      );
+    }
+    citations.push({
+      encryptedIndex: citation.encrypted_index,
+      url: citation.url,
+      title: citation.title,
+      citedText: citation.cited_text,
+      path: citationPath,
+    });
+  }
+  return citations;
+}
+
+function parseSearchResultState(
+  block: Readonly<Record<string, unknown>>,
+  path: string,
+): AnthropicFailure | HostedHistoryCall["publicState"] {
+  const content = block.content;
+  if (Array.isArray(content)) {
+    const sources: HostedHistorySourceView[] = [];
+    for (const [index, entry] of content.entries()) {
+      const entryPath = `${path}.content.${index}`;
+      if (!isRecord(entry) || entry.type !== "web_search_result") {
+        return failure(
+          `Invalid request: ${entryPath} must be a web_search_result`,
+          "web_search_replay_invalid",
+          entryPath,
+        );
+      }
+      const keys = validateAllowedKeys(
+        entry,
+        entryPath,
+        new Set(["type", "url", "title", "encrypted_content", "page_age"]),
+        "web_search_replay_invalid",
+      );
+      if (keys) return keys;
+      if (
+        typeof entry.url !== "string" ||
+        typeof entry.title !== "string" ||
+        (entry.page_age !== undefined &&
+          entry.page_age !== null &&
+          typeof entry.page_age !== "string")
+      ) {
+        return failure(
+          `Invalid request: ${entryPath} has an invalid web_search_result shape`,
+          "web_search_replay_invalid",
+          entryPath,
+        );
+      }
+      sources.push({
+        url: entry.url,
+        title: entry.title,
+        pageAge: typeof entry.page_age === "string" ? entry.page_age : null,
+        encryptedContent: entry.encrypted_content,
+      });
+    }
+    return { kind: "completed", sources };
+  }
+  if (
+    isRecord(content) &&
+    content.type === "web_search_tool_result_error" &&
+    typeof content.error_code === "string"
+  ) {
+    const keys = validateAllowedKeys(
+      content,
+      `${path}.content`,
+      new Set(["type", "error_code"]),
+      "web_search_replay_invalid",
+    );
+    if (keys) return keys;
+    return { kind: "failed", errorCode: content.error_code };
+  }
+  return failure(
+    `Invalid request: ${path}.content must be search results or a search error`,
+    "web_search_replay_invalid",
+    `${path}.content`,
+  );
+}
+
+/**
+ * Splits one assistant message that contains hosted search into the generation
+ * segments that actually ran. A segment ends where results start for its
+ * hosted calls; reasoning conflict rules apply within each segment and never
+ * across a hosted boundary. Leading result blocks answer calls left pending by
+ * the previous assistant message.
+ */
+function mapHostedAssistant(
+  message: AnthropicMessagesRequest["messages"][number],
+  index: number,
+  model: string,
+  outstanding: Map<string, HostedCallDraft>,
+):
+  | AnthropicFailure
+  | {
+      readonly segments: readonly HostedSegment[];
+      readonly citations: readonly HostedHistoryCitation[];
+    } {
+  const path = `messages.${index}`;
+  for (const key of Object.keys(message)) {
+    if (key !== "role" && key !== "content") {
+      return failure(
+        `Invalid request: ${path}.${key} is not supported`,
+        "unsupported_message_field",
+        `${path}.${key}`,
+      );
+    }
+  }
+  const blocks = message.content as readonly Readonly<Record<string, unknown> & { type: string }>[];
+  const segments: HostedSegment[] = [];
+  const citations: HostedHistoryCitation[] = [];
+  const newSegment = (blockIndex: number): HostedSegment => ({
+    content: [],
+    toolCalls: [],
+    hosted: [],
+    reasoningBlocks: 0,
+    conflictBlocks: 0,
+    cachePoint: false,
+    path: blockIndex === 0 ? path : `${path}.content.${blockIndex}`,
+  });
+  let current = newSegment(0);
+  let resultsPhase = false;
+  let leading = true;
+  for (const [blockIndex, block] of blocks.entries()) {
+    const blockPath = `${path}.content.${blockIndex}`;
+    if (block.type === "web_search_tool_result") {
+      const keys = validateAllowedKeys(
+        block,
+        blockPath,
+        new Set(["type", "tool_use_id", "content", "cache_control"]),
+        "web_search_replay_invalid",
+      );
+      if (keys) return keys;
+      const cacheControl = validateCacheControl(block.cache_control, `${blockPath}.cache_control`);
+      if (cacheControl) return cacheControl;
+      if (typeof block.tool_use_id !== "string") {
+        return failure(
+          `Invalid request: ${blockPath} requires tool_use_id`,
+          "invalid_tool_history",
+          blockPath,
+        );
+      }
+      const state = parseSearchResultState(block, blockPath);
+      if ("ok" in state) return state;
+      const own = current.hosted.find((call) => call.callId === block.tool_use_id);
+      const earlier = leading ? outstanding.get(block.tool_use_id) : undefined;
+      const call = own ?? earlier;
+      if (call === undefined || call.publicState !== undefined) {
+        return failure(
+          `Invalid request: ${blockPath} does not answer an unresolved server_tool_use`,
+          "invalid_tool_history",
+          blockPath,
+        );
+      }
+      call.publicState = state;
+      if (earlier !== undefined) {
+        outstanding.delete(block.tool_use_id);
+        continue;
+      }
+      resultsPhase = true;
+      continue;
+    }
+    leading = false;
+    if (resultsPhase) {
+      if (current.hosted.some((call) => call.publicState === undefined)) {
+        return failure(
+          `Invalid request: ${blockPath} follows unresolved server_tool_use blocks`,
+          "invalid_tool_history",
+          blockPath,
+        );
+      }
+      if (current.toolCalls.some((call) => call.sourceMetadata?.[HOSTED_CALL_METADATA] !== true)) {
+        return failure(
+          `Invalid request: a client tool_use must end its assistant message (${blockPath})`,
+          "invalid_tool_history",
+          blockPath,
+        );
+      }
+      segments.push(current);
+      current = newSegment(blockIndex);
+      resultsPhase = false;
+    }
+    switch (block.type) {
+      case "text": {
+        const keys = validateAllowedKeys(
+          block,
+          blockPath,
+          new Set(["type", "text", "cache_control", "citations"]),
+        );
+        if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
+        current.cachePoint ||= block.cache_control !== undefined;
+        if (typeof block.text !== "string") {
+          return failure(
+            `Invalid request: ${blockPath}.text must be a string`,
+            undefined,
+            `${blockPath}.text`,
+          );
+        }
+        const parsedCitations = parseCitations(block.citations, `${blockPath}.citations`);
+        if (!Array.isArray(parsedCitations)) return parsedCitations as AnthropicFailure;
+        citations.push(...parsedCitations);
+        current.content.push(textPart(block.text, `${blockPath}.text`));
+        break;
+      }
+      case "tool_use": {
+        const keys = validateAllowedKeys(
+          block,
+          blockPath,
+          new Set(["type", "id", "name", "input", "cache_control"]),
+        );
+        if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
+        current.cachePoint ||= block.cache_control !== undefined;
+        if (typeof block.id !== "string" || typeof block.name !== "string") {
+          return failure(
+            `Invalid request: ${blockPath} requires id and name`,
+            "invalid_tool_history",
+            blockPath,
+          );
+        }
+        current.toolCalls.push({
+          id: block.id,
+          name: block.name,
+          input: block.input ?? {},
+          path: blockPath,
+        });
+        break;
+      }
+      case "server_tool_use": {
+        const keys = validateAllowedKeys(
+          block,
+          blockPath,
+          new Set(["type", "id", "name", "input", "cache_control"]),
+          "web_search_replay_invalid",
+        );
+        if (keys) return keys;
+        const cacheControl = validateCacheControl(
+          block.cache_control,
+          `${blockPath}.cache_control`,
+        );
+        if (cacheControl) return cacheControl;
+        current.cachePoint ||= block.cache_control !== undefined;
+        const input = block.input;
+        if (
+          typeof block.id !== "string" ||
+          block.id.length === 0 ||
+          block.name !== "web_search" ||
+          !isRecord(input) ||
+          Object.keys(input).some((key) => key !== "query") ||
+          typeof input.query !== "string"
+        ) {
+          return failure(
+            `Invalid request: ${blockPath} must be a web_search server_tool_use with a query`,
+            "web_search_replay_invalid",
+            blockPath,
+          );
+        }
+        const draft: HostedCallDraft = { callId: block.id, query: input.query, path: blockPath };
+        current.hosted.push(draft);
+        current.toolCalls.push({
+          id: block.id,
+          name: "web_search",
+          input: { query: input.query },
+          path: blockPath,
+          sourceMetadata: { [HOSTED_CALL_METADATA]: true },
+        });
+        break;
+      }
+      case "thinking":
+      case "redacted_thinking": {
+        const mapped = reasoningContent(block, blockPath, model);
+        if ("ok" in mapped) return mapped;
+        current.reasoningBlocks += 1;
+        if (current.conflictBlocks > 0) {
+          if (!isEmptyDirectReasoning(mapped)) {
+            return failure(
+              `Invalid request: ${blockPath} cannot be combined with conflicting assistant reasoning blocks`,
+              "invalid_reasoning_replay",
+              blockPath,
+            );
+          }
+          current.conflictBlocks = current.reasoningBlocks;
+          break;
+        }
+        const sourceSignature =
+          block.type === "thinking" && typeof block.signature === "string"
+            ? block.signature
+            : undefined;
+        if (current.replay === undefined) {
+          current.replay = mapped;
+          current.replaySourceSignature = sourceSignature;
+          break;
+        }
+        if (
+          sameReasoningLookup(
+            current.replay,
+            mapped,
+            current.replaySourceSignature,
+            sourceSignature,
+          )
+        )
+          break;
+        if (isEmptyDirectReasoning(current.replay) && isEmptyDirectReasoning(mapped)) {
+          current.replay = undefined;
+          current.conflictBlocks = current.reasoningBlocks;
+          break;
+        }
+        return failure(
+          `Invalid request: ${blockPath} is not a valid single assistant reasoning block`,
+          "invalid_reasoning_replay",
+          blockPath,
+        );
+      }
+      default:
+        return failure(
+          `Invalid request: unsupported content block ${block.type} at ${blockPath}`,
+          "unsupported_content_part",
+          blockPath,
+        );
+    }
+  }
+  if (
+    !leading ||
+    segments.length > 0 ||
+    current.toolCalls.length > 0 ||
+    current.content.length > 0
+  ) {
+    if (
+      resultsPhase &&
+      current.toolCalls.some((call) => call.sourceMetadata?.[HOSTED_CALL_METADATA] !== true)
+    ) {
+      return failure(
+        `Invalid request: a client tool_use must end its assistant message (${path})`,
+        "invalid_tool_history",
+        path,
+      );
+    }
+    segments.push(current);
+  }
+  return { segments, citations };
+}
+
+function mapTools(tools: AnthropicMessagesRequest["tools"]):
+  | AnthropicFailure
+  | {
+      readonly declarations: readonly CanonicalToolDeclaration[];
+      readonly hosted?: HostedWebSearchDeclaration;
+    } {
   const declarations: CanonicalToolDeclaration[] = [];
   const names = new Set<string>();
+  let hosted: HostedWebSearchDeclaration | undefined;
   for (const [index, tool] of (tools ?? []).entries()) {
+    if (tool.type !== undefined) {
+      // Server tools are identified by type. Only the basic hosted web search is
+      // executed by the provider; every other server tool stays unsupported.
+      if (!tool.type.startsWith("web_search_")) {
+        return failure(
+          `Invalid request: tools.${index}.type is not supported`,
+          "unsupported_tool_field",
+          `tools.${index}.type`,
+        );
+      }
+      const parsed = parseMessagesWebSearchTool(tool, `tools.${index}`);
+      if (!parsed.ok)
+        return failure(`Invalid request: ${parsed.message}`, parsed.code, parsed.param);
+      const cacheControl = validateCacheControl(tool.cache_control, `tools.${index}.cache_control`);
+      if (cacheControl) return cacheControl;
+      if (names.has(tool.name)) {
+        return failure(
+          `Invalid request: duplicate tool name ${tool.name}`,
+          "invalid_tool_declaration",
+          `tools.${index}.name`,
+        );
+      }
+      names.add(tool.name);
+      hosted = parsed.declaration;
+      continue;
+    }
     for (const key of Object.keys(tool)) {
       if (
         key !== "name" &&
@@ -815,7 +1321,7 @@ function mapTools(
       ...(tool.cache_control !== undefined ? { cachePoint: true } : {}),
     });
   }
-  return declarations;
+  return { declarations, ...(hosted !== undefined ? { hosted } : {}) };
 }
 
 function validateToolHistory(
@@ -1057,8 +1563,9 @@ export function adaptAnthropicMessagesRequest(
       "system",
     );
   }
-  const tools = mapTools(request.tools);
-  if (isFailure(tools)) return tools;
+  const mappedTools = mapTools(request.tools);
+  if (isFailure(mappedTools)) return mappedTools;
+  const tools = mappedTools.declarations;
 
   const messages: CanonicalMessage[] = [];
   const reasoningReplays: CanonicalRequest["reasoningReplays"][number][] = [];
@@ -1079,7 +1586,125 @@ export function adaptAnthropicMessagesRequest(
         : {}),
     });
   }
+  const hostedCalls: HostedCallDraft[] = [];
+  const hostedCitations: HostedHistoryCitation[] = [];
+  // Calls of an earlier assistant message still waiting for their result block.
+  const outstanding = new Map<string, HostedCallDraft>();
+  // Calls whose placeholder results belong to the next canonical message.
+  let carry: HostedCallDraft[] = [];
+  // Client calls of a group that also holds hosted calls. The next message must
+  // answer every one of them before the group's searches may run.
+  let groupClients: string[] = [];
+  const missingClientResults = (ids: readonly string[], path: string): AnthropicFailure =>
+    failure(
+      `Invalid request: tool_use ids were found without tool_result blocks immediately after: ${ids.join(", ")}. Each tool_use block must have a corresponding tool_result block in the next message.`,
+      "invalid_tool_history",
+      path,
+    );
+  const pushHostedResults = (calls: readonly HostedCallDraft[], path: string): void => {
+    const messageIndex = messages.length;
+    for (const [part, call] of calls.entries()) call.result = { message: messageIndex, part };
+    messages.push({ role: "tool", content: calls.map(hostedPlaceholder), toolCalls: [], path });
+  };
   for (const [index, source] of request.messages.entries()) {
+    if (groupClients.length > 0) {
+      const answered = new Set(
+        source.role === "user" && Array.isArray(source.content)
+          ? source.content.flatMap((block) =>
+              block.type === "tool_result" && typeof block.tool_use_id === "string"
+                ? [block.tool_use_id]
+                : [],
+            )
+          : [],
+      );
+      const missing = groupClients.filter((id) => !answered.has(id));
+      if (missing.length > 0) return missingClientResults(missing, `messages.${index}`);
+      groupClients = [];
+    }
+    if (carry.length > 0 && source.role !== "user") {
+      pushHostedResults(carry, `messages.${index}`);
+      carry = [];
+    }
+    const unresolved = carry.find((call) => call.publicState === undefined);
+    if (
+      unresolved !== undefined &&
+      (!Array.isArray(source.content) ||
+        source.content.length === 0 ||
+        source.content.some((block) => block.type !== "tool_result"))
+    ) {
+      // Only client tool results may continue a turn that waits on a hosted
+      // call; any other content ends the turn with that call unresolved.
+      return failure(
+        `Invalid request: web_search tool use with id ${unresolved.callId} was found without a corresponding web_search_tool_result block`,
+        "invalid_tool_history",
+        `messages.${index}`,
+      );
+    }
+    if (hasHostedContent(source)) {
+      const awaiting = [...outstanding.keys()];
+      const hosted = mapHostedAssistant(source, index, request.model, outstanding);
+      if ("ok" in hosted) return hosted;
+      if (awaiting.some((callId) => outstanding.has(callId))) {
+        return failure(
+          `Invalid request: messages.${index} must begin with the web_search_tool_result of every earlier pending server_tool_use`,
+          "invalid_tool_history",
+          `messages.${index}`,
+        );
+      }
+      hostedCitations.push(...hosted.citations);
+      for (const [position, segment] of hosted.segments.entries()) {
+        const assistantIndex = messages.length;
+        if (segment.conflictBlocks > 0) {
+          reasoningReplayConflictMessages += 1;
+          reasoningReplayConflictBlocks += segment.conflictBlocks;
+        }
+        if (segment.replay !== undefined) {
+          const fingerprint = segmentOutputFingerprint(segment);
+          reasoningReplays.push({
+            lookup: segment.replay,
+            outputFingerprint: fingerprint.current,
+            ...(segment.replay.kind === "anthropic-token" &&
+            isLegacyReplayToken(segment.replay.signature) &&
+            fingerprint.legacy !== fingerprint.current
+              ? { compatibleOutputFingerprints: [fingerprint.legacy] }
+              : {}),
+            insertBeforeMessage: assistantIndex,
+            path: segment.path,
+          });
+        }
+        messages.push({
+          role: "assistant",
+          content: segment.content,
+          toolCalls: segment.toolCalls,
+          path: segment.path,
+          ...(segment.cachePoint ? { cachePoint: true } : {}),
+        });
+        for (const call of segment.hosted) {
+          call.assistantMessage = assistantIndex;
+          hostedCalls.push(call);
+        }
+        if (segment.hosted.length === 0) continue;
+        if (position < hosted.segments.length - 1) {
+          pushHostedResults(segment.hosted, `${segment.path}.results`);
+          continue;
+        }
+        carry = [...segment.hosted];
+        groupClients = segment.toolCalls.flatMap((call) =>
+          call.sourceMetadata?.[HOSTED_CALL_METADATA] === true ? [] : [call.id],
+        );
+        for (const call of segment.hosted) {
+          if (call.publicState === undefined) outstanding.set(call.callId, call);
+        }
+      }
+      continue;
+    }
+    if (source.role === "assistant" && outstanding.size > 0) {
+      return failure(
+        `Invalid request: messages.${index} must begin with the web_search_tool_result of every earlier pending server_tool_use`,
+        "invalid_tool_history",
+        `messages.${index}`,
+      );
+    }
     const mapped = mapMessage(source, index, request.model);
     if ("ok" in mapped) return mapped;
     if (mapped.reasoningReplayConflictBlocks !== undefined) {
@@ -1114,7 +1739,63 @@ export function adaptAnthropicMessagesRequest(
         path: mapped.message.path,
       });
     }
+    if (carry.length > 0) {
+      // Hosted results lead the next user turn, ahead of the client results of
+      // their group; restoration puts the whole group back in wire order.
+      const messageIndex = messages.length;
+      for (const [part, call] of carry.entries()) call.result = { message: messageIndex, part };
+      messages.push({
+        ...mapped.message,
+        content: [...carry.map(hostedPlaceholder), ...mapped.message.content],
+      });
+      carry = [];
+      continue;
+    }
     messages.push(mapped.message);
+  }
+  if (groupClients.length > 0) {
+    return missingClientResults(groupClients, `messages.${request.messages.length - 1}`);
+  }
+  if (carry.length > 0) {
+    pushHostedResults(carry, `messages.${request.messages.length - 1}`);
+    carry = [];
+  }
+  const hostedHistoryCalls: HostedHistoryCall[] = hostedCalls.map((call) => {
+    if (call.assistantMessage === undefined || call.result === undefined) {
+      throw new TypeError("Hosted search call was not projected");
+    }
+    return {
+      callId: call.callId,
+      query: call.query,
+      assistantMessage: call.assistantMessage,
+      result: call.result,
+      publicState: call.publicState ?? { kind: "pending" },
+      path: call.path,
+    };
+  });
+  const pendingHosted = hostedHistoryCalls.find((call) => call.publicState.kind === "pending");
+  if (pendingHosted !== undefined) {
+    if (mappedTools.hosted === undefined) {
+      return failure(
+        "Invalid request: a pending web search requires the web_search tool in the current request",
+        "web_search_pending_unauthorized",
+        pendingHosted.path,
+      );
+    }
+    if (request.tool_choice?.type === "none") {
+      return failure(
+        "Invalid request: tool_choice none cannot run a pending web search",
+        "web_search_pending_unauthorized",
+        "tool_choice",
+      );
+    }
+  }
+  if (mappedTools.hosted !== undefined && localStructuredOutputProfile !== undefined) {
+    return failure(
+      "Invalid request: web search cannot be combined with output_config.format",
+      "unsupported_web_search",
+      mappedTools.hosted.path,
+    );
   }
   if (projectionMode === "safe" && messages.some((message) => message.role === "system")) {
     return failure(
@@ -1208,6 +1889,8 @@ export function adaptAnthropicMessagesRequest(
           }
         : {}),
       ...(localStructuredOutputProfile !== undefined ? { localStructuredOutputProfile } : {}),
+      ...(mappedTools.hosted !== undefined ? { hostedWebSearch: mappedTools.hosted } : {}),
+      hostedHistory: { calls: hostedHistoryCalls, citations: hostedCitations },
     },
   };
 }

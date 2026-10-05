@@ -71,6 +71,13 @@ and unknown semantic fields remain explicit `invalid_request_error` failures. St
 Anthropic blocks and keep-alive `ping` events. `x-claude-code-session-id` is
 consumed as a tenant-scoped affinity key and is never logged verbatim.
 
+With `web_search_enabled` on, the basic `web_search_20250305` server tool is
+executed by the provider: responses carry `server_tool_use`,
+`web_search_tool_result` and cited text, mixed server/client groups end with
+`tool_use`, and stable checkpoints may end with `pause_turn`. Claude Code's
+WebSearch tool uses exactly this shape in its one-shot side request; `--bare`
+disables WebSearch. See [Web search](CONFIGURATION.md#web-search).
+
 GPT-5.6 Sol/Terra/Luna remain fail-closed for Anthropic `max_tokens` by
 default. A caller can opt into the exact
 `x-kiro-output-token-limit-mode: advisory` compatibility header; only those
@@ -318,7 +325,8 @@ request physical deletion of Kiro's server-side response state.
 | `previous_response_id`                                     | Supported for locally mirrored native or stateless responses.                                                                                  |
 | Responses `conversation` objects                           | Rejected with `unsupported_stateful_responses`.                                                                                                |
 | Structured Outputs / JSON schema                           | Only `single-string-object-v1` is locally enforced: Responses in compatible mode from strict `text.format`, Messages from `output_config.format` regardless of fidelity mode; arbitrary schemas and JSON mode return `unsupported_structured_output`. |
-| Built-in Web Search, File Search, Computer Use, hosted MCP | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                               |
+| Hosted web search (`web_search`, `web_search_2025_08_26`)   | Provider-executed real-time search through KiroRuntime `InvokeMCP` when `web_search_enabled` is on, on the stateless lane only, in verified model/region cells; cached search, preview tools, localization and image search are rejected. See [Web search](CONFIGURATION.md#web-search). |
+| File Search, Computer Use, hosted MCP                      | Rejected; V3 does not fabricate hosted-tool events or citations.                                                                               |
 | Remote image URLs and OpenAI `file_id` references          | Rejected; send data URLs or inline file data.                                                                                                  |
 | `background: true`                                         | Rejected.                                                                                                                                      |
 | Prompt templates, moderation config, context management    | Rejected.                                                                                                                                      |

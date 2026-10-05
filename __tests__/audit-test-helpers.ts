@@ -8,8 +8,10 @@ export type AuditRecord = Readonly<Record<string, unknown>> & {
 /**
  * Captures structured audit log lines (auditLog writes JSON to console.error)
  * so tests can assert on event names and fields without parsing prose.
+ * `onRecord` observes each record as it is written, so a test can sample
+ * other state at that exact moment.
  */
-export function captureAuditEvents(): {
+export function captureAuditEvents(onRecord?: (record: AuditRecord) => void): {
   readonly events: (name?: string) => AuditRecord[];
   readonly restore: () => void;
 } {
@@ -26,6 +28,7 @@ export function captureAuditEvents(): {
         typeof Reflect.get(parsed, "level") === "string"
       ) {
         records.push(parsed as AuditRecord);
+        onRecord?.(parsed as AuditRecord);
       }
     } catch {
       // Not an audit line.

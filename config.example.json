@@ -56,6 +56,13 @@
   "reasoning_replay_legacy_account_failover": "strict",
   "reasoning_replay_ttl_ms": 86400000,
   "reasoning_replay_max_entries": 10000,
+  "web_search_enabled": false,
+  "web_search_max_calls": 20,
+  "web_search_timeout_ms": 15000,
+  "web_search_max_result_bytes": 262144,
+  "web_search_max_history_bytes": 1048576,
+  "web_search_replay_ttl_ms": 86400000,
+  "web_search_max_cache_bytes": 268435456,
   "effort": null,
   "auto_effort_mapping": true,
   "log_level": "info"

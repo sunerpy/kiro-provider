@@ -87,8 +87,18 @@ leakage of the provider's private custom/namespace aliases.
 V3 selects its transport per request. Ordinary compatible requests use native
 KiroRuntime Responses. Requests using Ultra/max or needing custom grammar, namespace tools,
 `agent_message`, `additional_tools`, `parallel_tool_calls: false`, encrypted
-reasoning, `store: false`, or the bounded local thread-title output profile use
-the canonical stateless lane.
+reasoning, `store: false`, hosted web search, or the bounded local thread-title
+output profile use the canonical stateless lane.
+
+With `web_search_enabled` on, Codex's hosted web search is executed by the
+provider. Configure Codex for live search (`web_search = "live"` in
+`config.toml`, or `-c web_search=live`): the default cached mode declares
+`external_web_access: false`, which the provider rejects instead of answering
+from an index it does not have. Searches appear as `web_search_call` items, and
+links to retrieved sources carry `url_citation` annotations. When Codex replays
+the turn it keeps the call's `id`, `status` and `action.query`; the provider
+restores the result the model saw from its encrypted snapshot. See
+[Web search](CONFIGURATION.md#web-search).
 
 In compatible fidelity mode, Codex automatic thread titles use the provider-local
 `single-string-object-v1` profile: one required string property,
@@ -166,8 +176,9 @@ envelopes, and prompt text are not persisted.
 
 ## Limits
 
-- KiroRuntime does not provide OpenAI-hosted Web Search, File Search, Computer
-  Use, or hosted MCP tools.
+- Hosted web search is real-time only and limited to the verified model/region
+  cells in [Web search](CONFIGURATION.md#web-search). KiroRuntime provides no
+  OpenAI-hosted File Search, Computer Use, or hosted MCP tools.
 - `background`, Responses `conversation`, arbitrary Structured Outputs/JSON
   mode, `/responses/compact`, and exact `/responses/input_tokens` are rejected.
   Only the bounded compatible-mode single-string metadata profile is locally

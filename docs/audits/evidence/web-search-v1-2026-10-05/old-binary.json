@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "old_binary_version": "3.7.3",
+  "copied_user_version": 8,
+  "user_version_after": 8,
+  "web_search_rows_before": 43,
+  "web_search_rows_after": 43,
+  "statuses_after": [
+    "completed",
+    "failed"
+  ],
+  "starts_and_health": true,
+  "ready_status": 200,
+  "ordinary_messages_status": 200,
+  "hosted_tool_status": 400,
+  "rejects_config_with_web_search_keys": true
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "revision": "0691fafd3b665bd556baf4a40368f84c2ef3a785+src:b9f1fb5496c2adcd",
+  "user_agent": "kiro-provider/3.7.3",
+  "account_hash": "ebb372d8f8be8008",
+  "region": "us-east-1",
+  "tools_list": {
+    "ok": true,
+    "name": "web_search",
+    "description_chars": 4010,
+    "description_sha256_16": "d5f03a47aa4bf955",
+    "input_schema_keys": [
+      "additionalProperties",
+      "properties",
+      "required",
+      "type"
+    ],
+    "required": [
+      "query"
+    ],
+    "fingerprint_16": "92b848010148302b",
+    "cites_inline_markdown_links": true
+  },
+  "searches": [
+    {
+      "ok": true,
+      "duration_ms": 1111,
+      "response_bytes": 4023,
+      "schema_version": 1,
+      "source_count": 10,
+      "total_results": 10,
+      "echo_equals_query": true,
+      "https_sources": 10,
+      "dated_sources": 9,
+      "verbatim_limits": [
+        30
+      ],
+      "public_domain_values": [
+        true
+      ],
+      "domain_field_matches_host": 10,
+      "max_snippet_chars": 281
+    },
+    {
+      "ok": true,
+      "duration_ms": 1014,
+      "response_bytes": 6741,
+      "schema_version": 1,
+      "source_count": 10,
+      "total_results": 10,
+      "echo_equals_query": true,
+      "https_sources": 10,
+      "dated_sources": 10,
+      "verbatim_limits": [
+        30
+      ],
+      "public_domain_values": [
+        true
+      ],
+      "domain_field_matches_host": 10,
+      "max_snippet_chars": 1755
+    }
+  ],
+  "failures": [
+    {
+      "label": "over_backend_200_chars",
+      "ok": false,
+      "failure": "rpc_invalid_params",
+      "public_error_code": "invalid_tool_input",
+      "dispatched": true
+    },
+    {
+      "label": "whitespace_only",
+      "ok": false,
+      "failure": "query_empty",
+      "public_error_code": "invalid_tool_input",
+      "dispatched": false
+    }
+  ],
+  "pass": true
+}

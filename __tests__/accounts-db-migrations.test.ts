@@ -108,6 +108,7 @@ describe("AccountsDatabase schema versioning", () => {
       "replay_compatibility_state",
       "session_affinity",
       "stored_responses",
+      "web_search_replay",
     ]);
   });
 

@@ -92,6 +92,27 @@ const STREAM_FAILURES = {
     disposition: "fatal",
     message: "Upstream stream protocol error",
   },
+  // Hosted web search failures after the public response was committed.
+  web_search_unavailable: {
+    disposition: "retryable",
+    message: "Kiro web search is unavailable",
+  },
+  web_search_store_unavailable: {
+    disposition: "retryable",
+    message: "Web search snapshot storage is unavailable",
+  },
+  web_search_cache_full: {
+    disposition: "retryable",
+    message: "Web search snapshot capacity is exhausted",
+  },
+  web_search_replay_owner_unavailable: {
+    disposition: "retryable",
+    message: "The account that owns this web search turn is unavailable",
+  },
+  web_search_iteration_limit: {
+    disposition: "fatal",
+    message: "Hosted web search exceeded its generation limit",
+  },
 } as const;
 
 export type StreamFailureCode = keyof typeof STREAM_FAILURES;

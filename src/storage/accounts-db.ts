@@ -118,6 +118,82 @@ interface StoredResponseRow {
   expires_at: number;
 }
 
+export type WebSearchSnapshotStatus =
+  | "prepared"
+  | "deferred"
+  | "paused"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "uncertain"
+  | "expired";
+
+export interface WebSearchSnapshotRecord {
+  readonly lookupHash: string;
+  readonly version: number;
+  readonly status: WebSearchSnapshotStatus;
+  readonly keyId: string;
+  readonly nonce: Uint8Array;
+  readonly ciphertext: Uint8Array;
+  readonly authTag: Uint8Array;
+  readonly payloadBytes: number;
+  readonly reservedBytes: number;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly expiresAt: number;
+  readonly generation: number;
+}
+
+interface WebSearchSnapshotRow {
+  lookup_hash: string;
+  version: number;
+  status: string;
+  key_id: string;
+  nonce: Uint8Array;
+  ciphertext: Uint8Array;
+  auth_tag: Uint8Array;
+  payload_bytes: number;
+  reserved_bytes: number;
+  created_at: number;
+  updated_at: number;
+  expires_at: number;
+  generation: number;
+}
+
+const WEB_SEARCH_SNAPSHOT_STATUSES: ReadonlySet<string> = new Set([
+  "prepared",
+  "deferred",
+  "paused",
+  "executing",
+  "completed",
+  "failed",
+  "uncertain",
+  "expired",
+]);
+
+function rowToWebSearchSnapshot(row: WebSearchSnapshotRow): WebSearchSnapshotRecord {
+  // An unknown state written by a newer binary is treated as unreadable data,
+  // never as one of the states this binary knows how to resume.
+  const status = WEB_SEARCH_SNAPSHOT_STATUSES.has(row.status)
+    ? (row.status as WebSearchSnapshotStatus)
+    : "uncertain";
+  return {
+    lookupHash: row.lookup_hash,
+    version: row.version,
+    status,
+    keyId: row.key_id,
+    nonce: row.nonce,
+    ciphertext: row.ciphertext,
+    authTag: row.auth_tag,
+    payloadBytes: row.payload_bytes,
+    reservedBytes: row.reserved_bytes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
+    generation: row.generation,
+  };
+}
+
 export interface SessionAffinityBinding {
   readonly keyHash: string;
   readonly accountId: string;
@@ -354,6 +430,36 @@ const MIGRATIONS: readonly Migration[] = [
     db.run(`
       CREATE INDEX IF NOT EXISTS legacy_portable_replay_key_id_idx
       ON legacy_portable_replay (key_id, expires_at)
+    `);
+  },
+  // v8: encrypted, tenant-isolated hosted web search snapshots. Only the
+  // lookup hash, version, state, lifetimes, key id and AEAD framing are
+  // plaintext; sources, wire mapping and owner binding are sealed.
+  (db) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS web_search_replay (
+        lookup_hash TEXT PRIMARY KEY,
+        version INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        key_id TEXT NOT NULL,
+        nonce BLOB NOT NULL,
+        ciphertext BLOB NOT NULL,
+        auth_tag BLOB NOT NULL,
+        payload_bytes INTEGER NOT NULL,
+        reserved_bytes INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS web_search_replay_expires_idx
+      ON web_search_replay (expires_at)
+    `);
+    db.run(`
+      CREATE INDEX IF NOT EXISTS web_search_replay_status_idx
+      ON web_search_replay (status, updated_at)
     `);
   },
 ];
@@ -912,6 +1018,256 @@ export class AccountsDatabase {
     return this.withImmediateTransaction(() => this.pruneStoredResponsesInternal(now, maxEntries));
   }
 
+  /**
+   * Inserts a new snapshot when the unexpired cache can hold its reservation.
+   * Expired rows are retired first; unexpired rows are never evicted to make
+   * room, so a full cache refuses the new commitment instead.
+   */
+  insertWebSearchSnapshot(
+    record: Omit<WebSearchSnapshotRecord, "generation" | "updatedAt">,
+    capacityBytes: number,
+    now: number = Date.now(),
+  ): "inserted" | "exists" | "capacity" {
+    return this.withImmediateTransaction(() => {
+      this.expireWebSearchSnapshotsInternal(now);
+      if (
+        this.db
+          .query<CountRow, [string]>(
+            "SELECT COUNT(*) AS count FROM web_search_replay WHERE lookup_hash = ?",
+          )
+          .get(record.lookupHash)?.count
+      ) {
+        return "exists";
+      }
+      const used =
+        this.db
+          .query<{ used: number | null }, [number]>(`
+            SELECT SUM(MAX(payload_bytes, reserved_bytes)) AS used FROM web_search_replay
+            WHERE status != 'expired' AND expires_at > ?
+          `)
+          .get(now)?.used ?? 0;
+      if (used + Math.max(record.payloadBytes, record.reservedBytes) > capacityBytes) {
+        return "capacity";
+      }
+      this.db
+        .query(`
+          INSERT INTO web_search_replay (
+            lookup_hash, version, status, key_id, nonce, ciphertext, auth_tag,
+            payload_bytes, reserved_bytes, created_at, updated_at, expires_at, generation
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        `)
+        .run(
+          record.lookupHash,
+          record.version,
+          record.status,
+          record.keyId,
+          record.nonce,
+          record.ciphertext,
+          record.authTag,
+          record.payloadBytes,
+          record.reservedBytes,
+          record.createdAt,
+          record.createdAt,
+          record.expiresAt,
+        );
+      return "inserted";
+    });
+  }
+
+  getWebSearchSnapshot(lookupHash: string): WebSearchSnapshotRecord | undefined {
+    const row = this.db
+      .query<WebSearchSnapshotRow, [string]>(
+        "SELECT * FROM web_search_replay WHERE lookup_hash = ?",
+      )
+      .get(lookupHash);
+    return row === null ? undefined : rowToWebSearchSnapshot(row);
+  }
+
+  /**
+   * Compare-and-swap state transition. Succeeds only when the row still has
+   * the expected generation and one of the expected states, so two executors
+   * can never both claim the same pending call.
+   */
+  transitionWebSearchSnapshot(
+    lookupHash: string,
+    expected: {
+      readonly generation: number;
+      readonly statuses: readonly WebSearchSnapshotStatus[];
+    },
+    update: {
+      readonly status: WebSearchSnapshotStatus;
+      readonly sealed?: {
+        readonly keyId: string;
+        readonly nonce: Uint8Array;
+        readonly ciphertext: Uint8Array;
+        readonly authTag: Uint8Array;
+      };
+      readonly payloadBytes?: number;
+      readonly reservedBytes?: number;
+      readonly expiresAt?: number;
+    },
+    now: number = Date.now(),
+  ): boolean {
+    if (expected.statuses.length === 0) return false;
+    const placeholders = expected.statuses.map(() => "?").join(", ");
+    const sealed = update.sealed;
+    const result = this.db
+      .query(`
+        UPDATE web_search_replay SET
+          status = ?,
+          key_id = COALESCE(?, key_id),
+          nonce = COALESCE(?, nonce),
+          ciphertext = COALESCE(?, ciphertext),
+          auth_tag = COALESCE(?, auth_tag),
+          payload_bytes = COALESCE(?, payload_bytes),
+          reserved_bytes = COALESCE(?, reserved_bytes),
+          expires_at = MAX(expires_at, COALESCE(?, expires_at)),
+          updated_at = ?,
+          generation = generation + 1
+        WHERE lookup_hash = ? AND generation = ? AND expires_at > ?
+          AND status IN (${placeholders})
+      `)
+      .run(
+        update.status,
+        sealed?.keyId ?? null,
+        sealed?.nonce ?? null,
+        sealed?.ciphertext ?? null,
+        sealed?.authTag ?? null,
+        update.payloadBytes ?? null,
+        update.reservedBytes ?? null,
+        update.expiresAt ?? null,
+        now,
+        lookupHash,
+        expected.generation,
+        now,
+        ...expected.statuses,
+      );
+    return result.changes === 1;
+  }
+
+  /**
+   * Applies every transition or none: inside one immediate transaction each
+   * row must still match its expected generation and status. Used to claim a
+   * whole group of pending calls before any of them is dispatched.
+   */
+  transitionWebSearchSnapshotsAtomically(
+    transitions: ReadonlyArray<{
+      readonly lookupHash: string;
+      readonly expected: {
+        readonly generation: number;
+        readonly statuses: readonly WebSearchSnapshotStatus[];
+      };
+      readonly update: { readonly status: WebSearchSnapshotStatus };
+    }>,
+    now: number = Date.now(),
+  ): boolean {
+    const conflict = new Error("web search group transition conflict");
+    try {
+      return this.withImmediateTransaction(() => {
+        for (const transition of transitions) {
+          if (
+            !this.transitionWebSearchSnapshot(
+              transition.lookupHash,
+              transition.expected,
+              transition.update,
+              now,
+            )
+          ) {
+            throw conflict;
+          }
+        }
+        return true;
+      });
+    } catch (error) {
+      if (error === conflict) return false;
+      throw error;
+    }
+  }
+
+  /** Lengthens a snapshot's lifetime (never shortens it), e.g. for a stored response. */
+  extendWebSearchSnapshot(
+    lookupHash: string,
+    expiresAt: number,
+    now: number = Date.now(),
+  ): boolean {
+    return (
+      this.db
+        .query(`
+          UPDATE web_search_replay SET expires_at = MAX(expires_at, ?), updated_at = ?
+          WHERE lookup_hash = ? AND status != 'expired' AND expires_at > ?
+        `)
+        .run(expiresAt, now, lookupHash, now).changes === 1
+    );
+  }
+
+  /**
+   * Removes a snapshot that was recorded but never published, under the same
+   * generation and status guard as every transition. A group that cannot be
+   * recorded completely leaves nothing behind.
+   */
+  deleteUnpublishedWebSearchSnapshot(
+    lookupHash: string,
+    expected: {
+      readonly generation: number;
+      readonly statuses: readonly WebSearchSnapshotStatus[];
+    },
+  ): boolean {
+    if (expected.statuses.length === 0) return false;
+    const placeholders = expected.statuses.map(() => "?").join(", ");
+    return (
+      this.db
+        .query(
+          `DELETE FROM web_search_replay WHERE lookup_hash = ? AND generation = ? AND status IN (${placeholders})`,
+        )
+        .run(lookupHash, expected.generation, ...expected.statuses).changes === 1
+    );
+  }
+
+  /**
+   * After a restart nothing is executing any more: a call that had been
+   * dispatched may or may not have run, so it becomes `uncertain` and is never
+   * made pending again.
+   */
+  markExecutingWebSearchSnapshotsUncertain(now: number = Date.now()): number {
+    return this.withImmediateTransaction(
+      () =>
+        this.db
+          .query(`
+            UPDATE web_search_replay SET status = 'uncertain', updated_at = ?,
+              generation = generation + 1
+            WHERE status = 'executing'
+          `)
+          .run(now).changes,
+    );
+  }
+
+  /**
+   * Retires expired snapshots to content-free tombstones so a later replay can
+   * still be told apart as expired, and deletes tombstones past the grace.
+   */
+  pruneWebSearchSnapshots(now: number = Date.now(), tombstoneGraceMs: number): number {
+    return this.withImmediateTransaction(() => {
+      const retired = this.expireWebSearchSnapshotsInternal(now);
+      const deleted = this.db
+        .query("DELETE FROM web_search_replay WHERE status = 'expired' AND expires_at <= ?")
+        .run(now - tombstoneGraceMs).changes;
+      return retired + deleted;
+    });
+  }
+
+  webSearchSnapshotUsage(now: number = Date.now()): {
+    readonly count: number;
+    readonly bytes: number;
+  } {
+    const row = this.db
+      .query<{ count: number; bytes: number | null }, [number]>(`
+        SELECT COUNT(*) AS count, SUM(MAX(payload_bytes, reserved_bytes)) AS bytes
+        FROM web_search_replay WHERE status != 'expired' AND expires_at > ?
+      `)
+      .get(now);
+    return { count: row?.count ?? 0, bytes: row?.bytes ?? 0 };
+  }
+
   checkWritable(): boolean {
     try {
       this.withImmediateTransaction(() => {
@@ -1082,6 +1438,17 @@ export class AccountsDatabase {
         : prune.run(overflow)
     ).changes;
     return changes;
+  }
+
+  private expireWebSearchSnapshotsInternal(now: number): number {
+    return this.db
+      .query(`
+        UPDATE web_search_replay SET status = 'expired', nonce = x'', ciphertext = x'',
+          auth_tag = x'', payload_bytes = 0, reserved_bytes = 0, updated_at = ?,
+          generation = generation + 1
+        WHERE status != 'expired' AND expires_at <= ?
+      `)
+      .run(now, now).changes;
   }
 
   private migrate(): void {

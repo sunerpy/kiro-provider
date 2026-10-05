@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-05",
+  "round": 3,
+  "baseline_head": "0691fafd3b665bd556baf4a40368f84c2ef3a785",
+  "source_tree_sha256": "b9f1fb5496c2adcd0dc8e01d32d26b2eab6f9ae7c1917e82c7a7e8b71d592ec4",
+  "source_tree_scope": "src, scripts, __tests__, package.json, bun.lock, tsconfig.json, config.example.json (tracked and untracked); docs excluded",
+  "runtime_source_sha256": "0f982d53be59ac15c8a7af11d70c3c0dc87d3391ccaf8bdebc9bc1261202eec2",
+  "runtime_source_scope": "src, package.json, bun.lock, tsconfig.json: the packaged binary's inputs",
+  "packaged_binary_sha256": "7001e666d48c04ca1c20b49cf5f071b7a8df3768d3d5add76edc96b20e802848",
+  "packaged_binary_reproducible": true,
+  "packaged_binary_version": "3.7.3 (unreleased working tree build)",
+  "gateway": {
+    "transport": "isolated loopback port 18879",
+    "state": "accounts-only credential snapshot, placeholder refresh tokens, fresh keyring, account maintenance off",
+    "restarts_between_phases": 1
+  },
+  "clients": {
+    "codex": "codex-cli 0.159.3",
+    "claude_code": "2.1.285 (Claude Code)"
+  },
+  "results": {
+    "baseline_reproducer_fails_at_revision": true,
+    "baseline_reproducer_passes_on_implementation": true,
+    "rpc_probe_pass": true,
+    "sdk_first": {
+      "passed": 12,
+      "failed": []
+    },
+    "sdk_resume_after_restart": {
+      "passed": 36,
+      "failed": []
+    },
+    "codex_first": true,
+    "codex_resume_effort_model_switch": true,
+    "codex_client_tool_runs": [
+      {
+        "label": "client-tool",
+        "exit_code": 0,
+        "client_search_items": 2,
+        "client_tool_items": 1,
+        "final_mentions_marker": true,
+        "statuses": [
+          200,
+          200
+        ],
+        "mixed_response": true
+      },
+      {
+        "label": "client-tool-resume",
+        "exit_code": 0,
+        "client_search_items": 0,
+        "client_tool_items": 0,
+        "final_mentions_marker": true,
+        "statuses": [
+          200
+        ],
+        "mixed_response": false
+      }
+    ],
+    "claude_first": true,
+    "claude_resume_effort_model_switch": true,
+    "old_binary_reads_v8": true,
+    "defect_found_by_real_codex_before_fix": {
+      "round": 1,
+      "error_codes": [
+        "reasoning_replay_context_mismatch"
+      ],
+      "fixed_by": "generation keys in Responses item ids"
+    }
+  },
+  "files": {
+    "baseline-failure.json": "f10fc82305cfa4c782deb05f8017a0a1422e4300bedbd105bcbbd2b22e3736a6",
+    "claude-first.json": "829699b12ec65dd5fb5f7aafce4d7cef76f000bdcab05deb6f3f359c7b5c9137",
+    "claude-resume.json": "9a962886b88478ecc9d3063979ce18d899b961b7d2b8d15babf8be464097c299",
+    "codex-first.json": "ddd4150cd08d6fa3ab1f70dd26b4004ac978cae2f4dd49c3985f113779619b61",
+    "codex-resume-before-fix.json": "2f3d9dd7ca6cf6a7e5b6e8d41658f37cdf8726c434001dd97edcbd7b95d3928f",
+    "codex-resume.json": "c619aca141c8e3ff6a05f00a43df9fa510ffa8932a73ed681b718fde3168bb5b",
+    "old-binary.json": "c8a68d03aee3aba55bb6465e43cb8b94370212d0a14657f8201d9d1cc654d526",
+    "rpc.json": "780b7c0bf74b7aaff65d6b619caf6216095a7a18e7f60bb12106f6528980092d",
+    "sdk-matrix-first.json": "7982b3cef9f3a2eb4f1754af73b15853041970d2ecaf2ce336a9a6498ecb072a",
+    "sdk-matrix-resume.json": "2bf1ef17432d762f98d0c90a7bcabbca6990aa7cd5fe73d00be73615714fdb4d"
+  },
+  "quality_gates": {
+    "command": "make pre-ci",
+    "result": "pass",
+    "steps": [
+      "fmt-check",
+      "typecheck",
+      "lint",
+      "docs-links",
+      "scripts-syntax",
+      "build",
+      "security",
+      "codex-smoke-security",
+      "coverage-parity",
+      "coverage-gate"
+    ],
+    "tests_passed": 3040,
+    "tests_failed": 0,
+    "line_coverage_percent": 95.6,
+    "coverage_floor_percent": 93,
+    "binary_build": "bun run build:binary"
+  }
+}

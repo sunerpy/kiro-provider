@@ -35,8 +35,11 @@ import {
   KIRO_RUNTIME_COMPATIBILITY,
   NativeContextCapabilityService,
 } from "../kiro/native-context-capabilities.js";
+import { loadReasoningReplayKeyring, type ReasoningReplayKeyring } from "../reasoning/keyring.js";
 import { ReasoningReplayStore } from "../reasoning/replay-store.js";
 import { AccountsDatabase } from "../storage/accounts-db.js";
+import { type WebSearchDependencies, webSearchReservationBytes } from "../web-search/session.js";
+import { WebSearchSnapshotStore } from "../web-search/snapshot-store.js";
 import { anthropicError } from "./anthropic/errors.js";
 import { checkApiKey } from "./auth-gate.js";
 import {
@@ -89,6 +92,7 @@ export type AppDependencies = {
   readonly responseStore?: PipelineResponseStore;
   readonly nativeResponsesFetch?: NativeResponsesFetch;
   readonly makeClient?: PipelineClientFactory;
+  readonly webSearch?: WebSearchDependencies;
   readonly createRequestIdleTimeoutLease?: RequestIdleTimeoutLeaseMaker;
 };
 
@@ -151,6 +155,11 @@ export type ServerDependencyFactories = {
     database: AccountsDatabase,
     config: Config,
   ) => PipelineResponseStore;
+  readonly createWebSearch?: (
+    database: AccountsDatabase,
+    config: Config,
+    keyring: () => ReasoningReplayKeyring,
+  ) => WebSearchDependencies;
 };
 
 type RouteName =
@@ -334,6 +343,7 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
           ? { nativeResponsesFetch: dependencies.nativeResponsesFetch }
           : {}),
         ...(dependencies.makeClient ? { makeClient: dependencies.makeClient } : {}),
+        ...(dependencies.webSearch ? { webSearch: dependencies.webSearch } : {}),
         ...(leaseFactory ? { createRequestIdleTimeoutLease: leaseFactory } : {}),
       };
       try {
@@ -377,7 +387,12 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
           case "messages":
             return await handleMessages(request, config, routeDependencies);
           case "count_tokens":
-            return await handleMessageTokenCount(request, config, requestAdmission);
+            return await handleMessageTokenCount(request, config, requestAdmission, {
+              ...(routeDependencies.webSearch ? { webSearch: routeDependencies.webSearch } : {}),
+              ...(routeDependencies.tenantId !== undefined
+                ? { tenantId: routeDependencies.tenantId }
+                : {}),
+            });
           case "models":
             return await handleModels(
               dependencies.modelCapabilities,
@@ -447,9 +462,34 @@ export function buildServerDeps(
     });
   }
   const database = factories.createDatabase?.() ?? new AccountsDatabase();
+  // One protected keyring serves reasoning replay and web search history.
+  let replayKeyring: ReasoningReplayKeyring | undefined;
+  const keyring = (): ReasoningReplayKeyring => {
+    replayKeyring ??= loadReasoningReplayKeyring(config);
+    return replayKeyring;
+  };
   const reasoningReplayStore =
     factories.createReasoningReplayStore?.(database, config) ??
-    new ReasoningReplayStore(database, config);
+    new ReasoningReplayStore(database, config, keyring());
+  const webSearch =
+    factories.createWebSearch?.(database, config, keyring) ??
+    ({
+      store: new WebSearchSnapshotStore(database, keyring, {
+        capacityBytes: config.web_search_max_cache_bytes,
+        reservationBytes: webSearchReservationBytes(config),
+      }),
+      keyring,
+    } satisfies WebSearchDependencies);
+  // The instance lock is held: an execution left running belongs to a stopped
+  // process, so its outcome is unknown and it must never be resumed.
+  const interruptedSearches = webSearch.store.recoverInterruptedExecutions();
+  const prunedSearches = webSearch.store.prune();
+  if (interruptedSearches > 0 || prunedSearches > 0) {
+    auditLog("warn", "web_search_snapshots_recovered", {
+      uncertain_count: interruptedSearches,
+      pruned_count: prunedSearches,
+    });
+  }
   const modelCapabilities =
     factories.createModelCapabilityService?.(config) ?? new ModelCapabilityService(config);
   const nativeContextCapabilities =
@@ -500,6 +540,7 @@ export function buildServerDeps(
     modelCapabilities,
     nativeContextCapabilities,
     responseStore,
+    webSearch,
   };
 }
 

@@ -76,12 +76,12 @@ type ToolAccumulator = {
   arguments: string;
 };
 
-type AnthropicTerminalFailure = {
+export type AnthropicTerminalFailure = {
   readonly message: string;
   readonly type: "api_error" | "overloaded_error";
 };
 
-function toAnthropicFailure(
+export function toAnthropicFailure(
   failure: StreamFailure,
   message = failure.message,
 ): AnthropicTerminalFailure {
@@ -95,7 +95,7 @@ function formatEvent(event: string, payload: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, number | null>> {
+export function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, number | null>> {
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
@@ -104,7 +104,7 @@ function usagePayload(usage: CanonicalOutputUsage): Readonly<Record<string, numb
   };
 }
 
-function compatibilityHeaders(
+export function compatibilityHeaders(
   options: AnthropicCompatibilityOptions,
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
