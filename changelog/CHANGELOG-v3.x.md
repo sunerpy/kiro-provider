@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.0](https://github.com/sunerpy/kiro-provider/compare/v3.7.3...v3.8.0) (2026-10-05)
+
+
+### Features
+
+* **web-search:** 新增 provider 自有联网搜索 ([#122](https://github.com/sunerpy/kiro-provider/issues/122)) ([0f8b8fb](https://github.com/sunerpy/kiro-provider/commit/0f8b8fbac8163071c6f1a8d907c2763645533f0f))
+
 ## [3.7.3](https://github.com/sunerpy/kiro-provider/compare/v3.7.2...v3.7.3) (2026-10-04)
 
 
