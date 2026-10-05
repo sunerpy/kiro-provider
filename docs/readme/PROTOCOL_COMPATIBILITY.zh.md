@@ -1,4 +1,0 @@
-# 文档已移动
-
-当前简体中文文档位于
-[`PROTOCOL_COMPATIBILITY.zh-CN.md`](PROTOCOL_COMPATIBILITY.zh-CN.md)。

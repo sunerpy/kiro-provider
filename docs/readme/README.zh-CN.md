@@ -1,8 +1,10 @@
 <div align="center">
 
+<img src="../site/public/kiro-provider-logo.svg" alt="" width="72" />
+
 # kiro-provider
 
-让支持 OpenAI Responses 或 Anthropic Messages 的客户端使用你自己的 AWS Kiro 账号。
+### 让支持 OpenAI Responses 或 Anthropic Messages 的客户端使用你自己的 AWS Kiro 账号
 
 [![CI](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/sunerpy/kiro-provider/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/sunerpy/kiro-provider)](https://github.com/sunerpy/kiro-provider/releases)
@@ -10,54 +12,32 @@
 [![codecov](https://codecov.io/gh/sunerpy/kiro-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/sunerpy/kiro-provider)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 
-[快速开始](#快速开始) · [接入客户端](#接入-agent-客户端) · [兼容方式](#兼容方式) · [文档](#文档)
+[网站](https://firlab.app/kiro-provider/zh/) · [安装](#安装) · [快速开始](#快速开始) · [接入客户端](#接入-agent-客户端) · [文档](#文档)
 
 [English](../../README.md) · [**简体中文**](./README.zh-CN.md)
 
 </div>
 
-## 它做什么
+---
 
-kiro-provider 是运行在本机的 HTTP 网关，也是 Kiro 凭据的唯一所有者。它负责登录
-Kiro、按账号发现可用模型、调度请求，并向客户端提供两套主要接口：
+kiro-provider 是运行在你自己机器上的网关。它登录 AWS Kiro，保管你添加的每个账号的令牌，并以 OpenAI Responses 和
+Anthropic Messages 接口提供这些账号，Codex CLI、Claude Code、Zuno 和官方 SDK 只需配置一个地址和一个密钥即可使用。
 
-| 接口                    | 路由                                          | 默认状态                                      |
-| ----------------------- | --------------------------------------------- | --------------------------------------------- |
-| OpenAI Responses        | `POST /v1/responses`                          | 开启                                          |
-| Anthropic Messages      | `POST /v1/messages`                           | 开启                                          |
-| Anthropic token 估算    | `POST /v1/messages/count_tokens`              | 开启                                          |
-| OpenAI Chat Completions | `POST /v1/chat/completions`                   | 关闭；需设置 `enable_legacy_chat_completions` |
-| 模型与就绪检查          | `GET /v1/models`、`GET /health`、`GET /ready` | 开启                                          |
+## 特性
 
-Responses 还支持本地 retrieve、delete、input-items、cancel 和续轮。网关能完整保留
-请求时会使用 KiroRuntime 原生 Responses；否则切到 stateless adapter。如果两条路径
-都无法保留某项语义，请求会返回明确的类型化错误，不会悄悄删除字段。
+- **一个网关，两种接口。** `POST /v1/responses` 和 `POST /v1/messages`，支持流式与非流式、工具、图片和推理等级。
+  Chat Completions 作为可选开启的旧路由提供。
+- **直接登录。** 以设备码方式登录 AWS Builder ID 和 IAM Identity Center。kiro-provider 自己查找 Kiro profile，不需要 Kiro CLI。
+- **多个账号，一个地址。** 请求交给最空闲的可用账号；令牌在后台续期、用量在后台刷新，额度用完的账号会暂停使用，直到额度重置。
+- **失败即关闭。** 无法完整送达 Kiro 的字段会让请求以写明该字段的带类型错误失败，不会被悄悄丢弃。
+- **对话可以延续。** 保存的响应和加密的 reasoning 回放让客户端可以继续对话、切换模型或推理等级，并在重启后恢复。
+- **按需联网搜索。** 两种接口的托管联网搜索工具由 kiro-provider 通过你自己的账号执行，默认关闭。
+- **可校验的发布。** Linux、macOS 和 Windows 的独立二进制附带 `SHA256SUMS` 和构建证明，`self-update` 只在校验和一致时才替换二进制。
 
 ## 安装
 
-任选一种方式即可。下文统一使用 `kiro-provider`；如果通过 `bunx` 运行，请替换成
-`bunx @sunerpy/kiro-provider`。
-
-### Bun
-
-npm 包使用了 Bun 专属 API，不能用 Node.js 或 `npx` 运行。
-
-```bash
-bun add -g @sunerpy/kiro-provider
-kiro-provider --version
-```
-
-临时运行：
-
-```bash
-bunx @sunerpy/kiro-provider --help
-```
-
-### 独立二进制
-
-每个 GitHub Release 都提供 Linux x64/arm64、macOS x64/arm64 和 Windows x64
-二进制。安装脚本会先用该版本的 `SHA256SUMS` 校验文件，再默认写入
-`~/.local/bin`。
+安装脚本会下载当前平台的发布二进制，用该版本的 `SHA256SUMS` 校验，然后放到 `~/.local/bin`（可用
+`KIRO_PROVIDER_INSTALL_DIR` 修改）。
 
 Linux 或 macOS：
 
@@ -71,178 +51,127 @@ Windows PowerShell：
 irm https://raw.githubusercontent.com/sunerpy/kiro-provider/main/scripts/install.ps1 | iex
 ```
 
-常驻服务建议设置 `KIRO_PROVIDER_VERSION` 固定版本，不要直接跟随 `latest`。完整配置
-见[后台服务指南](SERVICE.zh-CN.md)。
-
-### 查看版本与升级
-
-`--version` 只打印已安装版本；加 `--check` 会查询 GitHub 上最新的 Release，加
-`--json` 输出机器可读格式。
+使用 [Bun](https://bun.sh)。npm 包使用 Bun 的 API，不能在 Node.js 或 `npx` 下运行：
 
 ```bash
-kiro-provider --version
-kiro-provider --version --check
+bun add -g @sunerpy/kiro-provider
 ```
 
-独立二进制可以自我替换。`self-update` 会下载当前平台的 Release 资产，先用该版本的
-`SHA256SUMS` 校验摘要，通过后才原地替换二进制；摘要不匹配时已安装的文件保持不变。
-
-```bash
-kiro-provider self-update --check          # 只报告将要安装的版本
-kiro-provider self-update                  # 确认后替换
-kiro-provider self-update --yes            # 免交互
-kiro-provider self-update --tag 3.3.1      # 指定版本，也可用于回退
-```
-
-npm 安装请改用包管理器升级（`bun add -g @sunerpy/kiro-provider@latest`），
-`self-update` 会拒绝并给出提示。两个命令都支持 `--proxy <url>`，否则依次读取
-`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`；`--proxy ""` 表示不选择任何
-代理，而不是继续回退到这些变量。Bun 的 `fetch` 自身也会读取
-`HTTPS_PROXY`/`HTTP_PROXY`，需要完全直连时请取消这两个变量。替换二进制只需要安装
-目录的写权限，不需要对二进制本身可写，因此刻意设为只读的安装同样可以升级。它们都不
-加载网关配置，因此 `config.json` 有问题也不会阻塞升级。以服务方式部署时，请在更新后
-重启服务。
+设置 `KIRO_PROVIDER_VERSION` 可以固定版本，长期运行的服务应当这样做。固定版本、校验构建证明、从源码构建和卸载见网站上的
+[安装指南](https://firlab.app/kiro-provider/zh/guide/install)。
 
 ## 快速开始
 
-### 1. 创建网关配置
+1. 为客户端设定一个密钥，没有密钥时网关拒绝启动：
 
-只有 `api_keys` 必填。请使用私有随机值；本地客户端会用这个 Key 访问网关。
+   ```bash
+   mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
+   cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF_CONFIG'
+   {
+     "api_keys": ["sk-replace-with-a-private-random-key"]
+   }
+   EOF_CONFIG
+   chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
+   ```
 
-```bash
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider"
-cat > "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json" <<'EOF_CONFIG'
-{
-  "api_keys": ["sk-replace-with-a-private-random-key"]
-}
-EOF_CONFIG
-chmod 600 "${XDG_CONFIG_HOME:-$HOME/.config}/kiro-provider/config.json"
-```
+   Windows 上的文件是 `%APPDATA%\kiro-provider\config.json`。
 
-Windows 默认目录是 `%APPDATA%\kiro-provider`。需要使用其他文件时，给 `login` 和
-`serve` 传入 `--config <path>`。
+2. 登录 Kiro。使用 IAM Identity Center 时加上 `--start-url <url> --region <region>`，身份有多个 profile 时再加上
+   `--profile-arn <arn>`：
 
-### 2. 登录 Kiro
+   ```bash
+   kiro-provider login
+   ```
 
-```bash
-# AWS Builder ID / 默认设备码流程
-kiro-provider login
+   `opencode-kiro-auth` 中的账号可以用 `kiro-provider accounts import` 一次性复制过来。
 
-# IAM Identity Center
-kiro-provider login \
-  --start-url https://example.awsapps.com/start \
-  --region us-east-1
-```
+3. 启动网关，并确认有可用的账号：
 
-直接登录会由 Provider 自行发现并持久化 Kiro profile，不依赖 Kiro CLI 或其状态。
-如果该身份有多个 profile，且 start URL 无法唯一选中，可重试并传入
-`--profile-arn <arn>`。
-登录/OIDC 区域与选中 profile 的运行区域可以不同；Provider 会枚举 Kiro 当前的商业
-profile control plane（`us-east-1` 与 `eu-central-1`），并分别保存两者。
+   ```bash
+   kiro-provider serve
+   ```
 
-如果已经使用 `opencode-kiro-auth`，可以把账号一次性复制到 Provider 自有数据库：
+   ```bash
+   export KIRO_GATEWAY_API_KEY='sk-replace-with-a-private-random-key'
+   curl -fsS http://127.0.0.1:8787/health
+   curl -fsS http://127.0.0.1:8787/ready -H "Authorization: Bearer $KIRO_GATEWAY_API_KEY"
+   ```
 
-```bash
-kiro-provider accounts import
-```
+4. 发送一个请求：
 
-导入不是实时链接。完成后，kiro-provider 负责其账号副本的 token 与用量刷新。
+   ```ts
+   import OpenAI from "openai";
 
-### 3. 启动网关
+   const client = new OpenAI({
+     baseURL: "http://127.0.0.1:8787/v1",
+     apiKey: process.env.KIRO_GATEWAY_API_KEY,
+   });
 
-```bash
-kiro-provider serve
-```
+   const response = await client.responses.create({
+     model: "gpt-5.6-sol",
+     store: false,
+     input: "Reply with exactly: KIRO_OK",
+   });
 
-默认地址是 `http://127.0.0.1:8787`。另开一个终端，同时检查进程健康和带鉴权的
-就绪状态：
+   console.log(response.output_text);
+   ```
 
-```bash
-export KIRO_GATEWAY_API_KEY='sk-replace-with-a-private-random-key'
-curl -fsS http://127.0.0.1:8787/health
-curl -fsS http://127.0.0.1:8787/ready \
-  -H "Authorization: Bearer $KIRO_GATEWAY_API_KEY"
-```
+   `store: false` 让请求经由 kiro-provider 自己的转换处理，Codex CLI 也是这样发送的。不带它时，请求会发往 Kiro 原生的
+   Responses 操作，而 Kiro 可能对某个账号以 `403 access_denied` 拒绝该操作。`GET /v1/models` 列出你的账号可用的模型名称。
 
-### 4. 发送 Responses 请求
-
-```ts
-import OpenAI from "openai";
-
-const client = new OpenAI({
-  baseURL: "http://127.0.0.1:8787/v1",
-  apiKey: process.env.KIRO_GATEWAY_API_KEY,
-});
-
-const response = await client.responses.create({
-  model: "auto",
-  input: "只回复：KIRO_OK",
-});
-
-console.log(response.output_text);
-```
-
-模型列表来自当前就绪账号。请查询 `GET /v1/models`，不要把其他账号或区域的模型
-列表直接写死在客户端中。
+网站上的[快速开始](https://firlab.app/kiro-provider/zh/guide/quick-start)逐步说明了每一步，并附有 Anthropic Messages 请求的示例。
 
 ## 接入 Agent 客户端
 
 | 客户端      | 接口                  | 指南                                                             |
 | ----------- | --------------------- | ---------------------------------------------------------------- |
-| Zuno        | OpenAI Responses      | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md)                    |
-| Codex CLI   | OpenAI Responses      | [隔离 profile 与兼容性检查](CODEX.zh-CN.md)                      |
+| Codex CLI   | OpenAI Responses      | [隔离配置与模型切换](CODEX.zh-CN.md)                             |
 | Claude Code | Anthropic Messages    | [共享状态的 `kiroclaude` 启动器与模型选择](CLAUDE_CODE.zh-CN.md) |
+| Zuno        | OpenAI Responses      | [原生 Provider 配置与会话路由](ZUNO.zh-CN.md)                    |
 | 其他 SDK    | Responses 或 Messages | [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)                  |
 
-长期使用独立状态的 `kirocodex`／`kiroclaude`，参见[启动器示例](CLIENT_LAUNCHERS.zh-CN.md)。
-仓库内 `kiroclaude` 默认共享原生 Claude 状态，只为当前进程覆盖 provider／模型；
-仅换命令名不代表历史也已隔离。指南会注明最近一次
-验证的客户端版本；这些版本是带日期的实测记录，不代表未来版本一定保持相同请求
-格式。
-
-## 配置
-
-配置优先级为 CLI 参数、环境变量、JSON 文件、schema 默认值。未知字段和无效取值会
-在启动时失败。可以从 [`config.example.json`](../../config.example.json) 开始，再到
-[配置参考](CONFIGURATION.zh-CN.md)查看全部字段、环境变量、超时、文件位置和协议开关。
+需要长期使用、各自拥有独立状态的 `kirocodex` 和 `kiroclaude` 命令时，参见[启动器示例](CLIENT_LAUNCHERS.zh-CN.md)。各指南注明了最近一次验证的客户端版本；这些版本是带日期的实测记录，不代表未来版本一定保持相同的请求格式。
 
 ## 兼容方式
 
-默认 `protocol_projection_mode: "v3-auto"` 由网关自动选择传输：
+| 路由                                                               | 默认状态                                      |
+| ------------------------------------------------------------------ | --------------------------------------------- |
+| `POST /v1/responses`，以及 retrieve、delete、input items 和 cancel | 开启                                          |
+| `POST /v1/messages`、`POST /v1/messages/count_tokens`（估算值）    | 开启                                          |
+| `POST /v1/chat/completions`                                        | 关闭；需设置 `enable_legacy_chat_completions` |
+| `GET /v1/models`、`GET /health`、`GET /ready`                      | 开启                                          |
 
-- 普通 Responses 请求使用 KiroRuntime 原生 Responses；
-- `store: false`、max effort、Provider reasoning 回放、custom grammar、协作或有界本地元数据
-  item 等需要 stateless 语义的请求，使用 canonical stateless 路径；
-- Anthropic Messages 直接投影到 Kiro contract，signed thinking 回放对客户端保持
-  opaque；
-- 无法保留的语义返回字段级错误。
+在默认的 `v3-auto` 模式下，Kiro 原生 Responses 操作能完整保留的 Responses 请求会发往那里；`store: false`、max effort、reasoning 回放以及其他只有 stateless 路径才能处理的请求走 provider 的 stateless 路径，所有 Messages 请求也是如此。无法保留的语义，例如联网搜索以外的托管工具、后台响应、conversation 对象和任意 JSON Schema 输出，都会以字段级错误拒绝。这并不承诺与 OpenAI 或 Anthropic 完全一致：[协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)是当前契约，[审计索引](../audits/README.md)保存带日期的探测证据。
 
-Provider 只在本地执行有界 `single-string-object-v1` JSON Schema profile，用于
-一次性的单字符串元数据请求：Responses 的 `text.format` 仅在 compatible 模式接受
-（Codex 自动会话标题），Anthropic Messages 的 `output_config.format` 则不受
-`responses_fidelity_mode` 影响（Claude Code 会话标题）。当前工具声明会完整保留，
-但本轮工具调用会被拒绝，并报告兼容诊断。复杂 schema、JSON mode、工具历史、
-续接和 Responses 严格保真模式仍拒绝该转换；这不表示 Kiro 原生支持 JSON Schema。
-托管工具、background Responses、Responses conversation、远程文件、精确 input-token
-计数、破坏性 context edit 等能力目前无法完整保留。[协议兼容说明](PROTOCOL_COMPATIBILITY.zh-CN.md)
-定义当前契约；[审计索引](../audits/README.md)保存带日期的探测证据。
+## 配置
+
+配置优先级为 CLI 参数、环境变量、JSON 文件、schema 默认值。未知字段和无效取值会在启动时失败。可以从
+[`config.example.json`](../../config.example.json) 开始，再到[配置参考](CONFIGURATION.zh-CN.md)查看全部字段、环境变量、超时、文件位置和协议开关。
 
 ## 状态与安全
 
 - `api_keys` 为空时服务拒绝启动，默认只绑定 `127.0.0.1`。
-- `auth_source: "local"` 把凭据与账号状态保存在平台配置目录。数据库及其
-  WAL/SHM 文件创建时只允许所属用户访问；JSON 配置也应保持 owner-only。
-- 单实例锁会阻止两个 Provider 进程拆分本地账号队列与续轮状态。
-- Reasoning 回放使用 AES-256-GCM 加密。日志不记录凭据、prompt、工具参数、签名或
-  原始 reasoning。
-- 配置 `proxy_url` 后，模型调用、登录、token 刷新和额度探测统一走该代理。
+- 凭据与账号状态保存在平台配置目录的 `accounts.db` 中。数据库及其 WAL/SHM 文件创建时只允许所属用户访问；JSON
+  配置也应保持只有所属用户可读。
+- 单实例锁会阻止两个网关在同一配置目录上拆分账号容量和对话状态。
+- Reasoning 回放使用 AES-256-GCM 加密。日志不记录凭据、提示词、工具参数、签名或原始 reasoning。
+- 配置 `proxy_url` 后，模型调用、登录、令牌刷新和额度探测统一经过该代理。
 
-只应使用你自己控制的 Kiro 账号。本项目不用于共享或转卖访问权，也不用于绕过账号
-级用量限制。
+只应使用你自己控制的 Kiro 账号。本项目不用于共享或转卖访问权，也不用于绕过账号级用量限制。
+
+## 更新
+
+```bash
+kiro-provider --version --check    # 查询最新版本
+kiro-provider self-update          # 校验后替换独立二进制
+bun add -g @sunerpy/kiro-provider@latest
+```
+
+`self-update` 会拒绝 npm 安装，也从不读取网关配置。更新后请重启网关；systemd 和 Windows 计划任务的步骤见[后台服务指南](SERVICE.zh-CN.md#升级服务二进制)。
 
 ## 文档
 
-可以浏览 [kiro-provider.firlab.app](https://kiro-provider.firlab.app/readme/)，也可以从仓库内的[文档索引](../README.md)开始，或直接查看：
+网站 [firlab.app/kiro-provider](https://firlab.app/kiro-provider/zh/) 提供中英文指南。仓库内的文档：
 
 - [配置参考](CONFIGURATION.zh-CN.md)
 - [后台服务](SERVICE.zh-CN.md)
@@ -250,7 +179,9 @@ Provider 只在本地执行有界 `single-string-object-v1` JSON Schema profile�
 - [Responses 用量与上下文统计](RESPONSES_USAGE.zh-CN.md)
 - [架构说明（英文）](../ARCHITECTURE.md)
 - [审计与验收记录](../audits/README.md)
-- [更新记录](../../changelog/README.md)
+- [更新日志](../../changelog/CHANGELOG-v3.x.md)
+
+[文档索引](../README.md)链接了全部文档及其简体中文版本。
 
 ## 开发
 
@@ -258,14 +189,13 @@ Provider 只在本地执行有界 `single-string-object-v1` JSON Schema profile�
 git clone https://github.com/sunerpy/kiro-provider.git
 cd kiro-provider
 bun install --frozen-lockfile
-make ci
+make check
 make coverage-gate
 bun run build:binary
 ```
 
-`make pre-ci` 会执行完整的本地 PR 门禁。仓库自有检查与 Codecov 都要求 93% 覆盖率；
-`codecov/project` 和 `codecov/patch` 是合并前的必需检查。实现、安全与发布约束见
-[AGENTS.md](../../AGENTS.md)。
+`make pre-ci` 会执行完整的本地 PR 门禁。仓库自有检查与 Codecov 都要求 93% 覆盖率；`codecov/project` 和
+`codecov/patch` 是合并前的必需检查。实现、安全与发布约束见 [AGENTS.md](../../AGENTS.md)。
 
 ## 许可证
 

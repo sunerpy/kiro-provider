@@ -1,11 +1,11 @@
-# 使用 kiro-provider V3 对接 Codex CLI
+# 使用 kiro-provider 对接 Codex CLI
 
 简体中文 · [English](../CODEX.md)
 
 **最近一次专项验收：**Codex CLI 0.159.3，2026-10-04，覆盖模型/effort 切换和
 真实 `/model` 菜单。此前自动标题/图片历史验收使用 0.156.1；下方 V3 smoke 使用 0.154.0。
 
-kiro-provider V3 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
+kiro-provider 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
 wire API。
 
 长期使用且希望保留原生 Codex home 时，参见[独立客户端入口示例](CLIENT_LAUNCHERS.zh-CN.md)，
@@ -157,6 +157,6 @@ reasoning envelope 或 prompt 正文。
 - `store: false` 只关闭 Provider 的本地 Response 镜像，不等于 AWS Zero Data
   Retention 保证。
 
-完整 wire 契约见 [V3 协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)。带日期的
+完整 wire 契约见[协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)。带日期的
 [初始 V3 验证](../audits/kiro-provider-v3-openai-responses-validation-2026-09-05.zh.md)
 和[回放/压缩验收](../audits/responses-replay-delivery-2026-09-14.zh.md)保存了对应证据。

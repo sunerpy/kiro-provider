@@ -27,7 +27,7 @@
 ## 环境
 
 - 日期：2026-08-26（Asia/Shanghai）
-- 认证：OpenCode 共享 Kiro IdC 数据库 `/config/.config/opencode/kiro.db`
+- 认证：OpenCode 共享 Kiro IdC 数据库 `~/.config/opencode/kiro.db`
 - 生成区域：`us-east-1`
 - 投影模型：仓库映射的 `gpt-5.6-sol`
 - reasoning/输出上限模型：仓库映射的 `claude-sonnet-5`

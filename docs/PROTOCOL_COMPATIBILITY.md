@@ -1,4 +1,4 @@
-# V3 protocol compatibility
+# Protocol compatibility
 
 > **Status**: current V3 contract
 > **Audience**: operators, client authors, and release reviewers
