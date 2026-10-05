@@ -76,12 +76,12 @@ const message = await anthropic.messages.create({
 console.log(message.content[0].type === "text" ? message.content[0].text : "");
 ```
 
-kiro-provider passes `max_tokens` on to Kiro for `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5` and
-`claude-fable-5-1`, from 1,024 to 128,000; a value outside that range is refused rather than changed. Kiro has no
-output limit kiro-provider can set for other models, and every Messages request carries `max_tokens`, so Messages
-serves those four models, plus the GPT-5.6 models when the request has the header
-`x-kiro-output-token-limit-mode: advisory` ([OpenCode](opencode.md) sets it). On Responses, `max_output_tokens`
-follows the same rule but is optional; a request without it can use every model.
+kiro-provider passes `max_tokens` on to Kiro for four Claude models: `claude-opus-5-5`, `claude-opus-5`,
+`claude-sonnet-5` and `claude-fable-5-1`, from 1,024 to 128,000. A value outside that range is refused rather than
+changed. For other models Kiro has no output limit that kiro-provider can set. Every Messages request carries
+`max_tokens`, so Messages serves only those four, plus the GPT-5.6 models when the request has the header
+`x-kiro-output-token-limit-mode: advisory` ([OpenCode](opencode.md) sets it). On Responses `max_output_tokens` follows
+the same rule but is optional, and a request without it can use every model.
 
 ## Separate commands for Kiro
 

@@ -65,7 +65,7 @@ const message = await anthropic.messages.create({
 console.log(message.content[0].type === "text" ? message.content[0].text : "");
 ```
 
-kiro-provider 只为 `claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1` 把 `max_tokens` 传给 Kiro，范围是 1,024 到 128,000；超出范围的值会被拒绝，而不是被改写。对其他模型，Kiro 没有 kiro-provider 可以设置的输出上限，而每个 Messages 请求都带 `max_tokens`，所以 Messages 只提供这四个模型；请求带有 `x-kiro-output-token-limit-mode: advisory` header 时，还可以使用 GPT-5.6 模型（[OpenCode](opencode.md) 中有设置示例）。在 Responses 上，`max_output_tokens` 遵循同样的规则，但它是可选的；不带它的请求可以使用所有模型。
+kiro-provider 只为四个 Claude 模型把 `max_tokens` 传给 Kiro：`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1`，范围是 1,024 到 128,000。超出范围的值会被拒绝，而不是被改写。对其他模型，Kiro 没有 kiro-provider 可以设置的输出上限。每个 Messages 请求都带 `max_tokens`，所以 Messages 只提供这四个模型；请求带有 `x-kiro-output-token-limit-mode: advisory` header 时，还可以使用 GPT-5.6 模型（[OpenCode](opencode.md) 中有设置示例）。在 Responses 上，`max_output_tokens` 遵循同样的规则，但它是可选的，不带它的请求可以使用所有模型。
 
 ## 为 Kiro 单独准备的命令
 

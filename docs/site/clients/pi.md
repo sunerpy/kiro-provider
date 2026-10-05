@@ -1,7 +1,7 @@
 # Pi
 
-[Pi](https://pi.dev) reaches kiro-provider through OpenAI Responses, with its built-in `openai-responses` API. The
-GPT-5.6 and Claude models work through the same provider entry.
+[Pi](https://pi.dev) has an OpenAI Responses client built in, `openai-responses`, and that is the one to point at
+kiro-provider. A single provider entry carries both the GPT-5.6 and the Claude models.
 
 ## Add the provider
 
@@ -71,6 +71,6 @@ level sets the effort.
 
 ## Pi's Anthropic API
 
-Pi's `anthropic-messages` API reaches the gateway too, at `http://127.0.0.1:8787`, but with `reasoning: true` Pi asks
-for summarized thinking. kiro-provider represents summarized thinking for Claude Fable 5.1 only and refuses it for
-other models with `unsupported_reasoning_display`, so `openai-responses` is the API to use.
+Pi's `anthropic-messages` API reaches the gateway too, at `http://127.0.0.1:8787`. With `reasoning: true`, though, Pi
+asks for summarized thinking, which kiro-provider supports for Claude Fable 5.1 only; other models refuse it with
+`unsupported_reasoning_display`. Stay with `openai-responses`.

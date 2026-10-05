@@ -1,6 +1,6 @@
 # Pi
 
-[Pi](https://pi.dev) 通过 OpenAI Responses 连接 kiro-provider，使用它内置的 `openai-responses` API。GPT-5.6 和 Claude 模型都通过同一个 provider 条目使用。
+[Pi](https://pi.dev) 内置了 OpenAI Responses 客户端 `openai-responses`，让它指向 kiro-provider 即可。同一个 provider 条目同时提供 GPT-5.6 和 Claude 模型。
 
 ## 添加 provider
 
@@ -67,4 +67,4 @@ curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_
 
 ## Pi 的 Anthropic API
 
-Pi 的 `anthropic-messages` API 也能以 `http://127.0.0.1:8787` 连接网关，但开启 `reasoning: true` 时，Pi 会请求摘要形式的 thinking。kiro-provider 只能为 Claude Fable 5.1 表示摘要 thinking，对其他模型会以 `unsupported_reasoning_display` 拒绝，因此应当使用 `openai-responses`。
+Pi 的 `anthropic-messages` API 也能以 `http://127.0.0.1:8787` 连接网关。但开启 `reasoning: true` 时，Pi 会请求摘要形式的 thinking，而 kiro-provider 只为 Claude Fable 5.1 提供摘要 thinking，其他模型会以 `unsupported_reasoning_display` 拒绝。请继续使用 `openai-responses`。
