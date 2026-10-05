@@ -186,7 +186,29 @@ async function invoke(
     throw new WebSearchRpcError("region_unverified");
   }
   const id = randomUUID();
-  const timeout = AbortSignal.timeout(Math.max(1, context.timeoutMs));
+  // A referenced timer, not AbortSignal.timeout: Bun's timeout signal uses an
+  // unreferenced timer, which on Windows never fires while nothing else keeps
+  // the event loop running, so a stalled call would never time out.
+  const timeout = new AbortController();
+  const timer = setTimeout(
+    () => timeout.abort(new DOMException("The web search call timed out", "TimeoutError")),
+    Math.max(1, context.timeoutMs),
+  );
+  try {
+    return await exchange(context, method, params, maxResponseBytes, id, timeout.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function exchange(
+  context: McpCallContext,
+  method: "tools/list" | "tools/call",
+  params: Readonly<Record<string, unknown>>,
+  maxResponseBytes: number,
+  id: string,
+  timeout: AbortSignal,
+): Promise<RpcResponse> {
   const signal = AbortSignal.any([context.signal, timeout]);
   const request = context.fetch ?? (fetch as unknown as WebSearchFetch);
   let response: Response;
