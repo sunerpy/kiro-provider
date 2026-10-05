@@ -2,10 +2,6 @@
 
 [简体中文](readme/CODEX.zh-CN.md) · English
 
-**Latest focused validation:** Codex CLI 0.159.3 model/effort switching and the
-real `/model` picker on 2026-10-04. Earlier automatic-title/image validation
-used 0.156.1; the broader V3 smoke below used 0.154.0.
-
 kiro-provider exposes the OpenAI Responses wire API used by a Codex custom
 `model_provider`.
 

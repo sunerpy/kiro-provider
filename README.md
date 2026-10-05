@@ -21,8 +21,8 @@
 ---
 
 kiro-provider is a gateway you run on your own machine. It signs in to AWS Kiro, keeps the tokens of every account you
-add, and serves those accounts through OpenAI Responses and Anthropic Messages, so Codex CLI, Claude Code, Zuno and
-the official SDKs work with a base URL and a key.
+add, and serves those accounts through OpenAI Responses and Anthropic Messages, so Codex CLI, Claude Code, OpenCode,
+Pi, Crush, Zuno and the official SDKs work with a base URL and a key.
 
 ## Features
 
@@ -137,12 +137,14 @@ an Anthropic Messages request as well.
 | ----------- | --------------------- | ----------------------------------------------------------------------------- |
 | Codex CLI   | OpenAI Responses      | [Isolated profile and model switching](docs/CODEX.md)                         |
 | Claude Code | Anthropic Messages    | [Shared-state `kiroclaude` launcher and model selection](docs/CLAUDE_CODE.md) |
+| OpenCode    | Anthropic Messages    | [A provider in `opencode.json`](docs/site/clients/opencode.md)                |
+| Pi          | OpenAI Responses      | [A provider in `models.json`, with thinking levels](docs/site/clients/pi.md)  |
+| Crush       | Anthropic Messages    | [A provider in `crush.json`](docs/site/clients/crush.md)                      |
 | Zuno        | OpenAI Responses      | [Native provider configuration and session routing](docs/ZUNO.md)             |
 | Other SDKs  | Responses or Messages | [Protocol compatibility](docs/PROTOCOL_COMPATIBILITY.md)                      |
 
 For persistent `kirocodex` and `kiroclaude` commands with their own state, follow
-[the launcher examples](docs/CLIENT_LAUNCHERS.md). The guides record the client versions last tested; treat them as
-dated evidence, not a promise about future request shapes.
+[the launcher examples](docs/CLIENT_LAUNCHERS.md).
 
 ## Compatibility
 

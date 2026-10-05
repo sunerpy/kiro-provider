@@ -77,10 +77,6 @@ effort、加密 reasoning、custom/namespace 工具或 Codex/Zuno 协作 item �
 测试端口。完整冒烟必须核对工具副作用或结果、最终答复、已存储续接，以及恢复后
 工具没有重复执行；只看到 HTTP 200 不算端到端通过。
 
-仓库内最新的脱敏证据覆盖 Zuno 0.10.39 的 max-effort shell 工具循环和冷启动
-续接，也覆盖当前上下文与累计用量的区分。这些版本和结果是带日期的验收证据，
-不是对未来 Zuno 请求形状的永久承诺。
-
 ## 相关文档
 
 - [协议兼容范围](PROTOCOL_COMPATIBILITY.zh-CN.md)

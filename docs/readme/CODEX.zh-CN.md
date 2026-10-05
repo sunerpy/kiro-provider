@@ -2,9 +2,6 @@
 
 简体中文 · [English](../CODEX.md)
 
-**最近一次专项验收：**Codex CLI 0.159.3，2026-10-04，覆盖模型/effort 切换和
-真实 `/model` 菜单。此前自动标题/图片历史验收使用 0.156.1；下方 V3 smoke 使用 0.154.0。
-
 kiro-provider 提供 Codex 自定义 `model_provider` 所需的 OpenAI Responses
 wire API。
 

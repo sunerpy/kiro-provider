@@ -5,7 +5,7 @@
 These Linux/macOS/WSL examples keep the ordinary `claude` and `codex` commands
 and their user configuration directories available. They require a running
 kiro-provider, Python 3, Claude Code 2.1.270 or Codex 0.154.0, and a checkout
-matching the provider version. Other client versions need their own validation.
+matching the provider version.
 
 There are two different kinds of separation. The repository's `kiroclaude`
 uses a process-local settings overlay and **shares native Claude state by

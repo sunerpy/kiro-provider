@@ -2,13 +2,6 @@
 
 [简体中文](readme/CLAUDE_CODE.zh-CN.md) · English
 
-**Last broad validation:** Claude Code 2.1.270. Focused 2.1.285 capture/resume
-validation on 2026-10-04 passed Opus 5.5 max→low and Fable→Opus 5.5 signed
-thinking/tool turns. Opus 5.5→Opus 5 still has an upstream stream-completion
-gap; it is not a replay-context rejection. Newer releases may add beta
-headers or request fields; validate their wire shape before extending this
-support claim.
-
 kiro-provider exposes the two Anthropic-compatible routes Claude Code needs:
 
 - `POST /v1/messages`
@@ -89,11 +82,9 @@ typed-rejected before dispatch, and the client then makes its ordinary request.
 The report keeps that rejection count; it does not count it as inference.
 
 `probe-image-run-order.ts` checks model-observed text/image order on an isolated
-gateway, in streaming/non-streaming Messages and a signed reasoning replay. The
-2026-10-04 Opus 5.5/Fable probes completed with a 16,000 output budget. One
-2,048-budget sample ended before visible output; budget exhaustion remains an
-inference rather than a proven cause. Keep max effort unchanged. These
-results cover those models, not every future catalog entry.
+gateway, in streaming/non-streaming Messages and a signed reasoning replay. Run it
+at max effort with an output budget of 16,000 tokens: with 2,048, a run can end
+before any visible output.
 
 ## Defaults and overrides
 
@@ -414,13 +405,14 @@ Anthropic services.
 
 ## Troubleshooting
 
-| Symptom                                                 | Action                                                                                                                                |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Token helper reports unsafe permissions                 | Run `chmod 600 ~/.config/kiro-provider/config.json` and confirm the current user owns the file.                                       |
-| `capability_rejected:context_management`                | The client requested a destructive edit outside the supported lossless form. Do not hide it with an unreviewed field-stripping proxy. |
-| Kiro GPT row is absent                                  | Start through `kiroclaude`; gateway discovery alone filters out the GPT IDs.                                                          |
-| Ordinary `claude` uses the wrong backend                | Check the normal `~/.claude` profile. `kiroclaude` does not modify it.                                                                |
-| A resumed session reports an invalid provider signature | Start a new session after switching between Kiro and native Bedrock.                                                                  |
+| Symptom                                                    | Action                                                                                                                                |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Token helper reports unsafe permissions                    | Run `chmod 600 ~/.config/kiro-provider/config.json` and confirm the current user owns the file.                                       |
+| `capability_rejected:context_management`                   | The client requested a destructive edit outside the supported lossless form. Do not hide it with an unreviewed field-stripping proxy. |
+| Kiro GPT row is absent                                     | Start through `kiroclaude`; gateway discovery alone filters out the GPT IDs.                                                          |
+| Ordinary `claude` uses the wrong backend                   | Check the normal `~/.claude` profile. `kiroclaude` does not modify it.                                                                |
+| A resumed session reports an invalid provider signature    | Start a new session after switching between Kiro and native Bedrock.                                                                  |
+| A session switched from Opus 5.5 to Opus 5 stops mid-reply | Kiro does not complete the stream for that switch; it is not a replay rejection. Stay on Opus 5.5, or start a new session for Opus 5. |
 
 References: [Messages API](https://platform.claude.com/docs/en/api/messages/create),
 [Claude Code settings](https://code.claude.com/docs/en/settings),

@@ -7,12 +7,18 @@ installed into the client.
 | -------------- | ------------------ | -------------------------- | ----------------------------------- |
 | Codex CLI      | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [Codex CLI](../../CODEX.md)         |
 | Claude Code    | Anthropic Messages | `http://127.0.0.1:8787`    | [Claude Code](../../CLAUDE_CODE.md) |
+| OpenCode       | Anthropic Messages | `http://127.0.0.1:8787/v1` | [OpenCode](opencode.md)             |
+| Pi             | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [Pi](pi.md)                         |
+| Crush          | Anthropic Messages | `http://127.0.0.1:8787`    | [Crush](crush.md)                   |
 | Zuno           | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [Zuno](../../ZUNO.md)               |
 | OpenAI SDKs    | OpenAI Responses   | `http://127.0.0.1:8787/v1` | [below](#sdks)                      |
 | Anthropic SDKs | Anthropic Messages | `http://127.0.0.1:8787`    | [below](#sdks)                      |
 
-Each guide records the client version it was last validated with. A newer client release can change the requests it
-sends; if a field it adds is not supported yet, the gateway names it in a typed error instead of ignoring it.
+The base URL depends on what the client appends to it. Claude Code, Crush and the Anthropic SDKs add `/v1/messages`;
+OpenCode's `@ai-sdk/anthropic` adds `/messages` only, so its base URL keeps `/v1`.
+
+A newer client release can change the requests it sends; if a field it adds is not supported yet, the gateway names it
+in a typed error instead of ignoring it.
 
 ## The key
 
@@ -70,8 +76,12 @@ const message = await anthropic.messages.create({
 console.log(message.content[0].type === "text" ? message.content[0].text : "");
 ```
 
-Claude models check `max_tokens` against the range Kiro accepts, 1,024 to 128,000 for `claude-opus-5-5`; a value
-outside it is refused rather than changed.
+kiro-provider passes `max_tokens` on to Kiro for `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5` and
+`claude-fable-5-1`, from 1,024 to 128,000; a value outside that range is refused rather than changed. Kiro has no
+output limit kiro-provider can set for other models, and every Messages request carries `max_tokens`, so Messages
+serves those four models, plus the GPT-5.6 models when the request has the header
+`x-kiro-output-token-limit-mode: advisory` ([OpenCode](opencode.md) sets it). On Responses, `max_output_tokens`
+follows the same rule but is optional; a request without it can use every model.
 
 ## Separate commands for Kiro
 
