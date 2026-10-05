@@ -99,17 +99,19 @@ Two workflows connect this repository to the site:
 - `.github/workflows/docs-site.yml` runs on pull requests that touch the pages or the references. It syncs them into
   a checkout of FirLab's `main`, builds the site and runs `check-dist.sh`, without a secret. It is advisory and not
   part of `CI Success`.
-- `.github/workflows/publish-site.yml` runs after a merge to `main` that touches them. It runs the same sync and
-  pushes the result to FirLab's `main` as `docs(kiro-provider): sync from kiro-provider@<sha>`; FirLab's deploy then
-  publishes the site.
+- `.github/workflows/publish-site.yml` runs after a merge to `main` that touches them. It runs the same sync, commits
+  the result as `docs(kiro-provider): sync from kiro-provider@<sha>` to the branch `kiro-provider-docs/sync` in
+  FirLab, and opens a pull request from it, or updates the one already open. Once FirLab's checks pass, it
+  squash-merges the pull request at the commit that was checked, and FirLab's deploy publishes the site. A failed check
+  leaves the pull request open; the next run replaces its commit.
 
 `publish-site.yml` needs the repository secret `FIRLAB_DOCS_TOKEN`: a fine-grained personal access token for
-`sunerpy/firlab` only, with Contents read and write and nothing else. GitHub has no API that creates one, so it is
-made by hand and stored with:
+`sunerpy/firlab` only, with Contents and Pull requests read and write and nothing else. GitHub has no API that creates
+one, so it is made by hand and stored with:
 
 ```sh
 gh secret set FIRLAB_DOCS_TOKEN --repo sunerpy/kiro-provider
 ```
 
-Without it the workflow fails at its first step and says so; nothing is pushed, and a sync reaches FirLab through a
-pull request there instead.
+Without it the workflow fails at its first step and says so, and nothing reaches FirLab until someone opens a sync pull
+request there by hand.
