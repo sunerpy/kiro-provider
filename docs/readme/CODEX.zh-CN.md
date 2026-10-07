@@ -71,8 +71,11 @@ Provider 需要预先启动，并至少有一个可用账号。Codex 启动前�
 仓库内真实客户端门禁覆盖：普通完成回合、命令成功与失败、失败后的恢复、
 compaction、Ultra reasoning，以及通过 `spawn_agent`、子代理响应和 `wait` 完成的
 namespace 协作。仓库内 Codex 契约还会回放当前 `view_image` 的 function output
-形状：保留工具调用关联，并把图片字节提升到同一个 Kiro user turn。验收还会检查输出
-中是否泄露 Provider 私有 custom/namespace 别名。
+形状：保留工具调用关联，并把图片字节提升到同一个 Kiro user turn。Codex 截图附件使用
+模型可见的 `<image name=[Image #N] path="…">`、图片、`</image>` 包络。compatible
+模式会在 stateless 通道把这个精确包络拆为保序的 Kiro user runs，并报告
+`codex_image_envelope_split`；strict 模式及其他 `text → 非文本 → text` 形状仍然
+fail closed。验收还会检查输出中是否泄露 Provider 私有 custom/namespace 别名。
 
 V3 按请求选择通道。普通兼容请求使用原生 KiroRuntime Responses；Ultra／max、custom
 grammar、namespace 工具、`agent_message`、`additional_tools`、

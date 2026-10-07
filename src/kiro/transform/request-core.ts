@@ -8,6 +8,7 @@ import {
   type ResolvedReasoningReplay,
   textFromParts,
 } from "../../protocol/canonical.js";
+import { isCodexImageEnvelope } from "../../protocol/codex-image-envelope.js";
 import { findToolHistoryViolation } from "../../protocol/tool-history.js";
 import { KIRO_CONSTANTS } from "../constants.js";
 import { resolveModelVariant } from "../models.js";
@@ -173,11 +174,27 @@ function clientImageRuns(message: CanonicalMessage): CanonicalMessage[] | undefi
   }));
 }
 
+function canSplitContentRuns(
+  message: CanonicalMessage,
+  protocol: CanonicalRequest["protocol"],
+  splitInterleavedUserImages: boolean,
+): boolean {
+  return (
+    clientImageRuns(message) !== undefined &&
+    (splitInterleavedUserImages ||
+      (protocol === "responses" && isCodexImageEnvelope(message.content)))
+  );
+}
+
 function contentBlockMessages(
   message: CanonicalMessage,
+  protocol: CanonicalRequest["protocol"],
   splitInterleavedUserImages: boolean,
 ): CanonicalMessage[] {
-  if (!splitInterleavedUserImages || interleavedTextPart(message) === undefined) {
+  if (
+    interleavedTextPart(message) === undefined ||
+    !canSplitContentRuns(message, protocol, splitInterleavedUserImages)
+  ) {
     return [cloneMessage(message)];
   }
   return clientImageRuns(message) ?? [cloneMessage(message)];
@@ -185,12 +202,13 @@ function contentBlockMessages(
 
 function validateContentBlockProjection(
   messages: readonly CanonicalMessage[],
+  protocol: CanonicalRequest["protocol"],
   splitInterleavedUserImages: boolean,
 ): void {
   for (const message of messages) {
     const interleaved = interleavedTextPart(message);
     if (interleaved === undefined) continue;
-    if (splitInterleavedUserImages && clientImageRuns(message) !== undefined) continue;
+    if (canSplitContentRuns(message, protocol, splitInterleavedUserImages)) continue;
     throw new RequestTransformError(
       `Message ${message.path} interleaves multiple text content blocks with non-text content, but Kiro exposes only one text field and cannot preserve their ordering`,
       "unsupported_content_block_projection",
@@ -270,7 +288,7 @@ function projectLegacyReplayPrefix(
   for (const [index, message] of prefix.entries()) {
     if (isInstruction(message)) continue;
     projectedIndexByOriginal.set(index, messages.length);
-    messages.push(...contentBlockMessages(message, splitInterleavedUserImages));
+    messages.push(...contentBlockMessages(message, request.protocol, splitInterleavedUserImages));
   }
   const suffix = projectMessages(
     { ...request, messages: request.messages.slice(boundary) },
@@ -341,7 +359,7 @@ function projectMessages(
     for (const [index, message] of request.messages.entries()) {
       if (isInstruction(message)) continue;
       projectedIndexByOriginal.set(index, messages.length);
-      messages.push(...contentBlockMessages(message, splitInterleavedUserImages));
+      messages.push(...contentBlockMessages(message, request.protocol, splitInterleavedUserImages));
     }
     const systemPrompt = nativeProjection.systemPrompt;
     return {
@@ -470,6 +488,7 @@ function projectMessages(
     messages.push(
       ...contentBlockMessages(
         projected,
+        request.protocol,
         splitInterleavedUserImages && interleavedTextPart(message) !== undefined,
       ),
     );
@@ -680,7 +699,11 @@ export function buildCodeWhispererRequest(
     throw new RequestTransformError("No messages", "empty_input");
   }
   const splitInterleavedUserImages = identity.splitInterleavedUserImages === true;
-  validateContentBlockProjection(canonical.messages, splitInterleavedUserImages);
+  validateContentBlockProjection(
+    canonical.messages,
+    canonical.protocol,
+    splitInterleavedUserImages,
+  );
   let resolved: string;
   let variantEffort: ReturnType<typeof resolveModelVariant>["effort"];
   try {
