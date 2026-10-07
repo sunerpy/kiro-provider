@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.1](https://github.com/sunerpy/kiro-provider/compare/v3.8.0...v3.8.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **responses:** 保留 Codex 图片包络顺序 ([#130](https://github.com/sunerpy/kiro-provider/issues/130)) ([d8283f5](https://github.com/sunerpy/kiro-provider/commit/d8283f575c64a45e16f15a585286c863b5ca2445))
+
 ## [3.8.0](https://github.com/sunerpy/kiro-provider/compare/v3.7.3...v3.8.0) (2026-10-05)
 
 
