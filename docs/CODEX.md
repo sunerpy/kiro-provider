@@ -77,8 +77,12 @@ failed command execution, recovery after a command failure, compaction, Ultra
 reasoning, and namespace collaboration through `spawn_agent`, a child response,
 and `wait`. The checked-in Codex contract also replays the current `view_image`
 function-output shape: its tool association remains intact while the image bytes
-are lifted into the same Kiro user turn. Captured output is also checked for
-leakage of the provider's private custom/namespace aliases.
+are lifted into the same Kiro user turn. Codex screenshot attachments use a
+model-visible `<image name=[Image #N] path="…">`, image, `</image>` envelope. In
+compatible mode the stateless lane splits that exact envelope into ordered Kiro
+user runs and reports `codex_image_envelope_split`; strict mode and every other
+`text → non-text → text` shape remain fail-closed. Captured output is also
+checked for leakage of the provider's private custom/namespace aliases.
 
 V3 selects its transport per request. Ordinary compatible requests use native
 KiroRuntime Responses. Requests using Ultra/max or needing custom grammar, namespace tools,

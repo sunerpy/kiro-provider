@@ -145,6 +145,9 @@ CodeWhisperer/Kiro 流式管道。它保留：
 - 任意非空文本字节，包括纯空白输入；
 - 图片、内联文档、工具结果及其 current-input 边界，包括从 function/custom 工具结果
   提升一个内联图片块，同时保留相邻文本和工具关联；
+- compatible 模式把精确的 Codex 截图包络（`<image name=[Image #N] path="…">`、内联
+  图片、`</image>`）拆为保序的 Kiro user runs，并报告
+  `codex_image_envelope_split`；strict 模式和任意交错形状仍会拒绝；
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
 - 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
@@ -269,28 +272,28 @@ V3 在 Provider 自有 SQLite 中镜像已存储 Response：
 
 ## 6. 请求能力矩阵
 
-| 请求能力                                             | V3 契约                                                                                                              |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 文本、消息数组、图片、内联文档                       | 在已记录的 Kiro 格式限制内支持；function/custom 工具结果可携带一个内联 data-URL 图片块。                             |
-| `instructions`、`system`、`developer`                | 普通 V3 通道使用原生字段；stateless fallback 保序投影。                                                              |
-| Function 工具                                        | 能走原生时走原生，否则 fallback。                                                                                    |
-| Namespace 与自由文本 custom 工具                     | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。                                      |
-| `agent_message`                                      | Stateless fallback；保留可见内容，不把子代理加密元数据注入父模型。                                                   |
-| `tool_choice: auto` / `none`                         | 在不存在冲突的未完成工具状态时支持。                                                                                 |
-| Required、指定或受约束 tool choice                   | 拒绝。                                                                                                               |
-| `strict: true`                                       | 仅上述 compatible 模式有界本地 profile 接受；其他 strict JSON Schema 请求拒绝。                                      |
-| `store: true` / 省略                                 | 普通请求支持镜像；本地 profile 拒绝 true，省略时归一为 false 并报告兼容损失。                                        |
-| `store: false`                                       | 走 stateless，不写本地 Response 镜像。                                                                               |
-| `previous_response_id`                               | 支持本地镜像中的原生或 stateless Response。                                                                          |
-| Responses `conversation` 对象                        | 返回 `unsupported_stateful_responses`。                                                                              |
-| Structured Outputs / JSON schema                     | 仅本地执行 `single-string-object-v1`：Responses 在 compatible 模式下从 strict `text.format` 识别，Messages 从 `output_config.format` 识别且不受保真模式限制；任意复杂 Schema 与 JSON mode 返回 `unsupported_structured_output`。 |
+| 请求能力                                                 | V3 契约                                                                                                                                                                                                                            |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文本、消息数组、图片、内联文档                           | 在已记录的 Kiro 格式限制内支持；compatible 模式把 Codex 截图包络投影为保序 user runs，任意交错仍拒绝；function/custom 工具结果可携带一个内联 data-URL 图片块。                                                                     |
+| `instructions`、`system`、`developer`                    | 普通 V3 通道使用原生字段；stateless fallback 保序投影。                                                                                                                                                                            |
+| Function 工具                                            | 能走原生时走原生，否则 fallback。                                                                                                                                                                                                  |
+| Namespace 与自由文本 custom 工具                         | 已验证的模型/区域使用原生桥接；其他组合使用兼容路径。Grammar 工具保留兼容路径。                                                                                                                                                    |
+| `agent_message`                                          | Stateless fallback；保留可见内容，不把子代理加密元数据注入父模型。                                                                                                                                                                 |
+| `tool_choice: auto` / `none`                             | 在不存在冲突的未完成工具状态时支持。                                                                                                                                                                                               |
+| Required、指定或受约束 tool choice                       | 拒绝。                                                                                                                                                                                                                             |
+| `strict: true`                                           | 仅上述 compatible 模式有界本地 profile 接受；其他 strict JSON Schema 请求拒绝。                                                                                                                                                    |
+| `store: true` / 省略                                     | 普通请求支持镜像；本地 profile 拒绝 true，省略时归一为 false 并报告兼容损失。                                                                                                                                                      |
+| `store: false`                                           | 走 stateless，不写本地 Response 镜像。                                                                                                                                                                                             |
+| `previous_response_id`                                   | 支持本地镜像中的原生或 stateless Response。                                                                                                                                                                                        |
+| Responses `conversation` 对象                            | 返回 `unsupported_stateful_responses`。                                                                                                                                                                                            |
+| Structured Outputs / JSON schema                         | 仅本地执行 `single-string-object-v1`：Responses 在 compatible 模式下从 strict `text.format` 识别，Messages 从 `output_config.format` 识别且不受保真模式限制；任意复杂 Schema 与 JSON mode 返回 `unsupported_structured_output`。   |
 | 托管 Web Search（`web_search`、`web_search_2025_08_26`） | 启用 `web_search_enabled` 后由 provider 通过 KiroRuntime `InvokeMCP` 执行实时搜索，仅走 stateless lane，仅限已验证模型/区域单元；缓存搜索、preview 工具、地理位置与图片搜索被拒绝。见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)。 |
-| File Search、Computer Use、托管 MCP | 拒绝；V3 不伪造托管工具或引用事件。 |
-| 远程图片 URL 与 OpenAI `file_id`                     | 拒绝；应发送 data URL 或内联文件数据。                                                                               |
-| `background: true`                                   | 拒绝。                                                                                                               |
-| Prompt template、moderation、context management      | 拒绝。                                                                                                               |
-| `metadata`、`client_metadata`、`prompt_cache_key`    | 用于响应回显、租户/会话路由或兼容元数据；不宣称等价于 Kiro prompt cache。                                            |
-| `text.verbosity`                                     | 作为兼容元数据接受；Kiro 没有经过验证的 verbosity 控制。                                                             |
+| File Search、Computer Use、托管 MCP                      | 拒绝；V3 不伪造托管工具或引用事件。                                                                                                                                                                                                |
+| 远程图片 URL 与 OpenAI `file_id`                         | 拒绝；应发送 data URL 或内联文件数据。                                                                                                                                                                                             |
+| `background: true`                                       | 拒绝。                                                                                                                                                                                                                             |
+| Prompt template、moderation、context management          | 拒绝。                                                                                                                                                                                                                             |
+| `metadata`、`client_metadata`、`prompt_cache_key`        | 用于响应回显、租户/会话路由或兼容元数据；不宣称等价于 Kiro prompt cache。                                                                                                                                                          |
+| `text.verbosity`                                         | 作为兼容元数据接受；Kiro 没有经过验证的 verbosity 控制。                                                                                                                                                                           |
 
 ## 7. Native-context 结论
 

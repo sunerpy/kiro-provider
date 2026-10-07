@@ -3,6 +3,7 @@ import { resolveEffort } from "../../kiro/effort.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import type { Effort } from "../../kiro/types.js";
 import { isRecord } from "../../protocol/adapter-utils.js";
+import { isCodexImageEnvelope } from "../../protocol/codex-image-envelope.js";
 import { isProviderReplayToken } from "../../reasoning/replay-token.js";
 import { openAiError } from "../errors.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
@@ -72,6 +73,21 @@ export function hasProviderReasoning(request: ResponsesRequest): boolean {
         isProviderReplayToken(item.encrypted_content),
     )
   );
+}
+
+function codexImageEnvelopePath(request: ResponsesRequest): string | undefined {
+  if (!Array.isArray(request.input)) return undefined;
+  for (const [index, item] of request.input.entries()) {
+    if (
+      (item.type === undefined || item.type === "message") &&
+      item.role === "user" &&
+      Array.isArray(item.content) &&
+      isCodexImageEnvelope(item.content)
+    ) {
+      return `input.${index}.content`;
+    }
+  }
+  return undefined;
 }
 
 export function hasNativeReasoning(request: ResponsesRequest): boolean {
@@ -245,6 +261,10 @@ export function responsesCompatibility(
     losses.push({ code: "reasoning_context_ignored", param: "reasoning.context" });
   }
   if (transport !== "stateless") return losses;
+  const imageEnvelope = codexImageEnvelopePath(request);
+  if (imageEnvelope !== undefined) {
+    losses.push({ code: "codex_image_envelope_split", param: imageEnvelope });
+  }
   if (request.parallel_tool_calls === false && hasCallableTools(request)) {
     losses.push({ code: "parallel_tool_calls_unenforced", param: "parallel_tool_calls" });
   }
