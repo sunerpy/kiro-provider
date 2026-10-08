@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.2](https://github.com/sunerpy/kiro-provider/compare/v3.8.1...v3.8.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* **messages:** 保留工具结果前缀后的图片交错顺序 ([#132](https://github.com/sunerpy/kiro-provider/issues/132)) ([8a0dc84](https://github.com/sunerpy/kiro-provider/commit/8a0dc84e91a777fd8e2317a17ada9c56892818f1))
+
 ## [3.8.1](https://github.com/sunerpy/kiro-provider/compare/v3.8.0...v3.8.1) (2026-10-07)
 
 
