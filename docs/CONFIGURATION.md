@@ -560,8 +560,12 @@ It recognizes only a leading literal `cd` to that exact directory followed by
 Both portable and database records require the same normalization context when
 replayed. Untagged records keep their original strict fingerprint contract.
 For Anthropic Messages requests with this complete normalization context, a user
-message containing only direct `text` and `image` blocks may be split into at
-most 16 consecutive text/image runs and projected as ordered Kiro user turns.
+message containing direct `text` and `image` blocks may also begin with a
+contiguous group of text-only `tool_result` blocks, followed by a text run.
+It may be split into at most 16 runs, including one tool-result prefix run,
+and projected as ordered Kiro user turns. Tool IDs, result status, text bytes,
+and direct image order are preserved; image-bearing tool results are not
+eligible for this additional splitting.
 This preserves Claude Code's client-injected text after direct images without
 flattening or reordering the blocks. Other mixed content and requests without
 the normalization context retain the strict `unsupported_content_block_projection`

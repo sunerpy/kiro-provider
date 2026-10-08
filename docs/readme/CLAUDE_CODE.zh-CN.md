@@ -322,8 +322,10 @@ Kiro tool result 内容只支持 text/JSON，因此其中的图片会按稳定�
 Kiro user turn。多个含图结果会保留每个 tool result、状态、文本与图片字节，但 wire
 无法编码逐图对应的工具关联；响应会用
 `x-kiro-tool-result-image-mode: multiple-lifted` 显式暴露该有界损失，并记录只含数量的
-审计事件。普通 user 图片与图片型 tool result 混用仍会被拒绝。真正的
-`text → 非文本 → text` 交错输入也会被拒绝：Kiro 只有一个文本字段。
+审计事件。普通 user 图片与图片型 tool result 混用仍会被拒绝。
+携带 launcher 完整且已认证的归一化上下文时，直接 `text → image → text` 可以
+按连续 Kiro 用户消息投影，也支持其前面的一组纯文本工具结果，其后从文字段开始。
+总计最多 16 段，包含工具结果组。其他混合交错仍会被拒绝：Kiro 只有一个文本字段。
 
 Destructive context edits、有界 `single-string-object-v1` profile 之外的 Structured
 Outputs、强制工具、硬性串行工具要求和未知 beta/tool 字段会返回 Anthropic

@@ -37,7 +37,7 @@ export interface RequestTransformIdentity {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
-  /** Authenticated Claude Code compatibility for user text/image run splitting. */
+  /** Authenticated Claude Code direct image runs, including a text-only tool-result prefix. */
   readonly splitInterleavedUserImages?: boolean;
   readonly promptCaching?: {
     readonly mode: "server-auto" | "explicit-checkpoints" | "off";
@@ -150,16 +150,27 @@ function interleavedTextPart(
   return undefined;
 }
 
-function clientImageRuns(message: CanonicalMessage): CanonicalMessage[] | undefined {
-  if (
-    message.role !== "user" ||
-    message.toolCalls.length > 0 ||
-    message.content.some((part) => part.type !== "text" && part.type !== "image")
-  ) {
+function clientImageRuns(
+  message: CanonicalMessage,
+  allowToolResultPrefix: boolean,
+): CanonicalMessage[] | undefined {
+  if (message.role !== "user" || message.toolCalls.length > 0) {
     return undefined;
   }
+  let prefixEnd = 0;
+  if (allowToolResultPrefix) {
+    while (message.content[prefixEnd]?.type === "tool_result") prefixEnd++;
+  }
+  // Lifted tool-result images immediately follow their result. Requiring the
+  // suffix to start with text excludes them, and keeps this compatibility
+  // limited to completed tool results followed by direct client image runs.
+  if (prefixEnd > 0 && message.content[prefixEnd]?.type !== "text") return undefined;
+  if (
+    message.content.slice(prefixEnd).some((part) => part.type !== "text" && part.type !== "image")
+  )
+    return undefined;
   const runs: Array<CanonicalMessage["content"][number][]> = [];
-  for (const part of message.content) {
+  for (const part of cloneMessage(message).content) {
     const current = runs.at(-1);
     if (current === undefined || current[0]?.type !== part.type) runs.push([{ ...part }]);
     else current.push({ ...part });
@@ -180,7 +191,8 @@ function canSplitContentRuns(
   splitInterleavedUserImages: boolean,
 ): boolean {
   return (
-    clientImageRuns(message) !== undefined &&
+    clientImageRuns(message, splitInterleavedUserImages && protocol === "anthropic-messages") !==
+      undefined &&
     (splitInterleavedUserImages ||
       (protocol === "responses" && isCodexImageEnvelope(message.content)))
   );
@@ -197,7 +209,11 @@ function contentBlockMessages(
   ) {
     return [cloneMessage(message)];
   }
-  return clientImageRuns(message) ?? [cloneMessage(message)];
+  return (
+    clientImageRuns(message, splitInterleavedUserImages && protocol === "anthropic-messages") ?? [
+      cloneMessage(message),
+    ]
+  );
 }
 
 function validateContentBlockProjection(
@@ -470,7 +486,14 @@ function projectMessages(
       }
       continue;
     }
-    let projected = cloneMessage(message);
+    // Split a validated tool-result prefix before adding provider instructions;
+    // prepending their text first would hide the original leading result group.
+    // Other input retains its existing instruction/image projection.
+    const resultRuns =
+      message.content[0]?.type === "tool_result"
+        ? contentBlockMessages(message, request.protocol, splitInterleavedUserImages)
+        : undefined;
+    let projected = resultRuns?.[0] ?? cloneMessage(message);
     if (pending.length > 0) {
       if (message.role === "user" || message.role === "tool") {
         projected = {
@@ -485,13 +508,18 @@ function projectMessages(
       } else appendInstructionTurn();
     }
     projectedIndexByOriginal.set(index, messages.length);
-    messages.push(
-      ...contentBlockMessages(
-        projected,
-        request.protocol,
-        splitInterleavedUserImages && interleavedTextPart(message) !== undefined,
-      ),
-    );
+    if (resultRuns !== undefined) {
+      resultRuns[0] = projected;
+      messages.push(...resultRuns);
+    } else {
+      messages.push(
+        ...contentBlockMessages(
+          projected,
+          request.protocol,
+          splitInterleavedUserImages && interleavedTextPart(message) !== undefined,
+        ),
+      );
+    }
   }
   appendInstructionTurn(trailingInstructions.length > 0);
 
