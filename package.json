@@ -1,6 +1,6 @@
 {
   "name": "@sunerpy/kiro-provider",
-  "version": "3.8.1",
+  "version": "3.8.2",
   "description": "Local gateway that serves your AWS Kiro accounts through OpenAI Responses and Anthropic Messages, for Codex CLI, Claude Code and other agents",
   "homepage": "https://firlab.app/kiro-provider/",
   "bugs": "https://github.com/sunerpy/kiro-provider/issues",
