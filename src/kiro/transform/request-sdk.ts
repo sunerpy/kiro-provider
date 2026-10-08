@@ -12,7 +12,7 @@ export interface EffortConfig {
   readonly conversationId?: string;
   readonly nativeSystemPromptEnabled?: boolean;
   readonly resolvedReasoningReplays?: readonly ResolvedReasoningReplay[];
-  /** Authenticated Claude Code compatibility for user text/image run splitting. */
+  /** Authenticated Claude Code direct image runs, including a text-only tool-result prefix. */
   readonly splitInterleavedUserImages?: boolean;
   readonly promptCaching?: {
     readonly mode: "server-auto" | "explicit-checkpoints" | "off";

@@ -392,9 +392,12 @@ to the containing Kiro user turn. For multiple image-bearing results the wire
 keeps every tool result and image in stable order, but cannot encode a per-image
 tool association; the response explicitly reports this bounded loss as
 `x-kiro-tool-result-image-mode: multiple-lifted` and emits a count-only audit.
-Direct user images mixed with image-bearing tool results remain rejected. A real
-`text → non-text → text` interleave is also rejected because Kiro exposes one
-text field.
+Direct user images mixed with image-bearing tool results remain rejected.
+With the launcher's complete authenticated normalization context, direct
+`text → image → text` runs may be projected as consecutive Kiro user turns,
+including a leading group of text-only tool results followed by a text run.
+The limit is 16 runs, including the tool-result group. Other mixed interleaves
+remain rejected because Kiro exposes one text field.
 
 The provider also rejects destructive context edits, Structured Outputs outside
 the bounded `single-string-object-v1` profile, forced tool selection, hard

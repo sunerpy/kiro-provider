@@ -83,6 +83,18 @@ async function main() {
       ],
     },
   ];
+  const withToolPrefix = process.argv.includes("--tool-result-prefix");
+  const imageContent = initial[0]?.content;
+  assert(imageContent, "invalid_block_sequence");
+  const tools = withToolPrefix
+    ? [
+        {
+          name: "FixtureMarker",
+          description: "Return the synthetic marker requested by this order probe",
+          input_schema: { type: "object", properties: {}, additionalProperties: false },
+        },
+      ]
+    : [];
   async function generate(model: string, stream: boolean, messages: unknown[]) {
     const response = await fetch(new URL("/v1/messages", base), {
       method: "POST",
@@ -98,6 +110,7 @@ async function main() {
         max_tokens: 16000,
         thinking: { type: "adaptive", display: "omitted" },
         output_config: { effort: "max" },
+        ...(tools.length ? { tools } : {}),
         messages,
       }),
       signal: AbortSignal.timeout(120_000),
@@ -118,6 +131,7 @@ async function main() {
     }
     if (!stream) return JSON.parse(text).content as Array<Record<string, unknown>>;
     const blocks: Array<Record<string, unknown>> = [];
+    const toolInputs = new Map<number, string>();
     let stopped = 0;
     for (const line of text.split("\n")) {
       if (!line.startsWith("data: {")) continue;
@@ -130,21 +144,62 @@ async function main() {
         for (const field of ["text", "thinking", "signature"])
           if (typeof event.delta[field] === "string")
             block[field] = String(block[field] ?? "") + event.delta[field];
+        if (typeof event.delta.partial_json === "string")
+          toolInputs.set(
+            event.index,
+            (toolInputs.get(event.index) ?? "") + event.delta.partial_json,
+          );
       }
       if (event.type === "message_stop") stopped++;
     }
     assert(stopped === 1, "invalid_terminal_count");
+    for (const [index, input] of toolInputs) {
+      const block = blocks[index];
+      assert(block?.type === "tool_use", "invalid_block_sequence");
+      block.input = JSON.parse(input);
+    }
     return blocks;
   }
   for (const model of (option("--models") ?? "claude-opus-5-5,claude-fable-5-1").split(","))
     for (const stream of [false, true]) {
-      const first = await generate(model, stream, initial);
+      let input: unknown[] = initial;
+      if (withToolPrefix) {
+        const seed = [
+          {
+            role: "user",
+            content:
+              "First solve 5 mod 17, 7 mod 19, 11 mod 23, 13 mod 29 to engage signed reasoning. Then call FixtureMarker exactly once with an empty object. The tool result and direct image blocks will arrive in the next user message. Do not answer the image-order task yet.",
+          },
+        ];
+        const output = await generate(model, stream, seed);
+        const calls = output.filter((block) => block.type === "tool_use");
+        assert(
+          calls.length === 1 && calls[0]?.name === "FixtureMarker",
+          "tool_prefix_seed_unproven",
+        );
+        input = [
+          ...seed,
+          { role: "assistant", content: output },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: calls[0]?.id,
+                content: "Synthetic marker tool completed.",
+              },
+              ...imageContent,
+            ],
+          },
+        ];
+      }
+      const first = await generate(model, stream, input);
       for (const [replay, content] of [
         [false, first],
         [
           true,
           await generate(model, stream, [
-            ...initial,
+            ...input,
             { role: "assistant", content: first },
             {
               role: "user",
@@ -163,6 +218,7 @@ async function main() {
           model,
           stream,
           replay,
+          scenario: withToolPrefix ? "tool-result-prefix" : "direct-image-runs",
           order_preserved: text === '["A","RED","B","BLUE","C"]',
           signed_thinking: first.some(
             (b) => b.type === "thinking" && String(b.signature).startsWith("kr2_"),
@@ -187,6 +243,7 @@ void main().catch((error) => {
     "invalid_block_sequence",
     "invalid_terminal_count",
     "image_order_or_signed_replay_unproven",
+    "tool_prefix_seed_unproven",
   ]);
   process.stderr.write(
     `${JSON.stringify({ pass: false, code: error instanceof Error && allowed.has(error.message) ? error.message : "probe_failed" })}\n`,
