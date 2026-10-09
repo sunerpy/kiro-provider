@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.5](https://github.com/sunerpy/kiro-provider/compare/v3.8.4...v3.8.5) (2026-10-09)
+
+
+### Bug Fixes
+
+* **replay:** 修复 Claude 原会话工具历史续接 ([#138](https://github.com/sunerpy/kiro-provider/issues/138)) ([62c27f2](https://github.com/sunerpy/kiro-provider/commit/62c27f2a13230ff8f538f5d5d91d1df9521a4d6c))
+
 ## [3.8.4](https://github.com/sunerpy/kiro-provider/compare/v3.8.3...v3.8.4) (2026-10-09)
 
 
