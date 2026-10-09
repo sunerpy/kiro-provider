@@ -675,3 +675,23 @@ real SDK send emits `sdk_dispatch_started` with a one-based `attempt`; the same
 pair is copied to completion-witness and `sdk_stream_terminal` events.
 `request_transform_rejected` records only the stage, code, and source path.
 These events contain counts, enum labels, lengths, and hashes only.
+
+## Conflicting summarized reasoning signatures after upgrading
+
+If an existing Claude session reports HTTP 502 with conflicting Kiro reasoning
+signatures, inspect its effective thinking display. Paseo can pass an explicit
+`--thinking-display summarized`, which overrides the launcher's preference.
+An operator may set `anthropic_thinking_display_mode: "omitted"` in the gateway
+configuration and restart it, or use
+`KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE=omitted`. Existing requests then
+use omitted current output without lowering effort or editing signed history.
+Converted responses report `x-kiro-thinking-display-mode: forced-omitted`.
+
+This is an explicit recovery policy. Summarized support remains strict when the
+policy is `preserve`, and nonempty or malformed conflicts still fail closed in
+recovery mode. `sdk_reasoning_signature_observed` records signature positions,
+lengths, relation enums and reasoning character counts; it never logs signature
+values, hashes or thinking text. These metrics distinguish real failures from
+short-request successes, but cannot alone prove that distinct signatures are
+fragments of one replayable value. Do not concatenate them without executable
+upstream replay evidence.

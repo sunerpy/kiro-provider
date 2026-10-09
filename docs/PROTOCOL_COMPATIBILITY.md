@@ -69,6 +69,15 @@ effort, visible summary and complete signature for replay. Multiple distinct
 signatures remain fatal; summarized output never uses conflicting-prefix
 omission. The `updates` mode remains rejected for every model.
 
+An operator can opt into `anthropic_thinking_display_mode: "omitted"` to
+recover sessions that explicitly request summarized thinking. After validating
+the original request and signed history, the gateway requests omitted current
+output for Fable 5.1 and Opus 5.5, preserves effort and historical reasoning, and
+returns `x-kiro-thinking-display-mode: forced-omitted`. This uses the existing
+opaque replay and bounded empty-prefix recovery; it does not concatenate
+distinct signatures or recover nonempty conflicts. The default `preserve` mode
+retains the summarized boundary described above.
+
 Only `clear_thinking_20251015` with `keep: "all"` is accepted for
 `context_management`; it returns `applied_edits: []`. Destructive edits,
 Structured Outputs outside the bounded `single-string-object-v1` profile

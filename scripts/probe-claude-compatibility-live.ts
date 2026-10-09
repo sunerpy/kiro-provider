@@ -35,6 +35,7 @@ type Result = {
   events: string[];
   bytes: number;
   errorType: string | null;
+  thinkingDisplayMode?: string | null;
 };
 type Row = { case: string; ok: boolean; [key: string]: unknown };
 
@@ -210,6 +211,11 @@ async function main(): Promise<void> {
   requireCondition(process.argv.includes("--confirm"), "confirmation_required");
   const binary = option("--binary");
   const output = option("--out");
+  const displayMode = option("--thinking-display-mode") ?? "preserve";
+  requireCondition(
+    displayMode === "preserve" || displayMode === "omitted",
+    "invalid_thinking_display_mode",
+  );
   requireCondition(binary && output, "binary_and_output_required");
   const binaryPath = resolve(binary);
   const existingState = option("--reuse-state");
@@ -268,6 +274,7 @@ async function main(): Promise<void> {
   const config =
     existingConfig ??
     ConfigSchema.parse({
+      anthropic_thinking_display_mode: displayMode,
       api_keys: [key],
       host: "127.0.0.1",
       port,
@@ -329,6 +336,7 @@ async function main(): Promise<void> {
           refresh_credentials_copied: false,
           account_maintenance_enabled: false,
           dynamic_model_catalog: false,
+          thinking_display_policy: config.anthropic_thinking_display_mode,
           proxy_enabled: true,
           generation_request_count: rows.length,
           rows,
@@ -378,7 +386,10 @@ async function main(): Promise<void> {
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(250_000),
       });
-      return parseResult(response.status, await response.text(), body.stream === true);
+      return {
+        ...parseResult(response.status, await response.text(), body.stream === true),
+        thinkingDisplayMode: response.headers.get("x-kiro-thinking-display-mode"),
+      };
     };
     const run = async (
       name: string,
@@ -393,6 +404,7 @@ async function main(): Promise<void> {
         effort: (body.output_config as Json)?.effort ?? null,
         stream: body.stream === true,
         duration_ms: Math.round(performance.now() - start),
+        thinking_display_mode: result.thinkingDisplayMode ?? null,
         ...summary(result),
       });
       report();
@@ -417,10 +429,15 @@ async function main(): Promise<void> {
       result.content.some(
         (block) =>
           block.type === "thinking" &&
-          String(block.thinking ?? "").length > 0 &&
+          (config.anthropic_thinking_display_mode === "omitted"
+            ? String(block.thinking ?? "").length === 0 &&
+              String(block.signature ?? "").startsWith("kr2_")
+            : String(block.thinking ?? "").length > 0) &&
           String(block.signature ?? "").length > 0,
       ) &&
-      !result.events.includes("error");
+      !result.events.includes("error") &&
+      (config.anthropic_thinking_display_mode !== "omitted" ||
+        result.thinkingDisplayMode === "forced-omitted");
     const first = await run(
       "summary-json-tool",
       {
@@ -453,7 +470,9 @@ async function main(): Promise<void> {
       {
         ...request,
         stream: true,
-        output_config: { effort: "xhigh" },
+        output_config: {
+          effort: config.anthropic_thinking_display_mode === "omitted" ? "max" : "xhigh",
+        },
         tools: [],
         messages: [
           initial,
@@ -543,6 +562,7 @@ async function main(): Promise<void> {
 void main().catch((error) => {
   const codes = new Set([
     "confirmation_required",
+    "invalid_thinking_display_mode",
     "binary_and_output_required",
     "no_fresh_healthy_account",
     "isolated_port_required",

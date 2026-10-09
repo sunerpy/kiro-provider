@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "binarySha256": "2bb357b78c9c229ff6035bbba014efbdca27cc8e5502bd55b19ecad9cd9c2fb6",
+  "thinkingDisplayPolicy": "omitted",
+  "liveUpstreamRequests": 0,
+  "syntheticUpstreamCalls": 4,
+  "maxPreserved": true,
+  "omittedForwarded": true,
+  "omissionAudits": [
+    {
+      "model": "claude-opus-5-5",
+      "reasoningEvents": 2,
+      "prefixEvents": 2,
+      "prefixBytes": 126
+    },
+    {
+      "model": "claude-opus-5-5",
+      "reasoningEvents": 2,
+      "prefixEvents": 2,
+      "prefixBytes": 126
+    }
+  ],
+  "results": [
+    {
+      "case": "empty-conflict-json",
+      "status": 200,
+      "omitted": true,
+      "outputSeen": true,
+      "leaked": false,
+      "forcedOmitted": true,
+      "success": true
+    },
+    {
+      "case": "empty-conflict-sse",
+      "status": 200,
+      "omitted": true,
+      "outputSeen": true,
+      "leaked": false,
+      "forcedOmitted": true,
+      "success": true
+    },
+    {
+      "case": "nonempty-conflict-json",
+      "status": 502,
+      "omitted": false,
+      "outputSeen": false,
+      "leaked": false,
+      "forcedOmitted": true,
+      "success": true
+    },
+    {
+      "case": "nonempty-conflict-sse",
+      "status": 502,
+      "omitted": false,
+      "outputSeen": false,
+      "leaked": false,
+      "forcedOmitted": true,
+      "success": true
+    }
+  ],
+  "passed": true
+}

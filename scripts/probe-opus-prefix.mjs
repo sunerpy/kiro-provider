@@ -11,6 +11,9 @@ import { AccountsDatabase } from "../src/storage/accounts-db.ts";
 const index = process.argv.indexOf("--binary");
 const binary = index >= 0 ? process.argv[index + 1] : undefined;
 if (!binary) throw new Error("Usage: bun scripts/probe-opus-prefix.mjs --binary PATH");
+const modeIndex = process.argv.indexOf("--thinking-display-mode");
+const displayMode = modeIndex >= 0 ? process.argv[modeIndex + 1] : "preserve";
+if (displayMode !== "preserve" && displayMode !== "omitted") throw new Error("invalid_thinking_display_mode");
 const sha256 = createHash("sha256")
   .update(await Bun.file(binary).bytes())
   .digest("hex");
@@ -118,6 +121,7 @@ await Bun.write(
     port: 0,
     api_keys: ["fixture-prefix-key"],
     auth_source: "local",
+    anthropic_thinking_display_mode: displayMode,
     account_maintenance_enabled: false,
     dynamic_model_catalog: false,
     proxy_url: null,
@@ -167,7 +171,7 @@ try {
         model: "claude-opus-5-5",
         max_tokens: 1024,
         stream: scenario.stream,
-        thinking: { type: "adaptive", display: "omitted" },
+        thinking: { type: "adaptive", display: displayMode === "omitted" ? "summarized" : "omitted" },
         output_config: { effort: "max" },
         messages: [{ role: "user", content: "Return the synthetic fixture marker." }],
       }),
@@ -176,6 +180,7 @@ try {
     const body = await response.text();
     const omitted = response.headers.get("x-kiro-reasoning-replay-mode") === "conflict-omitted";
     const outputSeen = body.includes(marker);
+    const forcedOmitted = response.headers.get("x-kiro-thinking-display-mode") === "forced-omitted";
     const leaked = ["fixture-prefix-a", "fixture-prefix-b", "fixture-private", "kr2_"].some((s) =>
       body.includes(s),
     );
@@ -184,6 +189,7 @@ try {
       omitted === scenario.omitted &&
       outputSeen === scenario.omitted &&
       !leaked &&
+      forcedOmitted === (displayMode === "omitted") &&
       (!scenario.stream || !scenario.omitted || body.includes("event: message_stop"));
     results.push({
       case: scenario.name,
@@ -191,6 +197,7 @@ try {
       omitted,
       outputSeen,
       leaked,
+      forcedOmitted,
       success,
     });
     passed &&= success;
@@ -214,6 +221,7 @@ passed &&= calls === cases.length && maxPreserved && omittedForwarded && audit.l
 const evidence = {
   schemaVersion: 1,
   binarySha256: sha256,
+  thinkingDisplayPolicy: displayMode,
   liveUpstreamRequests: 0,
   syntheticUpstreamCalls: calls,
   maxPreserved,

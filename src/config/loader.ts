@@ -84,6 +84,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE",
+    field: "anthropic_thinking_display_mode",
+    kind: "string",
+  },
+  {
     env: "KIRO_PROVIDER_RESPONSES_INSTRUCTION_LIFT",
     field: "responses_instruction_lift",
     kind: "string",

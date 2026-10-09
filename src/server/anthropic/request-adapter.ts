@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { resolveModelVariant } from "../../kiro/models.js";
+import { resolveModelVariant, supportsReasoningPrefixOmission } from "../../kiro/models.js";
 import {
   resolveOutputTokenLimit,
   supportsAdvisoryOutputTokenLimit,
@@ -120,6 +120,7 @@ export type AdaptedAnthropicRequest = {
   readonly cacheControlCount: number;
   readonly contextManagementRequested: boolean;
   readonly thinkingDisplay?: "omitted" | "summarized";
+  readonly thinkingDisplayMode?: "forced-omitted";
   readonly outputTokenLimitMode?: "advisory";
   readonly reasoningReplayMode?: "conflict-omitted";
   readonly reasoningReplayConflictMessages?: number;
@@ -1427,6 +1428,7 @@ export function adaptAnthropicMessagesRequest(
   options: {
     readonly requireMaxTokens?: boolean;
     readonly unsupportedOutputTokenLimitMode?: "advisory";
+    readonly thinkingDisplayMode?: "preserve" | "omitted";
   } = {},
   projectionMode: ProtocolProjectionMode = "safe",
 ): AdaptAnthropicRequestResult {
@@ -1831,8 +1833,16 @@ export function adaptAnthropicMessagesRequest(
 
   const thinkingEnabled =
     request.thinking?.type === "enabled" || request.thinking?.type === "adaptive";
-  const thinkingDisplay =
-    request.thinking?.display === "summarized"
+  // Apply the operator's output policy only after the original request and
+  // historical replay have passed validation. Historical reasoning is intact.
+  const forcedOmitted =
+    options.thinkingDisplayMode === "omitted" &&
+    thinkingEnabled &&
+    request.thinking?.display === "summarized" &&
+    supportsReasoningPrefixOmission(request.model);
+  const thinkingDisplay = forcedOmitted
+    ? ("omitted" as const)
+    : request.thinking?.display === "summarized"
       ? ("summarized" as const)
       : request.thinking?.display === "omitted"
         ? ("omitted" as const)
@@ -1879,6 +1889,7 @@ export function adaptAnthropicMessagesRequest(
       cacheControlCount: count,
       contextManagementRequested: request.context_management !== undefined,
       ...(thinkingDisplay !== undefined ? { thinkingDisplay } : {}),
+      ...(forcedOmitted ? { thinkingDisplayMode: "forced-omitted" as const } : {}),
       ...(outputTokenLimitMode !== undefined ? { outputTokenLimitMode } : {}),
       ...(reasoningReplayConflictMessages > 0
         ? {

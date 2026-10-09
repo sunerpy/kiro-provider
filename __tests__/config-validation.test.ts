@@ -25,6 +25,44 @@ afterEach(() => {
   }
 });
 
+describe("Anthropic thinking display policy configuration", () => {
+  test("preserves requests by default and applies environment before the file", () => {
+    expect(ConfigSchema.parse({ api_keys: ["fixture-key"] }).anthropic_thinking_display_mode).toBe(
+      "preserve",
+    );
+    const configPath = createConfigFile({
+      api_keys: ["fixture-key"],
+      anthropic_thinking_display_mode: "preserve",
+    });
+    expect(
+      loadConfig({ configPath, env: { KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE: "omitted" } })
+        .anthropic_thinking_display_mode,
+    ).toBe("omitted");
+    expect(
+      loadConfig({
+        configPath,
+        env: { KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE: "omitted" },
+        overrides: { anthropic_thinking_display_mode: "preserve" },
+      }).anthropic_thinking_display_mode,
+    ).toBe("preserve");
+  });
+
+  test("rejects unknown policy values from both the file and environment", () => {
+    const configPath = createConfigFile({
+      api_keys: ["fixture-key"],
+      anthropic_thinking_display_mode: "summarized",
+    });
+    expect(() => loadConfig({ configPath, env: {} })).toThrow(ConfigLoadError);
+    const valid = createConfigFile({ api_keys: ["fixture-key"] });
+    expect(() =>
+      loadConfig({
+        configPath: valid,
+        env: { KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE: "silent" },
+      }),
+    ).toThrow(ConfigLoadError);
+  });
+});
+
 type NumericField = {
   readonly field: string;
   readonly envName: string;

@@ -312,6 +312,7 @@ async function main(): Promise<void> {
         }),
       );
       row.status = response.status;
+      row.thinking_display_mode = response.headers.get("x-kiro-thinking-display-mode");
       row.sdk_dispatches = sdkDispatches - beforeRequestDispatches;
       if (response.status === 400) {
         const error = (await response.clone().json()) as { error?: { message?: string } };
@@ -420,9 +421,11 @@ async function main(): Promise<void> {
         sdk = sdkCaptures.slice(sdkStart);
       const expectedRejected = gate || unsupported;
       const expectedDisplay = explicit ? "summarized" : "omitted";
+      const forcedOmitted = explicit && config.anthropic_thinking_display_mode === "omitted";
       const row = {
         case: name,
         effort,
+        thinking_display_policy: config.anthropic_thinking_display_mode,
         exit_code: exitCode,
         request_count: segment.length,
         sdk_dispatches: sdkDispatches - beforeDispatch,
@@ -473,8 +476,13 @@ async function main(): Promise<void> {
               ) &&
               sdk.every(
                 (request) =>
-                  request.thinking_display === expectedDisplay && request.effort === effort,
+                  request.thinking_display === (forcedOmitted ? "omitted" : expectedDisplay) &&
+                  request.effort === effort,
               ) &&
+              (!forcedOmitted ||
+                segment
+                  .filter((request) => request.status === 200)
+                  .every((request) => request.thinking_display_mode === "forced-omitted")) &&
               sdk.some(
                 (request) => request.reasoning_replayed && Number(request.tool_result_count) > 0,
               ),
@@ -497,6 +505,13 @@ async function main(): Promise<void> {
       join(repository, "scripts/kiroclaude"),
       "max",
       true,
+      true,
+    );
+    config.anthropic_thinking_display_mode = "omitted";
+    await run(
+      "recovery-explicit-summarized-tool-replay",
+      join(repository, "scripts/kiroclaude"),
+      "max",
       true,
     );
     writeFileSync(

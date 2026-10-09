@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "window_start": "2026-10-09T05:13:13Z",
+  "observed_until": "2026-10-09T05:19:57.918Z",
+  "converted_requests": 41,
+  "max_effort_dispatches": 42,
+  "normal_completions": 34,
+  "invalid_reasoning_after_override": 0,
+  "output_empty_conflict_omissions": 7,
+  "signature_relations": {
+    "first": 25,
+    "distinct": 7
+  },
+  "nonempty_distinct_observations": 0
+}

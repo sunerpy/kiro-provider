@@ -12,6 +12,7 @@ import {
   supportsReasoningPrefixOmission,
 } from "../../models.js";
 import { type ReasoningReplayDecision, readReasoningPrefix } from "./reasoning-prefix.js";
+import { createReasoningSignatureObserver } from "./reasoning-signature-diagnostics.js";
 import {
   appendReasoningCapture,
   appendToolFragment,
@@ -145,9 +146,11 @@ export async function* transformSdkOutputStream(
   let reasoningOmitted = false;
   let prefetched: SdkStreamEvent[] = [];
   let prefetchedIndex = 0;
+  const observeReasoningSignature = createReasoningSignatureObserver(model, options.diagnostics);
   const observeRaw = (event: SdkStreamEvent): void => {
     options.onRawEvent?.(sdkEventTypes(event));
     assertSupportedSdkEvent(event);
+    if (options.emitAnthropicReasoningMetadata) observeReasoningSignature(event);
   };
 
   const bufferAssistantEvent = (event: BufferedAssistantEvent): void => {
