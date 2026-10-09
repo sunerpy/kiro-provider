@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.3](https://github.com/sunerpy/kiro-provider/compare/v3.8.2...v3.8.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* **messages:** 修复 Claude 思考显示与 Goal 评估 ([#134](https://github.com/sunerpy/kiro-provider/issues/134)) ([48414d9](https://github.com/sunerpy/kiro-provider/commit/48414d9067c80fc4e438050c5f7660c773e63284))
+
 ## [3.8.2](https://github.com/sunerpy/kiro-provider/compare/v3.8.1...v3.8.2) (2026-10-08)
 
 
