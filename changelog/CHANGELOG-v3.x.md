@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.4](https://github.com/sunerpy/kiro-provider/compare/v3.8.3...v3.8.4) (2026-10-09)
+
+
+### Bug Fixes
+
+* **messages:** 恢复升级后的思考签名兼容 ([#136](https://github.com/sunerpy/kiro-provider/issues/136)) ([4accf96](https://github.com/sunerpy/kiro-provider/commit/4accf968cb0eb16808d0297faa41399b4a1cb934))
+
 ## [3.8.3](https://github.com/sunerpy/kiro-provider/compare/v3.8.2...v3.8.3) (2026-10-09)
 
 
