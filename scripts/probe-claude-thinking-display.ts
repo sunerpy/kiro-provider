@@ -24,6 +24,7 @@ import { gunzipSync } from "node:zlib";
 import { ConfigSchema } from "../src/config/schema.js";
 import type { SdkStreamEvent } from "../src/kiro/transform/streaming/sdk-stream-runtime.js";
 import type { ManagedAccount } from "../src/kiro/types.js";
+import { workingDirectoryHash } from "../src/protocol/client-normalization.js";
 import { ReasoningReplayStore } from "../src/reasoning/replay-store.js";
 import { type AppDependencies, createApp } from "../src/server/app.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
@@ -150,6 +151,8 @@ async function main(): Promise<void> {
   const project = join(root, "project");
   const configDir = join(root, "claude");
   mkdirSync(project);
+  mkdirSync(join(project, "subdir"));
+  writeFileSync(join(project, "fixture.txt"), "OLD\n", { mode: 0o600 });
   mkdirSync(configDir);
   const sharedSettings = join(configDir, "settings.json");
   const sharedBytes = '{"showThinkingSummaries":true,"effortLevel":"low"}\n';
@@ -181,6 +184,7 @@ async function main(): Promise<void> {
   let sdkDispatches = 0;
   let iteratorClosed = 0;
   let gate = true;
+  let scenario: "baseline" | "cwd-change" | "edit-default" = "baseline";
   const sdkCaptures: Array<Record<string, unknown>> = [];
   const captures: Array<Record<string, unknown>> = [];
   const dependencies: AppDependencies = {
@@ -227,8 +231,18 @@ async function main(): Promise<void> {
             },
           },
         ];
-        if (tools.length > 0 && results.length === 0) {
-          const tool = tools.find((value) => "toolSpecification" in value);
+        const priorNames = (command.input.conversationState?.history ?? []).flatMap(
+          (message) => message.assistantResponseMessage?.toolUses?.map((call) => call.name) ?? [],
+        );
+        if (
+          tools.length > 0 &&
+          (results.length === 0 || (scenario === "edit-default" && !priorNames.includes("Edit")))
+        ) {
+          const nextName =
+            scenario === "edit-default" ? (priorNames.includes("Read") ? "Edit" : "Read") : "Bash";
+          const tool = tools.find(
+            (value) => "toolSpecification" in value && value.toolSpecification?.name === nextName,
+          );
           requireCondition(
             tool && "toolSpecification" in tool && tool.toolSpecification,
             "fixture_tool_missing",
@@ -236,11 +250,24 @@ async function main(): Promise<void> {
           events.push({
             toolUseEvent: {
               name: tool.toolSpecification.name,
-              toolUseId: "fixture-call",
-              input: JSON.stringify({
-                command: `printf '%s\\n' '${marker}'`,
-                description: "Run synthetic check",
-              }),
+              toolUseId: `fixture-call-${nextName}`,
+              input: JSON.stringify(
+                nextName === "Read"
+                  ? { file_path: join(project, "fixture.txt") }
+                  : nextName === "Edit"
+                    ? {
+                        file_path: join(project, "fixture.txt"),
+                        old_string: "OLD",
+                        new_string: "NEW",
+                      }
+                    : {
+                        command:
+                          scenario === "cwd-change"
+                            ? `cd ${project} && printf '%s\\n' '${marker}'`
+                            : `printf '%s\\n' '${marker}'`,
+                        description: "Run synthetic check",
+                      },
+              ),
               stop: true,
             },
           });
@@ -302,6 +329,11 @@ async function main(): Promise<void> {
       const headers = new Headers(request.headers);
       headers.delete("content-encoding");
       headers.delete("content-length");
+      if (scenario === "cwd-change") {
+        // Model a normalization scope retained from an earlier working
+        // directory while the real client now operates in this project.
+        headers.set("x-kiro-working-directory-hash", workingDirectoryHash(join(project, "subdir")));
+      }
       const beforeRequestDispatches = sdkDispatches;
       const response = await app(
         new Request(request.url, {
@@ -314,6 +346,31 @@ async function main(): Promise<void> {
       row.status = response.status;
       row.thinking_display_mode = response.headers.get("x-kiro-thinking-display-mode");
       row.sdk_dispatches = sdkDispatches - beforeRequestDispatches;
+      const sourceText =
+        typeof body.system === "string"
+          ? body.system
+          : Array.isArray(body.system)
+            ? body.system.map((part: { text?: string }) => part.text ?? "").join("\n")
+            : "";
+      row.system_has_current_subdir = sourceText.includes(join(project, "subdir"));
+      row.native_directory_hint = /(?:Primary working directory|Working directory):\s*\//.test(
+        sourceText,
+      );
+      row.native_cwd_tag = /<cwd>\//.test(sourceText);
+      const historicalCalls = (body.messages ?? []).flatMap(
+        (message: { role?: string; content?: unknown }) =>
+          message.role === "assistant" && Array.isArray(message.content)
+            ? message.content.filter((block: { type?: string }) => block.type === "tool_use")
+            : [],
+      );
+      row.history_edit_default_false = historicalCalls.some(
+        (call: { name?: string; input?: { replace_all?: boolean } }) =>
+          call.name === "Edit" && call.input?.replace_all === false,
+      );
+      row.history_bash_cd_prefix = historicalCalls.some(
+        (call: { name?: string; input?: { command?: string } }) =>
+          call.name === "Bash" && /^\s*cd\s/.test(call.input?.command ?? ""),
+      );
       if (response.status === 400) {
         const error = (await response.clone().json()) as { error?: { message?: string } };
         row.error_field_enums =
@@ -359,13 +416,17 @@ async function main(): Promise<void> {
           '--settings={"showThinkingSummaries":true}',
           "--no-session-persistence",
           "--tools",
-          gate || unsupported ? "" : "Bash",
+          gate || unsupported ? "" : scenario === "edit-default" ? "Read,Edit" : "Bash",
           "--allowedTools",
-          "Bash(printf *)",
+          scenario === "baseline"
+            ? "Bash(printf *)"
+            : scenario === "edit-default"
+              ? "Read,Edit"
+              : "Bash",
           "--max-turns",
-          "3",
+          scenario === "edit-default" ? "4" : "3",
           "--system-prompt",
-          "Synthetic check only. Do not delegate.",
+          `Synthetic check only. Do not delegate.\nPrimary working directory: ${project}`,
           "--effort",
           effort,
           ...(unsupported ? ["--model", "claude-sonnet-5[1m]"] : []),
@@ -514,6 +575,10 @@ async function main(): Promise<void> {
       "max",
       true,
     );
+    scenario = "cwd-change";
+    await run("replay-cwd-change", join(repository, "scripts/kiroclaude"), "max", true);
+    scenario = "edit-default";
+    await run("replay-edit-default", join(repository, "scripts/kiroclaude"), "max", true);
     writeFileSync(
       output,
       `${JSON.stringify({ schema_version: 1, client_version: version, private_network_namespace: true, passed: true, runs }, null, 2)}\n`,

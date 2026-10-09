@@ -695,3 +695,13 @@ values, hashes or thinking text. These metrics distinguish real failures from
 short-request successes, but cannot alone prove that distinct signatures are
 fragments of one replayable value. Do not concatenate them without executable
 upstream replay evidence.
+
+## Replay context 400 after omitted-thinking recovery
+
+A replay-context 400 is local binding validation, before inference. It is
+separate from Kiro's upstream signature-conflict 502. If a Claude conversation
+contains Edit default insertion or Bash directory-prefix removal, the bounded
+authenticated tool-input recovery handles those evidenced shapes without
+changing the model or effort. A rejected token still requires the complete
+original output, tenant, model and normalization scope. Do not disable binding
+validation or delete nonempty thinking merely to bypass the error.

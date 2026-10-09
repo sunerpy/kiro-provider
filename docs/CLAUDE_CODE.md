@@ -480,3 +480,25 @@ References: [Messages API](https://platform.claude.com/docs/en/api/messages/crea
 [Claude Code permissions](https://code.claude.com/docs/en/permissions),
 [Claude Code gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol),
 and [Claude Code environment variables](https://code.claude.com/docs/en/env-vars).
+
+### Authenticated recovery of native tool-input rewrites
+
+Claude Code can add the default `replace_all: false` to replayed Edit calls or
+remove a redundant literal `cd` prefix from Bash history after the shell changes
+directory. Opaque reasoning binds the complete original assistant output, so
+these mutations can otherwise produce HTTP 400 replay context errors.
+
+For the existing `claude-code-bash-v1` normalization opt-in, the gateway builds
+bounded historical-input candidates: omit only boolean false Edit defaults, or
+restore a literal Bash directory prefix from native working-directory hints in
+the system context. A hint is a candidate, not authorization. The original
+output fingerprint, tenant, model, complete GCM authentication, TTL, and minted
+normalization scope must all verify. Only then are the exact original inputs
+restored into upstream history. Tool IDs, names, actual parameters and current
+tool authorization remain bound. Changed arguments, directories, tenants,
+missing provenance and malformed tokens remain errors.
+
+There are at most 32 candidates and 8 MiB of fingerprint work per historical
+output, using at most four directory hints. The
+`reasoning_replay_client_shape_restored` audit reports only the repair enum and
+call count; `reasoning_replay_rejected` records sanitized rejection codes.

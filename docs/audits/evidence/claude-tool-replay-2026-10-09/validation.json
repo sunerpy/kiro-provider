@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "base_revision": "4ce8443901984d7bbf31c4c32257db487273cdc6",
+  "reproducer_before": {
+    "pass": 13,
+    "fail": 4
+  },
+  "focused_checks": {
+    "pass": 73,
+    "fail": 0
+  },
+  "full_suite": {
+    "pass": 3155,
+    "fail": 0,
+    "files": 230
+  },
+  "line_coverage": {
+    "covered": 33847,
+    "total": 35363,
+    "percent": 95.71,
+    "floor_percent": 93
+  },
+  "full_pre_ci_passed": true,
+  "native_client_version": "2.1.294",
+  "native_cases_passed": 2,
+  "retained_real_tokens_authenticated": 14,
+  "production_transcripts_modified": false,
+  "production_database_schema_changed": false,
+  "binding_checks_disabled": false,
+  "live_user_retry_observed": false
+}

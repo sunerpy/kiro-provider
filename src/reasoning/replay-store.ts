@@ -13,6 +13,7 @@ import {
   type KiroReasoningContent,
   type ResolvedReasoningReplay,
 } from "../protocol/canonical.js";
+import type { ClientReplayRepair } from "../protocol/claude-replay-repair.js";
 import {
   type ClientNormalization,
   isClientNormalization,
@@ -27,6 +28,7 @@ import {
   isPortableReplayToken,
   type PortableReplayMintProvenance,
   PortableReplayTokenError,
+  selectPortableReplayOutputFingerprint,
 } from "./replay-token.js";
 
 interface StoredEnvelope {
@@ -67,6 +69,7 @@ export interface ReasoningReplayContext {
   readonly outputFingerprint: string;
   readonly compatibleOutputFingerprints?: readonly string[];
   readonly normalizedOutputFingerprint?: string;
+  readonly clientReplayRepairs?: readonly ClientReplayRepair[];
   readonly clientNormalization?: ClientNormalization;
   readonly accountId?: string;
   readonly conversationId?: string;
@@ -482,6 +485,12 @@ export class ReasoningReplayStore {
             replay: {
               insertBeforeMessage,
               content: decoded.content,
+              ...(decoded.clientRepair !== undefined
+                ? {
+                    toolInputRestorations: decoded.clientRepair.toolInputs,
+                    clientRepairKind: decoded.clientRepair.kind,
+                  }
+                : {}),
               ...(decoded.provenance.instructionProjection !== undefined
                 ? { instructionProjection: decoded.provenance.instructionProjection }
                 : {}),
@@ -707,7 +716,7 @@ export class ReasoningReplayStore {
   private decodePortableForContext(
     token: string,
     context: ReasoningReplayContext,
-  ): ReturnType<typeof decodePortableReplayToken> {
+  ): ReturnType<typeof decodePortableReplayToken> & { readonly clientRepair?: ClientReplayRepair } {
     const decode = (outputFingerprint: string) =>
       decodePortableReplayToken(
         token,
@@ -722,6 +731,7 @@ export class ReasoningReplayStore {
       );
     let decoded: ReturnType<typeof decodePortableReplayToken>;
     let normalized = false;
+    let clientRepair: ClientReplayRepair | undefined;
     try {
       decoded = decode(context.outputFingerprint);
     } catch (error) {
@@ -732,7 +742,23 @@ export class ReasoningReplayStore {
         context.normalizedOutputFingerprint === undefined
       )
         throw error;
-      decoded = decode(context.normalizedOutputFingerprint);
+      try {
+        decoded = decode(context.normalizedOutputFingerprint);
+      } catch (normalizedError) {
+        if (
+          !(normalizedError instanceof PortableReplayTokenError) ||
+          normalizedError.code !== "reasoning_replay_context_mismatch"
+        )
+          throw normalizedError;
+        const repairs = (context.clientReplayRepairs ?? []).slice(0, 32);
+        const selected = selectPortableReplayOutputFingerprint(
+          token,
+          repairs.map((repair) => repair.normalizedOutputFingerprint),
+        );
+        clientRepair = repairs.find((repair) => repair.normalizedOutputFingerprint === selected);
+        if (clientRepair === undefined) throw normalizedError;
+        decoded = decode(clientRepair.normalizedOutputFingerprint);
+      }
       normalized = true;
     }
     const provenance = decoded.legacy ? undefined : decoded.provenance;
@@ -743,7 +769,7 @@ export class ReasoningReplayStore {
       );
     }
     this.verifyNormalization(provenance?.clientNormalization, context);
-    return decoded;
+    return { ...decoded, ...(clientRepair !== undefined ? { clientRepair } : {}) };
   }
 
   private decryptLegacyEnvelope(record: ReasoningReplayRecord): StoredEnvelope {
