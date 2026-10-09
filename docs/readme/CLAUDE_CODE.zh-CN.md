@@ -41,6 +41,14 @@ Bedrock、Vertex、Foundry 和 Mantle 路由，清空继承的 Anthropic 与 Bed
 认证始终以启动器配置为准。合并后的文件内容通过仅 owner 可读的匿名文件描述符
 传递，不进入进程命令行，避免 caller settings 中的凭据被 `ps` 暴露。
 
+Kiro 模式还在 overlay 中设置 `showThinkingSummaries: false`，防止共享 Claude
+设置或 caller settings 文件为不支持摘要的网关模型选择 `thinking.display:
+"summarized"`。请求采用 `omitted` 显示，保留所选 effort 与 signed reasoning 回放。
+显式 `--thinking-display` 参数与管理员 managed setting 仍优先；若它们选择摘要，
+可用 `--thinking-display omitted` 指定兼容显示方式。原生 Bedrock 模式保留 Claude
+自身的摘要设置。Kiro 模式还关闭 `CLAUDE_CODE_THINKING_DISPLAY_UPDATES`，
+避免 Claude Code 2.1.294 先请求未支持的 `updates` 显示、被拒后再重试。
+
 共享历史不代表 provider 专用签名可以互通。如果旧续轮包含另一个 provider 无法
 回放的 signed thinking，在原生 Bedrock 与 Kiro 之间切换时应新建会话。
 
@@ -80,6 +88,7 @@ stream/非 stream Messages 与 signed reasoning 续接。请以 max effort 和 1
 | Claude 状态            | 共享原生 `~/.claude` 与 `~/.claude.json`      |
 | 模型                   | Opus 5.5，客户端上下文窗口 1M                 |
 | 推理模式               | Ultra，即 Ultracode：`xhigh` 加 workflow 编排 |
+| 思考显示               | `omitted`（`showThinkingSummaries: false`）   |
 | 权限模式               | 继承 Claude 原生设置；启动器默认不覆盖        |
 | 离开后的 recap         | 关闭                                          |
 | 标题、分类等非必要流量 | 关闭                                          |
@@ -129,12 +138,10 @@ wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会
 `claude-sonnet-5[1m]`：Claude Code 会用该槽位执行 prompt hook，并发送正整数
 `max_tokens`，而 Kiro Haiku 4.5 会拒绝所有 `additionalModelRequestFields` 对象。
 该映射会消除 Haiku 特有的拒绝。Claude Code 2.1.280 的会话标题生成和 prompt hook
-还会发送 `output_config.format`。Messages 只按下文描述的有界本地
-`single-string-object-v1` profile 接受它，该 profile 覆盖会话标题请求中唯一的
-必填 `title` 字符串；`hook_prompt` 评估器的 schema（`ok`／`reason`／`impossible`，
-两个 required 属性且含 boolean）不在 profile 内，仍返回
-`400 unsupported_structured_output`，切换模型和本 profile 都不代表 prompt hook
-已完整兼容。Fable 行映射到 `claude-fable-5-1[1m]`，
+还会发送 `output_config.format`。Messages 识别两个有界本地 profile：会话标题使用
+`single-string-object-v1`，`hook_prompt` 和内置 `/goal` 评估器使用
+`hook-evaluation-v1`（`ok`／`reason`／`impossible`）。两者均在发布前校验输出；
+任意 JSON Schema 仍不支持。Fable 行映射到 `claude-fable-5-1[1m]`，
 实际 Kiro wire ID 为 `claude-fable-5.1`。启动器还会在 picker 中加入
 `claude-opus-5-5[1m]`、`claude-opus-5[1m]`、`gpt-5.6-sol[1m]`、
 `gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
@@ -155,8 +162,8 @@ wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会
 Claude Code 2.1.280 通过一个 `/v1/messages` 旁路请求生成会话标题：thinking
 关闭、工具列表为空、只有一条 user message，并在 `output_config.format` 中携带
 `{ type: "json_schema", schema }`，其根 object 恰好有一个 required string 属性
-（`title`）且 `additionalProperties: false`。Messages 只接受这一形状的
-`output_config.format`，即有界本地 `single-string-object-v1` profile：根 object、
+（`title`）且 `additionalProperties: false`。Messages 将这一形状的
+`output_config.format` 识别为有界本地 `single-string-object-v1` profile：根 object、
 恰好一个 required string 属性、`additionalProperties: false`，以及本地 1-256
 字符边界（显式整数 `minLength`/`maxLength` 必须落在该范围内）。Schema 不会发往
 上游，也不会注入任何 prompt。Kiro 仍生成普通文本；Provider 先缓冲、去除首尾
@@ -168,7 +175,7 @@ Claude Code 2.1.280 通过一个 `/v1/messages` 旁路请求生成会话标题�
 `unsupported_parameter`，message 内的 `output_config` 仍返回
 `unsupported_message_field`。
 
-该 profile 采取 fail closed。其他 Schema 形状、开启 thinking、或与 `format` 同时
+该 profile 采取 fail closed。未识别的 Schema 形状、开启 thinking、或与 `format` 同时
 出现的强制 `tool_choice` 返回 `400 unsupported_structured_output`。上游工具调用、
 thinking 已关闭时仍返回的上游 reasoning、超过 64 KiB 的输出，或无法满足 profile
 的空文本返回 `502 structured_output_unexpected_tool_call`、
@@ -179,6 +186,47 @@ thinking 已关闭时仍返回的上游 reasoning、超过 64 KiB 的输出，�
 其他获取标题的途径。若某个会话的输入只有 slash command（例如 `/model`）或不足
 10 个字符的提示词，标题仍显示首条输入，因为这种情况下 Claude Code 根本不会请求
 标题；升级 Provider 也不会改写既有 transcript。
+
+### Goal 与 prompt hook 评估
+
+Claude Code 2.1.285 的 Stop／Goal 评估请求使用 `/v1/messages`，关闭 thinking、
+不声明工具，并在 `output_config.format` 中携带以下 schema：
+
+```json
+{
+  "type": "json_schema",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "ok": { "type": "boolean" },
+      "reason": { "type": "string" },
+      "impossible": { "type": "boolean" }
+    },
+    "required": ["ok", "reason"],
+    "additionalProperties": false
+  }
+}
+```
+
+Messages 将这个精确形状识别为 `hook-evaluation-v1`，原样转发客户端评估指令，
+最多缓冲 64 KiB。完整输出必须是符合这些字段的 JSON object；允许剥掉包住整段
+JSON 的单个 Markdown 围栏。Provider 保留两个布尔值、完整 reason，以及
+`impossible` 未提供的状态，不将自然语言推测为决策，不补默认值、不做类型转换、
+不截断 reason。缺少字段、额外字段、重复 JSON key 或错误类型返回
+`structured_output_validation_failed`。标题 profile 的工具、reasoning、取消与超时
+保护同样适用。Schema 不发往上游，也不加入新指令或第二次推理。
+
+JSON 和 SSE 成功响应均只包含一个已校验的 text block，并带
+`x-kiro-structured-output: hook-evaluation-v1`。根据
+[Claude hook 契约](https://code.claude.com/docs/en/hooks#response-schema)，
+`ok: false` 让 Stop／Goal 将 reason 传回主模型继续执行；`ok: true` 允许结束；
+`ok: false, impossible: true` 允许结束无法满足的条件。后续决策和工具循环由
+Claude Code 负责。评估错误仍是明确的 API／SSE 错误，不会被转换成完成判断。
+
+可执行探针 `scripts/probe-claude-goal.ts` 默认使用隔离的 Claude home 和合成上游。
+`--native-goal` 验证真实 `/goal` 命令，包括过早停止、评估反馈、Bash 检查及最终
+评估。`--live-base-url` 与 `--provider-config` 仅将评估请求转发到隔离 gateway；
+宿主 managed settings 需要独立网络环境时，可用 `--live-unix-socket` 连接私有代理。
 
 Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthropic`
 的模型，所以这三个 GPT 行需要显式声明。两个 Claude Opus 行本身能通过该过滤，但
@@ -260,8 +308,9 @@ Responses 投影，因为 Kiro 原生 `CreateResponse` 当前拒绝该模型；�
 仍由 Provider 自有 continuation 和 replay 状态支持。
 
 Fable 5.1 与 Opus 5.5 的 Messages adaptive thinking 默认采用原生 `omitted`
-显示方式，通常仍保留并通过 opaque signature 回放签名推理。Fable 的显式
-`thinking.display: "summarized"` 会原样保留；Opus 5.5 的 summarized 显示仍不支持。
+显示方式，通常仍保留并通过 opaque signature 回放签名推理。Fable 5.1 与
+Opus 5.5 的显式 `thinking.display: "summarized"` 会原样保留，包括所选 effort、
+可见摘要与完整原生签名；其他模型继续拒绝摘要显示。
 Kiro 可能返回多段分别签名的摘要；
 网关会拒绝这个尚不支持的形态，不会拼接签名或丢弃推理来绕过错误。
 
@@ -327,7 +376,7 @@ Kiro user turn。多个含图结果会保留每个 tool result、状态、文本
 按连续 Kiro 用户消息投影，也支持其前面的一组纯文本工具结果，其后从文字段开始。
 总计最多 16 段，包含工具结果组。其他混合交错仍会被拒绝：Kiro 只有一个文本字段。
 
-Destructive context edits、有界 `single-string-object-v1` profile 之外的 Structured
+Destructive context edits、有界 `single-string-object-v1` 与 `hook-evaluation-v1` profile 之外的 Structured
 Outputs、强制工具、硬性串行工具要求和未知 beta/tool 字段会返回 Anthropic
 `invalid_request_error`，不会被静默删除。Prompt
 caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。

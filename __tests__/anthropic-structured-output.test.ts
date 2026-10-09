@@ -9,6 +9,7 @@ import {
 import type { RouteDependencies } from "../src/server/ingress.js";
 import { handleMessages } from "../src/server/routes/messages.js";
 import { captureAuditEvents } from "./audit-test-helpers.js";
+import { messagesFixture } from "./messages-regression-helpers.js";
 import { fidelityFixture } from "./responses-fidelity-helpers.js";
 import { makeSdkResponse } from "./sdk-stream-test-helpers.js";
 
@@ -99,7 +100,7 @@ function titleFormatNamed(propertyName: string): Record<string, unknown> {
   };
 }
 
-/** The exact `output_config.format` Claude Code 2.1.280 sends for a `hook_prompt` evaluation. */
+/** The evaluator schema captured from Claude Code 2.1.280 and 2.1.285, including /goal. */
 const CLAUDE_CODE_HOOK_PROMPT_FORMAT = {
   type: "json_schema",
   schema: {
@@ -303,6 +304,334 @@ function realPipelineDependencies(
     },
   };
 }
+
+function claudeCodeGoalRequest(stream: boolean, model = MODEL): Record<string, unknown> {
+  return claudeCodeTitleRequest(stream, {
+    model,
+    max_tokens: 64000,
+    system: [{ type: "text", text: "Evaluate the Stop condition. Return only the JSON decision." }],
+    messages: [
+      {
+        role: "user",
+        content:
+          'Condition: execute both synthetic room and selection checks. Transcript: user authorized both checks; assistant replied "I will test both now" without a tool call. Return ok false with the remaining action as reason.',
+      },
+    ],
+    output_config: { effort: "high", format: CLAUDE_CODE_HOOK_PROMPT_FORMAT },
+  });
+}
+
+describe("Claude Code Goal evaluation on /v1/messages", () => {
+  test("rejects a Goal verdict whose normalized JSON exceeds the output byte budget", async () => {
+    const fixture = fidelityFixture();
+    const upstream = `{"ok":false,"reason":"${"\uD800".repeat(12000)}"}`;
+    try {
+      for (const stream of [false, true]) {
+        const response = await sendMessages(fixture, claudeCodeGoalRequest(stream), {
+          runPipeline: async () => (stream ? textStream(upstream) : canonicalCompletion(upstream)),
+        });
+        if (stream)
+          expectStructuredFailureStream(await response.text(), "structured_output_buffer_exceeded");
+        else await expectStructuredFailureResponse(response, "structured_output_buffer_exceeded");
+      }
+    } finally {
+      fixture.database.close();
+    }
+  });
+  test("authenticates before accepting the Goal evaluator protocol", async () => {
+    const fixture = messagesFixture([
+      { assistantResponseEvent: { content: '{"ok":false,"reason":"Run the remaining test."}' } },
+    ]);
+    const body = claudeCodeGoalRequest(false);
+    const rejected = await fixture.request(body, "/v1/messages", { key: "wrong-fixture-key" });
+    expect(rejected.status).toBe(401);
+    expect(await rejected.json()).toMatchObject({ error: { type: "authentication_error" } });
+    expect(fixture.inputs).toHaveLength(0);
+    const accepted = await fixture.request(body);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({
+      content: [{ type: "text", text: '{"ok":false,"reason":"Run the remaining test."}' }],
+    });
+    expect(fixture.inputs).toHaveLength(1);
+    expect(fixture.state.iteratorClosed).toBe(1);
+  });
+
+  test.each(["cancel", "timeout"])(
+    "drops a buffered Goal decision and cleans up on %s",
+    async (mode) => {
+      const controller = new AbortController();
+      const started = Promise.withResolvers<void>();
+      let closed = 0;
+      const fixture = messagesFixture([], {
+        config: { request_timeout_ms: mode === "timeout" ? 60 : 2000 },
+        stream: (signal) =>
+          (async function* () {
+            try {
+              yield {
+                assistantResponseEvent: {
+                  content: '{"ok":false,"reason":"private incomplete decision',
+                },
+              };
+              started.resolve();
+              if (!signal.aborted)
+                await new Promise<void>((resolve) =>
+                  signal.addEventListener("abort", () => resolve(), { once: true }),
+                );
+            } finally {
+              closed += 1;
+            }
+          })(),
+      });
+      const response = await fixture.request(claudeCodeGoalRequest(true), "/v1/messages", {
+        signal: controller.signal,
+      });
+      const wirePromise = response.text();
+      await started.promise;
+      if (mode === "cancel") controller.abort();
+      const wire = await wirePromise;
+      expect(wire).not.toContain("private incomplete decision");
+      expect(wire).not.toContain("content_block_delta");
+      expect(wire).not.toContain("message_stop");
+      if (mode === "timeout") expect(wire).toContain("event: error");
+      expect(closed).toBe(1);
+      expect(fixture.state.aborted).toBe(1);
+      expect(fixture.inputs).toHaveLength(1);
+    },
+  );
+
+  test.each([false, true])(
+    "rejects upstream tools and reasoning before publishing a Goal verdict (stream=%s)",
+    async (stream) => {
+      for (const events of [
+        [
+          { assistantResponseEvent: { content: '{"ok":false,"reason":"private verdict"}' } },
+          {
+            toolUseEvent: {
+              toolUseId: "synthetic-call",
+              name: "synthetic-tool",
+              input: "{}",
+              stop: true,
+            },
+          },
+        ],
+        [
+          { reasoningContentEvent: { text: "private reasoning" } },
+          { assistantResponseEvent: { content: '{"ok":true,"reason":"private verdict"}' } },
+        ],
+      ]) {
+        const tool = events.some((event) => "toolUseEvent" in event);
+        const fixture = messagesFixture(events, {
+          config: { rate_limit_max_retries: 3, stream_max_attempts: 3 },
+        });
+        const response = await fixture.request(claudeCodeGoalRequest(stream));
+        const wire = await response.text();
+        expect(wire).not.toContain("private verdict");
+        expect(wire).not.toContain("private reasoning");
+        const code = tool
+          ? "structured_output_unexpected_tool_call"
+          : "structured_output_unexpected_reasoning";
+        if (stream) expectStructuredFailureStream(wire, code);
+        else {
+          expect(response.status).toBe(502);
+          expect(JSON.parse(wire).error.message).toContain(code);
+        }
+        expect(fixture.inputs).toHaveLength(1);
+        expect(fixture.state.iteratorClosed).toBe(1);
+      }
+    },
+  );
+
+  test.each([
+    { ok: true, reason: "Complete" },
+    { ok: false, reason: "Run the remaining check.", impossible: false },
+    { ok: false, reason: "Synthetic requirement cannot be satisfied.", impossible: true },
+    { ok: true, reason: "" },
+    { ok: false, reason: '  Preserve text including {"ok":true}, newlines\nand 🧪.  '.repeat(12) },
+  ])("preserves the full Goal decision %j in JSON and SSE", async (verdict) => {
+    const fixture = fidelityFixture();
+    const expected = JSON.stringify(verdict);
+    try {
+      for (const stream of [false, true]) {
+        const response = await sendMessages(fixture, claudeCodeGoalRequest(stream), {
+          runPipeline: async () =>
+            stream
+              ? textStream("```json\n", expected.slice(0, 5), expected.slice(5), "\n```")
+              : canonicalCompletion(expected),
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-kiro-structured-output")).toBe("hook-evaluation-v1");
+        if (stream) expectStructuredSuccessStream(await response.text(), expected);
+        else
+          expect(await response.json()).toMatchObject({
+            content: [{ type: "text", text: expected }],
+          });
+      }
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test.each([
+    "",
+    "Completed",
+    '"Completed"',
+    "[]",
+    '{"ok":true}',
+    '{"reason":"Missing verdict"}',
+    '{"ok":"false","reason":"Invalid boolean"}',
+    '{"ok":false,"reason":null}',
+    '{"ok":false,"reason":"Invalid impossibility","impossible":"false"}',
+    '{"ok":false,"reason":"Extra field","continue":true}',
+    '{"ok":false,"reason":"Incomplete"} trailing prose',
+    '{"ok":false,"ok":true,"reason":"Conflicting verdict"}',
+    '{"ok":false,"\\u006fk":true,"reason":"Conflicting escaped verdict"}',
+    '{"ok":false,"reason":"Incomplete","impossible":false,"impossible":true}',
+  ])("fails closed on unusable Goal output %j without retry or text leakage", async (upstream) => {
+    const fixture = fidelityFixture();
+    let dispatched = 0;
+    try {
+      for (const stream of [false, true]) {
+        const response = await sendMessages(fixture, claudeCodeGoalRequest(stream), {
+          runPipeline: async () => {
+            dispatched += 1;
+            return stream ? textStream(upstream) : canonicalCompletion(upstream);
+          },
+        });
+        if (stream) {
+          expect(response.status).toBe(200);
+          expectStructuredFailureStream(
+            await response.text(),
+            "structured_output_validation_failed",
+          );
+        } else
+          await expectStructuredFailureResponse(response, "structured_output_validation_failed");
+      }
+      expect(dispatched).toBe(2);
+      expect(JSON.stringify(audit.events())).not.toContain("Conflicting verdict");
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test("rejects a Goal reason over the 64 KiB input budget in JSON and SSE", async () => {
+    const fixture = fidelityFixture();
+    const verdict = JSON.stringify({ ok: false, reason: "🧪".repeat(17000) });
+    try {
+      for (const stream of [false, true]) {
+        const response = await sendMessages(fixture, claudeCodeGoalRequest(stream), {
+          runPipeline: async () => (stream ? textStream(verdict) : canonicalCompletion(verdict)),
+        });
+        if (stream)
+          expectStructuredFailureStream(await response.text(), "structured_output_buffer_exceeded");
+        else await expectStructuredFailureResponse(response, "structured_output_buffer_exceeded");
+      }
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  test.each([
+    { ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema, required: ["ok", "reason", "impossible"] },
+    { ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema, required: ["ok", "ok"] },
+    { ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema, additionalProperties: true },
+    {
+      ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema,
+      properties: {
+        ok: { type: "string" },
+        reason: { type: "string" },
+        impossible: { type: "boolean" },
+      },
+    },
+    {
+      ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema,
+      properties: {
+        ok: { type: "boolean", default: true },
+        reason: { type: "string" },
+        impossible: { type: "boolean" },
+      },
+    },
+    {
+      ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema,
+      properties: {
+        ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema.properties,
+        extra: { type: "string" },
+      },
+    },
+    {
+      ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema,
+      properties: { ok: { type: "boolean" }, reason: { type: "string" } },
+    },
+    { ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema, description: "Unrecognized instruction" },
+  ] as Readonly<Record<string, unknown>>[])(
+    "rejects an unrecognized Goal schema before dispatch",
+    async (schema) => {
+      const fixture = fidelityFixture();
+      try {
+        const request = claudeCodeGoalRequest(false);
+        request.output_config = { format: { type: "json_schema", schema } };
+        const response = await sendMessages(fixture, request);
+        expect(response.status).toBe(400);
+        expect(fixture.canonical).toHaveLength(0);
+        expect(audit.events("protocol_projection_rejected").at(-1)).toMatchObject({
+          code: "unsupported_structured_output",
+          param: "output_config.format",
+        });
+      } finally {
+        fixture.database.close();
+      }
+    },
+  );
+
+  test.each([false, true])(
+    "preserves an incomplete Goal decision through ingress, SDK dispatch and output (stream=%s)",
+    async (stream) => {
+      const fixture = fidelityFixture();
+      const verdict = { ok: false, reason: "Execute the synthetic room and selection checks." };
+      const real = realPipelineDependencies([
+        { assistantResponseEvent: { content: JSON.stringify(verdict) } },
+        { metadataEvent: { tokenUsage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } } },
+      ]);
+      try {
+        const response = await sendMessages(
+          fixture,
+          claudeCodeGoalRequest(stream, "claude-opus-5-5"),
+          real.dependencies,
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-kiro-structured-output")).toBe("hook-evaluation-v1");
+        if (stream) {
+          expectStructuredSuccessStream(await response.text(), JSON.stringify(verdict));
+        } else {
+          const body = await response.json();
+          expect(body).toMatchObject({
+            content: [{ type: "text", text: JSON.stringify(verdict) }],
+            stop_reason: "end_turn",
+            usage: { input_tokens: 11, output_tokens: 7 },
+          });
+        }
+        expect(real.commands).toHaveLength(1);
+        expect(real.efforts).toEqual(["high"]);
+        const sdkInput = real.commands[0]?.input;
+        expect(sdkInput?.conversationState?.currentMessage?.userInputMessage?.modelId).toBe(
+          "claude-opus-5.5",
+        );
+        const wire = JSON.stringify(sdkInput);
+        expect(wire).toContain("user authorized both checks");
+        expect(wire).not.toContain("json_schema");
+        expect(wire).not.toContain("additionalProperties");
+        expect(wire).not.toContain('"format"');
+        expect(audit.events("anthropic_structured_output_enforced")).toMatchObject([
+          { local_profile: "hook-evaluation-v1", stream },
+        ]);
+        const logs = JSON.stringify(audit.events());
+        expect(logs).not.toContain(verdict.reason);
+        expect(logs).not.toContain("user authorized both checks");
+      } finally {
+        fixture.database.close();
+      }
+    },
+  );
+});
 
 describe("Claude Code session-title structured output on /v1/messages", () => {
   test("streams the exact Claude Code 2.1.280 title request as one validated JSON text block", async () => {
@@ -864,7 +1193,13 @@ describe("Messages structured output request boundary", () => {
       },
     ],
     ["an invalid property name", titleFormatNamed("bad-name")],
-    ["the Claude Code 2.1.280 prompt-hook evaluator schema", CLAUDE_CODE_HOOK_PROMPT_FORMAT],
+    [
+      "a prompt-hook schema allowing extra properties",
+      {
+        ...CLAUDE_CODE_HOOK_PROMPT_FORMAT,
+        schema: { ...CLAUDE_CODE_HOOK_PROMPT_FORMAT.schema, additionalProperties: true },
+      },
+    ],
   ])("rejects output_config.format with %s", async (_label, format) => {
     await expectAdapterRejection(
       claudeCodeTitleRequest(false, { output_config: { format } }),

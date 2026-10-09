@@ -344,14 +344,21 @@ describe("Opus 5.5 bounded omitted reasoning prefix", () => {
     expect(audit.events("anthropic_output_reasoning_conflict_omitted")).toHaveLength(0);
   });
 
-  test("still rejects summarized requests before dispatch", async () => {
+  test("keeps summarized signature conflicts fatal after dispatch", async () => {
     const f = fixture([first, second, text]);
     const response = await f.request({
       ...request,
       thinking: { type: "adaptive", display: "summarized" },
     });
-    expect(response.status).toBe(400);
-    await response.text();
-    expect(f.inputs).toHaveLength(0);
+    expect(response.status).toBe(502);
+    const body = await response.text();
+    expect(body).toContain("conflicting reasoning signatures");
+    expect(body).not.toContain("OPUS_PREFIX_OK");
+    expect(body).not.toContain("kr2_");
+    expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBeNull();
+    expect(audit.events("anthropic_output_reasoning_conflict_omitted")).toHaveLength(0);
+    expect(f.inputs).toHaveLength(1);
+    expect(f.state.aborted).toBe(1);
+    expect(f.state.iteratorClosed).toBe(1);
   });
 });

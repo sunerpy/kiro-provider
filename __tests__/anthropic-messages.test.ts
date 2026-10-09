@@ -710,24 +710,26 @@ describe("Anthropic request adapter", () => {
     });
   });
 
-  test("accepts summarized adaptive thinking only for Fable 5.1", () => {
-    const fable = adaptAnthropicMessagesRequest(
-      validRequest({
-        model: "claude-fable-5-1",
-        thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
-      }),
-    );
-    expect(fable).toMatchObject({
-      ok: true,
-      value: {
-        body: {
-          model: "claude-fable-5-1",
-          thinking: { enabled: true },
-          reasoningEffort: "high",
+  test("accepts summarized adaptive thinking only for Fable 5.1 and Opus 5.5", () => {
+    for (const model of ["claude-fable-5-1", "claude-opus-5-5"]) {
+      const adapted = adaptAnthropicMessagesRequest(
+        validRequest({
+          model,
+          thinking: { type: "adaptive", display: "summarized" },
+          output_config: { effort: "high" },
+        }),
+      );
+      expect(adapted).toMatchObject({
+        ok: true,
+        value: {
+          body: {
+            model,
+            thinking: { enabled: true, display: "summarized" },
+            reasoningEffort: "high",
+          },
         },
-      },
-    });
+      });
+    }
     expect(
       adaptAnthropicMessagesRequest(
         validRequest({

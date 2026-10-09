@@ -250,6 +250,30 @@ stopped":
 
 ## Reasoning replay
 
+### `400 unsupported_reasoning_display`
+
+- **Look at:** Claude Code reports `capability_rejected:thinking.display:
+summarized cannot be represented by Kiro`; the provider audit identifies
+  `unsupported_reasoning_display` with `param: thinking.display`.
+- **Cause:** A shared `showThinkingSummaries: true` setting or explicit
+  `--thinking-display summarized` flag asks for summaries on a model whose
+  summary display the gateway cannot represent.
+- **Action:** Upgrade the provider for Opus 5.5: it now preserves an explicit
+  `summarized` request, including its effort and signed tool history, as it
+  already does for Fable 5.1. Other models still reject summaries.
+  Use the updated repository `kiroclaude` launcher, which sets
+  `showThinkingSummaries: false` in its Kiro overlay. For an explicit display
+  override, launch with `--thinking-display omitted`:
+
+  ```bash
+  PATH="$PWD/scripts:$PATH" kiroclaude --thinking-display omitted
+  ```
+
+  This changes display only; Ultra/xhigh or max effort and opaque signed
+  reasoning replay remain enabled. It does not edit shared Claude settings.
+  Other API clients must request a supported display explicitly; unsupported
+  summaries on other models still receive the typed rejection.
+
 ### `400 invalid_reasoning_signature`
 
 - **Look at:** HTTP `400`, `error.code` `invalid_reasoning_signature`
@@ -415,6 +439,7 @@ gates automatically, or delete replay data as an OOM workaround.
   These events carry only hashes, counts, enums, and error class names or
   driver codes; never message text, prompts, signatures, or account
   identifiers.
+
 - **Cause:** The request replayed verified portable signed reasoning but could
   not stay on its origin account (quota exhausted, rate limited, unhealthy,
   model-ineligible, quarantined, or at `account_inference_concurrency`), so
@@ -435,7 +460,7 @@ gates automatically, or delete replay data as an OOM workaround.
   signed reasoning (drop the `encrypted_content` / `thinking` blocks or fork a
   fresh conversation), explicitly accepting the loss of hidden reasoning. To
   disable migration entirely, set `reasoning_replay_account_failover:
-  "strict"`; owner failures then return the replay-bound codes below instead of
+"strict"`; owner failures then return the replay-bound codes below instead of
   moving the session. Do not strip reasoning automatically, merge history, or
   loop client retries: the provider already performed the only safe fallback,
   and the specific field Kiro rejects is still under investigation.
@@ -529,9 +554,9 @@ to "local" or delete the key`.
   `unsupported_message_field` and `param` `messages.1.output_config` as Claude
   Code retries once with the field moved onto a message. On current builds, a
   remaining `unsupported_structured_output` rejection with `param`
-  `output_config.format` normally comes from a prompt-hook evaluator request
-  (`ok`/`reason`/`impossible` schema), which is outside the title profile and
-  fails closed by design; it is not a title failure.
+  `output_config.format` means the supplied schema is outside the recognized
+  title and Goal/prompt-hook profiles. Check the request shape rather than
+  assuming the rejection came from title generation.
 - **Cause:** Claude Code 2.1.280 generates titles with a side request that
   carries `output_config.format` (a `json_schema` whose root object has exactly
   one required string property `title`). Older providers accepted only
@@ -551,6 +576,26 @@ to "local" or delete the key`.
   them: a session whose only inputs are slash commands, and one whose prompts
   are all under 10 characters, because Claude Code never requests a title for
   either. Existing transcripts are not rewritten; use `/rename` for those.
+
+### Claude Goal stays active but the agent stops after promising more work
+
+- **Look at:** The main request ends with `sdk_stream_terminal` reporting
+  `normal_complete` and zero tools. The Claude transcript then records a
+  `Hook evaluator API error` and no continuation. Older providers reject the
+  evaluator with `unsupported_structured_output`, `param: output_config.format`.
+- **Cause:** The Goal Stop evaluator needs a JSON decision with `ok`, `reason`,
+  and optional `impossible`; the old title-only profile rejected its schema.
+  A model completing its turn does not prove that the Goal is complete.
+- **Remedy:** Use a build supporting `hook-evaluation-v1`, described in
+  [the Claude Code guide](CLAUDE_CODE.md#goal-and-prompt-hook-evaluation).
+  Its accepted requests emit `anthropic_structured_output_enforced` with that
+  profile; JSON and SSE responses carry the corresponding header. The client
+  continues on `ok: false` and may end on `ok: true` or
+  `ok: false, impossible: true`. Evaluate actual follow-up tool execution as
+  well as HTTP status. An invalid evaluator output remains a typed
+  `structured_output_validation_failed` error, not a fabricated completion
+  decision. Claude Code owns how it handles evaluator failures; API
+  compatibility does not guarantee every model judgment.
 
 ### `413`: request too large vs context length exceeded
 

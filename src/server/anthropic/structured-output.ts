@@ -7,17 +7,23 @@ import {
   LOCAL_STRUCTURED_OUTPUT_MAX_PROPERTY_LENGTH,
   LOCAL_STRUCTURED_OUTPUT_PROFILE_KIND,
   type LocalSingleStringObjectProfile,
-  LocalSingleStringTextBuffer,
   type LocalStructuredOutputFailureCode,
   type LocalStructuredOutputResult,
+  LocalStructuredOutputTextBuffer,
   parseSingleStringObjectSchema,
   STRUCTURED_OUTPUT_BUFFER_EXCEEDED_MESSAGE,
   STRUCTURED_OUTPUT_UNEXPECTED_TOOL_CALL_MESSAGE,
   STRUCTURED_OUTPUT_VALIDATION_FAILED_MESSAGE,
 } from "../structured-output/local-profile.js";
+import {
+  enforceHookEvaluationOutput,
+  type HookEvaluationProfile,
+  parseHookEvaluationSchema,
+} from "./hook-evaluation.js";
 
 /**
- * The Anthropic Messages lane of the shared `single-string-object-v1` profile.
+ * Anthropic Messages local structured-output profiles: bounded session titles
+ * and the exact Goal/prompt-hook evaluator JSON contract.
  * Claude Code 2.1.280 generates session titles with `output_config.format`
  * carrying `{ type: "json_schema", schema }` whose root object has exactly one
  * required string property. Anthropic's wire shape has no `name` or `strict`
@@ -36,7 +42,12 @@ const FORMAT_KEYS = new Set(["type", "schema"]);
 const DEFAULT_MIN_LENGTH = 1;
 const DEFAULT_MAX_LENGTH = LOCAL_STRUCTURED_OUTPUT_MAX_PROPERTY_LENGTH;
 
-export type AnthropicLocalStructuredOutputProfile = LocalSingleStringObjectProfile;
+export type AnthropicLocalStructuredOutputProfile =
+  | LocalSingleStringObjectProfile
+  | HookEvaluationProfile;
+export type AnthropicLocalStructuredOutputResult = LocalStructuredOutputResult<
+  Readonly<Record<string, string | boolean>>
+>;
 
 export type AnthropicStructuredOutputFailureCode =
   | LocalStructuredOutputFailureCode
@@ -117,9 +128,9 @@ export function anthropicStructuredOutputFailureMessage(
 
 /**
  * Recognize `output_config.format`. Returns the profile when the format is
- * exactly `{ type: "json_schema", schema }` with a root object holding one
- * required string property, `additionalProperties: false`, and optional integer
- * bounds inside the local 1..256 code point window; `undefined` otherwise.
+ * exactly `{ type: "json_schema", schema }` with either the hook evaluator
+ * schema or one required string property, `additionalProperties: false`, and
+ * optional bounds inside the local 1..256 code point window; undefined otherwise.
  */
 export function parseAnthropicLocalStructuredOutputFormat(
   format: unknown,
@@ -127,6 +138,8 @@ export function parseAnthropicLocalStructuredOutputFormat(
   if (!isRecord(format) || format.type !== "json_schema" || !hasExactlyKeys(format, FORMAT_KEYS)) {
     return undefined;
   }
+  const hook = parseHookEvaluationSchema(format.schema);
+  if (hook !== undefined) return hook;
   const parsed = parseSingleStringObjectSchema(format.schema, {
     kind: "defaulted",
     minLength: DEFAULT_MIN_LENGTH,
@@ -147,7 +160,14 @@ export function enforceAnthropicStructuredOutput(
   profile: AnthropicLocalStructuredOutputProfile,
   visibleText: string,
   maxBufferBytes = LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
-): LocalStructuredOutputResult {
+): AnthropicLocalStructuredOutputResult {
+  if (profile.kind === "hook-evaluation-v1") {
+    return enforceHookEvaluationOutput(
+      visibleText,
+      ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
+      maxBufferBytes,
+    );
+  }
   return enforceLocalSingleStringOutput(profile, visibleText, {
     param: ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
     maxBufferBytes,
@@ -155,12 +175,18 @@ export function enforceAnthropicStructuredOutput(
 }
 
 /** Stream accumulator for the Messages lane; nothing is published until complete(). */
-export class AnthropicStructuredOutputTextBuffer extends LocalSingleStringTextBuffer {
+export class AnthropicStructuredOutputTextBuffer extends LocalStructuredOutputTextBuffer<
+  Readonly<Record<string, string | boolean>>
+> {
   constructor(
     profile: AnthropicLocalStructuredOutputProfile,
     maxBufferBytes = LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
   ) {
-    super(profile, ANTHROPIC_STRUCTURED_OUTPUT_PARAM, maxBufferBytes);
+    super(
+      ANTHROPIC_STRUCTURED_OUTPUT_PARAM,
+      (text, limit) => enforceAnthropicStructuredOutput(profile, text, limit),
+      maxBufferBytes,
+    );
   }
 }
 

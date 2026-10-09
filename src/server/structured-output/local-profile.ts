@@ -49,17 +49,17 @@ export interface LocalStructuredOutputFailure {
   readonly param: string;
 }
 
-export type LocalStructuredOutputSuccess = {
+export type LocalStructuredOutputSuccess<Value = Readonly<Record<string, string>>> = {
   readonly ok: true;
   readonly text: string;
-  readonly value: Readonly<Record<string, string>>;
+  readonly value: Value;
   readonly inputBytes: number;
   readonly outputBytes: number;
   readonly truncated: boolean;
 };
 
-export type LocalStructuredOutputResult =
-  | LocalStructuredOutputSuccess
+export type LocalStructuredOutputResult<Value = Readonly<Record<string, string>>> =
+  | LocalStructuredOutputSuccess<Value>
   | LocalStructuredOutputFailure;
 
 export const STRUCTURED_OUTPUT_VALIDATION_FAILED_MESSAGE =
@@ -192,7 +192,7 @@ export function parseSingleStringObjectSchema(
   return { propertyName, minLength, maxLength, schema: safeSchema };
 }
 
-function trimUnicodeWhitespace(value: string): string {
+export function trimUnicodeWhitespace(value: string): string {
   return value.replace(/^[\p{White_Space}\uFEFF]+/u, "").replace(/[\p{White_Space}\uFEFF]+$/u, "");
 }
 
@@ -202,7 +202,7 @@ function trimUnicodeWhitespace(value: string): string {
  * wrap the requested JSON that way even when asked for JSON only. Returns the
  * fenced body, or the text unchanged when it is not exactly one fenced block.
  */
-function unwrapMarkdownFence(text: string): string {
+export function unwrapMarkdownFence(text: string): string {
   const match = /^```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/u.exec(text);
   return match?.[1] === undefined ? text : trimUnicodeWhitespace(match[1]);
 }
@@ -305,24 +305,24 @@ export function enforceLocalSingleStringOutput(
  * A bounded streaming accumulator. Callers emit no public text until complete()
  * returns a validated envelope; dispose() eagerly drops private buffered text.
  */
-export class LocalSingleStringTextBuffer {
-  readonly #profile: LocalSingleStringObjectProfile;
+export class LocalStructuredOutputTextBuffer<Value> {
+  readonly #enforce: (text: string, maxBufferBytes: number) => LocalStructuredOutputResult<Value>;
   readonly #param: string;
   readonly #maxBufferBytes: number;
   #chunks: string[] = [];
   #byteLength = 0;
-  #terminal: LocalStructuredOutputResult | undefined;
+  #terminal: LocalStructuredOutputResult<Value> | undefined;
   #disposed = false;
 
   constructor(
-    profile: LocalSingleStringObjectProfile,
     param: string,
+    enforce: (text: string, maxBufferBytes: number) => LocalStructuredOutputResult<Value>,
     maxBufferBytes = LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
   ) {
     if (!Number.isSafeInteger(maxBufferBytes) || maxBufferBytes < 0) {
       throw new RangeError("maxBufferBytes must be a non-negative safe integer");
     }
-    this.#profile = profile;
+    this.#enforce = enforce;
     this.#param = param;
     this.#maxBufferBytes = maxBufferBytes;
   }
@@ -353,15 +353,12 @@ export class LocalSingleStringTextBuffer {
     return { ok: true };
   }
 
-  complete(): LocalStructuredOutputResult {
+  complete(): LocalStructuredOutputResult<Value> {
     if (this.#terminal !== undefined) return this.#terminal;
     if (this.#disposed) return structuredOutputValidationFailure(this.#param);
     const visibleText = this.#chunks.join("");
     this.#chunks = [];
-    this.#terminal = enforceLocalSingleStringOutput(this.#profile, visibleText, {
-      param: this.#param,
-      maxBufferBytes: this.#maxBufferBytes,
-    });
+    this.#terminal = this.#enforce(visibleText, this.#maxBufferBytes);
     return this.#terminal;
   }
 
@@ -370,5 +367,23 @@ export class LocalSingleStringTextBuffer {
     this.#byteLength = 0;
     this.#terminal = undefined;
     this.#disposed = true;
+  }
+}
+
+/** The original bounded string profile keeps its enforcement and buffering contract. */
+export class LocalSingleStringTextBuffer extends LocalStructuredOutputTextBuffer<
+  Readonly<Record<string, string>>
+> {
+  constructor(
+    profile: LocalSingleStringObjectProfile,
+    param: string,
+    maxBufferBytes = LOCAL_STRUCTURED_OUTPUT_MAX_BUFFER_BYTES,
+  ) {
+    super(
+      param,
+      (text, limit) =>
+        enforceLocalSingleStringOutput(profile, text, { param, maxBufferBytes: limit }),
+      maxBufferBytes,
+    );
   }
 }
