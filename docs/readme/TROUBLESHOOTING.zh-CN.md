@@ -575,3 +575,18 @@ Responses、Messages、Chat 请求都会在构造出规范请求之后、账号�
 completion witness 与 `sdk_stream_terminal` 会复用同一组关联字段。
 `request_transform_rejected` 只记录阶段、错误码和来源路径。所有字段均为计数、
 枚举、长度或哈希。
+
+## 升级后 summarized 推理签名冲突
+
+旧 Claude 会话出现 Kiro 推理签名冲突的 HTTP 502 时，先检查实际的思考显示
+模式。Paseo 可能显式传入 `--thinking-display summarized`，覆盖 launcher
+的默认偏好。可以在网关配置中设置 `anthropic_thinking_display_mode: "omitted"`
+并重启，或使用 `KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE=omitted`。
+既有请求将使用 omitted 当前输出，保留原 effort 和历史签名。发生转换的响应
+带有 `x-kiro-thinking-display-mode: forced-omitted`。
+
+这是明确的恢复策略。`preserve` 模式继续保留 summarized 的严格边界；恢复
+模式下，非空或不合法冲突仍会失败。`sdk_reasoning_signature_observed` 只
+记录签名位置、长度、关系枚举和推理字符数，不记录签名值、签名哈希或思考文本。
+这些指标可以区分真实故障和短请求成功，但不能单凭它们证明不同签名属于同一
+可回放值的分片。拼接签名前必须有可执行的上游回放证据。

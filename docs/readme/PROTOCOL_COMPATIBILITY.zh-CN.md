@@ -396,3 +396,12 @@ V1 stateless 的已知 canonical 历史保存在新 V3 记录中。V2 native 缺
 一个持久化的兼容窗口内 owner-bound 可读。
 
 详见[真实验证报告](../audits/kiro-provider-responses-fidelity-2026-09-10.zh.md)。
+
+### Messages 思考显示恢复策略
+
+`anthropic_thinking_display_mode` 默认是 `preserve`，保留客户端请求。
+设置为 `omitted` 时，网关在原请求和历史签名通过验证后，将 Fable 5.1
+与 Opus 5.5 的 summarized 当前输出改为 omitted，保留 effort 和历史推理，
+并返回 `x-kiro-thinking-display-mode: forced-omitted`。
+此模式使用已有的不透明回放 token 和有界空前缀恢复；不同签名不会被拼接，
+非空签名冲突仍会失败。关闭覆盖后，summarized 原有的严格边界继续适用。

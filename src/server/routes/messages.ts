@@ -182,6 +182,7 @@ export async function handleMessages(
     bodyResult.value,
     {
       requireMaxTokens: true,
+      thinkingDisplayMode: config.anthropic_thinking_display_mode,
       ...(unsupportedOutputTokenLimitMode(request) !== undefined
         ? { unsupportedOutputTokenLimitMode: "advisory" as const }
         : {}),
@@ -207,6 +208,9 @@ export async function handleMessages(
     claudeCodeIdentityHeader(request, "x-claude-code-agent-id"),
   );
   let compatibility: AnthropicCompatibilityOptions = {
+    ...(adapted.value.thinkingDisplayMode !== undefined
+      ? { thinkingDisplayMode: adapted.value.thinkingDisplayMode }
+      : {}),
     ...(adapted.value.cacheControlCount > 0 ? { cacheControlObserved: true } : {}),
     ...(adapted.value.cacheControlCount > 0
       ? { promptCacheMode: config.kiro_prompt_cache_mode }
@@ -226,6 +230,15 @@ export async function handleMessages(
       : {}),
   };
   const localStructuredOutputProfile = adapted.value.localStructuredOutputProfile;
+  if (adapted.value.thinkingDisplayMode === "forced-omitted") {
+    auditLog("warn", "anthropic_thinking_display_overridden", {
+      request_id: ingress.requestId,
+      model: adapted.value.body.model,
+      stream: adapted.value.source.stream,
+      requested_display: "summarized",
+      effective_display: "omitted",
+    });
+  }
   const reportStructuredOutputFailure = (failure: AnthropicStructuredOutputFailure): void => {
     auditLog("warn", "anthropic_structured_output_failed", {
       request_id: ingress.requestId,
@@ -358,7 +371,11 @@ export async function handleMessages(
           return anthropicError(502, anthropicStructuredOutputFailureMessage(failure), "api_error");
         }
       }
-      return await translatePipelineError(await withRetryAfter(pipelineResponse));
+      const translated = await translatePipelineError(await withRetryAfter(pipelineResponse));
+      if (compatibility.thinkingDisplayMode === "forced-omitted") {
+        translated.headers.set("x-kiro-thinking-display-mode", "forced-omitted");
+      }
+      return translated;
     }
     if (pipelineResponse.headers.get("x-kiro-reasoning-replay-mode") === "conflict-omitted") {
       compatibility = {

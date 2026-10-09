@@ -37,6 +37,7 @@ import {
 
 export type AnthropicCompatibilityOptions = {
   readonly thinkingDisplay?: "omitted" | "summarized";
+  readonly thinkingDisplayMode?: "forced-omitted";
   readonly contextManagementRequested?: boolean;
   readonly cacheControlObserved?: boolean;
   readonly promptCacheMode?: "server-auto" | "explicit-checkpoints" | "off";
@@ -108,6 +109,9 @@ export function compatibilityHeaders(
   options: AnthropicCompatibilityOptions,
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = {};
+  if (options.thinkingDisplayMode === "forced-omitted") {
+    headers["x-kiro-thinking-display-mode"] = "forced-omitted";
+  }
   if (options.cacheControlObserved) {
     headers["x-kiro-prompt-cache-mode"] = options.promptCacheMode ?? "server-auto";
   }

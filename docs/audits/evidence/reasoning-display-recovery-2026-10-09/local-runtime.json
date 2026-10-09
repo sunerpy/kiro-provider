@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "binary_sha256": "2bb357b78c9c229ff6035bbba014efbdca27cc8e5502bd55b19ecad9cd9c2fb6",
+  "process_matches_installed": true,
+  "candidate_digest_matches": true,
+  "active": true,
+  "restarts_since_corrected_start": 0,
+  "thinking_display_policy": "omitted",
+  "database_quick_check": "ok",
+  "rows": [
+    {
+      "case": "/health",
+      "authenticated": false,
+      "status": 200,
+      "ok": true
+    },
+    {
+      "case": "/ready",
+      "authenticated": true,
+      "status": 200,
+      "ok": true
+    },
+    {
+      "case": "/v1/models",
+      "authenticated": true,
+      "status": 200,
+      "ok": true
+    },
+    {
+      "case": "/v1/models",
+      "authenticated": false,
+      "status": 401,
+      "ok": true
+    }
+  ],
+  "cutover_correction": {
+    "operator_restart_count": 2,
+    "configuration_trailing_escape_corrected": true,
+    "observed_auto_restarts_before_correction": 26
+  },
+  "pass": true
+}

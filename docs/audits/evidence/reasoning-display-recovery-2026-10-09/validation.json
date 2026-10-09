@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "base_revision": "c5709bdc8461eab3ccb0306b8e490612320cc526",
+  "implementation_inputs_sha256": "eaf87b6f9e4f35cc8de0a0c940b01a38e8ef8a25f47bd5a6aa86f336c20f853e",
+  "candidate_binary_sha256": "2bb357b78c9c229ff6035bbba014efbdca27cc8e5502bd55b19ecad9cd9c2fb6",
+  "reproducer_before": {
+    "pass": 7,
+    "fail": 10,
+    "failure_stage": "missing_output_policy"
+  },
+  "regression_and_config_focused": {
+    "pass": 310,
+    "fail": 0
+  },
+  "full_suite": {
+    "pass": 3137,
+    "fail": 0,
+    "files": 229
+  },
+  "line_coverage": {
+    "covered": 33678,
+    "total": 35194,
+    "percent": 95.69,
+    "floor_percent": 93
+  },
+  "pre_ci_passed": true,
+  "real_client_version": "2.1.294",
+  "real_client_fixture_passed": true,
+  "packaged_fixture_passed": true,
+  "live_kiro_requests": 4,
+  "direct_signature_shape_requests": 3,
+  "summarized_signature_fragmentation_proven": false
+}
