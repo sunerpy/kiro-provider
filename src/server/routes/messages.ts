@@ -241,7 +241,9 @@ export async function handleMessages(
       stream: adapted.value.source.stream,
       local_profile: localStructuredOutputProfile.kind,
       schema_hash: auditHash(JSON.stringify(localStructuredOutputProfile.schema)),
-      property_hash: auditHash(localStructuredOutputProfile.propertyName),
+      ...(localStructuredOutputProfile.kind === "single-string-object-v1"
+        ? { property_hash: auditHash(localStructuredOutputProfile.propertyName) }
+        : {}),
     });
     compatibility = {
       ...compatibility,

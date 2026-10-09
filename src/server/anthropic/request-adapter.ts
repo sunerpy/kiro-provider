@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isFable51Model } from "../../kiro/models.js";
+import { resolveModelVariant } from "../../kiro/models.js";
 import {
   resolveOutputTokenLimit,
   supportsAdvisoryOutputTokenLimit,
@@ -1358,7 +1358,7 @@ function validateToolHistory(
 
 /**
  * `output_config.format` is accepted only as the bounded local
- * `single-string-object-v1` profile. Effort keeps working alongside it; every
+ * title or hook-evaluation profile. Effort keeps working alongside it; every
  * other key stays on the ordinary unsupported_parameter path.
  */
 function validateOutputConfig(
@@ -1536,12 +1536,19 @@ export function adaptAnthropicMessagesRequest(
         "thinking.display",
       );
     }
-    const fableSummarized =
-      request.thinking.display === "summarized" && isFable51Model(request.model);
+    let summarizedSupported = false;
+    if (request.thinking.display === "summarized") {
+      try {
+        const wireId = resolveModelVariant(request.model).wireId;
+        summarizedSupported = wireId === "claude-fable-5.1" || wireId === "claude-opus-5.5";
+      } catch {
+        // Unknown models retain the typed display rejection below.
+      }
+    }
     if (
       request.thinking.display !== undefined &&
       request.thinking.display !== "omitted" &&
-      !fableSummarized
+      !summarizedSupported
     ) {
       return failure(
         `capability_rejected:thinking.display: ${request.thinking.display} cannot be represented by Kiro`,

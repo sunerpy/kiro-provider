@@ -1,0 +1,274 @@
+{
+  "schema_version": 1,
+  "client_version": "2.1.285",
+  "private_network_namespace": true,
+  "passed": true,
+  "runs": [
+    {
+      "case": "isolation-gate",
+      "effort": "max",
+      "exit_code": 1,
+      "request_count": 1,
+      "sdk_dispatches": 0,
+      "iterator_closed": 0,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null
+        }
+      ],
+      "sdk": []
+    },
+    {
+      "case": "before-paseo-explicit-summarized",
+      "effort": "max",
+      "exit_code": 0,
+      "request_count": 3,
+      "sdk_dispatches": 2,
+      "iterator_closed": 2,
+      "stderr_bytes": 0,
+      "marker_returned": true,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "sdk_dispatches": 0,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "summarized",
+          "effort": "max",
+          "tool_result_count": 0,
+          "reasoning_replayed": false
+        },
+        {
+          "thinking_display": "summarized",
+          "effort": "max",
+          "tool_result_count": 1,
+          "reasoning_replayed": true
+        }
+      ]
+    },
+    {
+      "case": "after-xhigh-tool-replay",
+      "effort": "xhigh",
+      "exit_code": 0,
+      "request_count": 3,
+      "sdk_dispatches": 2,
+      "iterator_closed": 2,
+      "stderr_bytes": 0,
+      "marker_returned": true,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "xhigh",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "sdk_dispatches": 0,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "xhigh",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        },
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "xhigh",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "omitted",
+          "effort": "xhigh",
+          "tool_result_count": 0,
+          "reasoning_replayed": false
+        },
+        {
+          "thinking_display": "omitted",
+          "effort": "xhigh",
+          "tool_result_count": 1,
+          "reasoning_replayed": true
+        }
+      ]
+    },
+    {
+      "case": "after-max-tool-replay",
+      "effort": "max",
+      "exit_code": 0,
+      "request_count": 3,
+      "sdk_dispatches": 2,
+      "iterator_closed": 2,
+      "stderr_bytes": 0,
+      "marker_returned": true,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "sdk_dispatches": 0,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        },
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "omitted",
+          "effort": "max",
+          "tool_result_count": 0,
+          "reasoning_replayed": false
+        },
+        {
+          "thinking_display": "omitted",
+          "effort": "max",
+          "tool_result_count": 1,
+          "reasoning_replayed": true
+        }
+      ]
+    },
+    {
+      "case": "explicit-summarized-tool-replay",
+      "effort": "max",
+      "exit_code": 0,
+      "request_count": 3,
+      "sdk_dispatches": 2,
+      "iterator_closed": 2,
+      "stderr_bytes": 0,
+      "marker_returned": true,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "sdk_dispatches": 0,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "sdk_dispatches": 1
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "summarized",
+          "effort": "max",
+          "tool_result_count": 0,
+          "reasoning_replayed": false
+        },
+        {
+          "thinking_display": "summarized",
+          "effort": "max",
+          "tool_result_count": 1,
+          "reasoning_replayed": true
+        }
+      ]
+    },
+    {
+      "case": "unsupported-summarized-rejected",
+      "effort": "max",
+      "exit_code": 1,
+      "request_count": 1,
+      "sdk_dispatches": 0,
+      "iterator_closed": 0,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": "thinking.display",
+          "sdk_dispatches": 0,
+          "error_field_enums": ["capability_rejected", "thinking", "display"]
+        }
+      ],
+      "sdk": []
+    }
+  ]
+}

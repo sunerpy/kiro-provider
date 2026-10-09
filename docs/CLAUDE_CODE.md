@@ -48,6 +48,16 @@ contents travel through an anonymous owner-only file descriptor instead of the
 process command line, so credentials in a caller settings file are not exposed
 through `ps`.
 
+Kiro mode also sets `showThinkingSummaries: false` in that overlay, so a shared
+Claude setting or caller settings file cannot select `thinking.display:
+"summarized"` for a gateway model that rejects it. Requests use `omitted`
+display while retaining the selected effort and signed reasoning replay.
+An explicit `--thinking-display` flag or administrator-managed setting still
+takes precedence; use `--thinking-display omitted` if either selects summaries.
+The native Bedrock mode keeps Claude's own summary setting. Kiro mode disables
+`CLAUDE_CODE_THINKING_DISPLAY_UPDATES` because Claude Code 2.1.294 can otherwise
+request the unsupported `updates` display before retrying without it.
+
 Shared history does not make provider-specific signatures portable. Start a
 new session when switching between native Bedrock and Kiro if the old
 continuation contains signed thinking that the other provider cannot replay.
@@ -94,6 +104,7 @@ before any visible output.
 | Claude state                          | Shared native `~/.claude` and `~/.claude.json`       |
 | Model                                 | Opus 5.5, 1M client context window                   |
 | Reasoning                             | Ultra: `xhigh` plus Ultracode orchestration          |
+| Thinking display                      | `omitted` (`showThinkingSummaries: false`)           |
 | Permission mode                       | Inherit native Claude settings; no launcher override |
 | Away recap                            | Disabled                                             |
 | Nonessential title/classifier traffic | Disabled                                             |
@@ -150,13 +161,11 @@ maps to `claude-sonnet-5[1m]`: Claude Code uses that row for prompt hooks and
 sends a positive `max_tokens`, while Kiro Haiku 4.5 rejects every
 `additionalModelRequestFields` object. This removes that Haiku-specific
 rejection. Claude Code 2.1.280 session-title generation and prompt hooks
-additionally send `output_config.format`. Messages accepts it only as the
-bounded local `single-string-object-v1` profile described below, which covers
-the single required `title` string of the session-title request; the
-`hook_prompt` evaluator schema (`ok`/`reason`/`impossible`, two required
-properties, boolean types) is outside that profile and still returns
-`400 unsupported_structured_output`, so neither the model mapping nor this
-profile claims complete prompt-hook compatibility. The built-in
+additionally send `output_config.format`. Messages recognizes two bounded
+local profiles: `single-string-object-v1` for session titles and
+`hook-evaluation-v1` for the `hook_prompt` and built-in `/goal` evaluator
+schema (`ok`/`reason`/`impossible`). Both validate output before publication;
+arbitrary JSON schemas remain unsupported. The built-in
 Fable row maps to `claude-fable-5-1[1m]`, whose Kiro wire id is
 `claude-fable-5.1`. The launcher also adds `claude-opus-5-5[1m]`,
 `claude-opus-5[1m]`, `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
@@ -182,8 +191,8 @@ Claude Code 2.1.280 generates a session title with a side request on
 `/v1/messages`: thinking disabled, an empty tool list, one user message, and
 `output_config.format` carrying `{ type: "json_schema", schema }` whose root
 object has exactly one required string property (`title`) with
-`additionalProperties: false`. Messages accepts `output_config.format` only in
-that shape, the bounded local `single-string-object-v1` profile: a root object,
+`additionalProperties: false`. Messages recognizes that shape as the bounded
+local `single-string-object-v1` profile: a root object,
 exactly one required string property, `additionalProperties: false`, and a
 local 1-256 character bound (explicit integer `minLength`/`maxLength` must stay
 within it). The schema is never sent upstream and no prompt is injected. Kiro
@@ -198,7 +207,7 @@ keeps working alongside `format`; every other `output_config` key (for example
 `task_budget`) keeps its `unsupported_parameter` rejection, and `output_config`
 inside a message keeps its `unsupported_message_field` rejection.
 
-The profile fails closed. Any other schema shape, enabled thinking, or a forced
+The profile fails closed. Unrecognized schema shapes, enabled thinking, or a forced
 `tool_choice` with `format` returns `400 unsupported_structured_output`. An
 upstream tool call, upstream reasoning arriving although thinking is disabled,
 output over 64 KiB, or empty text that cannot satisfy the profile returns
@@ -209,6 +218,54 @@ stream is committed). Partial text is never published before validation, and
 validation failure never triggers a second inference. The profile does not
 depend on `responses_fidelity_mode`, which governs only the Responses lane;
 Claude Code has no other way to obtain a title.
+
+### Goal and prompt-hook evaluation
+
+Claude Code 2.1.285 sends its Stop/Goal evaluator to `/v1/messages` with
+thinking disabled, no tools, and this `output_config.format` schema:
+
+```json
+{
+  "type": "json_schema",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "ok": { "type": "boolean" },
+      "reason": { "type": "string" },
+      "impossible": { "type": "boolean" }
+    },
+    "required": ["ok", "reason"],
+    "additionalProperties": false
+  }
+}
+```
+
+Messages recognizes exactly this schema as `hook-evaluation-v1`. It forwards
+the client's evaluation instructions unchanged and buffers at most 64 KiB.
+The complete output must be a JSON object satisfying those fields; a single
+Markdown fence around the whole JSON may be removed. The provider preserves
+both booleans, the full reason, and the absence of `impossible`. It never
+turns prose into a decision, adds defaults, coerces types, or truncates reasons.
+Missing fields, extra fields, duplicate JSON keys, and invalid types fail with
+`structured_output_validation_failed`. The title profile's tool, reasoning,
+cancellation and timeout guards also apply. Schemas are not sent upstream;
+no instructions or second inference are added.
+
+Successful JSON and SSE responses contain one validated text block and carry
+`x-kiro-structured-output: hook-evaluation-v1`. The
+[Claude hook contract](https://code.claude.com/docs/en/hooks#response-schema)
+uses `ok: false` to continue a Stop/Goal turn with `reason`, `ok: true` to
+allow ending, and `ok: false, impossible: true` to allow ending an impossible
+condition. Claude Code owns these decisions and the subsequent tool loop.
+An evaluator error remains an explicit API/SSE error; it is never converted
+into a successful completion decision.
+
+The executable probe `scripts/probe-claude-goal.ts` uses an isolated Claude
+home and synthetic upstream by default. `--native-goal` exercises the real
+`/goal` command, including an early stop, evaluator feedback, a Bash check,
+and the final evaluation. `--live-base-url` and `--provider-config` forward
+only evaluator requests to an isolated gateway; `--live-unix-socket` supports
+a private proxy when host managed settings require a separate network namespace.
 A session whose only inputs are slash commands (for example `/model`) or prompts
 under 10 characters still shows its first prompt as the title, because Claude
 Code never asks for one in that case, and upgrading the provider does not rewrite
@@ -320,7 +377,8 @@ upstream continuation id.
 Messages requests with adaptive thinking use native `omitted` display by default
 for Fable 5.1 and Opus 5.5. Signed reasoning is normally retained and replayed
 through the opaque signature. An explicit `thinking.display: "summarized"` is
-preserved for Fable; Opus 5.5 summarized display remains unsupported. Kiro can
+preserved for Fable 5.1 and Opus 5.5, including the selected effort, visible
+summary and complete native signature. Other models remain rejected. Kiro can
 return multiple independently signed summary segments; the gateway rejects
 that unsupported shape rather than concatenating signatures or discarding
 reasoning.
@@ -400,7 +458,7 @@ The limit is 16 runs, including the tool-result group. Other mixed interleaves
 remain rejected because Kiro exposes one text field.
 
 The provider also rejects destructive context edits, Structured Outputs outside
-the bounded `single-string-object-v1` profile, forced tool selection, hard
+the bounded `single-string-object-v1` and `hook-evaluation-v1` profiles, forced tool selection, hard
 serial-tool requirements, and unknown beta/tool fields with an Anthropic
 `invalid_request_error`. It does not silently remove
 those semantics. Prompt caching and token counting remain estimates, not native

@@ -163,6 +163,9 @@ settings = {
     **({"effortLevel": effort} if effort else {}),
     "ultracode": ultracode == "true",
     "awaySummaryEnabled": False,
+    # Kiro returns signature-only thinking. Keep the configured reasoning effort
+    # while overriding a shared native preference for visible summaries.
+    "showThinkingSummaries": False,
     "modelPicker": {
         "replaceBuiltInOptions": False,
         "options": [
@@ -185,6 +188,9 @@ settings = {
         # Kiro's inline system projection would make that a signed-prefix edit.
         "CLAUDE_CODE_TOASTY_THIMBLE": "0",
         "CLAUDE_CODE_GENTLE_PARASOL": "0",
+        # Connector updates are a separate thinking-display API mode that Kiro
+        # cannot represent. An explicit summarized flag keeps its own semantics.
+        "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "0",
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_AUTH_TOKEN": "",
         "AWS_BEARER_TOKEN_BEDROCK": "",

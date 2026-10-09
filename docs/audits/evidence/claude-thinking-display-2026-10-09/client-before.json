@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "client_version": "2.1.294",
+  "private_network_namespace": true,
+  "passed": false,
+  "runs": [
+    {
+      "case": "isolation-gate",
+      "effort": "max",
+      "exit_code": 1,
+      "request_count": 1,
+      "sdk_dispatches": 0,
+      "iterator_closed": 0,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400
+        }
+      ],
+      "sdk": []
+    },
+    {
+      "case": "before-paseo-explicit-summarized",
+      "effort": "max",
+      "exit_code": 1,
+      "request_count": 1,
+      "sdk_dispatches": 0,
+      "iterator_closed": 0,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400
+        }
+      ],
+      "sdk": []
+    }
+  ]
+}

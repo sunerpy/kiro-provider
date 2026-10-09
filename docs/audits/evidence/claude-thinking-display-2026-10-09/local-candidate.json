@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "base_revision": "99241f3dcc6ce6994452716bea96dbeeec42847e",
+  "reported_version": "3.8.2",
+  "candidate": true,
+  "binary_sha256": "75d7d4cbad9e68007b7c7860fb2b671c4bc647560f9fedcf935af1947c6e560a",
+  "local_install": {
+    "atomic": true,
+    "service_restarts": 1,
+    "active": true,
+    "nrestarts": 0,
+    "process_binary_matches": true,
+    "loopback_only": true,
+    "health": 200,
+    "authenticated_ready": 200,
+    "authenticated_models": 200,
+    "unauthenticated_models": 401,
+    "database_quick_check": "ok",
+    "database_account_count": 53,
+    "config_database_replay_keyring_owner_only": true,
+    "consistent_database_backup": true,
+    "rollback_prepared": true
+  },
+  "preflight": {
+    "tests_pass": 3114,
+    "tests_fail": 0,
+    "coverage_hit": 33592,
+    "coverage_total": 35108,
+    "coverage_percent": 95.68,
+    "coverage_floor": 93,
+    "tracked_patch_executable_lines": 50,
+    "tracked_patch_hit": 50
+  },
+  "packaged_prefix_probe": {
+    "synthetic_upstream_calls": 4,
+    "live_upstream_requests": 0,
+    "passed": true
+  },
+  "limits": [
+    "Pre-release candidate version remains 3.8.2; Release Please owns the final version.",
+    "Health and authentication checks are read-only; live upstream probes use a separate account-state copy."
+  ]
+}

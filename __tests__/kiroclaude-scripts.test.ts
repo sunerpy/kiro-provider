@@ -482,6 +482,91 @@ printf '%s\n' "$line" >"$KIROCLAUDE_TEST_CAPTURE"
     expect(readFileSync(fake.capture, "utf8")).toBe("STDIN_SURVIVES\n");
   });
 
+  test("uses omitted thinking for Kiro without changing shared summaries, effort, or explicit display flags", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const nativeSettings = join(root, ".claude", "settings.json");
+    mkdirSync(join(root, ".claude"));
+    writeFileSync(nativeSettings, '{"showThinkingSummaries":true,"effortLevel":"low"}\n');
+    const original = readFileSync(nativeSettings, "utf8");
+    const callerSettings = join(root, "caller-settings.json");
+    writeFileSync(callerSettings, '{"showThinkingSummaries":true}\n');
+    const env = environment(root, fake);
+    for (const [effort, expected] of Object.entries({
+      ultra: { effort: "xhigh", ultracode: true },
+      high: { effort: "high", ultracode: false },
+      max: { effort: "max", ultracode: false },
+    })) {
+      const result = Bun.spawnSync(
+        [
+          "sh",
+          launcher,
+          "--settings",
+          callerSettings,
+          '--settings={"showThinkingSummaries":true}',
+          "--print",
+          "fixture",
+        ],
+        { env: { ...env, KIROCLAUDE_EFFORT: effort } },
+      );
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+        arguments: string[];
+        effectiveSettings: {
+          showThinkingSummaries: boolean;
+          effortLevel?: unknown;
+          ultracode?: unknown;
+        };
+      };
+      expect(capture.effectiveSettings.showThinkingSummaries).toBe(false);
+      expect(
+        JSON.parse(capture.arguments[1] as string).env.CLAUDE_CODE_THINKING_DISPLAY_UPDATES,
+      ).toBe("0");
+      expect(claudeEffectiveEffort(capture.arguments, capture.effectiveSettings)).toEqual(expected);
+      expect(capture.arguments).not.toContain("--thinking-display");
+      expect(readFileSync(nativeSettings, "utf8")).toBe(original);
+    }
+
+    const explicit = Bun.spawnSync(
+      ["sh", launcher, "--thinking-display", "summarized", "--print", "fixture"],
+      { env },
+    );
+    expect(explicit.exitCode).toBe(0);
+    const explicitCapture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+    };
+    expect(explicitCapture.arguments.slice(-4)).toEqual([
+      "--thinking-display",
+      "summarized",
+      "--print",
+      "fixture",
+    ]);
+
+    const bedrock = Bun.spawnSync(["sh", launcher, "--bedrock-fable", "--print", "fixture"], {
+      env,
+    });
+    expect(bedrock.exitCode).toBe(0);
+    const bedrockCapture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+      effectiveSettings: {
+        showThinkingSummaries: boolean;
+        effortLevel?: unknown;
+        ultracode?: unknown;
+      };
+    };
+    expect(bedrockCapture.effectiveSettings.showThinkingSummaries).toBe(true);
+    expect(JSON.parse(bedrockCapture.arguments[1] as string)).not.toHaveProperty(
+      "showThinkingSummaries",
+    );
+    expect(
+      claudeEffectiveEffort(bedrockCapture.arguments, bedrockCapture.effectiveSettings),
+    ).toEqual({
+      effort: "max",
+      ultracode: false,
+    });
+    expect(readFileSync(nativeSettings, "utf8")).toBe(original);
+  });
+
   test("supports isolated endpoint and model overrides without appending /v1", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);

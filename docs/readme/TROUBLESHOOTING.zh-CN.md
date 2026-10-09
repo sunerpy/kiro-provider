@@ -222,6 +222,27 @@ placeholder ...`。
 
 ## Reasoning 回放
 
+### `400 unsupported_reasoning_display`
+
+- **查看：** Claude Code 报告 `capability_rejected:thinking.display:
+summarized cannot be represented by Kiro`；Provider 审计记录
+  `unsupported_reasoning_display`、`param: thinking.display`。
+- **原因：** 共享配置中的 `showThinkingSummaries: true` 或显式
+  `--thinking-display summarized` 参数为网关无法表示摘要的模型请求了摘要显示。
+- **处置：** Opus 5.5 需升级 Provider：现在与 Fable 5.1 一样原样保留显式
+  `summarized` 请求、所选 effort 与 signed tool history；其他模型仍拒绝摘要显示。
+  使用已更新的仓库 `kiroclaude` 启动器，其 Kiro overlay 设置
+  `showThinkingSummaries: false`。需要覆盖显式显示参数时，启动时指定
+  `--thinking-display omitted`：
+
+  ```bash
+  PATH="$PWD/scripts:$PATH" kiroclaude --thinking-display omitted
+  ```
+
+  此选项只改变显示方式，保留 Ultra/xhigh 或 max effort 与 opaque signed
+  reasoning 回放，不修改共享 Claude 设置。其他 API 客户端须显式请求支持的
+  显示方式；其他模型的摘要仍返回类型化拒绝。
+
 ### `400 invalid_reasoning_signature`
 
 - **查看：** HTTP `400`，`error.code` 为 `invalid_reasoning_signature`
@@ -320,7 +341,7 @@ Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 
 
 - **查看：** HTTP `400`，`error.code` 为 `reasoning_replay_migration_rejected`
   （message 为 `Kiro rejected the request after its signed reasoning history was
-  migrated to another account, and the original account is unavailable`），以及
+migrated to another account, and the original account is unavailable`），以及
   同一 `request_id` 的审计序列：
   - `reasoning_replay_account_migrated`（`info`）：已验证的 portable 回放正被派发到
     其绑定单元以外的账号。每次真实迁移只发一条；之后延展已提交单元的尝试（空完成
@@ -351,10 +372,11 @@ Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 
 
   这些事件只含哈希、计数、枚举值以及错误类名或驱动错误码；绝不包含消息文本、
   提示词、签名或账号标识。
+
 - **原因：** 请求回放了已验证的 portable signed reasoning，但无法留在原账号
   （额度耗尽、限流、不健康、模型不符、被隔离，或已达
   `account_inference_concurrency`），于是 `reasoning_replay_account_failover:
-  "verified"` 把它迁移到另一个账号并使用新的 Kiro conversation。Kiro 在服务端
+"verified"` 把它迁移到另一个账号并使用新的 Kiro conversation。Kiro 在服务端
   校验迁移后的请求体，在产生输出前以 `400 ValidationException` /
   `REQUEST_BODY_INVALID`（`Improperly formed request.`）或无效 reasoning 签名拒绝。
   Provider 在 Kiro 接受迁移请求之前绝不重写持久绑定，因此会话仍指向原账号。
@@ -365,7 +387,7 @@ Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 
   后重发；绑定仍指向它。若原账号无法恢复，从不含 signed reasoning 的历史继续
   （去掉 `encrypted_content` / `thinking` 块或另起新会话），并明确接受隐藏
   reasoning 的损失。要完全禁用迁移，设置 `reasoning_replay_account_failover:
-  "strict"`；此后 owner 失败会返回下文的 replay 绑定错误码而不是迁移会话。不要
+"strict"`；此后 owner 失败会返回下文的 replay 绑定错误码而不是迁移会话。不要
   自动删除 reasoning、合并历史或让客户端循环重试：Provider 已经执行了唯一安全的
   回退，Kiro 具体拒绝的字段仍在调查中。
 
@@ -447,16 +469,15 @@ kiro-provider.service` 确认只定义了一个服务，且同一用户没有前
   `output_config.format`；随后通常还有一次 `unsupported_message_field`、`param`
   为 `messages.1.output_config` 的拒绝，因为 Claude Code 会把该字段挪到 message
   上重试一次。在当前版本上，若仍看到 `unsupported_structured_output` 且 `param` 为
-  `output_config.format` 的拒绝，来源通常是 prompt hook 评估请求
-  （`ok`／`reason`／`impossible` schema），它不在标题 profile 内、按设计 fail
-  closed，并不是标题请求失败。
+  `output_config.format` 的拒绝，说明 schema 不属于已识别的标题或 Goal／prompt hook
+  profile。应核对请求形状，不能直接归因为标题生成失败。
 - **原因：** Claude Code 2.1.280 通过一个携带 `output_config.format` 的旁路请求
   生成标题（`json_schema`，根 object 恰好一个 required string 属性 `title`）。旧版
   Provider 只接受 `output_config.effort`，标题请求因此失败，客户端回退为首条提示词。
 - **处置：** 升级 Provider。当前版本会把该形状识别为有界本地
   `single-string-object-v1` profile，缓冲上游文本并在本地验证，然后返回一个包含
   `{"title":"..."}` 的 text block，并带 `x-kiro-structured-output:
-  single-string-object-v1`。每次识别都会写入 info 事件
+single-string-object-v1`。每次识别都会写入 info 事件
   `anthropic_structured_output_enforced`（只含 request id、模型、是否流式、profile
   名称，以及 Schema 与属性名的哈希）；发布失败写入 warn 事件
   `anthropic_structured_output_failed`，只含 code（`structured_output_validation_failed`、
@@ -464,6 +485,23 @@ kiro-provider.service` 确认只定义了一个服务，且同一用户没有前
   `structured_output_unexpected_reasoning`），绝不包含文本。仍有两种情况属于客户端行为，任何 Provider 都无法修复：会话输入只有
   slash command，或所有提示词都不足 10 个字符，因为这两种情况下 Claude Code 根本
   不会请求标题。既有 transcript 不会被改写，可用 `/rename` 手动命名。
+
+### Claude Goal 仍 active，但 Agent 宣布继续后就停止
+
+- **查看：** 主请求的 `sdk_stream_terminal` 为 `normal_complete`、工具数为零；
+  随后 Claude transcript 记录 `Hook evaluator API error`，没有继续执行。旧版
+  Provider 会以 `unsupported_structured_output`、`param: output_config.format`
+  拒绝评估请求。
+- **原因：** Goal Stop 评估器需要包含 `ok`、`reason` 及可选 `impossible` 的 JSON
+  决策，旧的标题 profile 不接受该 schema。模型结束一轮不代表 Goal 已完成。
+- **处置：** 使用支持 `hook-evaluation-v1` 的构建，详见
+  [Claude Code 指南](CLAUDE_CODE.zh-CN.md#goal-与-prompt-hook-评估)。接受请求后，
+  `anthropic_structured_output_enforced` 记录该 profile，JSON 和 SSE 响应均带相应
+  header。客户端在 `ok: false` 时继续，在 `ok: true` 或
+  `ok: false, impossible: true` 时可结束。验收须检查后续工具是否执行，不能只看
+  HTTP 状态。无效评估输出仍返回类型化 `structured_output_validation_failed`
+  错误，不会伪造完成判断。评估失败如何处理仍由 Claude Code 决定；协议兼容不
+  保证每次模型判断都正确。
 
 ### `413`：请求体过大与上下文超长
 

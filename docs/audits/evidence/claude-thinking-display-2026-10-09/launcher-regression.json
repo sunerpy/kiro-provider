@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "test_file": "__tests__/kiroclaude-scripts.test.ts",
+  "target_test": "uses omitted thinking for Kiro without changing shared summaries, effort, or explicit display flags",
+  "before": {
+    "command": "bun test __tests__/kiroclaude-scripts.test.ts -t 'uses omitted thinking for Kiro'",
+    "exit_code": 1,
+    "tests_failed": 1,
+    "expected_show_thinking_summaries": false,
+    "actual_show_thinking_summaries": true
+  },
+  "after": {
+    "command": "bun test __tests__/kiroclaude-scripts.test.ts",
+    "exit_code": 0,
+    "tests_passed": 16,
+    "tests_failed": 0,
+    "assertions": 213
+  }
+}
