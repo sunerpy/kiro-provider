@@ -490,8 +490,10 @@ these mutations can otherwise produce HTTP 400 replay context errors.
 
 For the existing `claude-code-bash-v1` normalization opt-in, the gateway builds
 bounded historical-input candidates: omit only boolean false Edit defaults, or
-restore a literal Bash directory prefix from native working-directory hints in
-the system context. A hint is a candidate, not authorization. The original
+restore a literal Bash directory prefix from recent historical Bash calls or
+native working-directory hints in the system context. Recent history takes
+priority over stale system hints; at most 256 historical calls are inspected.
+A hint is a candidate, not authorization. The original
 output fingerprint, tenant, model, complete GCM authentication, TTL, and minted
 normalization scope must all verify. Only then are the exact original inputs
 restored into upstream history. Tool IDs, names, actual parameters and current

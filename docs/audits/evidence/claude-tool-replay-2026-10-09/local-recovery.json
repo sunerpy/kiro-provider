@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "since_candidate_cutover": true,
+  "source": "sanitized_journal_counts",
+  "events": {
+    "anthropic_thinking_display_overridden": 129,
+    "reasoning_replay_client_shape_restored": 75
+  },
+  "user_confirmed_sessions_recovered": 2
+}

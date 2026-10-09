@@ -53,6 +53,7 @@
           "native_cwd_tag": false,
           "history_edit_default_false": false,
           "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false,
           "error_field_enums": ["output_config"]
         },
         {
@@ -68,7 +69,8 @@
           "native_directory_hint": true,
           "native_cwd_tag": false,
           "history_edit_default_false": false,
-          "history_bash_cd_prefix": false
+          "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false
         },
         {
           "thinking_display": "summarized",
@@ -83,7 +85,8 @@
           "native_directory_hint": true,
           "native_cwd_tag": false,
           "history_edit_default_false": false,
-          "history_bash_cd_prefix": false
+          "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false
         }
       ],
       "sdk": [
@@ -91,12 +94,93 @@
           "thinking_display": "omitted",
           "effort": "max",
           "tool_result_count": 0,
+          "last_history_bash_cd_prefix": false,
           "reasoning_replayed": false
         },
         {
           "thinking_display": "omitted",
           "effort": "max",
           "tool_result_count": 1,
+          "last_history_bash_cd_prefix": true,
+          "reasoning_replayed": true
+        }
+      ]
+    },
+    {
+      "case": "replay-history-cwd-change",
+      "effort": "max",
+      "thinking_display_policy": "omitted",
+      "exit_code": 0,
+      "request_count": 3,
+      "sdk_dispatches": 2,
+      "iterator_closed": 2,
+      "stderr_bytes": 0,
+      "marker_returned": true,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "thinking_display_mode": null,
+          "sdk_dispatches": 0,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": true,
+          "history_last_bash_cd_prefix": true,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "thinking_display_mode": "forced-omitted",
+          "sdk_dispatches": 1,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": true,
+          "history_last_bash_cd_prefix": true
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "thinking_display_mode": "forced-omitted",
+          "sdk_dispatches": 1,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": true,
+          "history_last_bash_cd_prefix": false
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "omitted",
+          "effort": "max",
+          "tool_result_count": 0,
+          "last_history_bash_cd_prefix": true,
+          "reasoning_replayed": true
+        },
+        {
+          "thinking_display": "omitted",
+          "effort": "max",
+          "tool_result_count": 1,
+          "last_history_bash_cd_prefix": true,
           "reasoning_replayed": true
         }
       ]
@@ -127,6 +211,7 @@
           "native_cwd_tag": false,
           "history_edit_default_false": false,
           "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false,
           "error_field_enums": ["output_config"]
         },
         {
@@ -142,7 +227,8 @@
           "native_directory_hint": true,
           "native_cwd_tag": false,
           "history_edit_default_false": false,
-          "history_bash_cd_prefix": false
+          "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false
         },
         {
           "thinking_display": "summarized",
@@ -157,7 +243,8 @@
           "native_directory_hint": true,
           "native_cwd_tag": false,
           "history_edit_default_false": false,
-          "history_bash_cd_prefix": false
+          "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false
         },
         {
           "thinking_display": "summarized",
@@ -172,7 +259,8 @@
           "native_directory_hint": true,
           "native_cwd_tag": false,
           "history_edit_default_false": true,
-          "history_bash_cd_prefix": false
+          "history_bash_cd_prefix": false,
+          "history_last_bash_cd_prefix": false
         }
       ],
       "sdk": [
@@ -180,18 +268,21 @@
           "thinking_display": "omitted",
           "effort": "max",
           "tool_result_count": 0,
+          "last_history_bash_cd_prefix": false,
           "reasoning_replayed": false
         },
         {
           "thinking_display": "omitted",
           "effort": "max",
           "tool_result_count": 1,
+          "last_history_bash_cd_prefix": false,
           "reasoning_replayed": true
         },
         {
           "thinking_display": "omitted",
           "effort": "max",
           "tool_result_count": 1,
+          "last_history_bash_cd_prefix": false,
           "reasoning_replayed": true
         }
       ]

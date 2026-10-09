@@ -203,6 +203,137 @@ async function roundTrip(
 }
 
 describe("Authenticated Claude tool input replay repairs", () => {
+  for (const stream of [false, true])
+    test(`restores a 277-envelope continuation using earlier Bash history (${stream ? "SSE" : "JSON"})`, async () => {
+      const config = ConfigSchema.parse({
+        api_keys: [MESSAGES_FIXTURE_KEY],
+        anthropic_thinking_display_mode: "omitted",
+        reasoning_replay_keys: [`fixture:${Buffer.alloc(32, 19).toString("base64url")}`],
+      });
+      const database = new AccountsDatabase(":memory:");
+      databases.push(database);
+      const store = new ReasoningReplayStore(database, config);
+      const f = messagesFixture([], {
+        config: { ...config },
+        dependencies: { reasoningReplayStore: store, affinityStore: database },
+        stream: (): AsyncIterable<SdkStreamEvent> =>
+          (async function* () {
+            try {
+              const turn = f.inputs.length;
+              if (turn <= 11) {
+                yield { reasoningContentEvent: { text: "", signature } };
+                yield {
+                  toolUseEvent: {
+                    toolUseId: `portable-${turn}`,
+                    name: "Bash",
+                    input: JSON.stringify({
+                      command: turn === 11 ? originalCommand : `printf fixture-${turn}`,
+                      description: "Synthetic retained history.",
+                    }),
+                    stop: true,
+                  },
+                };
+              } else yield { assistantResponseEvent: { content: "LONG_REPLAY_RESTORED" } };
+              yield {
+                metadataEvent: {
+                  tokenUsage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
+                },
+              };
+            } finally {
+              f.state.iteratorClosed++;
+            }
+          })(),
+      });
+      const messages: unknown[] = [{ role: "user", content: "Continue the synthetic history." }];
+      for (let index = 0; index < 266; index++) {
+        messages.push({
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "Synthetic historical reasoning.",
+              signature: `direct-${index}`,
+            },
+            {
+              type: "tool_use",
+              id: `historical-${index}`,
+              name: "Bash",
+              input: { command: `cd ${executionDirectory} && printf historical-${index}` },
+            },
+          ],
+        });
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `historical-${index}`,
+              content: "Synthetic result.",
+            },
+          ],
+        });
+      }
+      const send = () =>
+        f.app(
+          new Request("http://fixture/v1/messages", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": MESSAGES_FIXTURE_KEY,
+              "x-kiro-output-token-limit-mode": "advisory",
+              "x-kiro-client-normalization": "claude-code-bash-v1",
+              "x-kiro-working-directory-hash": workingDirectoryHash(declaredDirectory),
+            },
+            body: JSON.stringify({
+              model: "claude-opus-5-5",
+              stream,
+              max_tokens: 4096,
+              thinking: { type: "adaptive", display: "summarized" },
+              output_config: { effort: "max" },
+              // Old system hints must not exhaust the budget before recent history.
+              system: [
+                "/fixture/stale-1",
+                "/fixture/stale-2",
+                "/fixture/stale-3",
+                "/fixture/stale-4",
+              ]
+                .map((directory) => `Primary working directory: ${directory}`)
+                .join("\n"),
+              tools: f.inputs.length < 11 ? tools : [],
+              messages,
+            }),
+          }),
+        );
+      for (let turn = 1; turn <= 11; turn++) {
+        const response = await send();
+        expect(response.status).toBe(200);
+        const content = blocks(await response.text(), stream);
+        const call = content.find((block) => block.type === "tool_use");
+        expect(call).toBeDefined();
+        if (turn === 11) (call!.input as Record<string, unknown>).command = "printf fixture";
+        messages.push({ role: "assistant", content });
+        messages.push({
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: call!.id, content: "Synthetic result." }],
+        });
+      }
+      const response = await send();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("LONG_REPLAY_RESTORED");
+      expect(f.inputs).toHaveLength(12);
+      expect(f.state.iteratorClosed).toBe(12);
+      const history = f.inputs.at(-1)?.conversationState?.history ?? [];
+      expect(
+        history
+          .flatMap((message) => message.assistantResponseMessage?.toolUses ?? [])
+          .find((call) => call.toolUseId === "portable-11")?.input,
+      ).toEqual({ command: originalCommand, description: "Synthetic retained history." });
+      expect(
+        history.flatMap((message) => message.assistantResponseMessage?.reasoningContent ?? []),
+      ).toHaveLength(277);
+      expect(audit.events("reasoning_replay_client_shape_restored")).toHaveLength(1);
+    });
+
   test("bounds candidate work including oversized IDs and escaped prefixes", () => {
     const context = {
       kind: "claude-code-bash-v1" as const,
@@ -263,6 +394,46 @@ describe("Authenticated Claude tool input replay repairs", () => {
         },
       ]),
     ).toEqual([]);
+    const historical = (input: unknown, role: "assistant" | "user" = "assistant") => ({
+      role,
+      path: "fixture",
+      content: [],
+      toolCalls: [{ id: "fixture-hint", name: "Bash", input, path: "fixture" }],
+    });
+    for (const input of [
+      null,
+      [],
+      {},
+      { command: 42 },
+      { command: "cd $PWD && printf fixture" },
+      { command: `cd /${"x".repeat(4097)} && printf fixture` },
+    ])
+      expect(claudeReplayRepairCandidates(output, context, [historical(input)])).toEqual([]);
+    expect(
+      claudeReplayRepairCandidates(output, context, [
+        historical({ command: "cd /untrusted-user && printf fixture" }, "user"),
+      ]),
+    ).toEqual([]);
+    const boundedHistory = [
+      historical({ command: "cd /past-budget && printf fixture" }),
+      ...Array.from({ length: 256 }, () => historical({ command: "printf fixture" })),
+    ];
+    expect(claudeReplayRepairCandidates(output, context, boundedHistory)).toEqual([]);
+    const fallback = claudeReplayRepairCandidates(output, context, [
+      ...messages,
+      ...boundedHistory,
+    ]);
+    expect(fallback).not.toHaveLength(0);
+    expect(JSON.stringify(fallback)).not.toContain("/past-budget");
+    const bullet = claudeReplayRepairCandidates(output, context, [
+      {
+        ...messages[0]!,
+        content: [
+          { type: "text", path: "system", text: "- Primary working directory: /fixture/bullet" },
+        ],
+      },
+    ]);
+    expect(bullet).not.toHaveLength(0);
   });
   for (const stream of [false, true])
     for (const shape of ["bash", "edit"] as const) {

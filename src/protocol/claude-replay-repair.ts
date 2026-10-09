@@ -1,6 +1,7 @@
 import type { CanonicalAssistantOutput, CanonicalMessage } from "./canonical.js";
 import {
   type ClientNormalization,
+  literalBashCdPrefix,
   normalizedAssistantOutputFingerprint,
 } from "./client-normalization.js";
 
@@ -16,16 +17,43 @@ export interface ClientReplayRepair {
 
 const MAX_CANDIDATES = 32;
 const MAX_WORK_BYTES = 8 << 20;
+const MAX_HINT_CALLS = 256;
+const MAX_HINT_PREFIX_BYTES = 24_576;
 
 /** Candidate hints never grant trust: a complete token must authenticate them. */
 function nativeDirectories(messages: readonly CanonicalMessage[]): string[] {
   const directories = new Set<string>();
+  // A retained Claude session can have no system directory hint after its
+  // working directory changed. Earlier literal Bash prefixes are bounded,
+  // untrusted candidate hints; only the complete token authenticates a repair.
+  let inspected = 0;
+  history: for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    for (const call of message.toolCalls) {
+      if (++inspected > MAX_HINT_CALLS) break history;
+      if (
+        call.name !== "Bash" ||
+        typeof call.input !== "object" ||
+        call.input === null ||
+        !("command" in call.input) ||
+        typeof call.input.command !== "string"
+      )
+        continue;
+      const directory = literalBashCdPrefix(
+        call.input.command.slice(0, MAX_HINT_PREFIX_BYTES),
+      )?.directory;
+      if (!directory || directory.length > 4096) continue;
+      directories.add(directory);
+      if (directories.size === 4) return [...directories];
+    }
+  }
   for (const message of messages) {
     if (message.role !== "system") continue;
     for (const part of message.content) {
       if (part.type !== "text") continue;
       const pattern =
-        /(?:^|\n)[ \t]*(?:Primary working directory|Working directory):[ \t]*(\/[^\r\n]+)|<cwd>(\/[^<>\r\n]+)<\/cwd>/g;
+        /(?:^|\n)[ \t]*(?:-[ \t]+)?(?:Primary working directory|Working directory):[ \t]*(\/[^\r\n]+)|<cwd>(\/[^<>\r\n]+)<\/cwd>/g;
       for (const match of part.text.matchAll(pattern)) {
         const directory = (match[1] ?? match[2])?.trim();
         if (!directory || directory.length > 4096 || directory.includes("\0")) continue;

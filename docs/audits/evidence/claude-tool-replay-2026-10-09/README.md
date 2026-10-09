@@ -28,6 +28,21 @@ No token data, key, prompt, real tool arguments or session identifier is committ
   contains counts/enums from 14 retained real tokens. Existing unchanged tokens
   keep authenticating; the two affected outputs authenticate after exact-input
   restoration. No production transcript or database was changed by this check.
+- [history-client-before.json](history-client-before.json) and
+  [history-client-after.json](history-client-after.json) use a synthetic retained
+  native session with an earlier literal Bash prefix and no system directory
+  hint. Claude removes the newly generated redundant prefix on replay. The
+  earlier implementation rejects that continuation; the fix completes both
+  SDK calls at max effort and closes both upstream iterators.
+- [retained-history-validation.json](retained-history-validation.json) checks
+  an isolated real-client resume of a read-only snapshot containing 277
+  reasoning envelopes. Before the history-hint fix, the final portable token
+  cannot authenticate a candidate; afterward all 11 portable tokens verify,
+  including the exact restored original Bash input. This diagnostic omits one
+  unrelated assistant metadata field before canonical adaptation and performs
+  no upstream generation; it establishes cryptographic replay compatibility,
+  not acceptance of that metadata field. The user subsequently confirmed both
+  original live sessions recovered after the candidate cutover.
 
 The native fixture is executable:
 
@@ -35,7 +50,7 @@ The native fixture is executable:
 bun scripts/probe-claude-thinking-display.ts \
   --claude-bin /path/to/claude \
   --before-launcher /path/to/launcher-implementation \
-  --cases replay-cwd-change,replay-edit-default \
+  --cases replay-cwd-change,replay-history-cwd-change,replay-edit-default \
   --out /private/client-replay.json
 ```
 
@@ -44,3 +59,7 @@ history and parallel Edit calls, verifies original SDK inputs, and rejects
 changed tenant, directory scope, tool IDs, actual arguments, missing provenance,
 missing context and unauthenticatable directory hints. Candidate count and work
 are bounded, including oversized IDs and escaped directory prefixes.
+The long-history regression retains 266 direct signatures plus 11 portable
+tokens and stale system directory hints, reproducing the final HTTP 400 in
+JSON and SSE before the fix. Recent literal historical Bash prefixes take
+priority within the four-directory candidate limit; they never grant trust.
