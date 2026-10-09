@@ -232,6 +232,27 @@ function contextDigest(domain: string, value: string, version: number): Buffer {
   return createHash("sha256").update(prefix).update(value).digest();
 }
 
+/** Untrusted header filtering only; every selected candidate still needs GCM authentication. */
+export function selectPortableReplayOutputFingerprint(
+  token: string,
+  candidates: readonly string[],
+): string | undefined {
+  const bytes = decodeTokenBytes(token);
+  const version = bytes[0];
+  if (
+    version !== LEGACY_TOKEN_VERSION &&
+    version !== PUBLIC_MODEL_TOKEN_VERSION &&
+    version !== TOKEN_VERSION
+  )
+    return undefined;
+  const start = 2 + (bytes[1] ?? 0) + 2 * CONTEXT_DIGEST_BYTES;
+  const actual = bytes.subarray(start, start + CONTEXT_DIGEST_BYTES);
+  if (actual.byteLength !== CONTEXT_DIGEST_BYTES) return undefined;
+  return candidates
+    .slice(0, 32)
+    .find((candidate) => timingSafeEqual(actual, contextDigest("output", candidate, version)));
+}
+
 function encodeHeader(
   key: ReasoningReplayKey,
   nonce: Buffer,

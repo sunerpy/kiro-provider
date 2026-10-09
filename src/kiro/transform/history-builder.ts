@@ -153,6 +153,13 @@ function asAssistantResponse(
       input: call.input,
     })),
   ];
+  for (const restoration of replay?.toolInputRestorations ?? []) {
+    const target = toolUses.find(
+      (call) => call.toolUseId === restoration.id && call.name === restoration.name,
+    );
+    if (!target) throw new TypeError("Authenticated replay input does not reference its tool call");
+    target.input = restoration.input;
+  }
   if (toolUses.length > 0) assistant.toolUses = toolUses;
   return assistant;
 }

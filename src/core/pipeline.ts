@@ -17,6 +17,10 @@ import {
   normalizedAssistantOutputFingerprint,
 } from "../protocol/client-normalization.js";
 import {
+  claudeReplayRepairCandidates,
+  type ClientReplayRepair,
+} from "../protocol/claude-replay-repair.js";
+import {
   CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
   type CanonicalOutputEvent,
 } from "../protocol/output.js";
@@ -445,7 +449,11 @@ function canonicalOutputFingerprint(
 function replayNormalization(
   options: RunChatCompletionOptions,
   messageIndex: number,
-): { clientNormalization?: ClientNormalization; normalizedOutputFingerprint?: string } {
+): {
+  clientNormalization?: ClientNormalization;
+  normalizedOutputFingerprint?: string;
+  clientReplayRepairs?: readonly ClientReplayRepair[];
+} {
   if (!options.clientNormalization) return {};
   const message = options.body.messages[messageIndex];
   if (!message || message.role !== "assistant") {
@@ -454,8 +462,25 @@ function replayNormalization(
       "invalid_reasoning_replay",
     );
   }
+  const output = {
+    text: textFromParts(message.content),
+    toolCalls: message.toolCalls.map((call) => ({
+      id: call.id,
+      name: call.name,
+      input: JSON.stringify(call.input),
+    })),
+  };
   return {
     clientNormalization: options.clientNormalization,
+    ...(options.body.protocol === "anthropic-messages"
+      ? {
+          clientReplayRepairs: claudeReplayRepairCandidates(
+            output,
+            options.clientNormalization,
+            options.body.messages,
+          ),
+        }
+      : {}),
     normalizedOutputFingerprint: normalizedAssistantOutputFingerprint(
       {
         text: textFromParts(message.content),
@@ -828,7 +853,18 @@ function resolveReasoningReplayState(
         );
     for (const [position, item] of tokenItems.entries()) {
       const resolution = resolved[position];
-      if (resolution) tokenResolutions.set(item.index, resolution);
+      if (resolution) {
+        tokenResolutions.set(item.index, resolution);
+        if (resolution.replay.clientRepairKind !== undefined) {
+          auditLog("warn", "reasoning_replay_client_shape_restored", {
+            request_id: options.requestId,
+            protocol: options.body.protocol,
+            model: options.body.model,
+            repair_kind: resolution.replay.clientRepairKind,
+            restored_call_count: resolution.replay.toolInputRestorations?.length ?? 0,
+          });
+        }
+      }
     }
   }
   for (const [index, replay] of options.body.reasoningReplays.entries()) {
@@ -3754,6 +3790,13 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
       return openAiError(400, error.message, "invalid_request_error", error.code, error.param);
     }
     if (error instanceof ReasoningReplayError) {
+      auditLog("warn", "reasoning_replay_rejected", {
+        request_id: requestId,
+        protocol: tracedOptions.body.protocol,
+        model: tracedOptions.body.model,
+        code: error.code,
+        replay_count: tracedOptions.body.reasoningReplays.length,
+      });
       return openAiError(
         error.retryable ? 503 : 400,
         error.message,

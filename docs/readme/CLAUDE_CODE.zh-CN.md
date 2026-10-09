@@ -397,3 +397,22 @@ caching 与 token counting 仍是估算能力，不是 Anthropic 原生服务。
 [Claude Code permissions](https://code.claude.com/docs/en/permissions)、
 [Claude Code gateway protocol](https://code.claude.com/docs/en/llm-gateway-protocol) 和
 [Claude Code 环境变量](https://code.claude.com/docs/en/env-vars)。
+
+### 原生工具历史改写的认证恢复
+
+Claude Code 回传 Edit 历史时可能补入默认 `replace_all: false`；Bash 切换目录
+后，也可能去掉冗余的 `cd` 前缀。不透明推理 token 绑定完整的原始 assistant
+输出，这些改写此前可能触发 HTTP 400 回放上下文错误。
+
+在现有 `claude-code-bash-v1` 归一化选项下，网关生成有界的历史输入候选：
+只移除 Edit 的布尔 false 默认值，或根据近期 Bash 历史及 system 中的原生
+工作目录提示恢复 Bash 的字面目录前缀。近期历史优先于旧 system 提示，
+最多检查 256 个历史调用。提示仅用于选择候选，不提供授权。原始输出指纹、
+tenant、model、完整 GCM 认证、TTL 和签发时的归一化范围必须全部通过验证，
+之后才把认证过的原始输入恢复到上游历史。工具 ID、名称、实际参数和当前
+工具授权继续保持绑定。参数、目录或 tenant 改变，缺少来源证明或 token
+不合法时，仍会失败。
+
+每个历史输出最多 32 个候选、8 MiB 指纹计算材料和四个目录提示。
+`reasoning_replay_client_shape_restored` 审计只记录恢复枚举和调用数量；
+`reasoning_replay_rejected` 记录脱敏的拒绝代码。

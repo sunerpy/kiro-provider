@@ -30,22 +30,25 @@ export function workingDirectoryHash(directory: string): string {
     .digest("hex");
 }
 
-function normalizedCommand(command: string, context: ClientNormalization): string {
-  // Only a literal, absolute cd to the declared working directory is eligible.
+export function literalBashCdPrefix(
+  command: string,
+): { readonly directory: string; readonly length: number } | undefined {
+  // Recognize only a literal, absolute cd prefix.
   // No expansion, shell execution, path resolution or general command rewriting.
   const prefix =
     /^[ \t\r\n]*cd[ \t]+(?:--[ \t]+)?(?:'([^'\r\n]*)'|"([^"$`\\\r\n]*)"|(\/[A-Za-z0-9_./:@%+,-]+))[ \t]*&&[ \t\r\n]*/.exec(
       command,
     );
   const directory = prefix?.[1] ?? prefix?.[2] ?? prefix?.[3];
-  if (
-    !prefix ||
-    !directory?.startsWith("/") ||
-    directory.includes("\0") ||
-    workingDirectoryHash(directory) !== context.workingDirectoryHash
-  )
+  if (!prefix || !directory?.startsWith("/") || directory.includes("\0")) return undefined;
+  return { directory, length: prefix[0].length };
+}
+
+function normalizedCommand(command: string, context: ClientNormalization): string {
+  const prefix = literalBashCdPrefix(command);
+  if (!prefix || workingDirectoryHash(prefix.directory) !== context.workingDirectoryHash)
     return command;
-  const remainder = command.slice(prefix[0].length);
+  const remainder = command.slice(prefix.length);
   return remainder.length > 0 ? remainder : command;
 }
 

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "base_revision": "4ce8443901984d7bbf31c4c32257db487273cdc6",
+  "reproducer_before": {
+    "pass": 13,
+    "fail": 4
+  },
+  "focused_checks": {
+    "pass": 73,
+    "fail": 0
+  },
+  "full_suite": {
+    "pass": 3157,
+    "fail": 0,
+    "files": 230
+  },
+  "line_coverage": {
+    "covered": 33872,
+    "total": 35388,
+    "percent": 95.72,
+    "floor_percent": 93
+  },
+  "full_pre_ci_passed": true,
+  "native_client_version": "2.1.294",
+  "native_cases_passed": 3,
+  "retained_real_tokens_authenticated": 14,
+  "production_transcripts_modified": false,
+  "production_database_schema_changed": false,
+  "binding_checks_disabled": false,
+  "live_user_retry_observed": true,
+  "long_history_reproducer_before": {
+    "pass": 18,
+    "fail": 2,
+    "reason": "HTTP 400 on JSON and SSE final continuation"
+  },
+  "retained_request_reasoning_envelopes": 277,
+  "retained_request_portable_tokens_authenticated": 11,
+  "live_user_confirmed_sessions_recovered": 2
+}

@@ -129,6 +129,13 @@ export interface ResolvedReasoningReplay {
   readonly instructionProjection?: InstructionReplayProjection;
   /** Compatibility hint for an authenticated token predating projection metadata. */
   readonly legacyProjectionUnversioned?: true;
+  /** Complete token authentication proved these exact original historical inputs. */
+  readonly toolInputRestorations?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly input: unknown;
+  }[];
+  readonly clientRepairKind?: "edit-default" | "bash-cd" | "combined";
 }
 
 export interface CanonicalRequest {

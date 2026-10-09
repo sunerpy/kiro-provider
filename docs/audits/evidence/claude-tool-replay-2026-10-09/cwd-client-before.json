@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "client_version": "2.1.294",
+  "private_network_namespace": true,
+  "passed": false,
+  "runs": [
+    {
+      "case": "isolation-gate",
+      "effort": "max",
+      "thinking_display_policy": "preserve",
+      "exit_code": 1,
+      "request_count": 1,
+      "sdk_dispatches": 0,
+      "iterator_closed": 0,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": null,
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null
+        }
+      ],
+      "sdk": []
+    },
+    {
+      "case": "replay-cwd-change",
+      "effort": "max",
+      "thinking_display_policy": "omitted",
+      "exit_code": 1,
+      "request_count": 3,
+      "sdk_dispatches": 1,
+      "iterator_closed": 1,
+      "stderr_bytes": 0,
+      "marker_returned": false,
+      "shared_settings_unchanged": true,
+      "requests": [
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "thinking_display_mode": null,
+          "sdk_dispatches": 0,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": false,
+          "error_field_enums": ["output_config"]
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 200,
+          "rejected_capability": null,
+          "thinking_display_mode": "forced-omitted",
+          "sdk_dispatches": 1,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": false
+        },
+        {
+          "thinking_display": "summarized",
+          "thinking_type": "adaptive",
+          "effort": "max",
+          "stream": true,
+          "status": 400,
+          "rejected_capability": null,
+          "thinking_display_mode": "forced-omitted",
+          "sdk_dispatches": 0,
+          "system_has_current_subdir": false,
+          "native_directory_hint": false,
+          "native_cwd_tag": false,
+          "history_edit_default_false": false,
+          "history_bash_cd_prefix": false,
+          "error_field_enums": []
+        }
+      ],
+      "sdk": [
+        {
+          "thinking_display": "omitted",
+          "effort": "max",
+          "tool_result_count": 0,
+          "reasoning_replayed": false
+        }
+      ]
+    }
+  ]
+}

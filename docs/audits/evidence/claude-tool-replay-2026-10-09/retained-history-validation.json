@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "client_version": "2.1.294",
+  "private_network_namespace": true,
+  "source_snapshot_readonly": true,
+  "cryptographic_validation_only": true,
+  "upstream_generation_performed": false,
+  "original_session_modified": false,
+  "rows": [
+    {
+      "implementation": "before",
+      "reasoning_envelope_count": 277,
+      "portable_token_count": 11,
+      "authenticated_portable_count": 10,
+      "rejected_portable_count": 1,
+      "last_portable_ordinal": 276,
+      "last_result": "no_candidate_match",
+      "repaired_call_count": 0,
+      "diagnostic_assistant_metadata_removed": 1
+    },
+    {
+      "implementation": "after",
+      "reasoning_envelope_count": 277,
+      "portable_token_count": 11,
+      "authenticated_portable_count": 11,
+      "rejected_portable_count": 0,
+      "last_portable_ordinal": 276,
+      "last_result": "authenticated",
+      "repaired_call_count": 1,
+      "diagnostic_assistant_metadata_removed": 1
+    }
+  ],
+  "live_user_confirmed_both_sessions_recovered": true
+}
