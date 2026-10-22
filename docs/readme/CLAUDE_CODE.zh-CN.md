@@ -49,6 +49,9 @@ Kiro 模式还在 overlay 中设置 `showThinkingSummaries: false`，防止共�
 自身的摘要设置。Kiro 模式还关闭 `CLAUDE_CODE_THINKING_DISPLAY_UPDATES`，
 避免 Claude Code 2.1.294 先请求未支持的 `updates` 显示、被拒后再重试。
 
+K3 不沿用上述 Claude/GPT 显示默认值，其请求必须省略 `thinking.display`，
+具体边界见 [Kimi K3](#kimi-k3)。
+
 共享历史不代表 provider 专用签名可以互通。如果旧续轮包含另一个 provider 无法
 回放的 signed thinking，在原生 Bedrock 与 Kiro 之间切换时应新建会话。
 
@@ -156,6 +159,28 @@ wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会
 指向同一个模型是有意的：正是这一行标名的 picker 行让客户端显示确切版本，而不是
 笼统的 Opus 标签。Opus 5 仍可通过自己的 picker 行和 `KIROCLAUDE_OPUS5_MODEL`
 访问，`KIROCLAUDE_MODEL=opus` 则选择家族别名。
+
+### Kimi K3
+
+K3 的目录声明 `1000000` token context、`131072` token 原生输出上限、文本/图片
+输入，以及仅 `low`、`high`、`max` 三档 reasoning。通过仓库启动器显式选择：
+
+```bash
+KIROCLAUDE_MODEL='kimi-k3[1m]' KIROCLAUDE_EFFORT=max scripts/kiroclaude
+scripts/kiroclaude --model 'kimi-k3[1m]' --effort low
+scripts/kiroclaude --model 'kimi-k3[1m]' --effort high
+```
+
+K3 默认使用会话级 `max` 并关闭 Ultracode。最终显式选择
+`medium/xhigh/ultra/ultracode` 时，在启动 Claude 前失败，不转换等级；显式 CLI effort
+优先于环境默认值。本次没有把 K3 加入静态 picker：尚未验证原生菜单能只显示三档，
+因此不将其伪装为 Claude 家族。
+
+K3 始终 reasoning。Messages 允许省略 `thinking` 或使用没有 budget/display 的
+adaptive 形状；显式关闭、定量 budget 与 display 请求均 fail closed。真实 Claude Code
+2.1.296 的隔离捕获已验证三个 effort 原样出站、adaptive 且没有 budget/display，
+但客户端的 `max_tokens` 仍需使用下文的显式 advisory header。合成捕获不证明
+真实 Kiro 生成或回放兼容，详见 [K3 验证记录](../audits/kimi-k3-adaptation-2026-10-21.zh.md)。
 
 ### 会话标题与 `output_config.format`
 
@@ -291,10 +316,10 @@ GPT stateless schema 会拒绝已测试的所有上游 output-token 字段。启
 X-Kiro-Output-Token-Limit-Mode: advisory
 ```
 
-该声明只对三个 GPT-5.6 模型生效。Provider 会在请求 Kiro 前移除 `max_tokens`，
+该声明只对三个 GPT-5.6 模型与 `kimi-k3` 生效。Provider 会在请求 Kiro 前移除 `max_tokens`，
 记录 `anthropic_output_token_limit_unenforced`，并返回
-`x-kiro-output-token-limit-mode: advisory-unenforced`。缺少或错误的 header、非
-GPT 请求仍会 fail closed。它也不会改变 OpenAI Responses、Chat Completions、
+`x-kiro-output-token-limit-mode: advisory-unenforced`。缺少或错误的 header、
+allowlist 外的请求仍会 fail closed。它也不会改变 OpenAI Responses、Chat Completions、
 其他 Anthropic 客户端或普通 `claude` 命令的行为。
 
 私有模型目录可通过 `KIROCLAUDE_SOL_MODEL`、`KIROCLAUDE_TERRA_MODEL` 和

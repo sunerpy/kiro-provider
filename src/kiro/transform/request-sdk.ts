@@ -1,6 +1,7 @@
 import type { CanonicalRequest, ResolvedReasoningReplay } from "../../protocol/canonical.js";
 import { extractRegionFromArn } from "../constants.js";
-import { resolveEffectiveEffort } from "../effort.js";
+import { assertKimiReasoningEffort, resolveEffectiveEffort } from "../effort.js";
+import { isKimiK3Model } from "../models.js";
 import { resolveOutputTokenLimit } from "../output-token-limit.js";
 import type { Effort, KiroAuthDetails, SdkPreparedRequest } from "../types.js";
 import { RequestTransformError } from "./errors.js";
@@ -30,6 +31,27 @@ export function transformToSdkRequest(
   budget = 20_000,
   effortConfig?: EffortConfig,
 ): SdkPreparedRequest {
+  assertKimiReasoningEffort(model, body.requestedReasoningEffort ?? body.reasoningEffort);
+  if (isKimiK3Model(model)) {
+    if (
+      body.thinking?.enabled === false ||
+      body.thinking?.budgetTokens !== undefined ||
+      body.thinking?.display !== undefined
+    ) {
+      throw new RequestTransformError(
+        "Kimi K3 does not advertise thinking disable, token-budget, or display controls",
+        "unsupported_reasoning_control",
+        "thinking",
+      );
+    }
+    if (body.temperature !== undefined) {
+      throw new RequestTransformError(
+        "Kimi K3 does not advertise a temperature request field",
+        "unsupported_parameter",
+        "temperature",
+      );
+    }
+  }
   const { request, resolved, convId, systemPrompt, diagnostics } = buildCodeWhispererRequest(
     body,
     model,

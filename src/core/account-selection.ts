@@ -1,6 +1,7 @@
 import {
   DEFAULT_OVERAGE_POLICY,
   isAccessTokenError,
+  isClientRegistrationExpired,
   isIncludedQuotaExhausted,
   isOverageBlocked,
   isPermanentError,
@@ -27,8 +28,10 @@ export function isSelectableAccount(
   policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
 ): boolean {
   if (isPermanentError(account.unhealthyReason)) return false;
+  if (isClientRegistrationExpired(account, now)) return false;
   if (isQuotaExhausted(account, policy)) return false;
   if (account.rateLimitResetTime > now) return false;
+  if ((account.refreshRetryAt ?? 0) > now) return false;
   return hasUsableHealth(account, now);
 }
 
@@ -51,6 +54,8 @@ export function isBlockedOnlyByOverage(
 ): boolean {
   if (!isOverageBlocked(account, policy)) return false;
   if (isPermanentError(account.unhealthyReason)) return false;
+  if (isClientRegistrationExpired(account, now) || (account.refreshRetryAt ?? 0) > now)
+    return false;
   if (isIncludedQuotaExhausted(account)) return false;
   return hasUsableHealth(account, now);
 }

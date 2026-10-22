@@ -156,7 +156,7 @@ describe("pipeline refresh failover with the real TokenRefresher", () => {
     });
   });
 
-  test("account A network error: request succeeds on B and A is only cooled down", async () => {
+  test("account A network error: request succeeds on B and A is auth-cooled, not rate-limited", async () => {
     // Given
     const { database, manager, refresher } = fixture([account("account-a"), account("account-b")]);
     installFetch(async (_input, init) => {
@@ -187,7 +187,11 @@ describe("pipeline refresh failover with the real TokenRefresher", () => {
     expect(sentTokens).toEqual(["b-fresh"]);
     const cooled = database.getById("account-a");
     expect(cooled).toMatchObject({ isHealthy: true, failCount: 0 });
-    expect(cooled?.rateLimitResetTime ?? 0).toBeGreaterThan(0);
+    expect(cooled?.unhealthyReason).toBeUndefined();
+    expect(cooled?.rateLimitResetTime).toBe(0);
+    expect(cooled?.refreshFailureCode).toBe("network_error");
+    expect(cooled?.refreshFailureCount).toBe(1);
+    expect(cooled?.refreshRetryAt ?? 0).toBeGreaterThan(Date.now());
   });
 
   test("concurrent requests holding different generations share one network refresh", async () => {

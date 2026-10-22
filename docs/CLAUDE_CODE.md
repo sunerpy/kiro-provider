@@ -58,6 +58,9 @@ The native Bedrock mode keeps Claude's own summary setting. Kiro mode disables
 `CLAUDE_CODE_THINKING_DISPLAY_UPDATES` because Claude Code 2.1.294 can otherwise
 request the unsupported `updates` display before retrying without it.
 
+K3 is an exception to the Claude/GPT display defaults: its request must omit
+`thinking.display`. See [Kimi K3](#kimi-k3) for its narrower contract.
+
 Shared history does not make provider-specific signatures portable. Start a
 new session when switching between native Bedrock and Kiro if the old
 continuation contains signed thinking that the other provider cannot replay.
@@ -184,6 +187,32 @@ as the session model. Those two rows resolve to one model on purpose: the named
 row is what makes the exact version visible in the client instead of a generic
 Opus label. Opus 5 stays reachable as its own picker row and through
 `KIROCLAUDE_OPUS5_MODEL`, and `KIROCLAUDE_MODEL=opus` selects the family alias.
+
+### Kimi K3
+
+K3's catalog advertises a 1,000,000-token context, a 131,072-token native output
+limit, text/image input, and only `low`, `high`, and `max` reasoning. Start it
+explicitly through the repository launcher:
+
+```bash
+KIROCLAUDE_MODEL='kimi-k3[1m]' KIROCLAUDE_EFFORT=max scripts/kiroclaude
+scripts/kiroclaude --model 'kimi-k3[1m]' --effort low
+scripts/kiroclaude --model 'kimi-k3[1m]' --effort high
+```
+
+K3 defaults to the session effort `max` and disables Ultracode. A final explicit
+`medium`, `xhigh`, `ultra`, or `ultracode` selection fails before Claude starts;
+no level is translated. Explicit CLI effort overrides the environment default.
+K3 is not added to the static picker: a per-model three-level effort menu has
+not been verified, so it is not disguised as a Claude family.
+
+K3 always reasons. Messages permits absent `thinking` or adaptive thinking with
+no budget or display field; disabled thinking, numeric budgets, and display
+requests fail closed. Real Claude Code 2.1.296 capture verified all three exact
+efforts with adaptive thinking and no budget/display, but its `max_tokens`
+requires the explicit advisory header described below. Synthetic capture alone
+does not prove live Kiro execution or replay compatibility. See the
+[K3 validation record](audits/kimi-k3-adaptation-2026-10-21.zh.md).
 
 ### Session titles and `output_config.format`
 
@@ -348,11 +377,11 @@ output-token field. The launcher therefore sends:
 X-Kiro-Output-Token-Limit-Mode: advisory
 ```
 
-For the three GPT-5.6 models only, this opts into an explicit compromise: the
+For the three GPT-5.6 models and `kimi-k3` only, this opts into an explicit compromise: the
 provider removes `max_tokens` before calling Kiro, logs
 `anthropic_output_token_limit_unenforced`, and returns
 `x-kiro-output-token-limit-mode: advisory-unenforced`. Missing or invalid
-headers and non-GPT requests remain fail closed. The setting does not change
+headers and requests outside this allowlist remain fail closed. This header does not change
 OpenAI Responses, Chat Completions, another Anthropic client, or the ordinary
 `claude` command.
 

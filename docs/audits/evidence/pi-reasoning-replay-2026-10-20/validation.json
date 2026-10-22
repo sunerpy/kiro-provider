@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "revision": "27a0bc61d6e65f19a3658181f96883480979eafa",
+    "version": "3.8.5",
+    "installed_matches_public_release": true,
+    "binary_sha256": "fe853deba03d51f8125085facb72b3aa761be144db66db2190caaddf3b325cbe",
+    "client": "pi",
+    "client_version": "1.3.0",
+    "observed_failure": "unsupported_reasoning_plaintext_replay",
+    "failure_param": "input.267",
+    "history_reasoning_count": 66,
+    "history_encrypted_reasoning_count": 65,
+    "unsigned_summary_chars": 1640,
+    "preceding_generation_terminal": "normal_complete",
+    "preceding_generation_finish_reason": "tool_calls",
+    "historical_upstream_signature_cause": "not_provable_from_retained_sanitized_logs"
+  },
+  "candidate": {
+    "version": "3.8.5",
+    "kind": "local_unreleased_fix",
+    "binary_sha256": "85a35b7a0398e6be1834a1c55904dd0ed31a52d49d3a19e9080fe4b4e199bce0",
+    "source": "baseline_plus_task_changes_in_independent_snapshot",
+    "preexisting_models_refresh_code_included": false,
+    "changed_runtime_files": [
+      "src/server/responses/request-adapter.ts",
+      "src/server/routes/responses.ts",
+      "src/kiro/transform/streaming/sdk-output-transformer.ts"
+    ]
+  },
+  "regression": {
+    "baseline_new_tests_pass": 14,
+    "baseline_new_tests_fail": 13,
+    "command": "make pre-ci",
+    "exit_code": 0,
+    "tests_pass": 3184,
+    "tests_fail": 0,
+    "assertions": 15963,
+    "covered_lines": 33908,
+    "coverable_lines": 35418,
+    "line_coverage_percent": 95.74,
+    "required_line_coverage_percent": 93,
+    "coverage_parity_pass": true,
+    "security_pass": true,
+    "codex_smoke_security_pass": true,
+    "typecheck_pass": true,
+    "lint_pass": true,
+    "format_pass": true,
+    "docs_links_pass": true,
+    "npm_build_pass": true,
+    "standalone_build_pass": true
+  },
+  "installed_pi_synthetic_sdk_probe": {
+    "command": "PI_PROBE_BINARY=/absolute/path/to/pi bun scripts/probe-pi-reasoning-replay.ts",
+    "passed": true,
+    "scenarios": [
+      { "case": "token-roundtrip", "sdk_dispatches": 3, "iterator_closed": 3, "passed": true },
+      { "case": "summary-compatible", "sdk_dispatches": 3, "iterator_closed": 3, "passed": true },
+      { "case": "summary-strict", "sdk_dispatches": 1, "iterator_closed": 1, "passed": true },
+      { "case": "invalid-token", "sdk_dispatches": 1, "iterator_closed": 1, "passed": true }
+    ],
+    "current_tool_count": 1,
+    "tool_result_count": 1,
+    "summary_omission_audit_count": 2,
+    "all_client_stderr_bytes": 0
+  },
+  "original_history_live_probe": {
+    "isolated_state_config_port_and_session_copy": true,
+    "passed": true,
+    "request_count": 1,
+    "input_count": 271,
+    "reasoning_count": 66,
+    "encrypted_reasoning_count": 65,
+    "summary_only_indices": [267],
+    "current_tool_count": 0,
+    "tool_execution_count": 0,
+    "http_status": 200,
+    "compatibility_header_contains": "reasoning_summary_replay_omitted",
+    "audit_event": "responses_reasoning_summary_omitted",
+    "audit_reasoning_item_count": 1,
+    "sdk_dispatch_count": 1,
+    "completion_witnessed": true,
+    "terminal_provenance": "normal_complete",
+    "finish_reason": "stop",
+    "output_marker_seen": true,
+    "client_exit_code": 0,
+    "original_session_unchanged": true,
+    "private_probe_copies_removed": true
+  },
+  "local_cutover": {
+    "atomic_binary_replacement": true,
+    "service_restart_count": 1,
+    "service_active": true,
+    "service_auto_restarts": 0,
+    "installed_and_running_hash_match_candidate": true,
+    "health_status": 200,
+    "authorized_ready_status": 200,
+    "authorized_models_status": 200,
+    "unauthorized_models_status": 401,
+    "post_restart_pi_smoke": {
+      "passed": true,
+      "http_status": 200,
+      "request_count": 1,
+      "client_exit_code": 0,
+      "output_marker_seen": true,
+      "tool_execution_count": 0,
+      "original_session_loaded": false,
+      "temporary_client_state_removed": true
+    },
+    "post_restart_database_quick_check": "ok",
+    "rollback_backup_online_sqlite_quick_check": "ok",
+    "rollback_backup_sha256_entries_verified": 5
+  },
+  "limitations": {
+    "lost_opaque_reasoning_restored": false,
+    "summary_plaintext_sent_as_model_input": false,
+    "strict_or_invalid_tokens_downgraded": false,
+    "release_published": false,
+    "commits_or_pushes_created": false
+  }
+}

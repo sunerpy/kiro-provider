@@ -1,3 +1,5 @@
+import type { ManagedAccount } from "./types.js";
+
 // Failure and quota classification for Kiro accounts.
 //
 // Two orthogonal failure classes drive the refresh / selection logic:
@@ -38,6 +40,10 @@ const REFRESH_TOKEN_DEAD_MARKERS: readonly string[] = [
   "invalid_grant",
   "invalid_client",
   "unauthorized_client",
+  "expired_token",
+  "expired_client",
+  "client_expired",
+  "client_registration_expired",
   // AWS JSON protocol `__type` exception names
   "InvalidGrantException",
   "InvalidClientException",
@@ -57,7 +63,26 @@ const REFRESH_TOKEN_DEAD_MARKERS: readonly string[] = [
  * secret, or a refresh response that carried no access token. Matched on the
  * structured `<code>: <message>` prefix built by errorReason, never on prose.
  */
-const REFRESH_TOKEN_DEAD_CODES: readonly string[] = ["MISSING_CREDENTIALS", "INVALID_RESPONSE"];
+const REFRESH_TOKEN_DEAD_CODES: readonly string[] = [
+  "MISSING_CREDENTIALS",
+  "INVALID_RESPONSE",
+  "CLIENT_REGISTRATION_EXPIRED",
+];
+
+/** Unknown legacy expiry is not evidence that a client registration expired. */
+export function isClientRegistrationExpired(
+  account: Pick<ManagedAccount, "authMethod" | "clientSecretExpiresAt">,
+  now = Date.now(),
+): boolean {
+  const expiry = account.clientSecretExpiresAt;
+  return (
+    account.authMethod === "idc" &&
+    typeof expiry === "number" &&
+    Number.isFinite(expiry) &&
+    expiry > 0 &&
+    expiry <= now
+  );
+}
 
 function hasDeadCode(reason: string): boolean {
   return REFRESH_TOKEN_DEAD_CODES.some(
@@ -68,6 +93,14 @@ function hasDeadCode(reason: string): boolean {
 /** REFRESH-token-dead signals (needs re-login). */
 export function isRefreshTokenDead(reason?: string): boolean {
   if (!reason) return false;
+  // A known transient structured code wins over incidental words in its
+  // diagnostic prose (for example an invalid_request mentioning invalid_grant).
+  if (/^(?:invalid_request|NETWORK_ERROR|REFRESH_BACKOFF)(?::|$)/.test(reason)) return false;
+  if (/^HTTP_\d{3}:/.test(reason)) {
+    return ["Invalid refresh token", "Invalid grant provided", "Client is expired"].some((marker) =>
+      reason.includes(marker),
+    );
+  }
   if (hasDeadCode(reason)) return true;
   return REFRESH_TOKEN_DEAD_MARKERS.some((marker) => reason.includes(marker));
 }

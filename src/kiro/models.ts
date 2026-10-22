@@ -24,6 +24,14 @@ export function isGpt56Model(model: string): boolean {
   return GPT_56_MODEL.test(model);
 }
 
+export function isKimiK3Model(model: string): boolean {
+  try {
+    return resolveModelVariant(model).wireId === "kimi-k3";
+  } catch {
+    return false;
+  }
+}
+
 export function isGpt56ReasoningPlaceholder(model: string, text: string): boolean {
   if (!isGpt56Model(model)) return false;
   const normalized = text.trim();

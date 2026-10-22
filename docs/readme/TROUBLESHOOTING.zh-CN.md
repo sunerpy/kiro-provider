@@ -21,6 +21,7 @@
   | ----------------- | ------------------------------------------------------------------------------------- |
   | `available`       | 健康、未限流、额度未耗尽。                                                            |
   | `rate-limited`    | `429`/退避窗口生效中，持续到 `RECHECK_AT`。                                           |
+  | `refresh-failed`  | 认证刷新失败；查看 `AUTH_ERROR` 和 `AUTH_RETRY_AT`。到达重试时间不代表认证已经恢复。  |
   | `quota-exhausted` | Kiro 报告额度已用完；到期探测确认新周期后自动回池。                                   |
   | `overage-blocked` | 健康且额度未耗尽，但付费超额次数超过 `overage_threshold`，被 `stop_on_overage` 排除。 |
   | `unhealthy`       | 因临时原因被标记不健康（`HEALTH` 为 `unhealthy`）。                                   |
@@ -84,10 +85,40 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
   会通过强制刷新处理；只有 refresh-dead 标记才会停用账号。
 - **处置：** `kiro-provider accounts relogin <id|email>`。账号保留内部 ID
   与会话亲和记录。`NETWORK_ERROR` 或裸 `HTTP_<status>`（代理/WAF 返回的
-  HTML、空响应）这类临时 `error_code` 绝不会把账号标记为死亡：它会先产生一次
-  `account_token_refresh_retry`，然后流水线切换账号，维护循环稍后重试。
-  因此 `refresh_token_dead: false` 的含义是"去查网络或代理"，而不是
-  "重新登录"。
+  HTML、空响应）这类临时 `error_code` 绝不会把账号标记为死亡：它会记录独立的
+  认证退避，流水线切换到可用账号，维护循环在退避到期后重试。
+  `refresh_token_dead: false` 只表示尚未证明永久失效，也可能是 OIDC
+  `invalid_request`，不能一概归因于网络或代理。
+
+### 仍有额度，但认证刷新失败
+
+后台维护默认每分钟执行，并在 access token 到期前五分钟刷新。刚登录后的生成
+请求成功，并不能证明下一轮自动刷新一定成功。
+候选账号会跨轮公平轮转；令牌阶段最多占原维护超时预算的一半，其余留给额度和
+用量同步。取消等待者不会取消共享刷新，也不会因此把账号记为认证失败。
+
+- 刷新失败有独立、持久化的认证状态。首次等待 30 秒，连续失败按指数退避，
+  最长 15 分钟。`accounts list --details` 显示 `AUTH_ERROR`、`AUTH_RETRY_AT`、
+  `CLIENT_EXPIRES` 和 `LAST_REFRESH`；`--json` 提供对应生命周期时间、受限失败
+  次数和分类枚举，不提供凭证。只有刷新成功或新登录才能清除 `refresh-failed`；
+  重试时间到达仅允许再次探测，不会自动把旧凭证报告为已恢复。
+- 所有本可用账号的认证刷新均失败时，返回 `503 upstream_token_refresh_failed`。
+  即使池中还存在其他额度耗尽的账号，也不能掩盖本次刷新失败。Messages 将其
+  投影为 `overloaded_error`，不是额度 `429 rate_limit_error`；真正的上游额度
+  拒绝仍保留原有额度契约。
+- 不能仅凭 `invalid_request` 永久停用账号。已知撤销/过期的 grant 错误、OAuth
+  `expired_token`，以及有权威到期时间且已过期的 OIDC 客户端注册需要重新登录。
+  新的直接登录会保存 Kiro 返回的注册签发/到期时间；旧行缺少元数据时保持未知，
+  不能猜测它已经过期。
+- 刷新成功、失败和冷却写入都绑定发起操作时的凭证元组。晚到的旧结果不能覆盖
+  或停用新登录；正常用量更新也不会破坏此保护。
+- OpenCode 导入只是一次性凭证快照，不是实时共享凭证库。不要恢复共享数据库，
+  也不要反复用旧导入覆盖较新的本地登录。更新 access token 不能复活已撤销的
+  授权，也不能无限延长已过期的客户端注册。
+
+确认永久失效时执行 `kiro-provider accounts relogin <id|email>`。遇到
+`invalid_request` 时核对安全错误分类和签发区域；授权已不可用时重新登录，
+不要反复清空限流计时器。排障时不得打印 refresh token 或 client secret。
 
 ### IAM Identity Center 登录后报 `profileArn is required for this request`
 
@@ -312,7 +343,14 @@ Provider 的全局请求/请求体预算会在上游 dispatch 前，以 503 和 
 - **原因：** 客户端回放的 `reasoning` 条目只带明文 `summary`/`content`，而
   该轮次里任何位置都没有 `encrypted_content`。Provider 从不把明文推理转成
   提示词，因此无法投影。
-- **处置：** 请求时带上 `include: ["reasoning.encrypted_content"]`，回放该
+- **恢复：** `responses_fidelity_mode: "compatible"` 下，stateless 请求可省略
+  所在 assistant 输出组整组无回放 token 的合法 summary-only 条目。响应通过
+  `X-Kiro-Compatibility: reasoning_summary_replay_omitted` 和只含计数的
+  `responses_reasoning_summary_omitted` 审计报告损失。可见 assistant 消息和工具
+  历史保持完整；丢失的 opaque reasoning 无法恢复，也不会变成模型输入。
+  strict 模式、非空 `content`、孤立条目、未知字段，以及任何已提供但无效的
+  token 仍拒绝。
+- **预防：** 请求时带上 `include: ["reasoning.encrypted_content"]`，回放该
   轮次时把返回的 `encrypted_content`（默认 `kr2_...`，兼容历史 `kr1_...`）原样放回 reasoning 条目。
   每轮恰好一个 reasoning 条目携带令牌；同一轮次的其他 reasoning 条目可以
   保留明文摘要。无法保存令牌的客户端应从历史中省略 reasoning 条目，而不是
@@ -503,16 +541,20 @@ single-string-object-v1`。每次识别都会写入 info 事件
   错误，不会伪造完成判断。评估失败如何处理仍由 Claude Code 决定；协议兼容不
   保证每次模型判断都正确。
 
-### `413`：请求体过大与上下文超长
+### 请求体过大与上下文超长
 
 - **查看：** HTTP `413`。`error.code` 为 `request_too_large`（message 为
   `Request body exceeds the N byte limit`）是入口的请求体上限。`error.type`
   为 `upstream_error`、`error.code` 为 `context_length_exceeded` 的 `413`，
-  则是 Kiro 以提示词超过模型上下文为由拒绝（结构化 reason
+  在 Responses 中表示 Kiro 以提示词超过模型上下文为由拒绝（结构化 reason
   `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `PROMPT_TOO_LONG`，或旧响应里的
-  `input is too long` 文本）；Provider 把该上游 `400` 重新映射为 `413`，以便
-  客户端把它与格式错误的请求区分开。
-- **原因：** 前者是请求体超过 `max_request_body_bytes`（默认 10 MiB；更大的
+  `input is too long` 文本）；共享 pipeline 保留将该上游 `400` 映射为 `413`
+  的契约。Messages 则将精确的 `context_length_exceeded` 分类翻译为 HTTP `400`
+  `invalid_request_error`，消息以稳定的 `Prompt is too long` 开头，并包含
+  Provider code。Claude Code 因而能识别上下文超限并尝试压缩，避免把 HTTP 413
+  泛化显示为“32MB 图片/附件过多”。脱敏上游失败信息仍保留在 `error.details`。
+  真正的请求体字节超限仍返回 HTTP 413。
+- **原因：** 前者是请求体超过 `max_request_body_bytes`（默认 32 MiB；更大的
   请求体 Bun 会在 JSON 信封之前直接返回纯 `413`）。后者是会话历史、工具结果
   或附带文档超过了模型的上下文窗口。
 - **处置：** 请求体上限只在负载确实合理时（大体积内联文档）才提高
@@ -520,6 +562,9 @@ single-string-object-v1`。每次识别都会写入 info 事件
   代替模型截断、总结或丢弃消息。`request_shape` 诊断
   （`input_text_chars`、`document_count`、`tool_result_count`）能显示请求的
   哪一部分在膨胀。
+- **已经开始流式输出：** Messages SSE 一旦提交 HTTP 200，上游失败会以 SSE
+  error 终止，不能再改 HTTP 状态，也不会重放已经接受的生成。上面的 HTTP 400
+  翻译仅适用于响应提交前收到的错误。
 
 ### 代理问题（`proxy_url`）
 

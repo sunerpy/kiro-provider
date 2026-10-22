@@ -462,6 +462,22 @@ const MIGRATIONS: readonly Migration[] = [
       ON web_search_replay (status, updated_at)
     `);
   },
+  // v9: optional OIDC registration lifetime and credential-scoped refresh health.
+  (db) => {
+    for (const [column, type] of [
+      ["client_id_issued_at", "INTEGER"],
+      ["client_secret_expires_at", "INTEGER"],
+      ["refresh_failure_count", "INTEGER"],
+      ["refresh_failure_code", "TEXT"],
+      ["refresh_failed_at", "INTEGER"],
+      ["refresh_retry_at", "INTEGER"],
+      ["last_refresh_at", "INTEGER"],
+    ] as const) {
+      if (!hasColumn(db, "accounts", column)) {
+        db.run(`ALTER TABLE accounts ADD COLUMN ${column} ${type}`);
+      }
+    }
+  },
 ];
 
 export const ACCOUNTS_DB_SCHEMA_VERSION = MIGRATIONS.length;
@@ -548,8 +564,10 @@ export class AccountsDatabase {
             id, email, auth_method, region, oidc_region, client_id, client_secret,
             profile_arn, start_url, refresh_token, access_token, expires_at,
             rate_limit_reset, is_healthy, unhealthy_reason, recovery_time, fail_count,
-            last_used, used_count, limit_count, last_sync, overage_count, generation
-          ) VALUES (${Array.from({ length: 23 }, () => "?").join(", ")})
+            last_used, used_count, limit_count, last_sync, overage_count,
+            client_id_issued_at, client_secret_expires_at, refresh_failure_count,
+            refresh_failure_code, refresh_failed_at, refresh_retry_at, last_refresh_at, generation
+          ) VALUES (${Array.from({ length: 30 }, () => "?").join(", ")})
         `)
         .run(...rowBindings(row));
       this.clearRemovedAccountInternal(account.id);
@@ -567,6 +585,8 @@ export class AccountsDatabase {
           access_token = ?, expires_at = ?, rate_limit_reset = ?, is_healthy = ?,
           unhealthy_reason = ?, recovery_time = ?, fail_count = ?, last_used = ?,
           used_count = ?, limit_count = ?, last_sync = ?, overage_count = ?,
+          client_id_issued_at = ?, client_secret_expires_at = ?, refresh_failure_count = ?,
+          refresh_failure_code = ?, refresh_failed_at = ?, refresh_retry_at = ?, last_refresh_at = ?,
           generation = generation + 1
         WHERE id = ? AND generation = ? AND NOT EXISTS (
           SELECT 1 FROM removed_accounts WHERE removed_accounts.id = accounts.id

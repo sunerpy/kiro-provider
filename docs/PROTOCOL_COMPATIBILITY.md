@@ -94,15 +94,21 @@ executed by the provider: responses carry `server_tool_use`,
 WebSearch tool uses exactly this shape in its one-shot side request; `--bare`
 disables WebSearch. See [Web search](CONFIGURATION.md#web-search).
 
-GPT-5.6 Sol/Terra/Luna remain fail-closed for Anthropic `max_tokens` by
+GPT-5.6 Sol/Terra/Luna and `kimi-k3` remain fail-closed for Anthropic `max_tokens` by
 default. A caller can opt into the exact
 `x-kiro-output-token-limit-mode: advisory` compatibility header; only those
-three GPT wire models then omit Claude Code's required limit before Kiro,
+three GPT wire models and K3 then omit Claude Code's required limit before Kiro,
 return `advisory-unenforced`, and emit a structured audit event. This exception
 does not alter the OpenAI surfaces or the probe-backed Claude `max_tokens`
 projection. Claude Code 2.1.263's `modelPicker.behavesAs` supplies GPT rows with
 effort/xhigh/max UI; the resulting `output_config.effort` is translated to
 Kiro GPT `reasoning.effort`.
+
+K3 accepts only `low`, `high`, and `max` effort, defaulting to `max`; other
+levels are rejected rather than mapped. Its always-on reasoning accepts absent
+or adaptive `thinking` without `budget_tokens` or `display`. It has no added
+Claude picker alias or Ultra preset. See the
+[K3 adaptation boundaries](audits/kimi-k3-adaptation-2026-10-21.zh.md).
 
 ## 2. V3 transport selection
 

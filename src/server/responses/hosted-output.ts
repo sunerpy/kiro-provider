@@ -77,6 +77,7 @@ function protocolError(message: string): HostedResponsesOutputError {
 }
 
 export interface HostedResponsesOptions {
+  readonly omitReasoningSummary?: boolean;
   readonly model: string;
   readonly bridge: ResponsesToolBridge;
   readonly includeEncryptedReasoning: boolean;
@@ -591,6 +592,7 @@ export class HostedResponsesEncoder {
   // Reasoning follows the ordinary Responses rules within each generation.
 
   #reasoningDelta(text: string): void {
+    if (this.options.omitReasoningSummary) return;
     if (this.#messageSeen) {
       this.#deferredReasoning += text;
       return;

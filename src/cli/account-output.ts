@@ -1,6 +1,7 @@
 import type { AccountRefreshSummary } from "../core/quota-rechecker.js";
 import {
   DEFAULT_OVERAGE_POLICY,
+  isClientRegistrationExpired,
   isIncludedQuotaExhausted,
   isOverageBlocked,
   isPermanentError,
@@ -20,6 +21,7 @@ export type AccountAvailability =
   | "quota-exhausted"
   | "overage-blocked"
   | "rate-limited"
+  | "refresh-failed"
   | "unhealthy"
   | "available";
 
@@ -73,10 +75,11 @@ export function isAccountSortOrder(value: string): value is AccountSortOrder {
 const AVAILABILITY_RANK: Readonly<Record<AccountAvailability, number>> = {
   available: 0,
   "rate-limited": 1,
-  unhealthy: 2,
-  "overage-blocked": 3,
-  "quota-exhausted": 4,
-  "needs-relogin": 5,
+  "refresh-failed": 2,
+  unhealthy: 3,
+  "overage-blocked": 4,
+  "quota-exhausted": 5,
+  "needs-relogin": 6,
 };
 
 export class AccountNotFoundError extends Error {
@@ -123,9 +126,14 @@ export function accountAvailability(
   policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
   now = Date.now(),
 ): AccountAvailability {
-  if (isPermanentError(account.unhealthyReason)) return "needs-relogin";
+  if (isPermanentError(account.unhealthyReason) || isClientRegistrationExpired(account, now))
+    return "needs-relogin";
   if (isIncludedQuotaExhausted(account)) return "quota-exhausted";
   if (isOverageBlocked(account, policy)) return "overage-blocked";
+  // An elapsed retry window permits a new authentication probe; it does not
+  // establish that the credentials recovered. Only a successful refresh/login
+  // clears this persisted diagnostic state.
+  if ((account.refreshFailureCount ?? 0) > 0) return "refresh-failed";
   if (account.rateLimitResetTime > now) return "rate-limited";
   if (!account.isHealthy) return "unhealthy";
   return "available";
@@ -290,6 +298,27 @@ function accountJson(
     last_used: jsonTimestamp(account.lastUsed),
     token_expires_at: jsonTimestamp(account.expiresAt),
     rate_limit_reset_at: jsonTimestamp(account.rateLimitResetTime),
+    ...(account.clientIdIssuedAt !== undefined
+      ? { client_id_issued_at: jsonTimestamp(account.clientIdIssuedAt) }
+      : {}),
+    ...(account.clientSecretExpiresAt !== undefined
+      ? { client_secret_expires_at: jsonTimestamp(account.clientSecretExpiresAt) }
+      : {}),
+    ...(account.refreshFailureCount !== undefined
+      ? { refresh_failure_count: account.refreshFailureCount }
+      : {}),
+    ...(account.refreshFailureCode !== undefined
+      ? { refresh_failure_code: account.refreshFailureCode }
+      : {}),
+    ...(account.refreshFailedAt !== undefined
+      ? { refresh_failed_at: jsonTimestamp(account.refreshFailedAt) }
+      : {}),
+    ...(account.refreshRetryAt !== undefined
+      ? { refresh_retry_at: jsonTimestamp(account.refreshRetryAt) }
+      : {}),
+    ...(account.lastRefreshAt !== undefined
+      ? { last_refresh_at: jsonTimestamp(account.lastRefreshAt) }
+      : {}),
     generation: account.generation,
   };
 }
@@ -325,6 +354,10 @@ export function formatAccountList(
         "LAST_SYNC",
         "TOKEN_EXPIRES",
         "RECHECK_AT",
+        "AUTH_ERROR",
+        "AUTH_RETRY_AT",
+        "CLIENT_EXPIRES",
+        "LAST_REFRESH",
         "GENERATION",
       ],
       sorted.map((account) => [
@@ -339,6 +372,10 @@ export function formatAccountList(
         formatTimestamp(account.lastSync),
         formatTimestamp(account.expiresAt),
         formatTimestamp(account.rateLimitResetTime),
+        account.refreshFailureCode ?? "-",
+        formatTimestamp(account.refreshRetryAt),
+        formatTimestamp(account.clientSecretExpiresAt),
+        formatTimestamp(account.lastRefreshAt),
         String(account.generation),
       ]),
     );

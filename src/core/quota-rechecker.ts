@@ -1,3 +1,4 @@
+import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   DEFAULT_OVERAGE_POLICY,
   isPermanentError,
@@ -5,7 +6,6 @@ import {
   isRefreshTokenDead,
   type OveragePolicy,
   type QuotaCounts,
-  toDeadReason,
 } from "../kiro/health.js";
 import type { KiroAuthDetails, KiroUsageSnapshot, ManagedAccount } from "../kiro/types.js";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../kiro/usage-client.js";
 import { errorFields as baseErrorFields, errorReason } from "./account-errors.js";
 import { auditHash, auditLog } from "./audit-log.js";
+import { recordRefreshFailure } from "./credential-state.js";
 import { abortable, abortReason } from "./pipeline-runtime.js";
 
 interface QuotaAccountManager {
@@ -22,6 +23,7 @@ interface QuotaAccountManager {
   getOveragePolicy?(): OveragePolicy;
   toAuthDetails(account: ManagedAccount): KiroAuthDetails;
   markUnhealthy(account: ManagedAccount, reason: string, recoveryTime?: number): unknown;
+  recordRefreshFailure?(account: ManagedAccount, error: unknown): ManagedAccount | undefined;
   scheduleQuotaRecheck(account: ManagedAccount, recheckAfter: number): ManagedAccount | undefined;
   updateQuotaUsage(
     account: ManagedAccount,
@@ -121,6 +123,7 @@ function isQuotaRecheckDue(account: ManagedAccount, now: number, policy: Overage
   return (
     isQuotaExhausted(account, policy) &&
     !isPermanentError(account.unhealthyReason) &&
+    (account.refreshRetryAt ?? 0) <= now &&
     account.rateLimitResetTime <= now
   );
 }
@@ -372,6 +375,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
   }
 
   private isUsageRefreshDue(account: ManagedAccount, now: number): boolean {
+    if ((account.refreshRetryAt ?? 0) > now) return false;
     if (
       isPermanentError(account.unhealthyReason) ||
       isQuotaExhausted(account, this.overagePolicy)
@@ -546,12 +550,10 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
     } catch (error) {
       const nextRecheckAt = this.now() + this.options.intervalMs;
       const reason = errorReason(error);
+      if (error instanceof KiroTokenRefreshError || isRefreshTokenDead(reason)) {
+        recordRefreshFailure(this.options.accountManager, account, error);
+      }
       if (isRefreshTokenDead(reason)) {
-        try {
-          this.options.accountManager.markUnhealthy(account, toDeadReason(reason));
-        } catch {
-          // The account may have been removed while its probe was in flight.
-        }
         this.usageRetryAfter.delete(account.id);
       } else if (isQuotaExhausted(account, this.overagePolicy)) {
         try {
@@ -559,7 +561,7 @@ export class QuotaRechecker implements PipelineQuotaRechecker {
         } catch {
           // The account may have been removed while its probe was in flight.
         }
-      } else {
+      } else if (!(error instanceof KiroTokenRefreshError)) {
         this.usageRetryAfter.set(account.id, nextRecheckAt);
       }
       auditLog(

@@ -90,6 +90,7 @@ export const MODEL_MAPPING: Record<string, string> = {
   // Open weight models
   "deepseek-3.2": "deepseek-3.2",
   "glm-5": "glm-5",
+  "kimi-k3": "kimi-k3",
   "minimax-m2.5": "minimax-m2.5",
   "minimax-m2.1": "minimax-m2.1",
   "qwen3-coder-next": "qwen3-coder-next",
@@ -142,6 +143,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "claude-opus-5-5": 1000000,
   "deepseek-3.2": 164000,
   "glm-5": 200000,
+  "kimi-k3": 1000000,
   "minimax-m2.5": 196000,
   "minimax-m2.1": 196000,
   "qwen3-coder-next": 256000,

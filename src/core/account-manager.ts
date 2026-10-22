@@ -1,9 +1,12 @@
 import { decodeRefreshToken, encodeRefreshToken } from "../kiro/auth.js";
+import { KiroTokenRefreshError } from "../kiro/errors.js";
 import {
   DEFAULT_OVERAGE_POLICY,
   isPermanentError,
   isQuotaExhausted,
+  isRefreshTokenDead,
   type OveragePolicy,
+  toDeadReason,
 } from "../kiro/health.js";
 import type {
   AccountSelectionStrategy,
@@ -12,6 +15,7 @@ import type {
   ManagedAccount,
 } from "../kiro/types.js";
 import type { AccountsDatabase, StoredAccount } from "../storage/accounts-db.js";
+import { errorReason } from "./account-errors.js";
 import {
   AccountSelector,
   countSelectable,
@@ -19,6 +23,12 @@ import {
   isSelectableAccount,
   selectableCandidates,
 } from "./account-selection.js";
+import {
+  canAdoptRefreshedAccount,
+  refreshFailureCode,
+  refreshFailureDelayMs,
+  sameCredentialTuple,
+} from "./credential-state.js";
 import { evictSdkClientsForAccount } from "./sdk-client.js";
 
 const MAX_CAS_ATTEMPTS = 4;
@@ -57,6 +67,12 @@ export function toAuthDetails(account: ManagedAccount): KiroAuthDetails {
     ...(account.oidcRegion ? { oidcRegion: account.oidcRegion } : {}),
     ...(account.clientId ? { clientId: account.clientId } : {}),
     ...(account.clientSecret ? { clientSecret: account.clientSecret } : {}),
+    ...(account.clientIdIssuedAt !== undefined
+      ? { clientIdIssuedAt: account.clientIdIssuedAt }
+      : {}),
+    ...(account.clientSecretExpiresAt !== undefined
+      ? { clientSecretExpiresAt: account.clientSecretExpiresAt }
+      : {}),
     ...(account.email ? { email: account.email } : {}),
     ...(account.profileArn ? { profileArn: account.profileArn } : {}),
   };
@@ -109,7 +125,7 @@ export class AccountManager {
   getMinWaitTime(): number {
     const now = Date.now();
     const waits = this.accounts
-      .map(({ rateLimitResetTime }) => rateLimitResetTime - now)
+      .map((account) => Math.max(account.rateLimitResetTime, account.refreshRetryAt ?? 0) - now)
       .filter((wait) => wait > 0);
     return waits.length === 0 ? 0 : Math.min(...waits);
   }
@@ -278,26 +294,78 @@ export class AccountManager {
     }));
   }
 
+  /** Persist refresh failure only for the credential epoch that actually failed. */
+  recordRefreshFailure(account: ManagedAccount, error: unknown): StoredAccount | undefined {
+    if (error instanceof KiroTokenRefreshError && error.code === "REFRESH_BACKOFF") {
+      return this.getLatestAccount(account.id);
+    }
+    for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+      const current = this.database.getById(account.id);
+      if (!current) return undefined;
+      if (!sameCredentialTuple(account, current)) {
+        this.replaceAccount(cloneAccount(current));
+        return cloneAccount(current);
+      }
+      const now = Date.now();
+      const previousCount = current.refreshFailureCount ?? 0;
+      const count = Math.min(Number.MAX_SAFE_INTEGER, previousCount + 1);
+      const reason = errorReason(error);
+      const permanent = isRefreshTokenDead(reason);
+      const updated: StoredAccount = {
+        ...current,
+        refreshFailureCount: count,
+        refreshFailureCode: refreshFailureCode(error),
+        refreshFailedAt: now,
+        ...(permanent
+          ? {
+              isHealthy: false,
+              failCount: 10,
+              unhealthyReason: toDeadReason(reason),
+              recoveryTime: undefined,
+            }
+          : { refreshRetryAt: now + refreshFailureDelayMs(count) }),
+      };
+      if (this.database.updateExistingAccounts([updated]) === 1) {
+        const persisted = { ...updated, generation: current.generation + 1 };
+        this.replaceAccount(persisted);
+        return cloneAccount(persisted);
+      }
+    }
+    this.reconcileFromDb();
+    throw new AccountConcurrentUpdateError(account.id);
+  }
+
   updateFromAuth(account: StoredAccount, auth: KiroAuthDetails): StoredAccount | undefined {
     const refresh = decodeRefreshToken(auth.refresh);
     for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
       const current = attempt === 0 ? account : this.database.getById(account.id);
-      if (!current || !this.isSameLogin(account, current)) {
+      if (!current) {
         this.reconcileFromDb();
         return undefined;
       }
-      if (attempt > 0 && !this.sameCredentials(account, current)) {
+      if (attempt > 0 && !sameCredentialTuple(account, current)) {
         // Another writer already rotated this login's credentials; adopt the
         // newer row instead of overwriting it with this refresh result.
-        this.replaceAccount(cloneAccount(current));
-        return cloneAccount(current);
+        if (canAdoptRefreshedAccount(account, current, 0)) {
+          this.replaceAccount(cloneAccount(current));
+          return cloneAccount(current);
+        }
+        this.reconcileFromDb();
+        return undefined;
       }
       const updated: StoredAccount = {
         ...current,
         refreshToken: refresh.refreshToken,
         accessToken: auth.access,
         expiresAt: auth.expires,
-        ...(auth.email ? { email: auth.email } : {}),
+        lastRefreshAt: Date.now(),
+        refreshFailureCount: undefined,
+        refreshFailureCode: undefined,
+        refreshFailedAt: undefined,
+        refreshRetryAt: undefined,
+        ...(auth.email
+          ? { email: current.email !== account.email ? current.email : auth.email }
+          : {}),
         isHealthy: true,
         failCount: 0,
         unhealthyReason: undefined,
@@ -315,23 +383,6 @@ export class AccountManager {
 
   toAuthDetails(account: ManagedAccount): KiroAuthDetails {
     return toAuthDetails(account);
-  }
-
-  private isSameLogin(started: StoredAccount, current: StoredAccount): boolean {
-    return (
-      current.authMethod === started.authMethod &&
-      current.clientId === started.clientId &&
-      current.email === started.email &&
-      current.startUrl === started.startUrl
-    );
-  }
-
-  private sameCredentials(started: StoredAccount, current: StoredAccount): boolean {
-    return (
-      current.refreshToken === started.refreshToken &&
-      current.accessToken === started.accessToken &&
-      current.expiresAt === started.expiresAt
-    );
   }
 
   private patchAccount(id: string, patch: AccountPatch): StoredAccount | undefined {

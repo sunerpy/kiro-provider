@@ -3,6 +3,7 @@ import type { Config } from "../../config/schema.js";
 import { leastQueuedAccountIds, reserveAccountCapacity } from "../../core/account-capacity.js";
 import { isSelectableAccount } from "../../core/account-selection.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
+import { recordRefreshFailure } from "../../core/credential-state.js";
 import {
   abortable,
   abortableSleep,
@@ -18,7 +19,8 @@ import {
 } from "../../core/tool-output-validation.js";
 import { readUpstreamErrorBody } from "../../core/upstream-error-body.js";
 import { KIRO_CONSTANTS } from "../../kiro/constants.js";
-import { isAccessTokenError, toOveragePolicy } from "../../kiro/health.js";
+import { KiroTokenRefreshError } from "../../kiro/errors.js";
+import { isAccessTokenError, isQuotaExhausted, toOveragePolicy } from "../../kiro/health.js";
 import { resolveModelVariant } from "../../kiro/models.js";
 import { RequestTransformError } from "../../kiro/transform/errors.js";
 import { SdkStreamProtocolError } from "../../kiro/transform/streaming/sdk-stream-runtime.js";
@@ -798,6 +800,34 @@ export async function proxyNativeResponses(
       release = await (options.signals.diagnostics?.waitForQueue("account", acquire) ?? acquire());
     }
     if (!account || (owner && account.id !== owner.accountId)) {
+      const now = Date.now();
+      const policy = manager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
+      const authenticationBackoff = manager
+        .reconcileFromDb()
+        .filter(
+          (candidate) =>
+            (owner
+              ? candidate.id === owner.accountId
+              : (options.adaptation?.eligibleAccounts?.has(candidate.id) ?? true)) &&
+            !isQuotaExhausted(candidate, policy) &&
+            (candidate.refreshFailureCount ?? 0) > 0 &&
+            (candidate.refreshRetryAt ?? 0) > now,
+        );
+      if (authenticationBackoff.length > 0) {
+        const retryAt = Math.min(
+          ...authenticationBackoff.map((candidate) => candidate.refreshRetryAt ?? now),
+        );
+        const response = openAiError(
+          503,
+          owner
+            ? "Authentication refresh is unavailable for the response's Kiro account"
+            : "Authentication refresh is temporarily unavailable for every usable Kiro account",
+          "service_unavailable",
+          owner ? "response_account_unavailable" : "upstream_token_refresh_failed",
+        );
+        response.headers.set("Retry-After", String(Math.max(1, Math.ceil((retryAt - now) / 1000))));
+        return { response, streamOwnsResources: false };
+      }
       const bound =
         owner && manager.reconcileFromDb().find((candidate) => candidate.id === owner.accountId);
       const delay = bound ? bound.rateLimitResetTime - Date.now() : 0;
@@ -1345,6 +1375,27 @@ export async function proxyNativeResponses(
         ),
         streamOwnsResources: false,
       };
+    }
+    if (error instanceof KiroTokenRefreshError) {
+      if (accountForAudit) recordRefreshFailure(manager, accountForAudit, error);
+      options.signals.diagnostics?.failure(error, "token_refresh");
+      const attempted = accountForAudit;
+      const current =
+        attempted && manager.reconcileFromDb().find((candidate) => candidate.id === attempted.id);
+      const retryAt = current?.refreshRetryAt ?? error.retryAt;
+      const response = openAiError(
+        503,
+        "Kiro account authentication refresh failed",
+        "service_unavailable",
+        "upstream_token_refresh_failed",
+      );
+      if (retryAt !== undefined && retryAt > Date.now())
+        response.headers.set(
+          "Retry-After",
+          String(Math.max(1, Math.ceil((retryAt - Date.now()) / 1000))),
+        );
+      logTerminal("warn", "authentication_refresh_failed", { httpStatus: 503 });
+      return { response, streamOwnsResources: false };
     }
     if (error instanceof NativeStreamError || error instanceof SdkStreamProtocolError) {
       options.signals.diagnostics?.failure(error, "upstream_stream");

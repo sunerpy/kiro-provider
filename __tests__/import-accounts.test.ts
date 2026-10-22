@@ -83,6 +83,43 @@ afterEach(() => {
 });
 
 describe("runImportAccounts", () => {
+  test("imports optional registration metadata but never source runtime refresh failure state", () => {
+    const sourcePath = temporaryPath("opencode-metadata.db");
+    const source = new Database(sourcePath, { create: true });
+    source.exec(LEGACY_ACCOUNTS_SCHEMA);
+    source.exec(
+      "ALTER TABLE accounts ADD COLUMN client_id_issued_at INTEGER; ALTER TABLE accounts ADD COLUMN client_secret_expires_at INTEGER; ALTER TABLE accounts ADD COLUMN refresh_failure_code TEXT; ALTER TABLE accounts ADD COLUMN refresh_retry_at INTEGER",
+    );
+    insertLegacyAccount(source, {
+      id: "metadata",
+      email: "metadata@example.com",
+      authMethod: "idc",
+      clientId: "client",
+      clientSecret: "secret",
+    });
+    source.run(
+      "UPDATE accounts SET client_id_issued_at=1700000000000, client_secret_expires_at=1800000000000, refresh_failure_code='invalid_request', refresh_retry_at=1900000000000",
+    );
+    source.close();
+    const target = new AccountsDatabase(temporaryPath("metadata-target.db"));
+    openDatabases.push(target);
+    expect(
+      runImportAccounts({ from: sourcePath }, { database: target, stdout: () => undefined })
+        .imported,
+    ).toBe(1);
+    expect(target.getById("metadata")).toMatchObject({
+      clientIdIssuedAt: 1_700_000_000_000,
+      clientSecretExpiresAt: 1_800_000_000_000,
+    });
+    expect(target.getById("metadata")).not.toHaveProperty("refreshFailureCode");
+    expect(target.getById("metadata")).not.toHaveProperty("refreshRetryAt");
+    const readonly = new Database(sourcePath, { readonly: true });
+    expect(readonly.query("SELECT refresh_failure_code FROM accounts").get()).toEqual({
+      refresh_failure_code: "invalid_request",
+    });
+    readonly.close();
+  });
+
   test("resolves the default OpenCode database from XDG_CONFIG_HOME or the home directory", () => {
     expect(defaultOpenCodeDatabasePath({ XDG_CONFIG_HOME: "/tmp/xdg" }, "linux")).toBe(
       "/tmp/xdg/opencode/kiro.db",

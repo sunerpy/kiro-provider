@@ -95,6 +95,7 @@ export const EXPECTED_PUBLIC_MODEL_IDS = Object.freeze([
   "claude-opus-5-5-max",
   "deepseek-3.2",
   "glm-5",
+  "kimi-k3",
   "minimax-m2.5",
   "minimax-m2.1",
   "qwen3-coder-next",
@@ -487,6 +488,15 @@ export const MODEL_CATALOG: readonly ModelCatalogEntry[] = Object.freeze([
     contextLimit: getModelContextLimit("glm-5"),
     outputLimit: 64000,
     modalities: TEXT_MODALITIES,
+  },
+  {
+    id: "kimi-k3",
+    wireId: "kimi-k3",
+    name: "Kimi K3 (2.4x)",
+    contextLimit: getModelContextLimit("kimi-k3"),
+    outputLimit: 131072,
+    rateMultiplier: 2.4,
+    modalities: IMAGE_MODALITIES,
   },
   {
     id: "minimax-m2.5",

@@ -75,13 +75,18 @@ server/client 工具时以 `tool_use` 结束，稳定检查点可能以 `pause_t
 Code 的 WebSearch 工具在一次性子请求中正是使用这一形状；`--bare` 会禁用
 WebSearch。见[联网搜索](CONFIGURATION.zh-CN.md#联网搜索)。
 
-GPT-5.6 Sol/Terra/Luna 的 Anthropic `max_tokens` 默认继续 fail closed。调用方
+GPT-5.6 Sol/Terra/Luna 与 `kimi-k3` 的 Anthropic `max_tokens` 默认继续 fail closed。调用方
 只有显式发送 `x-kiro-output-token-limit-mode: advisory` 才会进入兼容路径；且仅
-这三个 GPT wire model 会在调用 Kiro 前省略 Claude Code 的必填 limit，在响应中
+这三个 GPT wire model 与 K3 会在调用 Kiro 前省略 Claude Code 的必填 limit，在响应中
 返回 `advisory-unenforced` 并记录结构化审计事件。该例外不改变 OpenAI 接口或
 已经探针确认的 Claude `max_tokens` 投影。Claude Code 2.1.263 使用
 `modelPicker.behavesAs` 为 GPT 行提供 effort/xhigh/max UI，产生的
 `output_config.effort` 再转换为 Kiro GPT `reasoning.effort`。
+
+K3 的 effort 仅支持 `low`、`high`、`max`，默认 `max`；其他等级直接拒绝，不做映射。
+K3 始终 reasoning，`thinking` 只能省略或使用不含 `budget_tokens`、`display` 的 adaptive
+形状。没有为它新增 Claude picker 别名或 Ultra 预设，见
+[K3 适配边界](../audits/kimi-k3-adaptation-2026-10-21.zh.md)。
 
 ## 2. V3 传输选择
 

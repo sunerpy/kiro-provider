@@ -57,6 +57,7 @@ conversation 绑定；当前工具声明仍独立决定新调用的授权。Resp
 | `enable_legacy_chat_completions`            | `boolean`，默认 `false`                                                                  | `KIRO_PROVIDER_ENABLE_LEGACY_CHAT_COMPLETIONS`            | 是否开放 `POST /v1/chat/completions`。除非客户端不能使用 Responses 或 Anthropic Messages，否则应保持关闭。环境变量接受 `true`、`false`、`1`、`0`。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `protocol_projection_mode`                  | `"v3-auto" \| "safe" \| "native-context-safe" \| "legacy-user-prefix"`，默认 `"v3-auto"` | `KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE`                  | `v3-auto` 在请求可保真时使用 KiroRuntime 原生 Responses，并对 `store:false`、max effort、加密 reasoning、custom/namespace 工具与 Codex 协作 item 自动 fallback；其余值保留显式旧投影控制。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `responses_fidelity_mode`                   | `"compatible"` (default) / `"strict"`                                                    | `KIRO_PROVIDER_RESPONSES_FIDELITY_MODE`                   | 兼容模式通过 X-Kiro-Compatibility 报告已登记降级，并只在本地执行有界 `single-string-object-v1` 元数据 profile；严格模式会在派发前拒绝该近似和其他无法保真的语义。该键只作用于 `/v1/responses`；Anthropic Messages 的 `output_config.format` profile 不受其控制。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `responses_thinking_display_mode`           | `"preserve" \| "omitted"`，默认 `"preserve"`                                             | `KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE`           | Responses 显式恢复策略：仅在 stateless Fable 5.1/Opus 5.5 验证通过后请求 adaptive omitted，隐藏当前 JSON/SSE 推理文本，保留 effort、不透明回放 token 和历史。原生 Responses、其他模型及 effort none 不变；返回 x-kiro-thinking-display-mode: forced-omitted。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `anthropic_thinking_display_mode`           | `"preserve" \| "omitted"`, default `"preserve"`                                          | `KIRO_PROVIDER_ANTHROPIC_THINKING_DISPLAY_MODE`           | Messages 恢复开关：仅在 Fable 5.1 和 Opus 5.5 上，将已通过验证的 summarized 当前输出改为 omitted，保留 effort 和历史签名，并返回 x-kiro-thinking-display-mode: forced-omitted。默认保留客户端请求。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `responses_instruction_lift`                | `"auto"` (default) / `"off"` / `"experimental"`                                          | `KIRO_PROVIDER_RESPONSES_INSTRUCTION_LIFT`                | 原生指令提升门禁；auto 要求完整续接证据，experimental 不绕过存储和账号约束。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `responses_native_tool_bridge`              | `"auto"` (default) / `"off"` / `"experimental"`                                          | `KIRO_PROVIDER_RESPONSES_NATIVE_TOOL_BRIDGE`              | 原生 namespace / 自由文本工具桥接门禁；关闭后仍能读取已有会话映射。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -272,6 +273,13 @@ KiroRuntime CreateResponse，包括原生 `instructions` 字段。需要
 缓冲投射 JSON；strict 模式在派发前拒绝。Anthropic Messages 的 `output_config.format`
 变体不受 `responses_fidelity_mode` 影响。该行为不开放任意 Structured Outputs。
 
+对于 stateless 历史，compatible 模式还会省略所在 assistant 输出组整组无回放
+token 的合法 summary-only reasoning 条目，并通过
+`X-Kiro-Compatibility: reasoning_summary_replay_omitted` 和计数审计报告损失。
+可见 assistant/tool 历史保持完整；丢失的 opaque reasoning 无法恢复，摘要也不会
+转成模型输入。strict 模式仍拒绝这类历史。非空 reasoning `content`、孤立
+reasoning 条目、未知字段和已提供但无效的 token 都不会被降级接受。
+
 显式 `safe` 仍作用于旧 GenerateAssistantResponse 路径。GPT 与 Claude 真实
 探针证明，Kiro 虽接受合法非空标签的 `additionalContext`，但不会保留指令
 内容或指令高于 user 的优先级，因此 `safe` 对指令角色返回
@@ -314,6 +322,13 @@ clean EOF 时才完成。旧 SDK `q` 端点可能两者都不提供。因此 `le
 成功结果。请求只会发送给实时/缓存目录中包含精确 wire ID 的账号。若管理面
 暂不可达且没有缓存，则使用仓库内目录做受限兜底；未知模型仍会在调用 SDK
 前被拒绝。
+
+`GET /v1/models` 不等待上游：它直接用已缓存的账号目录作答，过期的也可以；
+还没有任何账号缓存目录时，使用仓库内目录。随后在后台先做到期的额度复查，
+再为仍有额度的账号刷新令牌和目录。并发的列表请求共用同一次刷新，结果在下一
+次列出模型时生效。这样，用量、OIDC 或管理端点变慢，也不会让列表请求超过
+客户端的超时。后台刷新失败时只记录 `model_catalog_revalidation_failed`
+和错误类型，并继续提供已缓存的目录。
 
 ## 会话亲和与连接复用
 
@@ -629,6 +644,7 @@ export KIRO_PROVIDER_REASONING_REPLAY_KEYS='2026-08:<base64url-32-byte-key>,2026
   "api_keys": ["sk-REPLACE-ME"],
   "enable_legacy_chat_completions": false,
   "protocol_projection_mode": "v3-auto",
+  "responses_thinking_display_mode": "preserve",
   "session_affinity_mode": "explicit-only",
   "auth_source": "local",
   "opencode_auth_db_path": null,
@@ -713,6 +729,32 @@ Bun 可以在应用 handler 执行前返回 HTTP 413 并关闭连接，Codex 随
 此预算不是 JS heap 上限：解析、字符串、replay 和 SDK 序列化会放大驻留内存。
 按受限环境的峰值测量设置服务内存预算，并限制并行构建和完整测试任务。每账号
 `account_inference_concurrency` 仍独立生效；全局准入不改变账号资格、tenant 隔离或签名绑定。
+
+## Responses 思考显示恢复
+
+`responses_thinking_display_mode: "preserve"` 是默认值，保留现有 Responses
+投影及其已报告的 `reasoning_summary_ignored` 兼容降级，不额外覆盖上游
+thinking/display。需要显式请求 omitted 时，设置
+`responses_thinking_display_mode: "omitted"` 或
+`KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE=omitted`，然后重启网关。
+
+策略仅作用于已选定 stateless 路径的 Fable 5.1 或 Opus 5.5 Responses 请求，
+并在认证、模型能力和历史回放验证通过后生效。发往上游的字段为
+`thinking: { type: "adaptive", display: "omitted" }`，保持原有实际 effort。
+JSON 与 SSE 均隐藏当前推理文本；经过认证的不透明回放 token 和历史签名仍可
+用于续接。原生 Responses、其他模型及显式 `reasoning.effort: "none"`
+保持原行为。
+
+发生转换的响应带有 `x-kiro-thinking-display-mode: forced-omitted`。
+`responses_thinking_display_forced` 审计仅含枚举与计数；签名诊断仅记录位置、
+长度和关系枚举，不记录签名值、签名哈希或推理文本。严格模式仍会在派发前拒绝
+现有不支持的 `reasoning.summary: "auto"`、`"concise"` 和 `"detailed"`
+语义；summary 缺省、为 null 或为 `"none"` 也不会绕过其他严格模式检查。
+
+此设置不会启用空前缀省略，也不放宽推理完整性检查。冲突签名和混合推理载荷
+仍会失败；已接受的生成不会为了改变 display 或 effort 而重试。
+`anthropic_thinking_display_mode` 仍仅作用于 Messages。将 Responses 模式改回
+`preserve` 并重启即可关闭覆盖。
 
 ## Messages 思考显示恢复
 

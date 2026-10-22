@@ -58,6 +58,7 @@ import {
 } from "./tool-bridge.js";
 
 type AdapterOptions = {
+  readonly omitReasoningSummary?: boolean;
   readonly usageMode?: "compatible" | "strict";
   readonly responseId?: string;
   readonly createdAt?: number;
@@ -463,6 +464,9 @@ export function responsesSseAdapter(pipelineResponse: Response, options: Adapter
       case "completed":
         return;
       case "reasoning_delta": {
+        // Canonical deltas still establish semantic acceptance and capture the
+        // original replay material. Only their public projection is omitted.
+        if (options.omitReasoningSummary) return;
         // Kiro has been observed to emit an ellipsis placeholder for GPT 5.6 Sol.
         // Buffer only that exact candidate so it can be omitted without affecting
         // normal Opus reasoning or future non-placeholder GPT reasoning.

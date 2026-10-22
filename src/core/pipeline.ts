@@ -30,6 +30,7 @@ import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
 import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
 import {
   isGpt56Model,
+  isKimiK3Model,
   resolveModelVariant,
   supportsReasoningPrefixOmission,
 } from "../kiro/models.js";
@@ -69,6 +70,7 @@ import {
 } from "./error-classifier.js";
 import { type AffinityStallSnapshot, affinityStallTracker } from "./affinity-stall.js";
 import { auditHash, auditLog } from "./audit-log.js";
+import { recordRefreshFailure } from "./credential-state.js";
 import {
   abortable,
   abortableSleep,
@@ -151,6 +153,7 @@ type CompletionResult =
       readonly captureReasoning?: SdkReasoningCaptureHandler;
       readonly emitEncryptedReasoning: boolean;
       readonly emitAnthropicReasoningMetadata: boolean;
+      readonly responsesThinkingDisplayForced?: boolean;
       readonly bufferLateGptReasoning: boolean;
       readonly prefetchOmittedReasoning: boolean;
       readonly reasoningReplayDecision: ReasoningReplayDecision;
@@ -329,15 +332,19 @@ function shortestRateLimitWaitMs(
   return waits.length === 0 ? undefined : Math.min(...waits);
 }
 
-function refreshFailureResponse(): CompletionResult {
+function refreshFailureResponse(retryAfterMs?: number): CompletionResult {
+  const response = openAiError(
+    503,
+    "Token refresh failed for every usable Kiro account",
+    "service_unavailable",
+    "upstream_token_refresh_failed",
+  );
+  if (retryAfterMs !== undefined && retryAfterMs > 0) {
+    response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
+  }
   return {
     kind: "response",
-    response: openAiError(
-      503,
-      "Token refresh failed for every usable Kiro account",
-      "service_unavailable",
-      "upstream_token_refresh_failed",
-    ),
+    response,
   };
 }
 
@@ -580,6 +587,17 @@ function replayLockedSelectionResult(
         "The account bound to signed reasoning replay has exhausted its included quota",
         "reasoning_replay_account_quota_exhausted",
         retryAfterMs,
+      ),
+    };
+  }
+  if ((bound.refreshRetryAt ?? 0) > now) {
+    return {
+      kind: "result",
+      result: replayAccountError(
+        503,
+        "Token refresh failed for the account bound to signed reasoning replay",
+        "reasoning_replay_account_refresh_failed",
+        (bound.refreshRetryAt as number) - now,
       ),
     };
   }
@@ -1039,6 +1057,7 @@ function reasoningCaptureOptions(
     readonly runtimeProtocol: "codewhisperer" | "kiro-runtime";
     readonly legacyPrefixMessages?: number;
   },
+  responsesThinkingDisplayForced = false,
 ): {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning: boolean;
@@ -1046,6 +1065,7 @@ function reasoningCaptureOptions(
   readonly bufferLateGptReasoning: boolean;
   readonly prefetchOmittedReasoning: boolean;
   readonly reasoningReplayDecision: ReasoningReplayDecision;
+  readonly responsesThinkingDisplayForced: boolean;
   readonly fingerprintOutput?: SdkOutputFingerprint;
   readonly captureOutput?: SdkOutputCaptureHandler;
 } {
@@ -1110,6 +1130,7 @@ function reasoningCaptureOptions(
       bufferLateGptReasoning,
       prefetchOmittedReasoning,
       reasoningReplayDecision,
+      responsesThinkingDisplayForced,
       fingerprintOutput,
       ...(captureOutput ? { captureOutput } : {}),
     };
@@ -1144,6 +1165,7 @@ function reasoningCaptureOptions(
     bufferLateGptReasoning,
     prefetchOmittedReasoning,
     reasoningReplayDecision,
+    responsesThinkingDisplayForced,
     fingerprintOutput,
     ...(captureOutput ? { captureOutput } : {}),
   };
@@ -1525,7 +1547,15 @@ function excludeAfterRefreshFailure(
   const refreshTokenDead = failure instanceof KiroTokenRefreshError && isRefreshTokenDead(reason);
   const networkError = failure instanceof KiroTokenRefreshError && failure.code === "NETWORK_ERROR";
   state.lastRefreshFailure = failure;
-  if (networkError && !state.refreshNetworkRetriedAccountIds.has(failed.id)) {
+  const recorded =
+    failure instanceof KiroTokenRefreshError
+      ? recordRefreshFailure(options.accountManager, failed, failure)
+      : undefined;
+  if (
+    networkError &&
+    (recorded?.refreshRetryAt ?? 0) <= Date.now() &&
+    !state.refreshNetworkRetriedAccountIds.has(failed.id)
+  ) {
     state.refreshNetworkRetriedAccountIds.add(failed.id);
     auditLog("warn", "account_token_refresh_retry", {
       account_hash: auditHash(failed.id),
@@ -1534,16 +1564,6 @@ function excludeAfterRefreshFailure(
     return "retry";
   }
   if (state.replayLocked) {
-    if (failure instanceof KiroTokenRefreshError) {
-      if (refreshTokenDead) {
-        options.accountManager.markUnhealthy(failed, toDeadReason(reason));
-      } else {
-        options.accountManager.markRateLimited(
-          failed,
-          Date.now() + options.config.rate_limit_retry_delay_ms,
-        );
-      }
-    }
     auditLog("warn", "reasoning_replay_account_refresh_failed", {
       account_hash: auditHash(failed.id),
       error_type: failure.name,
@@ -1553,16 +1573,6 @@ function excludeAfterRefreshFailure(
     return "switch";
   }
   state.requestExcludedAccountIds.add(failed.id);
-  if (failure instanceof KiroTokenRefreshError) {
-    if (refreshTokenDead) {
-      options.accountManager.markUnhealthy(failed, toDeadReason(reason));
-    } else {
-      options.accountManager.markRateLimited(
-        failed,
-        Date.now() + options.config.rate_limit_retry_delay_ms,
-      );
-    }
-  }
   auditLog("warn", "account_token_refresh_failed", {
     account_hash: auditHash(failed.id),
     error_type: failure.name,
@@ -1856,6 +1866,43 @@ function selectAttemptAccount(
   if (candidateAccountIds.length === 0 && state.lastAuthenticationFailure) {
     return { kind: "result", result: authenticationFailureResult(state.lastAuthenticationFailure) };
   }
+  const refreshBackoffCandidates = accounts.filter(
+    (account) =>
+      !state.modelRejectedAccountIds.has(account.id) &&
+      !isQuotaExhausted(account, policy) &&
+      !isPermanentError(account.unhealthyReason) &&
+      (account.refreshRetryAt ?? 0) > selectionNow,
+  );
+  const refreshRetryAfterMs =
+    refreshBackoffCandidates.length > 0
+      ? Math.min(...refreshBackoffCandidates.map((account) => account.refreshRetryAt as number)) -
+        selectionNow
+      : undefined;
+  // Cached exhausted rows did not fail this generation. Preserve the actual
+  // refresh failure unless an account already earned a quota/stream failure.
+  if (
+    candidateAccountIds.length === 0 &&
+    state.lastRefreshFailure !== undefined &&
+    state.lastQuotaFailure === undefined &&
+    state.lastStreamFailure === undefined
+  ) {
+    return { kind: "result", result: refreshFailureResponse(refreshRetryAfterMs) };
+  }
+  const eligibleRefreshCandidates = requestCandidates.filter(
+    (account) =>
+      eligibleAccountIds.has(account.id) &&
+      !isQuotaExhausted(account, policy) &&
+      !isPermanentError(account.unhealthyReason),
+  );
+  if (
+    eligibleRefreshCandidates.length > 0 &&
+    eligibleRefreshCandidates.every((account) => (account.refreshRetryAt ?? 0) > selectionNow)
+  ) {
+    const retryAfterMs =
+      Math.min(...eligibleRefreshCandidates.map((account) => account.refreshRetryAt as number)) -
+      selectionNow;
+    return { kind: "result", result: refreshFailureResponse(retryAfterMs) };
+  }
   if (
     candidateAccountIds.length === 0 &&
     state.lastQuotaFailure === undefined &&
@@ -1875,7 +1922,7 @@ function selectAttemptAccount(
     return { kind: "result", result: streamFailureResult(undefined, state.lastStreamFailure) };
   }
   if (candidateAccountIds.length === 0 && state.lastRefreshFailure !== undefined) {
-    return { kind: "result", result: refreshFailureResponse() };
+    return { kind: "result", result: refreshFailureResponse(refreshRetryAfterMs) };
   }
   if (state.webSearchCellRejected && candidateAccountIds.length === 0) {
     return {
@@ -2346,10 +2393,18 @@ async function runAttempt(
           buildEffortRequestFields(wireModel, prepared.effort),
         )
       : prepared.additionalModelRequestFields;
+    // Preserve the effort resolved from the original request. Enabling thinking
+    // before request transformation would invent an effort from its budget.
+    const responsesThinkingDisplayForced =
+      options.body.protocol === "responses" &&
+      options.config.responses_thinking_display_mode === "omitted" &&
+      options.body.thinking?.enabled !== false &&
+      options.body.requestedReasoningEffort !== "none" &&
+      buildThinkingRequestFields(wireModel, true, "omitted") !== undefined;
     const thinkingRequestFields = buildThinkingRequestFields(
       wireModel,
-      options.body.thinking?.enabled === true,
-      options.body.thinking?.display,
+      responsesThinkingDisplayForced || options.body.thinking?.enabled === true,
+      responsesThinkingDisplayForced ? "omitted" : options.body.thinking?.display,
     );
     if (thinkingRequestFields !== undefined) {
       additionalModelRequestFields = mergeModelRequestFields(
@@ -2422,14 +2477,28 @@ async function runAttempt(
       throw error;
     }
     options.diagnostics?.accepted();
-    const captureOptions = reasoningCaptureOptions(options, account.id, prepared.conversationId, {
-      region: prepared.region,
-      ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
-      runtimeProtocol: prepared.runtimeProtocol,
-      ...(prepared.diagnostics.projection.legacyPrefixMessages !== undefined
-        ? { legacyPrefixMessages: prepared.diagnostics.projection.legacyPrefixMessages }
-        : {}),
-    });
+    if (responsesThinkingDisplayForced) {
+      auditLog("info", "responses_thinking_display_forced", {
+        protocol: "responses",
+        model: wireModel,
+        effective_display: "omitted",
+        effort: prepared.effort ?? "default",
+      });
+    }
+    const captureOptions = reasoningCaptureOptions(
+      options,
+      account.id,
+      prepared.conversationId,
+      {
+        region: prepared.region,
+        ...(prepared.profileArn !== undefined ? { profileArn: prepared.profileArn } : {}),
+        runtimeProtocol: prepared.runtimeProtocol,
+        ...(prepared.diagnostics.projection.legacyPrefixMessages !== undefined
+          ? { legacyPrefixMessages: prepared.diagnostics.projection.legacyPrefixMessages }
+          : {}),
+      },
+      responsesThinkingDisplayForced,
+    );
     const attemptContext: AttemptStreamContext = {
       options,
       signal,
@@ -2955,8 +3024,16 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     telemetry.emitTerminal(aborted ? "external_abort" : idle ? "idle_timeout" : "upstream_error");
     context.abortUpstream(collectError);
     await boundedCleanup(() => upstreamCleanup);
-    if (aborted) throw abortReason(signal);
-    if (captureOptions.prefetchOmittedReasoning) {
+    if (signal.aborted) throw abortReason(signal);
+    // Omitted reasoning may contain only opaque signatures. A transport fault
+    // after that metadata must not replay the accepted generation merely
+    // because the non-stream collector has no readable reasoning characters.
+    if (
+      captureOptions.prefetchOmittedReasoning ||
+      ((captureOptions.responsesThinkingDisplayForced || isKimiK3Model(options.model)) &&
+        telemetry.reasoningMetadataSeen)
+    ) {
+      options.diagnostics?.failure(collectError, "upstream_stream");
       return {
         kind: "result",
         leaseTransferred: false,
@@ -3003,6 +3080,9 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
       response: Response.json(completion, {
         headers: {
           "Content-Type": CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+          ...(captureOptions.responsesThinkingDisplayForced
+            ? { "x-kiro-thinking-display-mode": "forced-omitted" }
+            : {}),
           ...(captureOptions.reasoningReplayDecision.mode === "conflict-omitted"
             ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
             : {}),
@@ -3710,6 +3790,8 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
         hosted.decisions.conflictOmitted = true;
       }
       const markHosted = (response: Response): Response => {
+        if (result.responsesThinkingDisplayForced)
+          response.headers.set("x-kiro-thinking-display-mode", "forced-omitted");
         if (result.reasoningModelOmitted)
           response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
         if (hosted.decisions.conflictOmitted)

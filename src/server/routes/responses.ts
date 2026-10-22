@@ -3,7 +3,7 @@ import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
-import { isFable51Model, resolveModelVariant } from "../../kiro/models.js";
+import { isFable51Model, isKimiK3Model, resolveModelVariant } from "../../kiro/models.js";
 import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
@@ -135,7 +135,8 @@ function nativeInstructionRolesSupported(model: unknown): boolean | undefined {
 }
 
 function unsupportedNativeModel(model: unknown): StatelessV3Requirement | undefined {
-  if (typeof model !== "string" || !isFable51Model(model)) return undefined;
+  if (typeof model !== "string" || (!isFable51Model(model) && !isKimiK3Model(model)))
+    return undefined;
   return { reason: "native_model_unsupported", param: "model" };
 }
 
@@ -348,6 +349,7 @@ function completedResponse(
   createdAt: number,
   usageMode: "compatible" | "strict",
   localStructuredOutputProfile?: LocalStructuredOutputProfile,
+  omitReasoningSummary = false,
 ): CompletedResponseProjection {
   let visibleText = payload.text;
   if (localStructuredOutputProfile !== undefined) {
@@ -396,7 +398,9 @@ function completedResponse(
   const output: ResponseOutputItem[] = [];
   const reasoningText = payload.reasoning?.text;
   const reasoningSummary =
-    reasoningText !== undefined && !isGpt56ReasoningPlaceholder(model, reasoningText)
+    !omitReasoningSummary &&
+    reasoningText !== undefined &&
+    !isGpt56ReasoningPlaceholder(model, reasoningText)
       ? [{ type: "summary_text" as const, text: reasoningText }]
       : [];
   if (reasoningSummary.length > 0 || payload.reasoning?.encryptedContent) {
@@ -617,11 +621,24 @@ export async function handleResponses(
     dependencies.requestAdmission,
   );
   let plan: ResponsesExecutionPlan | undefined;
+  let thinkingDisplayForced = false;
   try {
-    const response = await handleResponsesCore(request, config, dependencies, ingress, (value) => {
-      plan = value;
-    });
-    return plan ? responseDiagnostics(response, plan) : response;
+    const response = await handleResponsesCore(
+      request,
+      config,
+      dependencies,
+      ingress,
+      (value) => {
+        plan = value;
+      },
+      () => {
+        thinkingDisplayForced = true;
+      },
+    );
+    const annotated = plan ? responseDiagnostics(response, plan) : response;
+    if (thinkingDisplayForced)
+      annotated.headers.set("x-kiro-thinking-display-mode", "forced-omitted");
+    return annotated;
   } catch (error) {
     ingress.finalize();
     if (error instanceof ResponseContextError) {
@@ -643,6 +660,7 @@ async function handleResponsesCore(
   dependencies: ResponsesDependencies,
   ingress: ReturnType<typeof createIngress>,
   setPlan: (plan: ResponsesExecutionPlan) => void,
+  markThinkingDisplayForced: () => void,
 ): Promise<Response> {
   const bodyResult = await readJsonBody(request, config, ingress.signals, openAiIngressErrors);
   if (!bodyResult.ok) {
@@ -876,7 +894,9 @@ async function handleResponsesCore(
       : config.protocol_projection_mode === "v3-auto"
         ? "legacy-user-prefix"
         : config.protocol_projection_mode;
-  const adapted = adaptResponsesRequest(parsed.value, projectionMode, previous);
+  const adapted = adaptResponsesRequest(parsed.value, projectionMode, previous, {
+    allowSummaryOnlyReplay: config.responses_fidelity_mode === "compatible",
+  });
   if (!adapted.ok) {
     auditLog("warn", "protocol_projection_rejected", {
       request_id: ingress.requestId,
@@ -893,6 +913,14 @@ async function handleResponsesCore(
       adapted.code,
       adapted.param,
     );
+  }
+  if (adapted.omittedReasoningSummaryCount > 0) {
+    compatibility.push({ code: "reasoning_summary_replay_omitted", param: "input" });
+    setPlan({ transport: "stateless", reason: v3Route?.reason ?? "legacy_mode", compatibility });
+    auditLog("warn", "responses_reasoning_summary_omitted", {
+      protocol: "responses",
+      reasoning_item_count: adapted.omittedReasoningSummaryCount,
+    });
   }
   const includeSources = (parsed.value.include ?? []).includes(WEB_SEARCH_SOURCES_INCLUDE);
   let hosted: HostedRequestPreparation;
@@ -1013,6 +1041,9 @@ async function handleResponsesCore(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
+    const omitReasoningSummary =
+      pipelineResponse.headers.get("x-kiro-thinking-display-mode") === "forced-omitted";
+    if (omitReasoningSummary) markThinkingDisplayForced();
     if (!pipelineResponse.ok) {
       if (localStructuredOutputProfile !== undefined) {
         try {
@@ -1046,6 +1077,7 @@ async function handleResponsesCore(
         pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
         "incompatible-omitted";
       const hostedOptions = {
+        omitReasoningSummary,
         model: adapted.body.model,
         bridge: adapted.bridge,
         includeEncryptedReasoning: adapted.body.includeEncryptedReasoning,
@@ -1145,6 +1177,7 @@ async function handleResponsesCore(
         );
       }
       const streaming = responsesSseAdapter(pipelineResponse, {
+        omitReasoningSummary,
         usageMode: config.responses_fidelity_mode,
         responseId,
         createdAt,
@@ -1186,6 +1219,7 @@ async function handleResponsesCore(
           createdAt,
           config.responses_fidelity_mode,
           localStructuredOutputProfile,
+          omitReasoningSummary,
         );
         if (!projected.ok) return projected.response;
         const publicState = publicResponseState(

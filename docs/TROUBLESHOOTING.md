@@ -24,6 +24,7 @@ in-stream error codes are specified in
   | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
   | `available`       | Healthy, not rate-limited, quota not exhausted.                                                                         |
   | `rate-limited`    | A `429`/backoff window is active until `RECHECK_AT`.                                                                    |
+  | `refresh-failed`  | Authentication refresh failed; inspect `AUTH_ERROR` and `AUTH_RETRY_AT`. An elapsed retry time does not prove recovery. |
   | `quota-exhausted` | Kiro reported the quota as used up; a due probe re-admits it.                                                           |
   | `overage-blocked` | Healthy and within quota, but `stop_on_overage` excludes it because its paid overage count exceeds `overage_threshold`. |
   | `unhealthy`       | Marked unhealthy for a transient reason (`HEALTH` is `unhealthy`).                                                      |
@@ -91,10 +92,52 @@ true` and an `error_code` such as `invalid_grant`, `InvalidGrantException`,
 - **Remedy:** `kiro-provider accounts relogin <id|email>`. The account keeps
   its internal ID and session-affinity rows. A transient `error_code` such as
   `NETWORK_ERROR` or a bare `HTTP_<status>` (proxy or WAF HTML, empty body)
-  never marks the account dead; it produces `account_token_refresh_retry`
-  once, then the pipeline switches account and the maintenance loop retries
-  later. `refresh_token_dead: false` therefore means "look at the network or
-  proxy", not "re-login".
+  never marks the account dead; it records a separate authentication backoff,
+  then the pipeline switches to an available account and maintenance retries
+  when that backoff expires. `refresh_token_dead: false` means the failure is not proven permanent;
+  it can also be an OIDC `invalid_request`, not just a network or proxy failure.
+
+### Authentication refresh fails although quota remains
+
+The background maintenance loop runs every minute by default and refreshes
+access tokens five minutes before expiry. A successful generation immediately
+after login does not establish that the next refresh will succeed.
+Token candidates rotate fairly across passes. The token phase uses at most
+half the existing maintenance deadline, leaving the remainder for quota and
+usage; cancelling that waiter does not cancel a shared refresh or classify it
+as an authentication failure.
+
+- Refresh failures have separate, persistent authentication state. The first
+  retry is delayed by 30 seconds; repeated failures back off exponentially to
+  15 minutes. `accounts list --details` exposes `AUTH_ERROR`, `AUTH_RETRY_AT`,
+  `CLIENT_EXPIRES`, and `LAST_REFRESH`; `--json` exposes the corresponding
+  lifecycle timestamps, bounded failure count, and classification enum, never
+  credentials. The account remains `refresh-failed` until a successful refresh
+  or a new login clears that state. Reaching the retry time permits a probe; it
+  does not mark the credentials healthy automatically.
+- When every otherwise usable account fails authentication refresh, the result
+  is `503 upstream_token_refresh_failed`, including in a mixed pool containing
+  unrelated quota-exhausted rows. Messages projects this as `overloaded_error`,
+  not a quota `429 rate_limit_error`. A genuine upstream quota rejection keeps
+  its existing quota contract.
+- `invalid_request` alone is not enough to mark an account permanently dead.
+  Known revoked/expired grant codes, OAuth `expired_token`, and a known-expired
+  OIDC client registration require re-login. New direct logins retain the
+  registration issue/expiry times returned by Kiro; legacy rows with no such
+  metadata remain unknown, not guessed expired.
+- Refresh success, failure, and cooldown updates are bound to the credential
+  tuple that started the operation. A late result cannot overwrite or disable
+  a newer login; ordinary usage updates do not invalidate that protection.
+- Imported OpenCode credentials are a one-time snapshot, not a live credential
+  database. Do not reintroduce shared database access or repeatedly overwrite a
+  newer local login from an older import. Refreshing an access token cannot
+  revive a revoked grant or extend an expired client registration indefinitely.
+
+Use `kiro-provider accounts relogin <id|email>` for confirmed permanent expiry.
+For `invalid_request`, inspect the safe error classification and issuer region;
+if the authorization is no longer usable, re-login rather than repeatedly
+clearing a rate-limit timer. Never print refresh tokens or client secrets while
+diagnosing this condition.
 
 ### `profileArn is required for this request` after an IAM Identity Center login
 
@@ -363,7 +406,14 @@ gates automatically, or delete replay data as an OOM workaround.
   plaintext `summary`/`content` and no `encrypted_content` anywhere in that
   turn. The provider never converts plaintext reasoning into a prompt, so it
   cannot be projected.
-- **Remedy:** Request `include: ["reasoning.encrypted_content"]` and echo the
+- **Recovery:** With `responses_fidelity_mode: "compatible"`, stateless requests
+  may omit a valid summary-only item whose assistant output group has no replay
+  token. The response reports `X-Kiro-Compatibility: reasoning_summary_replay_omitted`
+  and a count-only `responses_reasoning_summary_omitted` audit. Visible assistant
+  messages and tool history remain intact; lost opaque reasoning is not recovered
+  or converted into model input. Strict mode, non-empty `content`, orphan items,
+  unknown fields, and any present but invalid token still fail closed.
+- **Prevention:** Request `include: ["reasoning.encrypted_content"]` and echo the
   returned `encrypted_content` (`kr2_...` by default; legacy `kr1_...` remains accepted) on the reasoning item when
   replaying the turn. Exactly one reasoning item per turn carries the token;
   other reasoning items in the same turn may keep plaintext summaries. A
@@ -597,17 +647,23 @@ to "local" or delete the key`.
   decision. Claude Code owns how it handles evaluator failures; API
   compatibility does not guarantee every model judgment.
 
-### `413`: request too large vs context length exceeded
+### Request body too large vs context length exceeded
 
 - **Look at:** HTTP `413`. `error.code` `request_too_large` (message
   `Request body exceeds the N byte limit`) is the ingress body limit. A `413`
   with `error.type` `upstream_error` and `error.code` `context_length_exceeded`
-  is Kiro rejecting the prompt as exceeding the model context (structured
+  on Responses is Kiro rejecting the prompt as exceeding the model context (structured
   reasons `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `PROMPT_TOO_LONG`, or the
   `input is too long` message on older responses); the provider remaps that
-  upstream `400` to `413` so clients can tell it from a malformed request.
+  upstream `400` to its shared pipeline `413` contract. Messages translates that
+  exact `context_length_exceeded` classification to HTTP `400`
+  `invalid_request_error`, with a stable `Prompt is too long` message and the
+  provider code in the message. This lets Claude Code recognize context overflow
+  and attempt compaction, instead of showing its generic 32 MB image/attachment
+  error for HTTP 413. Sanitized upstream failure details remain available in
+  `error.details`. A true request-body overflow remains HTTP 413.
 - **Cause:** The first is a body larger than `max_request_body_bytes`
-  (default 10 MiB; Bun answers even larger bodies with a plain `413` before
+  (default 32 MiB; Bun answers even larger bodies with a plain `413` before
   the JSON envelope). The second is conversation history, tool results, or
   attached documents exceeding the model's context window.
 - **Remedy:** For the body limit, raise `max_request_body_bytes` only if the
@@ -616,6 +672,10 @@ to "local" or delete the key`.
   drop messages on the model's behalf. The `request_shape` diagnostic
   (`input_text_chars`, `document_count`, `tool_result_count`) shows which
   part of the request grew.
+- **Already streaming:** Once a Messages SSE response has committed HTTP 200,
+  an upstream failure terminates with an SSE error rather than a new HTTP status.
+  The accepted generation is not replayed. The HTTP 400 translation above applies
+  to errors received before the response is committed.
 
 ### Proxy problems (`proxy_url`)
 

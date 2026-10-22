@@ -5,6 +5,8 @@ import type { KiroRegion } from "./types.js";
 const ClientRegistrationSchema = z.object({
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
+  clientIdIssuedAt: z.number().finite().int().nonnegative().max(253_402_300_799).optional(),
+  clientSecretExpiresAt: z.number().finite().int().nonnegative().max(253_402_300_799).optional(),
 });
 
 const DeviceAuthorizationSchema = z.object({
@@ -36,6 +38,8 @@ export interface KiroIDCAuthorization {
   readonly deviceCode: string;
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly clientIdIssuedAt?: number;
+  readonly clientSecretExpiresAt?: number;
   readonly interval: number;
   readonly expiresIn: number;
   readonly region: KiroRegion;
@@ -49,6 +53,8 @@ export interface KiroIDCTokenResult {
   readonly email: string;
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly clientIdIssuedAt?: number;
+  readonly clientSecretExpiresAt?: number;
   readonly region: KiroRegion;
   readonly authMethod: "idc";
 }
@@ -142,6 +148,12 @@ export async function authorizeKiroIDC(
     deviceCode: authorization.data.deviceCode,
     clientId: registration.data.clientId,
     clientSecret: registration.data.clientSecret,
+    ...(registration.data.clientIdIssuedAt === undefined
+      ? {}
+      : { clientIdIssuedAt: registration.data.clientIdIssuedAt * 1_000 }),
+    ...(registration.data.clientSecretExpiresAt === undefined
+      ? {}
+      : { clientSecretExpiresAt: registration.data.clientSecretExpiresAt * 1_000 }),
     interval: authorization.data.interval,
     expiresIn: authorization.data.expiresIn,
     region: effectiveRegion,

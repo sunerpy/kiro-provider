@@ -9,7 +9,15 @@ const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set([
   "claude-opus-5",
   "claude-opus-5.5",
 ]);
-const ADVISORY_ONLY_MAX_TOKENS_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const ADVISORY_ONLY_MAX_TOKENS_MODELS = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  // Its catalog forbids max_tokens; an isolated max-effort request without
+  // that field completed successfully. Only the explicit advisory opt-in may
+  // omit the requested limit; native output control stays fail-closed.
+  "kimi-k3",
+]);
 
 export type OutputTokenLimitResult =
   | {

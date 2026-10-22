@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "revision": "27a0bc61d6e65f19a3658181f96883480979eafa",
+    "version": "3.8.5",
+    "kind": "local_pi_replay_fix",
+    "installed_binary_sha256": "85a35b7a0398e6be1834a1c55904dd0ed31a52d49d3a19e9080fe4b4e199bce0"
+  },
+  "observed_failure": {
+    "exact_native_request_matches_provider_log": true,
+    "upstream_status": 400,
+    "upstream_code": "ValidationException",
+    "upstream_reason": "CONTENT_LENGTH_EXCEEDS_THRESHOLD",
+    "old_messages_status": 413,
+    "client_displayed_generic_32mb_error": true,
+    "incoming_request_bytes": 3478999,
+    "local_request_limit_bytes": 33554432,
+    "history_image_count": 0,
+    "history_inline_document_count": 0,
+    "history_base64_characters": 0,
+    "last_successful_input_tokens": 926532
+  },
+  "fix": {
+    "runtime_file": "src/server/routes/messages.ts",
+    "condition": "pipeline_status_413_and_exact_code_context_length_exceeded",
+    "messages_status": 400,
+    "messages_type": "invalid_request_error",
+    "message_prefix": "Prompt is too long",
+    "provider_code_in_fixed_message": "context_length_exceeded",
+    "original_sanitized_failure_retained_in_details": true,
+    "true_body_overflow_status": 413,
+    "responses_context_overflow_status": 413,
+    "committed_sse_status_changed": false,
+    "automatic_replay_of_accepted_generation": false
+  },
+  "candidate": {
+    "version": "3.8.5",
+    "kind": "local_unreleased_fix",
+    "binary_sha256": "610de348889813b80a92815952e56746021e298b4650d53c03f935f178b6a003",
+    "previous_pi_replay_fix_included": true,
+    "preexisting_models_refresh_code_included": false,
+    "source": "independent_baseline_snapshot_plus_installed_pi_fix_and_messages_translation"
+  },
+  "regression": {
+    "baseline_new_tests_pass": 10,
+    "baseline_new_tests_fail": 7,
+    "new_tests_after_fix_pass": 17,
+    "target_and_related_tests_pass": 57,
+    "command": "make pre-ci",
+    "exit_code": 0,
+    "tests_pass": 3201,
+    "tests_fail": 0,
+    "assertions": 16118,
+    "covered_lines": 33915,
+    "coverable_lines": 35425,
+    "line_coverage_percent": 95.74,
+    "line_floor_percent": 93,
+    "coverage_parity_pass": true,
+    "format_typecheck_lint_docs_security_build_pass": true
+  },
+  "real_claude_synthetic_probe": {
+    "script": "scripts/probe-claude-context-errors.ts",
+    "client_version": "2.1.296",
+    "isolated_network_and_temporary_config": true,
+    "context_error_recognized": true,
+    "body_413_remains_size_error": true,
+    "compact_recovery": {
+      "history_message_counts": [14, 12, 10],
+      "context_rejections_before_success": 2,
+      "final_status": 200,
+      "summary_marker_seen": true,
+      "compact_boundary_count": 1,
+      "result_success": true,
+      "exit_code": 0
+    },
+    "user_original_session_loaded_or_modified": false
+  },
+  "cutover": {
+    "rollback_online_backup_quick_check": "ok",
+    "rollback_backup_sha256_entries_verified": 5,
+    "isolated_live_candidate_pi_smoke": {
+      "status": 200,
+      "marker_seen": true,
+      "tool_execution_count": 0,
+      "passed": true
+    },
+    "isolated_live_candidate_claude_smoke": {
+      "verified_against_candidate": false,
+      "limitation": "host_managed_settings_override_test_endpoint",
+      "error_and_compaction_validation": "separate_network_isolated_real_claude_synthetic_sdk_probe"
+    },
+    "atomic_install_and_restart": {
+      "passed": true,
+      "restart_count": 1,
+      "service_active": true,
+      "automatic_restarts": 0,
+      "installed_and_running_hash_match_candidate": true
+    },
+    "post_restart_health_auth_clients_database": {
+      "health_status": 200,
+      "authorized_ready_status": 200,
+      "authorized_models_status": 200,
+      "unauthorized_models_status": 401,
+      "database_quick_check": "ok",
+      "pi_http_status": 200,
+      "pi_marker_seen": true,
+      "pi_exit_code": 0,
+      "claude_marker_seen": true,
+      "claude_exit_code": 0,
+      "claude_endpoint_evidence": "unique_completed_messages_generation_by_time_window_visible_length_and_dispatch",
+      "claude_native_request_id_available": false,
+      "claude_completed_generation_dispatch_count": 1,
+      "claude_completed_generation_visible_chars": 27,
+      "claude_completed_generation_tool_count": 0,
+      "user_original_session_loaded_or_modified": false
+    }
+  },
+  "release_published": false,
+  "commits_or_pushes_created": false
+}

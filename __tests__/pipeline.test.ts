@@ -2968,11 +2968,23 @@ describe("runChatCompletion projection and terminal errors", () => {
     expect(manager.unhealthy).toEqual([]);
   });
 
-  test("rate-limits, not kills, an account whose refresh keeps failing on the network and switches", async () => {
+  test("auth-cools, not rate-limits or kills, an account whose refresh fails on the network and switches", async () => {
     // Given
     const flaky = account("account-a");
     const healthy = account("account-b");
-    const manager = new FakeAccountManager([flaky, healthy], "sticky");
+    const refreshFailures: Array<{ accountId: string; error: unknown }> = [];
+    const manager = Object.assign(new FakeAccountManager([flaky, healthy], "sticky"), {
+      recordRefreshFailure(selected: ManagedAccount, error: unknown): ManagedAccount {
+        refreshFailures.push({ accountId: selected.id, error });
+        Object.assign(selected, {
+          refreshFailureCode: "network_error" as const,
+          refreshFailureCount: 1,
+          refreshFailedAt: Date.now(),
+          refreshRetryAt: Date.now() + 30_000,
+        });
+        return selected;
+      },
+    });
     const refresher = new FakeTokenRefresher();
     refresher.refreshHandler = async (selected) => {
       if (selected.id === flaky.id) {
@@ -3000,10 +3012,17 @@ describe("runChatCompletion projection and terminal errors", () => {
     // Then
     expect(response.status).toBe(200);
     expect(sentAccounts).toEqual([healthy.email]);
-    expect(manager.rateLimited).toEqual([flaky.id]);
+    expect(refreshFailures).toHaveLength(1);
+    expect(refreshFailures[0]?.accountId).toBe(flaky.id);
+    expect(refreshFailures[0]?.error).toBeInstanceOf(KiroTokenRefreshError);
+    expect(refreshFailures[0]?.error).toMatchObject({ code: "NETWORK_ERROR" });
+    expect(manager.rateLimited).toEqual([]);
     expect(manager.unhealthy).toEqual([]);
     expect(flaky.isHealthy).toBe(true);
-    expect(flaky.rateLimitResetTime).toBeGreaterThan(Date.now() - 1_000);
+    expect(flaky.rateLimitResetTime).toBe(0);
+    expect(flaky.refreshFailureCode).toBe("network_error");
+    expect(flaky.refreshFailureCount).toBe(1);
+    expect(flaky.refreshRetryAt ?? 0).toBeGreaterThan(Date.now());
   });
 
   test("switches accounts when the forced refresh after an invalid bearer fails", async () => {

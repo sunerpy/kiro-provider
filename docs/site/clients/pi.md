@@ -69,6 +69,19 @@ Add each one as another entry under `models`, with `compat.supportsMaxOutputToke
 four Claude models above. Names with an effort suffix, such as `claude-opus-5-5-high`, are not needed: the thinking
 level sets the effort.
 
+## Resume a session with summary-only reasoning
+
+Pi saves each Responses reasoning output item in `thinkingSignature` and replays
+it on the next turn. If an earlier gateway response lacked `encrypted_content`,
+the default `responses_fidelity_mode: "compatible"` can resume that history by
+omitting only valid summary-only metadata from a turn with no replay token.
+`X-Kiro-Compatibility: reasoning_summary_replay_omitted` reports the loss; visible
+messages and tool calls/results are preserved. The missing opaque reasoning is
+not restored. Strict mode and invalid tokens still reject the request.
+
+New Responses outputs with conflicting reasoning signatures fail with
+`invalid_upstream_reasoning` instead of completing a turn with an unusable token.
+
 ## Pi's Anthropic API
 
 Pi's `anthropic-messages` API reaches the gateway too, at `http://127.0.0.1:8787`. With `reasoning: true`, though, Pi

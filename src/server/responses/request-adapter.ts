@@ -59,6 +59,8 @@ export type ResponsesRequestAdaptationResult =
       readonly hostedWebSearch?: HostedWebSearchDeclaration;
       /** Hosted search calls in history, restored from snapshots before dispatch. */
       readonly hostedHistory: HostedHistory;
+      /** Explicit compatible-mode loss; never converted into model input. */
+      readonly omittedReasoningSummaryCount: number;
     }
   | {
       readonly ok: false;
@@ -1029,6 +1031,7 @@ export function adaptResponsesRequest(
   request: ResponsesRequest,
   projectionMode: ProtocolProjectionMode = "safe",
   previous?: ResponsesPreviousContext,
+  options: { readonly allowSummaryOnlyReplay?: boolean } = {},
 ): ResponsesRequestAdaptationResult {
   if (previous?.input?.length) {
     request = {
@@ -1313,6 +1316,7 @@ export function adaptResponsesRequest(
       path,
     );
   const replayByGroup = new Map<number, { readonly token: string; readonly path: string }>();
+  let omittedReasoningSummaryCount = 0;
   if (typeof request.input === "string") {
     messages.push({
       role: "user",
@@ -1401,6 +1405,21 @@ export function adaptResponsesRequest(
           // The provider attaches the replay token to one reasoning item per
           // turn; the turn's other reasoning items are output metadata only.
           if (groupHasReplayToken(request.input, group)) continue;
+          if (
+            options.allowSummaryOnlyReplay === true &&
+            hasSummary &&
+            !hasContent &&
+            group.firstOutputIndex !== undefined
+          ) {
+            // Pi preserves the complete output item as thinkingSignature, even
+            // when an older response contained only an unsigned summary. That
+            // metadata cannot restore opaque reasoning. Compatible callers may
+            // explicitly lose it while retaining every visible output/tool and
+            // authenticating all tokens elsewhere in the original input groups.
+            // Present-but-invalid tokens never enter this branch.
+            omittedReasoningSummaryCount += 1;
+            continue;
+          }
           if (hasSummary || hasContent) {
             return protocolFailure(
               "unsupported_reasoning_plaintext_replay",
@@ -1629,5 +1648,6 @@ export function adaptResponsesRequest(
     bridge,
     ...(hostedWebSearch !== undefined ? { hostedWebSearch } : {}),
     hostedHistory: { calls: hostedCalls, citations: [] },
+    omittedReasoningSummaryCount,
   };
 }

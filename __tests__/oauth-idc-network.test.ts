@@ -46,6 +46,50 @@ describe("authorizeKiroIDC with mocked network", () => {
     globalThis.fetch = realFetch;
   });
 
+  test("preserves validated registration timestamps as epoch milliseconds without changing authorization wire", async () => {
+    const { fn, calls } = captureFetch((_request, index) =>
+      index === 0
+        ? json({
+            clientId: "c",
+            clientSecret: "s",
+            clientIdIssuedAt: 1_700_000_000,
+            clientSecretExpiresAt: 1_800_000_000,
+          })
+        : json({
+            verificationUri: "u",
+            verificationUriComplete: "uc",
+            userCode: "code",
+            deviceCode: "dc",
+          }),
+    );
+    globalThis.fetch = fn;
+    expect(await authorizeKiroIDC()).toMatchObject({
+      clientIdIssuedAt: 1_700_000_000_000,
+      clientSecretExpiresAt: 1_800_000_000_000,
+    });
+    expect(calls[1]?.body).toEqual({
+      clientId: "c",
+      clientSecret: "s",
+      startUrl: "https://view.awsapps.com/start",
+    });
+  });
+
+  test("rejects malformed optional registration times rather than guessing a credential lifetime", async () => {
+    for (const invalid of [-1, null, "1700000000", 1e20]) {
+      globalThis.fetch = captureFetch((_request, index) =>
+        index === 0
+          ? json({ clientId: "c", clientSecret: "s", clientSecretExpiresAt: invalid })
+          : json({
+              verificationUri: "u",
+              verificationUriComplete: "uc",
+              userCode: "code",
+              deviceCode: "dc",
+            }),
+      ).fn;
+      await expect(authorizeKiroIDC()).rejects.toThrow("Client registration");
+    }
+  });
+
   test("registers a client and requests device authorization", async () => {
     const { fn, calls } = captureFetch((_request, index) =>
       index === 0
