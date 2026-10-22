@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.8.6](https://github.com/sunerpy/kiro-provider/compare/v3.8.5...v3.8.6) (2026-10-22)
+
+
+### Bug Fixes
+
+* **provider:** 修复凭证续期与模型协议兼容 ([#141](https://github.com/sunerpy/kiro-provider/issues/141)) ([ac1f30a](https://github.com/sunerpy/kiro-provider/commit/ac1f30a297ee9fef9a2abff6d25c311e7d52cb0a))
+
 ## [3.8.5](https://github.com/sunerpy/kiro-provider/compare/v3.8.4...v3.8.5) (2026-10-09)
 
 
