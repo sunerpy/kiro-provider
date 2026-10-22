@@ -21,9 +21,36 @@ import {
 } from "../scripts/probe-kimi-clients.js";
 
 const roots: string[] = [];
-afterEach(() => {
+const children = new Set<Bun.Subprocess<"ignore", "pipe", "pipe">>();
+afterEach(async () => {
+  for (const child of children) if (child.exitCode === null) child.kill("SIGKILL");
+  await Promise.all([...children].map((child) => child.exited));
+  children.clear();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+// Keep these children asynchronous on Windows. Bun 1.3.14's cached sync-loop
+// clock otherwise makes a later unrelated timed execFileSync fail immediately.
+// https://github.com/oven-sh/bun/issues/33932
+async function runProbeChild(args: string[]) {
+  const child = Bun.spawn([process.execPath, ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  children.add(child);
+  const stdout = new Response(child.stdout).arrayBuffer();
+  const stderr = new Response(child.stderr).arrayBuffer();
+  try {
+    const [exitCode, output, errors] = await Promise.all([child.exited, stdout, stderr]);
+    return { exitCode, stdout: Buffer.from(output), stderr: Buffer.from(errors) };
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await Promise.allSettled([stdout, stderr]);
+    children.delete(child);
+  }
+}
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "kimi-bridge-budget-"));
   roots.push(root);
@@ -235,10 +262,7 @@ test("unsupported platform execution never invokes the client runner", async () 
   expect(await runKimiClientProbeOnPlatform("linux", execute)).toBe("synthetic");
   expect(executions).toBe(1);
   if (process.platform !== "linux") {
-    const child = Bun.spawnSync(
-      [process.execPath, join(import.meta.dir, "../scripts/probe-kimi-clients.ts")],
-      { stdout: "pipe", stderr: "pipe" },
-    );
+    const child = await runProbeChild([join(import.meta.dir, "../scripts/probe-kimi-clients.ts")]);
     expect(child.exitCode).not.toBe(0);
     expect(JSON.parse(child.stderr.toString())).toEqual({
       error: "kimi_client_probe_requires_linux",
@@ -247,7 +271,7 @@ test("unsupported platform execution never invokes the client runner", async () 
   }
 });
 
-test("the actual private-config reader refuses Windows before reading a fixture", () => {
+test("the actual private-config reader refuses Windows before reading a fixture", async () => {
   const { ledger, config } = fixture();
   const path = join(dirname(ledger), "config.json");
   writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
@@ -262,10 +286,7 @@ test("the actual private-config reader refuses Windows before reading a fixture"
       console.log(JSON.stringify({rejected: error.message === "kimi_client_probe_requires_linux"}));
     }
   `;
-  const child = Bun.spawnSync([process.execPath, "--eval", code], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const child = await runProbeChild(["--eval", code]);
   expect(child.exitCode).toBe(0);
   expect(JSON.parse(child.stdout.toString())).toEqual({ rejected: true });
 });

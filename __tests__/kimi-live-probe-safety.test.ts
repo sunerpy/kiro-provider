@@ -21,17 +21,38 @@ import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
 const script = resolve(import.meta.dir, "../scripts/probe-kimi-k3-live.ts");
 const directories: string[] = [];
-afterEach(() => {
+const children = new Set<Bun.Subprocess<"ignore", "pipe", "pipe">>();
+afterEach(async () => {
+  for (const child of children) if (child.exitCode === null) child.kill("SIGKILL");
+  await Promise.all([...children].map((child) => child.exited));
+  children.clear();
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
 });
-const runWithEnvironment = (env: NodeJS.ProcessEnv, ...args: string[]) =>
-  Bun.spawnSync({
+// Do not use synchronous children here: Bun 1.3.14 caches a Windows uv loop
+// whose stale clock can instantly time out a later, unrelated execFileSync.
+// https://github.com/oven-sh/bun/issues/33932
+const runWithEnvironment = async (env: NodeJS.ProcessEnv, ...args: string[]) => {
+  const child = Bun.spawn({
     cmd: [process.execPath, script, ...args],
     env,
+    stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
+  children.add(child);
+  const stdout = new Response(child.stdout).arrayBuffer();
+  const stderr = new Response(child.stderr).arrayBuffer();
+  try {
+    const [exitCode, output, errors] = await Promise.all([child.exited, stdout, stderr]);
+    return { exitCode, stdout: Buffer.from(output), stderr: Buffer.from(errors) };
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await Promise.allSettled([stdout, stderr]);
+    children.delete(child);
+  }
+};
 const run = (...args: string[]) => runWithEnvironment(process.env, ...args);
 
 function fakeFixture() {
@@ -96,9 +117,9 @@ function fakeFixture() {
 }
 
 describe("K3 live probe execution boundary", () => {
-  test("fake-provider proves both platform state roots remain private with inherited outside APPDATA", () => {
+  test("fake-provider proves both platform state roots remain private with inherited outside APPDATA", async () => {
     const f = fakeFixture();
-    const result = runWithEnvironment(
+    const result = await runWithEnvironment(
       { ...process.env, APPDATA: "C:\\Users\\synthetic\\AppData\\Roaming" },
       ...f.args,
       "--cases",
@@ -114,8 +135,8 @@ describe("K3 live probe execution boundary", () => {
     expect(ledger.reserved_requests).toBe(1);
   });
 
-  test("defaults to a dry run without reading account state or sending requests", () => {
-    const result = run();
+  test("defaults to a dry run without reading account state or sending requests", async () => {
+    const result = await run();
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout.toString())).toEqual({
       phase: "dry_run",
@@ -126,15 +147,15 @@ describe("K3 live probe execution boundary", () => {
     });
   });
 
-  test("rejects a matrix larger than its explicitly authorized request budget", () => {
-    const result = run("--max-requests", "4");
+  test("rejects a matrix larger than its explicitly authorized request budget", async () => {
+    const result = await run("--max-requests", "4");
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.toString()).toContain("exceeds the explicit request budget");
   });
 
-  test("fake-provider exercises all five reservations and keeps K3 stored-default on verified stateless", () => {
+  test("fake-provider exercises all five reservations and keeps K3 stored-default on verified stateless", async () => {
     const f = fakeFixture();
-    const result = run(...f.args);
+    const result = await run(...f.args);
     expect(result.exitCode).toBe(0);
     const ledger = JSON.parse(result.stdout.toString());
     expect(ledger.fake_provider).toBe(true);
@@ -155,14 +176,14 @@ describe("K3 live probe execution boundary", () => {
     ).toBe("v3-auto");
     const before = readFileSync(join(f.root, "kimi-k3-live-ledger.json"), "utf8");
     const configBefore = readFileSync(join(f.store, "config.json"), "utf8");
-    const repeated = run(...f.args);
+    const repeated = await run(...f.args);
     expect(repeated.exitCode).not.toBe(0);
     expect(repeated.stderr.toString()).toContain("EEXIST");
     expect(readFileSync(join(f.root, "kimi-k3-live-ledger.json"), "utf8")).toBe(before);
     expect(readFileSync(join(f.store, "config.json"), "utf8")).toBe(configBefore);
   });
 
-  test("ignores external credential/key/lock paths and makes fresh private keys after the ledger claim", () => {
+  test("ignores external credential/key/lock paths and makes fresh private keys after the ledger claim", async () => {
     const f = fakeFixture();
     const external = join(f.root, "external-secret-material");
     writeFileSync(external, "synthetic external file must remain unchanged", { mode: 0o644 });
@@ -178,7 +199,7 @@ describe("K3 live probe execution boundary", () => {
       proxy_url: "http://127.0.0.1:9",
     };
     writeFileSync(join(f.store, "config.json"), JSON.stringify(malicious), { mode: 0o600 });
-    const result = run(...f.args, "--cases", "low", "--max-requests", "1");
+    const result = await run(...f.args, "--cases", "low", "--max-requests", "1");
     expect(result.exitCode).toBe(0);
     const actual = JSON.parse(readFileSync(join(f.store, "config.json"), "utf8"));
     expect(actual.auth_source).toBe("local");
@@ -205,7 +226,7 @@ describe("K3 live probe execution boundary", () => {
         )
         .run(authMethod);
       original.close();
-      expect(run(...f.args, "--cases", "low", "--max-requests", "1").exitCode).toBe(0);
+      expect((await run(...f.args, "--cases", "low", "--max-requests", "1")).exitCode).toBe(0);
       const database = new AccountsDatabase(join(f.store, "accounts.db"));
       try {
         const account = database.getAccounts()[0];
@@ -247,9 +268,9 @@ describe("K3 live probe execution boundary", () => {
     });
   }
 
-  test("fake-provider stored-default consumes exactly one new reservation and sends no explicit effort", () => {
+  test("fake-provider stored-default consumes exactly one new reservation and sends no explicit effort", async () => {
     const f = fakeFixture();
-    const result = run(...f.args, "--cases", "stored-default", "--max-requests", "1");
+    const result = await run(...f.args, "--cases", "stored-default", "--max-requests", "1");
     expect(result.exitCode).toBe(0);
     const ledger = JSON.parse(result.stdout.toString());
     expect(ledger.reserved_requests).toBe(1);
@@ -269,7 +290,7 @@ describe("K3 live probe execution boundary", () => {
     "db-hardlink",
     "parent-xdg-symlink",
   ]) {
-    test(`refuses unsafe isolated fixture ${kind} before a binary or account read`, () => {
+    test(`refuses unsafe isolated fixture ${kind} before a binary or account read`, async () => {
       const root = mkdtempSync(join(tmpdir(), "kiro-k3-probe-safety-"));
       directories.push(root);
       const state = join(root, "isolated");
@@ -304,7 +325,7 @@ describe("K3 live probe execution boundary", () => {
           } else writeFileSync(join(store, name as string), "synthetic", { mode: 0o600 });
         }
       }
-      const result = run(
+      const result = await run(
         "--execute",
         "--state-dir",
         state,
