@@ -1,9 +1,15 @@
 import { z } from "zod";
-import { resolveModelVariant, supportsReasoningPrefixOmission } from "../../kiro/models.js";
+import { assertKimiReasoningEffort } from "../../kiro/effort.js";
+import {
+  isKimiK3Model,
+  resolveModelVariant,
+  supportsReasoningPrefixOmission,
+} from "../../kiro/models.js";
 import {
   resolveOutputTokenLimit,
   supportsAdvisoryOutputTokenLimit,
 } from "../../kiro/output-token-limit.js";
+import { RequestTransformError } from "../../kiro/transform/errors.js";
 import { isRecord, textPart } from "../../protocol/adapter-utils.js";
 import {
   assistantOutputFingerprint,
@@ -1450,6 +1456,35 @@ export function adaptAnthropicMessagesRequest(
         key,
       );
     }
+  }
+  try {
+    assertKimiReasoningEffort(request.model, request.output_config?.effort, "output_config.effort");
+  } catch (error) {
+    if (!(error instanceof RequestTransformError)) throw error;
+    return failure(error.message, error.code, error.param);
+  }
+  if (isKimiK3Model(request.model) && request.thinking !== undefined) {
+    if (request.thinking.type !== "adaptive" || request.thinking.budget_tokens !== undefined) {
+      return failure(
+        "Kimi K3 has always-on categorical reasoning; disabled or token-budget thinking cannot be represented",
+        "unsupported_reasoning_control",
+        "thinking",
+      );
+    }
+    if (request.thinking.display !== undefined) {
+      return failure(
+        "Kimi K3 does not advertise a thinking display control",
+        "unsupported_reasoning_display",
+        "thinking.display",
+      );
+    }
+  }
+  if (isKimiK3Model(request.model) && request.temperature !== undefined) {
+    return failure(
+      "Kimi K3 does not advertise a temperature request field",
+      "unsupported_parameter",
+      "temperature",
+    );
   }
   if (options.requireMaxTokens === true && request.max_tokens === undefined) {
     return failure("Invalid request: max_tokens is required", undefined, "max_tokens");

@@ -1,5 +1,6 @@
 import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
+import { CONTEXT_LENGTH_EXCEEDED_CODE } from "../../core/error-classifier.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
 import { estimateTokens } from "../../kiro/transform/response.js";
@@ -98,12 +99,22 @@ export async function translatePipelineError(response: Response): Promise<Respon
   } catch {
     // Preserve the status-derived fallback when the upstream body is not JSON.
   }
+  // The shared pipeline retains its historical 413 context-overflow contract.
+  // Claude Code treats ordinary 413s as a 32 MiB upload failure; Anthropic
+  // context errors instead need 400 plus this recognizable prefix so its
+  // compaction recovery can run. Never infer this from upstream prose.
+  const contextOverflow = response.status === 413 && code === CONTEXT_LENGTH_EXCEEDED_CODE;
   // Kiro quota exhaustion (402) is a capacity condition that clears when a
   // quota window resets, so Anthropic clients see the retryable rate-limit
   // class instead of a permanent invalid-request rejection. The structured
   // provider code stays visible in the message for operators.
-  const translated =
-    response.status === 402
+  const translated = contextOverflow
+    ? anthropicError(
+        400,
+        "Prompt is too long for the model's context window (code: context_length_exceeded). Compact the conversation and retry.",
+        "invalid_request_error",
+      )
+    : response.status === 402
       ? anthropicError(
           429,
           code !== undefined ? `${message} (code: ${code})` : message,

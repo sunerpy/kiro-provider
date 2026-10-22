@@ -3,13 +3,12 @@ import {
   DEFAULT_OVERAGE_POLICY,
   isPermanentError,
   isQuotaExhausted,
-  isRefreshTokenDead,
   type OveragePolicy,
-  toDeadReason,
 } from "../kiro/health.js";
 import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
-import { errorFields, errorReason } from "./account-errors.js";
+import { errorFields } from "./account-errors.js";
 import { auditHash, auditLog } from "./audit-log.js";
+import { recordRefreshFailure } from "./credential-state.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 interface MaintenanceAccountManager {
@@ -18,6 +17,7 @@ interface MaintenanceAccountManager {
   reconcileFromDb(): readonly ManagedAccount[];
   toAuthDetails(account: ManagedAccount): KiroAuthDetails;
   markUnhealthy(account: ManagedAccount, reason: string, recoveryTime?: number): unknown;
+  recordRefreshFailure?(account: ManagedAccount, error: unknown): ManagedAccount | undefined;
 }
 
 interface MaintenanceTokenRefresher {
@@ -71,6 +71,7 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
   private intervalTimer: ReturnType<typeof setInterval> | undefined;
   private lifecycleController = new AbortController();
   private inFlight: Promise<void> | undefined;
+  private lastTokenAccountId: string | undefined;
 
   constructor(private readonly options: AccountMaintenanceOptions) {}
 
@@ -143,6 +144,7 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
       if (isPermanentError(account.unhealthyReason) || isQuotaExhausted(account, policy)) {
         continue;
       }
+      if ((account.refreshRetryAt ?? 0) > Date.now()) continue;
       const auth = this.authDetails(account);
       if (auth === undefined) {
         tokenFailed += 1;
@@ -152,21 +154,42 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
         tokenCandidates.push({ account, auth });
       }
     }
+    tokenCandidates.sort((left, right) => left.account.id.localeCompare(right.account.id));
+    const lastTokenAccountId = this.lastTokenAccountId;
+    const nextIndex =
+      lastTokenAccountId === undefined
+        ? 0
+        : tokenCandidates.findIndex(
+            (candidate) => candidate.account.id.localeCompare(lastTokenAccountId) > 0,
+          );
+    const startIndex = nextIndex < 0 ? 0 : nextIndex;
+    const ordered = [...tokenCandidates.slice(startIndex), ...tokenCandidates.slice(0, startIndex)];
+    // Token refresh is shared and may outlive this waiter. Reserve the second
+    // half of the existing outer deadline for quota and usage, not a new round.
+    const tokenDeadlineAt = startedAt + Math.max(1, Math.floor(this.options.timeoutMs / 2));
+    const tokenSignal = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(Math.max(1, tokenDeadlineAt - Date.now())),
+    ]);
     let cursor = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         if (signal.aborted) throw signal.reason;
-        const candidate = tokenCandidates[cursor];
+        if (tokenSignal.aborted || Date.now() >= tokenDeadlineAt) return;
+        const candidate = ordered[cursor];
         cursor += 1;
         if (!candidate) return;
+        this.lastTokenAccountId = candidate.account.id;
         try {
           await this.options.tokenRefresher.refreshIfNeeded(
             candidate.account,
             candidate.auth,
-            signal,
+            tokenSignal,
           );
           tokenRefreshed += 1;
         } catch (error) {
+          if (signal.aborted) throw signal.reason;
+          if (tokenSignal.aborted) return;
           tokenFailed += 1;
           this.recordTokenFailure(candidate.account, error);
         }
@@ -180,8 +203,10 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
         worker,
       ),
     );
+    if (signal.aborted) throw signal.reason;
     const refreshedAccounts = this.options.accountManager.reconcileFromDb();
     await this.options.usageRefresher.recheckDueAccounts(refreshedAccounts, signal);
+    if (signal.aborted) throw signal.reason;
     const usageAccounts = this.options.accountManager.reconcileFromDb();
     await this.options.usageRefresher.syncDueAccounts(usageAccounts, signal);
     auditLog("info", "account_maintenance_pass_completed", {
@@ -216,14 +241,7 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
   }
 
   private recordTokenFailure(account: ManagedAccount, error: unknown): void {
-    const reason = errorReason(error);
-    if (isRefreshTokenDead(reason)) {
-      try {
-        this.options.accountManager.markUnhealthy(account, toDeadReason(reason));
-      } catch {
-        // The account may have been removed while maintenance ran.
-      }
-    }
+    recordRefreshFailure(this.options.accountManager, account, error);
     auditLog("warn", "account_maintenance_token_refresh_failed", {
       account_hash: auditHash(account.id),
       ...errorFields(error),

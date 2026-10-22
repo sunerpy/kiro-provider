@@ -1,6 +1,7 @@
 import type { Config } from "../../config/schema.js";
-import { resolveEffort } from "../../kiro/effort.js";
+import { assertKimiReasoningEffort, resolveEffort } from "../../kiro/effort.js";
 import { resolveModelVariant } from "../../kiro/models.js";
+import { RequestTransformError } from "../../kiro/transform/errors.js";
 import type { Effort } from "../../kiro/types.js";
 import { isRecord } from "../../protocol/adapter-utils.js";
 import { isCodexImageEnvelope } from "../../protocol/codex-image-envelope.js";
@@ -231,6 +232,12 @@ export function normalizeResponsesRequest(
   if (localStructuredOutputProfile !== undefined) request = { ...request, store: false };
   const requestedEffort = request.reasoning?.effort;
   const effectiveEffort = requestedEffort ?? variant.effort ?? config.effort ?? undefined;
+  try {
+    assertKimiReasoningEffort(variant.wireId, effectiveEffort);
+  } catch (error) {
+    if (!(error instanceof RequestTransformError)) throw error;
+    return openAiError(400, error.message, "invalid_request_error", error.code, error.param);
+  }
   return {
     request: {
       ...request,

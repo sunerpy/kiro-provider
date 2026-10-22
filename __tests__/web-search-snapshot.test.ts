@@ -99,7 +99,7 @@ describe("web search snapshot store", () => {
     raw.close();
     const reopened = new AccountsDatabase(path);
     expect(reopened.schemaVersion()).toBe(ACCOUNTS_DB_SCHEMA_VERSION);
-    expect(ACCOUNTS_DB_SCHEMA_VERSION).toBe(8);
+    expect(ACCOUNTS_DB_SCHEMA_VERSION).toBe(9);
     const { store: snapshots } = store(reopened);
     snapshots.prepare({
       tenantId: "tenant",

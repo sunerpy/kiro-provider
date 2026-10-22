@@ -394,13 +394,7 @@ export function createApp(config: Config, dependencies: AppDependencies): AppFet
                 : {}),
             });
           case "models":
-            return await handleModels(
-              dependencies.modelCapabilities,
-              dependencies.accountManager,
-              dependencies.tokenRefresher,
-              request.signal,
-              dependencies.quotaRechecker,
-            );
+            return handleModels(dependencies);
           case "ready":
             return handleReadiness(
               dependencies.accountManager,

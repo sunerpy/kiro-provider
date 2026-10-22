@@ -73,13 +73,37 @@ export interface ManagedAccountRow {
   limit_count: number;
   last_sync: number;
   overage_count: number;
+  client_id_issued_at?: number | null;
+  client_secret_expires_at?: number | null;
+  refresh_failure_count?: number | null;
+  refresh_failure_code?: ManagedAccount["refreshFailureCode"] | null;
+  refresh_failed_at?: number | null;
+  refresh_retry_at?: number | null;
+  last_refresh_at?: number | null;
 }
 
 export interface AccountRow extends ManagedAccountRow {
   generation: number;
 }
 
+function optionalNumber(value: number | undefined, field: string, count = false): number | null {
+  if (value === undefined) return null;
+  const maximum = count ? Number.MAX_SAFE_INTEGER : 253_402_300_799_000;
+  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
+    throw new TypeError(`Invalid account ${field}`);
+  }
+  return value;
+}
+
 export function accountToRow(account: ManagedAccount, generation: number): AccountRow {
+  if (
+    account.refreshFailureCode !== undefined &&
+    !["invalid_request", "network_error", "throttled", "upstream_error"].includes(
+      account.refreshFailureCode,
+    )
+  ) {
+    throw new TypeError("Invalid account refreshFailureCode");
+  }
   return {
     id: account.id,
     email: account.email,
@@ -103,6 +127,16 @@ export function accountToRow(account: ManagedAccount, generation: number): Accou
     limit_count: account.limitCount ?? 0,
     last_sync: account.lastSync ?? 0,
     overage_count: account.overageCount ?? 0,
+    client_id_issued_at: optionalNumber(account.clientIdIssuedAt, "clientIdIssuedAt"),
+    client_secret_expires_at: optionalNumber(
+      account.clientSecretExpiresAt,
+      "clientSecretExpiresAt",
+    ),
+    refresh_failure_count: optionalNumber(account.refreshFailureCount, "refreshFailureCount", true),
+    refresh_failure_code: account.refreshFailureCode ?? null,
+    refresh_failed_at: optionalNumber(account.refreshFailedAt, "refreshFailedAt"),
+    refresh_retry_at: optionalNumber(account.refreshRetryAt, "refreshRetryAt"),
+    last_refresh_at: optionalNumber(account.lastRefreshAt, "lastRefreshAt"),
     generation,
   };
 }
@@ -134,6 +168,17 @@ export function rowToManagedAccount(row: ManagedAccountRow): ManagedAccount | un
     limitCount: row.limit_count,
     lastSync: row.last_sync,
     overageCount: row.overage_count,
+    ...(row.client_id_issued_at == null ? {} : { clientIdIssuedAt: row.client_id_issued_at }),
+    ...(row.client_secret_expires_at == null
+      ? {}
+      : { clientSecretExpiresAt: row.client_secret_expires_at }),
+    ...(row.refresh_failure_count == null
+      ? {}
+      : { refreshFailureCount: row.refresh_failure_count }),
+    ...(row.refresh_failure_code == null ? {} : { refreshFailureCode: row.refresh_failure_code }),
+    ...(row.refresh_failed_at == null ? {} : { refreshFailedAt: row.refresh_failed_at }),
+    ...(row.refresh_retry_at == null ? {} : { refreshRetryAt: row.refresh_retry_at }),
+    ...(row.last_refresh_at == null ? {} : { lastRefreshAt: row.last_refresh_at }),
   };
 }
 
@@ -167,6 +212,13 @@ export function rowBindings(row: AccountRow): (string | number | null)[] {
     row.limit_count,
     row.last_sync,
     row.overage_count,
+    row.client_id_issued_at ?? null,
+    row.client_secret_expires_at ?? null,
+    row.refresh_failure_count ?? null,
+    row.refresh_failure_code ?? null,
+    row.refresh_failed_at ?? null,
+    row.refresh_retry_at ?? null,
+    row.last_refresh_at ?? null,
     row.generation,
   ];
 }

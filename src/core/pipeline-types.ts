@@ -46,6 +46,8 @@ export interface PipelineAccountManager {
   markRateLimited(account: ManagedAccount, resetTime: number): unknown;
   markQuotaExhausted?(account: ManagedAccount, recheckAfter: number): unknown;
   markUnhealthy(account: ManagedAccount, reason: string, recoveryTime?: number): unknown;
+  /** Persist an authentication refresh failure only for the attempted credential generation. */
+  recordRefreshFailure?(account: ManagedAccount, error: unknown): ManagedAccount | undefined;
 }
 
 export interface PipelineTokenRefresher {

@@ -131,6 +131,55 @@ function createHarness(
 }
 
 describe("runLogin profile discovery", () => {
+  test("persists authorization client metadata and clears the previous credential epoch on relogin", async () => {
+    const previous = stored({
+      clientIdIssuedAt: 100,
+      clientSecretExpiresAt: 200,
+      refreshFailureCount: 3,
+      refreshFailureCode: "invalid_request",
+      refreshFailedAt: 300,
+      refreshRetryAt: 400,
+      lastRefreshAt: 500,
+    });
+    for (const metadata of [
+      { clientIdIssuedAt: 1_700_000_000_000, clientSecretExpiresAt: 1_800_000_000_000 },
+      {},
+    ]) {
+      const harness = createHarness([previous], async () => ({
+        email: previous.email,
+        usedCount: 1,
+        limitCount: 100,
+        overageCount: 0,
+      }));
+      const authorize = harness.deps.authorize!;
+      const result = await runLogin(
+        config,
+        { replaceAccount: previous },
+        {
+          ...harness.deps,
+          authorize: async (...args) => ({ ...(await authorize(...args)), ...metadata }),
+        },
+      );
+      expect(result.account.id).toBe(previous.id);
+      expect(result.account.clientIdIssuedAt).toBe(metadata.clientIdIssuedAt);
+      expect(result.account.clientSecretExpiresAt).toBe(metadata.clientSecretExpiresAt);
+      for (const key of [
+        "refreshFailureCount",
+        "refreshFailureCode",
+        "refreshFailedAt",
+        "refreshRetryAt",
+        "lastRefreshAt",
+      ] as const)
+        expect(result.account).not.toHaveProperty(key);
+      expect(result.account).toMatchObject({
+        clientId: "fresh-client",
+        clientSecret: "fresh-secret",
+        refreshToken: "fresh-refresh",
+        profileArn: PROFILE_ARN,
+      });
+    }
+  });
+
   test("discovers and persists a profile before requesting usage", async () => {
     const harness = createHarness([], async () => ({
       email: "dev@example.com",

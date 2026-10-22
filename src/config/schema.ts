@@ -49,6 +49,7 @@ export const ConfigSchema = z.object({
     .enum(["v3-auto", "safe", "native-context-safe", "legacy-user-prefix"])
     .default("v3-auto"),
   responses_fidelity_mode: z.enum(["compatible", "strict"]).default("compatible"),
+  responses_thinking_display_mode: z.enum(["preserve", "omitted"]).default("preserve"),
   anthropic_thinking_display_mode: z.enum(["preserve", "omitted"]).default("preserve"),
   responses_instruction_lift: z.enum(["auto", "off", "experimental"]).default("auto"),
   responses_native_tool_bridge: z.enum(["auto", "off", "experimental"]).default("auto"),

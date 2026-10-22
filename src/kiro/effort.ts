@@ -1,4 +1,5 @@
-import { resolveModelVariant } from "./models.js";
+import { isKimiK3Model, resolveModelVariant } from "./models.js";
+import { RequestTransformError } from "./transform/errors.js";
 import type { Effort } from "./types.js";
 
 /**
@@ -17,6 +18,8 @@ function isEffort(value: unknown): value is Effort {
  * monotonically low<medium<high<xhigh<max (.omo/evidence/task-gpt56-effort-probe.txt).
  */
 const GPT_REASONING_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const KIMI_K3_EFFORT_LEVELS: readonly Effort[] = ["low", "high", "max"];
+const FOUR_EFFORT_LEVELS: readonly Effort[] = ["low", "medium", "high", "max"];
 
 /**
  * Models that support the 5-value effort enum (including xhigh).
@@ -37,8 +40,8 @@ const XHIGH_CAPABLE_MODELS = new Set([
 ]);
 
 /**
- * Models that support the 4-value effort enum (no xhigh).
- * xhigh requests on these models are clamped to max.
+ * Models with categorical effort. The exact enum is model-specific: K3 has
+ * three levels; older Claude models have four and clamp xhigh to max.
  */
 const EFFORT_CAPABLE_MODELS = new Set([
   "claude-opus-4.5",
@@ -48,6 +51,7 @@ const EFFORT_CAPABLE_MODELS = new Set([
   // Keep adaptive-thinking requests usable by omitting effort for this model family.
   "claude-sonnet-4.6",
   "claude-sonnet-4.6-1m",
+  "kimi-k3",
   ...XHIGH_CAPABLE_MODELS,
 ]);
 
@@ -65,19 +69,46 @@ export function supportsXHighEffort(kiroModel: string): boolean {
   return XHIGH_CAPABLE_MODELS.has(kiroModel);
 }
 
+/** Wire-field selection does not imply a model supports every effort enum. */
+export function getSupportedEffortLevels(kiroModel: string): readonly Effort[] {
+  if (kiroModel === "kimi-k3") return KIMI_K3_EFFORT_LEVELS;
+  if (!supportsEffort(kiroModel)) return [];
+  return supportsXHighEffort(kiroModel) ? EFFORT_LEVELS : FOUR_EFFORT_LEVELS;
+}
+
+export function getDefaultEffort(kiroModel: string): Effort | undefined {
+  return kiroModel === "kimi-k3" ? "max" : supportsEffort(kiroModel) ? "medium" : undefined;
+}
+
+/** Reject unrepresentable K3 controls rather than silently changing depth. */
+export function assertKimiReasoningEffort(
+  model: string,
+  effort: string | null | undefined,
+  param = "reasoning.effort",
+): void {
+  if (!isKimiK3Model(model) || effort == null || KIMI_K3_EFFORT_LEVELS.includes(effort as Effort))
+    return;
+  throw new RequestTransformError(
+    "Kimi K3 supports reasoning effort low, high, or max; thinking cannot be disabled",
+    "unsupported_reasoning_effort",
+    param,
+  );
+}
+
 /**
  * Build the additionalModelRequestFields payload carrying the effort level.
  *
  * GPT and Claude take effort through different, mutually-exclusive wire fields
  * (each rejects the other's with HTTP 400, probe-confirmed):
- * - GPT (Mantle):  `reasoning.effort`
+ * - GPT (Mantle) and Kimi K3: `reasoning.effort`
  * - Claude:        `output_config.effort`
  */
 export function buildEffortRequestFields(
   kiroModel: string,
   effort: Effort,
 ): Record<string, unknown> {
-  if (GPT_REASONING_MODELS.has(kiroModel)) {
+  assertKimiReasoningEffort(kiroModel, effort);
+  if (GPT_REASONING_MODELS.has(kiroModel) || kiroModel === "kimi-k3") {
     return { reasoning: { effort } };
   }
   return { output_config: { effort } };
@@ -112,6 +143,10 @@ export function resolveEffort(kiroModel: string, requested: Effort): Effort | un
     return undefined;
   }
 
+  if (kiroModel === "kimi-k3") {
+    return KIMI_K3_EFFORT_LEVELS.includes(requested) ? requested : undefined;
+  }
+
   // xhigh is only preserved for models in the probe-backed xhigh allowlist.
   if (requested === "xhigh" && !supportsXHighEffort(kiroModel)) {
     return "max";
@@ -140,6 +175,8 @@ export function budgetToEffort(budget: number, kiroModel: string): Effort | unde
   if (!supportsEffort(kiroModel)) {
     return undefined;
   }
+  // K3 declares categorical effort only, not a numeric thinking budget.
+  if (kiroModel === "kimi-k3") return undefined;
 
   let effort: Effort;
   if (budget <= 10000) {
@@ -171,6 +208,8 @@ export interface EffectiveEffortOptions {
  *
  * Precedence: model variant, request reasoning_effort, global config effort,
  * automatic budget mapping, then the thinking-only medium fallback.
+ * K3 instead validates its three-value schema and defaults to max, without
+ * inventing a categorical effort from an unsupported numeric token budget.
  *
  * Invalid explicit values are skipped here so internal/programmatic callers can
  * fall through to the next level. HTTP input is a separate trust boundary: T18
@@ -193,6 +232,12 @@ export function resolveEffectiveEffort(options: EffectiveEffortOptions): Effort 
 
   if (!supportsEffort(resolved.wireId)) {
     return undefined;
+  }
+
+  if (resolved.wireId === "kimi-k3") {
+    const requested = options.reasoningEffort ?? resolved.effort ?? options.configEffort;
+    assertKimiReasoningEffort(resolved.wireId, requested);
+    return (requested as Effort | undefined) ?? "max";
   }
 
   if (options.requestFirst && options.reasoningEffort === "none") return undefined;

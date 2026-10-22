@@ -2,6 +2,7 @@ import { fetchProxyOption } from "../core/proxy.js";
 import { decodeRefreshToken, encodeRefreshToken } from "./auth.js";
 import { buildUrl, KIRO_CONSTANTS } from "./constants.js";
 import { KiroTokenRefreshError } from "./errors.js";
+import { isClientRegistrationExpired } from "./health.js";
 import type { KiroAuthDetails, RefreshParts } from "./types.js";
 
 type JsonObject = Readonly<Record<string, unknown>>;
@@ -62,6 +63,12 @@ export async function refreshAccessToken(
   signal?: AbortSignal,
   proxyUrl?: string,
 ): Promise<KiroAuthDetails> {
+  if (isClientRegistrationExpired(auth)) {
+    throw new KiroTokenRefreshError(
+      "The OIDC client registration expired; re-login is required",
+      "CLIENT_REGISTRATION_EXPIRED",
+    );
+  }
   const refreshParts = decodeRefreshToken(auth.refresh);
   const isIdc = auth.authMethod === "idc";
   const refreshRegion = isIdc ? (auth.oidcRegion ?? auth.region) : auth.region;
@@ -104,7 +111,14 @@ export async function refreshAccessToken(
 
     if (!response.ok) {
       const details = errorDetails(await response.text(), response.status);
-      throw new KiroTokenRefreshError(`Refresh failed: ${details.message}`, details.code);
+      throw new KiroTokenRefreshError(
+        `Refresh failed: ${details.message}`,
+        details.code,
+        undefined,
+        {
+          status: response.status,
+        },
+      );
     }
 
     const parsed: unknown = await response.json();
@@ -132,6 +146,10 @@ export async function refreshAccessToken(
       ...(auth.profileArn ? { profileArn: auth.profileArn } : {}),
       ...(auth.clientId ? { clientId: auth.clientId } : {}),
       ...(auth.clientSecret ? { clientSecret: auth.clientSecret } : {}),
+      ...(auth.clientIdIssuedAt !== undefined ? { clientIdIssuedAt: auth.clientIdIssuedAt } : {}),
+      ...(auth.clientSecretExpiresAt !== undefined
+        ? { clientSecretExpiresAt: auth.clientSecretExpiresAt }
+        : {}),
       ...(auth.email || responseEmail(parsed)
         ? { email: auth.email ?? responseEmail(parsed) }
         : {}),

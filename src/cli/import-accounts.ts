@@ -13,6 +13,14 @@ const SourceAccountSchema = z.object({
   oidc_region: z.string().nullable(),
   client_id: z.string().nullable(),
   client_secret: z.string().nullable(),
+  client_id_issued_at: z.number().finite().int().nonnegative().max(253_402_300_799_000).nullable(),
+  client_secret_expires_at: z
+    .number()
+    .finite()
+    .int()
+    .nonnegative()
+    .max(253_402_300_799_000)
+    .nullable(),
   profile_arn: z.string().nullable(),
   start_url: z.string().nullable(),
   refresh_token: z.string(),
@@ -104,6 +112,10 @@ function toCandidate(row: SourceAccount): AccountCandidate {
       ...(parsedOidcRegion?.success ? { oidcRegion: parsedOidcRegion.data } : {}),
       ...(optionalText(row.client_id) ? { clientId: optionalText(row.client_id) } : {}),
       ...(optionalText(row.client_secret) ? { clientSecret: optionalText(row.client_secret) } : {}),
+      ...(row.client_id_issued_at === null ? {} : { clientIdIssuedAt: row.client_id_issued_at }),
+      ...(row.client_secret_expires_at === null
+        ? {}
+        : { clientSecretExpiresAt: row.client_secret_expires_at }),
       ...(optionalText(row.profile_arn) ? { profileArn: optionalText(row.profile_arn) } : {}),
       ...(optionalText(row.start_url) ? { startUrl: optionalText(row.start_url) } : {}),
       refreshToken: row.refresh_token,
@@ -137,12 +149,21 @@ export function runImportAccounts(
   let imported = 0;
   let skipped = 0;
   try {
+    const sourceColumns = new Set(
+      source
+        .query<{ name: string }, []>("PRAGMA table_info(accounts)")
+        .all()
+        .map(({ name }) => name),
+    );
+    const optionalClientColumns = ["client_id_issued_at", "client_secret_expires_at"]
+      .map((column) => (sourceColumns.has(column) ? column : `NULL AS ${column}`))
+      .join(", ");
     const rows = source
       .query<Record<string, unknown>, []>(`SELECT
           id, email, auth_method, region, oidc_region, client_id, client_secret,
           profile_arn, start_url, refresh_token, access_token, expires_at,
           rate_limit_reset, is_healthy, unhealthy_reason, recovery_time, fail_count,
-          last_used, used_count, limit_count, last_sync, overage_count
+          last_used, used_count, limit_count, last_sync, overage_count, ${optionalClientColumns}
         FROM accounts`)
       .all();
     for (const rawRow of rows) {

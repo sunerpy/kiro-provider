@@ -39,7 +39,7 @@ describe("probe-backed Kiro output-token limits", () => {
     },
   );
 
-  test.each(["gpt-5.6-sol", "auto", "claude-sonnet-4-5", "claude-opus-4-8"])(
+  test.each(["gpt-5.6-sol", "kimi-k3", "auto", "claude-sonnet-4-5", "claude-opus-4-8"])(
     "keeps unproven model %s fail-closed",
     (model) => {
       expect(resolveOutputTokenLimit(model, 4_096)).toMatchObject({
@@ -49,8 +49,14 @@ describe("probe-backed Kiro output-token limits", () => {
     },
   );
 
-  test("limits advisory compatibility to GPT 5.6 wire models and variants", () => {
-    for (const model of ["gpt-5.6-sol", "gpt-5.6-sol-max", "gpt-5.6-terra", "gpt-5.6-luna-xhigh"]) {
+  test("limits advisory compatibility to evidenced GPT 5.6 and K3 models", () => {
+    for (const model of [
+      "gpt-5.6-sol",
+      "gpt-5.6-sol-max",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna-xhigh",
+      "kimi-k3",
+    ]) {
       expect(supportsAdvisoryOutputTokenLimit(model)).toBe(true);
     }
     for (const model of ["claude-opus-5", "qwen3-coder-next", "unknown-model"]) {

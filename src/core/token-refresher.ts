@@ -1,10 +1,15 @@
 import { accessTokenExpired } from "../kiro/auth.js";
-import { isRefreshTokenDead, toDeadReason } from "../kiro/health.js";
+import { KiroTokenRefreshError } from "../kiro/errors.js";
+import { isClientRegistrationExpired } from "../kiro/health.js";
 import { refreshAccessToken } from "../kiro/token.js";
 import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import type { StoredAccount } from "../storage/accounts-db.js";
-import { errorReason } from "./account-errors.js";
 import type { AccountManager } from "./account-manager.js";
+import {
+  canAdoptRefreshedAccount,
+  recordRefreshFailure,
+  sameCredentialTuple,
+} from "./credential-state.js";
 import { abortable } from "./pipeline-runtime.js";
 
 /** Upper bound for one shared network refresh; independent of any caller's signal. */
@@ -15,14 +20,6 @@ export class AccountUnavailableError extends Error {
     super(`Account ${accountId} is no longer available`);
     this.name = "AccountUnavailableError";
   }
-}
-
-function sameTokenSnapshot(left: ManagedAccount, right: ManagedAccount): boolean {
-  return (
-    left.accessToken === right.accessToken &&
-    left.refreshToken === right.refreshToken &&
-    left.expiresAt === right.expiresAt
-  );
 }
 
 /**
@@ -53,6 +50,7 @@ export class TokenRefresher {
     signal?: AbortSignal,
   ): Promise<StoredAccount> {
     const current = this.latestAccount(account.id);
+    this.assertRefreshAvailable(current);
     if (!accessTokenExpired(this.authDetails(current), this.tokenExpiryBufferMs)) {
       return current;
     }
@@ -74,18 +72,27 @@ export class TokenRefresher {
     try {
       return this.accountManager.toAuthDetails(account);
     } catch (error) {
-      this.markDeadIfPermanent(account, error);
+      recordRefreshFailure(this.accountManager, account, error);
       throw error;
     }
   }
 
-  private markDeadIfPermanent(account: ManagedAccount, error: unknown): void {
-    const reason = errorReason(error);
-    if (!isRefreshTokenDead(reason)) return;
-    try {
-      this.accountManager.markUnhealthy(account, toDeadReason(reason));
-    } catch {
-      // The account may have been removed while the refresh was in flight.
+  private assertRefreshAvailable(account: ManagedAccount): void {
+    if (isClientRegistrationExpired(account)) {
+      const error = new KiroTokenRefreshError(
+        "The OIDC client registration expired; re-login is required",
+        "CLIENT_REGISTRATION_EXPIRED",
+      );
+      recordRefreshFailure(this.accountManager, account, error);
+      throw error;
+    }
+    if ((account.refreshRetryAt ?? 0) > Date.now()) {
+      throw new KiroTokenRefreshError(
+        "Credential refresh is temporarily backed off",
+        "REFRESH_BACKOFF",
+        undefined,
+        { retryAt: account.refreshRetryAt },
+      );
     }
   }
 
@@ -113,10 +120,13 @@ export class TokenRefresher {
   private async runRefresh(started: ManagedAccount, force: boolean): Promise<StoredAccount> {
     const latest = this.latestAccount(started.id);
     try {
+      if (!sameCredentialTuple(started, latest)) {
+        if (canAdoptRefreshedAccount(started, latest, this.tokenExpiryBufferMs)) return latest;
+        throw new AccountUnavailableError(started.id);
+      }
+      this.assertRefreshAvailable(latest);
       const latestAuth = this.accountManager.toAuthDetails(latest);
-      const alreadyRotated = force
-        ? !sameTokenSnapshot(started, latest)
-        : !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
+      const alreadyRotated = !force && !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
       if (alreadyRotated) return latest;
       const refreshedAuth = await refreshAccessToken(
         latestAuth,
@@ -127,7 +137,11 @@ export class TokenRefresher {
       if (!updated) throw new AccountUnavailableError(started.id);
       return updated;
     } catch (error) {
-      this.markDeadIfPermanent(latest, error);
+      const current = this.accountManager.getLatestAccount(latest.id);
+      if (current && canAdoptRefreshedAccount(latest, current, this.tokenExpiryBufferMs))
+        return current;
+      if (error instanceof KiroTokenRefreshError)
+        recordRefreshFailure(this.accountManager, latest, error);
       throw error;
     }
   }

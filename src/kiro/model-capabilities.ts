@@ -73,8 +73,9 @@ type ListModels = typeof listAvailableModels;
 /**
  * `serve`: request path. A usable stale snapshot is returned immediately and
  * revalidated in the background (stale-while-revalidate).
- * `await`: explicit refresh (models route). Waits for the live result unless
- * the account is inside its failure backoff window.
+ * `await`: explicit refresh (the models route's background revalidation).
+ * Waits for the live result unless the account is inside its failure backoff
+ * window.
  */
 type RefreshMode = "serve" | "await";
 

@@ -4,14 +4,17 @@
  * Returns both the standard OpenAI models-list envelope and the provider-owned
  * Codex model catalog envelope. Live per-account Kiro management data is used
  * when available; the checked-in catalog is the bounded last-resort fallback.
+ * A listing never waits on upstream work: it answers from the catalog in hand
+ * and revalidates that catalog in the background.
  */
+import { auditLog } from "../../core/audit-log.js";
 import type {
   PipelineAccountManager,
   PipelineModelCapabilities,
   PipelineQuotaRechecker,
   PipelineTokenRefresher,
 } from "../../core/pipeline.js";
-import { supportsEffort, supportsXHighEffort } from "../../kiro/effort.js";
+import { getDefaultEffort, getSupportedEffortLevels, supportsEffort } from "../../kiro/effort.js";
 import { isQuotaExhausted } from "../../kiro/health.js";
 import { MODEL_CATALOG, type ModelCatalogEntry } from "../../kiro/model-catalog.js";
 import { stripModelSuffix } from "../../kiro/models.js";
@@ -32,9 +35,7 @@ function codexReasoningLevels(wireId: string): Array<{
   readonly description: string;
 }> {
   if (!supportsEffort(wireId)) return [];
-  const efforts: readonly CodexReasoningLevel[] = supportsXHighEffort(wireId)
-    ? ["low", "medium", "high", "xhigh", "max"]
-    : ["low", "medium", "high", "max"];
+  const efforts: readonly CodexReasoningLevel[] = getSupportedEffortLevels(wireId);
   const levels = efforts.map((effort) => ({
     effort,
     description: `${effort} reasoning effort`,
@@ -60,7 +61,7 @@ function codexDefaultReasoningLevel(entry: ModelCatalogEntry): CodexReasoningLev
   ) {
     return suffix;
   }
-  return "medium";
+  return getDefaultEffort(entry.wireId) ?? null;
 }
 
 function codexInputModalities(entry: ModelCatalogEntry): Array<"text" | "image"> {
@@ -101,6 +102,7 @@ function codexModel(
     truncation_policy: { mode: "tokens", limit: entry.contextLimit },
     supports_image_detail_original: false,
     context_window: entry.contextLimit,
+    output_limit: entry.outputLimit,
     max_context_window: entry.contextLimit,
     auto_compact_token_limit: Math.floor(entry.contextLimit * 0.9),
     effective_context_window_percent: 95,
@@ -113,41 +115,88 @@ function codexModel(
   };
 }
 
-export async function handleModels(
-  modelCapabilities?: PipelineModelCapabilities,
-  accountManager?: PipelineAccountManager,
-  tokenRefresher?: PipelineTokenRefresher,
-  signal?: AbortSignal,
-  quotaRechecker?: PipelineQuotaRechecker,
-): Promise<Response> {
-  if (modelCapabilities && accountManager && tokenRefresher) {
-    const requestSignal = signal ?? new AbortController().signal;
-    let accounts = accountManager.reconcileFromDb();
-    if (quotaRechecker) {
-      await quotaRechecker.recheckDueAccounts(accounts, requestSignal);
-      accounts = accountManager.reconcileFromDb();
-    }
-    accounts = accounts.filter((account) => !isQuotaExhausted(account));
-    const refreshed = await Promise.allSettled(
-      accounts.map(async (account) => {
-        const current = await tokenRefresher.refreshIfNeeded(
-          account,
-          accountManager.toAuthDetails(account),
-          requestSignal,
-        );
-        return current;
-      }),
-    );
-    const available = refreshed.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
-    await modelCapabilities.refreshAccounts(
-      available,
-      (account) => accountManager.toAuthDetails(account),
-      requestSignal,
-    );
+export interface ModelsRouteDependencies {
+  readonly modelCapabilities?: PipelineModelCapabilities;
+  readonly accountManager?: PipelineAccountManager;
+  readonly tokenRefresher?: PipelineTokenRefresher;
+  readonly quotaRechecker?: PipelineQuotaRechecker;
+}
+
+/** One revalidation per capability service; concurrent listings join it. */
+const revalidations = new WeakMap<PipelineModelCapabilities, Promise<void>>();
+
+async function refreshListedAccounts(
+  modelCapabilities: PipelineModelCapabilities,
+  accountManager: PipelineAccountManager,
+  tokenRefresher: PipelineTokenRefresher,
+  quotaRechecker: PipelineQuotaRechecker | undefined,
+): Promise<void> {
+  // Detached from the listing that started it: the quota batch, each token
+  // refresh and each catalog request are bounded by their own timeouts.
+  const signal = new AbortController().signal;
+  let accounts = accountManager.reconcileFromDb();
+  if (quotaRechecker) {
+    await quotaRechecker.recheckDueAccounts(accounts, signal);
+    accounts = accountManager.reconcileFromDb();
   }
-  const catalog = modelCapabilities?.catalog() ?? MODEL_CATALOG;
+  accounts = accounts.filter((account) => !isQuotaExhausted(account));
+  const refreshed = await Promise.allSettled(
+    accounts.map(async (account) => {
+      const current = await tokenRefresher.refreshIfNeeded(
+        account,
+        accountManager.toAuthDetails(account),
+        signal,
+      );
+      return current;
+    }),
+  );
+  const available = refreshed.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+  await modelCapabilities.refreshAccounts(
+    available,
+    (account) => accountManager.toAuthDetails(account),
+    signal,
+  );
+}
+
+/**
+ * Starts, or joins, the background revalidation behind `GET /v1/models`:
+ * due quota rechecks first, then token refreshes and catalog refreshes for
+ * the accounts that still have quota. A failure is audited by type only and
+ * never reaches a listing; the returned promise always resolves.
+ */
+export function revalidateModelCatalog(dependencies: ModelsRouteDependencies): Promise<void> {
+  const { modelCapabilities, accountManager, tokenRefresher, quotaRechecker } = dependencies;
+  if (!modelCapabilities || !accountManager || !tokenRefresher) return Promise.resolve();
+  const running = revalidations.get(modelCapabilities);
+  if (running) return running;
+  const revalidation = refreshListedAccounts(
+    modelCapabilities,
+    accountManager,
+    tokenRefresher,
+    quotaRechecker,
+  )
+    .catch((error: unknown) => {
+      auditLog("warn", "model_catalog_revalidation_failed", {
+        error_type: error instanceof Error ? error.name : typeof error,
+      });
+    })
+    .finally(() => {
+      if (revalidations.get(modelCapabilities) === revalidation) {
+        revalidations.delete(modelCapabilities);
+      }
+    });
+  revalidations.set(modelCapabilities, revalidation);
+  return revalidation;
+}
+
+export function handleModels(dependencies: ModelsRouteDependencies = {}): Response {
+  // Fresh or stale account catalogs, else the checked-in one. Clients such as
+  // Codex give up on a listing after a few seconds, and a single slow usage,
+  // OIDC or management call can take longer than that.
+  const catalog = dependencies.modelCapabilities?.catalog() ?? MODEL_CATALOG;
+  void revalidateModelCatalog(dependencies);
   const data = catalog.map((entry) => ({
     id: entry.id,
     object: "model" as const,

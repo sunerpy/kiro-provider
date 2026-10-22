@@ -136,6 +136,10 @@ export async function* transformSdkOutputStream(
   };
   let completionWitness: "token-usage-metadata" | "metering-clean-eof" | undefined;
   let toolArgumentBytes = 0;
+  const requireReasoningIntegrity =
+    options.emitAnthropicReasoningMetadata === true ||
+    options.emitEncryptedReasoning === true ||
+    options.captureReasoning !== undefined;
   const bufferLateGptReasoning =
     options.bufferLateGptReasoning === true &&
     options.emitAnthropicReasoningMetadata === true &&
@@ -150,7 +154,9 @@ export async function* transformSdkOutputStream(
   const observeRaw = (event: SdkStreamEvent): void => {
     options.onRawEvent?.(sdkEventTypes(event));
     assertSupportedSdkEvent(event);
-    if (options.emitAnthropicReasoningMetadata) observeReasoningSignature(event);
+    // Observe Responses integrity without enabling Anthropic projection,
+    // ordering rules, or protocol-specific empty-prefix recovery.
+    if (requireReasoningIntegrity) observeReasoningSignature(event);
   };
 
   const bufferAssistantEvent = (event: BufferedAssistantEvent): void => {
@@ -287,6 +293,25 @@ export async function* transformSdkOutputStream(
       }
       updateUsageState(usage, event);
       appendReasoningCapture(reasoning, event.reasoningContentEvent);
+      // Any consumer of authenticated reasoning must reject an ambiguous
+      // capture before a completion witness can turn the unsigned summary
+      // into an apparently successful, but unreplayable, response.
+      if (requireReasoningIntegrity && reasoning.signatureConflict) {
+        throw new SdkStreamProtocolError(
+          "Kiro emitted conflicting reasoning signatures",
+          "invalid_upstream_reasoning",
+        );
+      }
+      if (
+        requireReasoningIntegrity &&
+        reasoning.text.length > 0 &&
+        reasoning.redactedChunks.length > 0
+      ) {
+        throw new SdkStreamProtocolError(
+          "Kiro mixed visible and redacted reasoning payloads",
+          "invalid_upstream_reasoning",
+        );
+      }
       const eventReasoningText = event.reasoningContentEvent?.text ?? "";
       const suppressLateGptPlaceholder =
         bufferLateGptReasoning &&
@@ -307,18 +332,6 @@ export async function* transformSdkOutputStream(
       }
 
       if (options.emitAnthropicReasoningMetadata) {
-        if (reasoning.signatureConflict) {
-          throw new SdkStreamProtocolError(
-            "Kiro emitted conflicting reasoning signatures",
-            "invalid_upstream_reasoning",
-          );
-        }
-        if (reasoning.text.length > 0 && reasoning.redactedChunks.length > 0) {
-          throw new SdkStreamProtocolError(
-            "Kiro mixed visible and redacted reasoning payloads",
-            "invalid_upstream_reasoning",
-          );
-        }
         const lateSignature =
           assistantOutputStarted &&
           event.reasoningContentEvent?.signature !== undefined &&

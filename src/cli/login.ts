@@ -161,6 +161,10 @@ function usageAuth(
     oidcRegion: token.region,
     clientId: token.clientId,
     clientSecret: token.clientSecret,
+    ...(token.clientIdIssuedAt === undefined ? {} : { clientIdIssuedAt: token.clientIdIssuedAt }),
+    ...(token.clientSecretExpiresAt === undefined
+      ? {}
+      : { clientSecretExpiresAt: token.clientSecretExpiresAt }),
     email: token.email,
     ...(profileArn ? { profileArn } : {}),
   };
@@ -199,7 +203,7 @@ export async function runLogin(
   const authorization = await authorize(oidcRegion, startUrl, proxyUrl);
   stdout(`Open this URL to sign in:\n${authorization.verificationUriComplete}`);
 
-  const token = await poll(
+  const polled = await poll(
     authorization.clientId,
     authorization.clientSecret,
     authorization.deviceCode,
@@ -209,6 +213,13 @@ export async function runLogin(
     undefined,
     proxyUrl,
   );
+  const token = {
+    ...polled,
+    // Registration metadata belongs to this login's client tuple only; never
+    // inherit it (or refresh failure state) from the replaced account.
+    clientIdIssuedAt: authorization.clientIdIssuedAt,
+    clientSecretExpiresAt: authorization.clientSecretExpiresAt,
+  };
   const refreshedAt = Date.now();
   let profileArn = options.profileArn ?? replaceAccount?.profileArn;
   let region = profileArn === undefined ? undefined : profileRegion(profileArn);
@@ -327,6 +338,10 @@ export async function runLogin(
       oidcRegion,
       clientId: token.clientId,
       clientSecret: token.clientSecret,
+      ...(token.clientIdIssuedAt === undefined ? {} : { clientIdIssuedAt: token.clientIdIssuedAt }),
+      ...(token.clientSecretExpiresAt === undefined
+        ? {}
+        : { clientSecretExpiresAt: token.clientSecretExpiresAt }),
       ...(startUrl ? { startUrl } : {}),
       ...(profileArn ? { profileArn } : {}),
       refreshToken: token.refreshToken,

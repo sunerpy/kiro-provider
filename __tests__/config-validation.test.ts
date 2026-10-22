@@ -25,6 +25,72 @@ afterEach(() => {
   }
 });
 
+describe("Responses thinking display policy configuration", () => {
+  test("preserves requests by default and loads an explicit omitted file policy", () => {
+    const defaults = ConfigSchema.parse({ api_keys: ["fixture-key"] });
+    expect(defaults.responses_thinking_display_mode).toBe("preserve");
+    expect(defaults.anthropic_thinking_display_mode).toBe("preserve");
+    const configPath = createConfigFile({
+      api_keys: ["fixture-key"],
+      responses_thinking_display_mode: "omitted",
+    });
+    expect(loadConfig({ configPath, env: {} }).responses_thinking_display_mode).toBe("omitted");
+  });
+
+  test("applies the Responses environment policy independently of Messages", () => {
+    const configPath = createConfigFile({
+      api_keys: ["fixture-key"],
+      responses_thinking_display_mode: "preserve",
+      anthropic_thinking_display_mode: "preserve",
+    });
+    const env = { KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE: "omitted" };
+    const config = loadConfig({ configPath, env });
+    expect(config.responses_thinking_display_mode).toBe("omitted");
+    expect(config.anthropic_thinking_display_mode).toBe("preserve");
+    expect(
+      loadConfig({
+        configPath,
+        env,
+        overrides: { responses_thinking_display_mode: "preserve" },
+      }).responses_thinking_display_mode,
+    ).toBe("preserve");
+  });
+
+  test.each(["summarized", "silent", "", null, false])(
+    "rejects an invalid Responses policy in the file: %s",
+    (value) => {
+      const configPath = createConfigFile({
+        api_keys: ["fixture-key"],
+        responses_thinking_display_mode: value,
+      });
+      expect(() => loadConfig({ configPath, env: {} })).toThrow(ConfigLoadError);
+    },
+  );
+
+  test.each(["summarized", "silent"])(
+    "rejects an invalid Responses policy in the environment: %s",
+    (value) => {
+      const configPath = createConfigFile({ api_keys: ["fixture-key"] });
+      expect(() =>
+        loadConfig({ configPath, env: { KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE: value } }),
+      ).toThrow(ConfigLoadError);
+    },
+  );
+
+  test("treats an empty Responses environment value as unset like other policies", () => {
+    const configPath = createConfigFile({
+      api_keys: ["fixture-key"],
+      responses_thinking_display_mode: "omitted",
+    });
+    expect(
+      loadConfig({
+        configPath,
+        env: { KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE: "" },
+      }).responses_thinking_display_mode,
+    ).toBe("omitted");
+  });
+});
+
 describe("Anthropic thinking display policy configuration", () => {
   test("preserves requests by default and applies environment before the file", () => {
     expect(ConfigSchema.parse({ api_keys: ["fixture-key"] }).anthropic_thinking_display_mode).toBe(

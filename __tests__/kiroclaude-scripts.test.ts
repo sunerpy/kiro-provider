@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -162,6 +170,130 @@ function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<
 }
 
 describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => {
+  test("starts Kimi K3 at max through environment and explicit model arguments", () => {
+    for (const selection of [
+      { model: "kimi-k3", args: [] },
+      { model: "kimi-k3[1m]", args: [] },
+      { model: "", args: ["--model", "kimi-k3"] },
+      { model: "", args: ["--model=kimi-k3[1m]"] },
+    ]) {
+      const root = temporaryRoot();
+      const fake = fakeClaude(root);
+      const result = Bun.spawnSync(["sh", launcher, ...selection.args, "--print", "fixture"], {
+        env: {
+          ...environment(root, fake),
+          KIROCLAUDE_MODEL: selection.model,
+          KIROCLAUDE_EFFORT: "",
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+        arguments: string[];
+        effectiveSettings: { effortLevel?: unknown; ultracode?: unknown };
+      };
+      expect(capture.arguments.slice(2, 4)).toEqual(["--effort", "max"]);
+      expect(claudeEffectiveEffort(capture.arguments, capture.effectiveSettings)).toEqual({
+        effort: "max",
+        ultracode: false,
+      });
+      expect(capture.effectiveSettings.ultracode).toBe(false);
+    }
+  });
+
+  test("passes only the selected low high or max K3 session effort without remapping", () => {
+    for (const effort of ["low", "high", "max"]) {
+      for (const selection of [
+        { model: "kimi-k3", args: [] },
+        { model: "", args: ["--model=kimi-k3[1m]"] },
+      ]) {
+        const root = temporaryRoot();
+        const fake = fakeClaude(root);
+        const result = Bun.spawnSync(["sh", launcher, ...selection.args, "--print", "fixture"], {
+          env: {
+            ...environment(root, fake),
+            KIROCLAUDE_MODEL: selection.model,
+            KIROCLAUDE_EFFORT: effort,
+          },
+        });
+        expect(result.exitCode).toBe(0);
+        const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+          arguments: string[];
+          effectiveSettings: { effortLevel?: unknown; ultracode?: unknown };
+        };
+        expect(capture.arguments.slice(2, 4)).toEqual(["--effort", effort]);
+        expect(claudeEffectiveEffort(capture.arguments, capture.effectiveSettings)).toEqual({
+          effort,
+          ultracode: false,
+        });
+      }
+    }
+  });
+
+  test("rejects unsupported effective K3 efforts before starting Claude", () => {
+    for (const effort of ["medium", "xhigh", "ultra", "ultracode"]) {
+      for (const args of [[], ["--effort", effort], [`--effort=${effort}`]]) {
+        const root = temporaryRoot();
+        const fake = fakeClaude(root);
+        const result = Bun.spawnSync(["sh", launcher, ...args, "--print", "fixture"], {
+          env: {
+            ...environment(root, fake),
+            KIROCLAUDE_MODEL: "kimi-k3[1m]",
+            KIROCLAUDE_EFFORT: args.length === 0 ? effort : "max",
+          },
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr.toString()).toContain(
+          "Kimi K3 supports only low, high, or max effort",
+        );
+        expect(existsSync(fake.capture)).toBe(false);
+      }
+    }
+  });
+
+  test("honors final explicit model and effort choices without treating prompt text as flags", () => {
+    const root = temporaryRoot();
+    const fake = fakeClaude(root);
+    const result = Bun.spawnSync(
+      ["sh", launcher, "--model", "kimi-k3", "--effort=high", "--print", "fixture"],
+      {
+        env: { ...environment(root, fake), KIROCLAUDE_EFFORT: "ultra" },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+      arguments: string[];
+      effectiveSettings: { effortLevel?: unknown; ultracode?: unknown };
+    };
+    expect(capture.effectiveSettings.ultracode).toBe(false);
+    expect(claudeEffectiveEffort(capture.arguments, capture.effectiveSettings)).toEqual({
+      effort: "high",
+      ultracode: false,
+    });
+
+    const nonK3 = Bun.spawnSync(
+      ["sh", launcher, "--model", "claude-opus-5-5", "--effort=medium", "--print", "fixture"],
+      {
+        env: {
+          ...environment(root, fake),
+          KIROCLAUDE_MODEL: "kimi-k3",
+          KIROCLAUDE_EFFORT: "ultra",
+        },
+      },
+    );
+    expect(nonK3.exitCode).toBe(0);
+    const prompt = Bun.spawnSync(["sh", launcher, "--", "--model", "kimi-k3", "--effort=medium"], {
+      env: environment(root, fake),
+    });
+    expect(prompt.exitCode).toBe(0);
+    const unchanged = JSON.parse(readFileSync(fake.capture, "utf8")) as typeof capture;
+    expect(
+      claudeEffectiveEffort(unchanged.arguments.slice(0, 2), unchanged.effectiveSettings),
+    ).toEqual({
+      effort: "xhigh",
+      ultracode: true,
+    });
+  });
+
   test("uses the probe-confirmed Sonnet fallback for small-fast requests while preserving custom pins", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);

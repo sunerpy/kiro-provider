@@ -92,7 +92,6 @@ if [ "$backend" = kiro ]; then
 
   provider_config=${KIROCLAUDE_PROVIDER_CONFIG:-"${XDG_CONFIG_HOME:-$home/.config}/kiro-provider/config.json"}
   base_url=${KIROCLAUDE_BASE_URL:-http://127.0.0.1:8787}
-  resolve_effort "${KIROCLAUDE_EFFORT:-ultra}"
   # Claude Code uses a conservative window behind custom gateways unless the
   # client model explicitly declares [1m]. Claude strips this client-only suffix
   # before sending the model ID. Custom pins remain exactly as supplied.
@@ -114,6 +113,50 @@ if [ "$backend" = kiro ]; then
   # Default to the named Opus 5.5 picker row rather than the `opus` family alias,
   # so the client displays the exact model. Both resolve to the same ID.
   model=${KIROCLAUDE_MODEL:-$opus_model}
+
+  # K3 has an evidenced low/high/max contract, unlike the broader Claude/GPT
+  # effort menu. Inspect the final CLI choice without reading prompt text after
+  # `--`; a session effort is required for max and keeps native Ultracode off.
+  k3_effort=$(python3 - "$model" "${KIROCLAUDE_EFFORT:-}" "$@" <<'PY'
+import sys
+
+model, configured_effort, *arguments = sys.argv[1:]
+session_effort = None
+index = 0
+while index < len(arguments):
+    argument = arguments[index]
+    if argument == "--":
+        break
+    if argument in {"--model", "--effort"}:
+        if index + 1 >= len(arguments):
+            break
+        if argument == "--model":
+            model = arguments[index + 1]
+        else:
+            session_effort = arguments[index + 1]
+        index += 2
+        continue
+    if argument.startswith("--model="):
+        model = argument[len("--model="):]
+    elif argument.startswith("--effort="):
+        session_effort = argument[len("--effort="):]
+    index += 1
+
+if model in {"kimi-k3", "kimi-k3[1m]"}:
+    effort = session_effort if session_effort is not None else configured_effort or "max"
+    if effort not in {"low", "high", "max"}:
+        print("kiroclaude: Kimi K3 supports only low, high, or max effort", file=sys.stderr)
+        raise SystemExit(1)
+    print(effort)
+PY
+  ) || exit $?
+  if [ -n "$k3_effort" ]; then
+    resolved_effort=
+    resolved_session_effort=$k3_effort
+    resolved_ultracode=false
+  else
+    resolve_effort "${KIROCLAUDE_EFFORT:-ultra}"
+  fi
 
   settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$opus5_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
 import json

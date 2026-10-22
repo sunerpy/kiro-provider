@@ -32,6 +32,7 @@ export interface PipelineStreamResult {
   readonly captureReasoning?: SdkReasoningCaptureHandler;
   readonly emitEncryptedReasoning?: boolean;
   readonly emitAnthropicReasoningMetadata?: boolean;
+  readonly responsesThinkingDisplayForced?: boolean;
   readonly bufferLateGptReasoning?: boolean;
   readonly prefetchOmittedReasoning?: boolean;
   readonly reasoningReplayDecision?: import("../kiro/transform/streaming/reasoning-prefix.js").ReasoningReplayDecision;
@@ -215,6 +216,11 @@ export class StreamTelemetry {
       this.reasoningRedacted ||
       this.completed !== undefined
     );
+  }
+
+  /** Opaque omitted reasoning can precede every publicly visible delta. */
+  get reasoningMetadataSeen(): boolean {
+    return (this.eventTypeCounts.get("reasoningContentEvent") ?? 0) > 0;
   }
 
   observeCanonicalEvent(event: CanonicalOutputEvent): void {
@@ -710,6 +716,9 @@ export function createPipelineStreamResponse(
     {
       headers: {
         "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+        ...(result.responsesThinkingDisplayForced
+          ? { "x-kiro-thinking-display-mode": "forced-omitted" }
+          : {}),
         ...(result.reasoningReplayDecision?.mode === "conflict-omitted"
           ? { "x-kiro-reasoning-replay-mode": "conflict-omitted" }
           : {}),

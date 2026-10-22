@@ -4,6 +4,11 @@ import type { EffortSchema, RegionSchema } from "./regions.js";
 export type KiroAuthMethod = "idc" | "desktop";
 export type KiroRegion = z.infer<typeof RegionSchema>;
 export type Effort = z.infer<typeof EffortSchema>;
+export type RefreshFailureCode =
+  | "invalid_request"
+  | "network_error"
+  | "throttled"
+  | "upstream_error";
 
 export interface KiroAuthDetails {
   refresh: string;
@@ -14,6 +19,9 @@ export interface KiroAuthDetails {
   oidcRegion?: KiroRegion;
   clientId?: string;
   clientSecret?: string;
+  /** Registration timestamps, in epoch milliseconds (not token JWT claims). */
+  clientIdIssuedAt?: number;
+  clientSecretExpiresAt?: number;
   email?: string;
   profileArn?: string;
 }
@@ -43,6 +51,14 @@ export interface ManagedAccount {
   oidcRegion?: KiroRegion;
   clientId?: string;
   clientSecret?: string;
+  /** Registration timestamps, in epoch milliseconds. Unknown for legacy imports. */
+  clientIdIssuedAt?: number;
+  clientSecretExpiresAt?: number;
+  refreshFailureCount?: number;
+  refreshFailureCode?: RefreshFailureCode;
+  refreshFailedAt?: number;
+  refreshRetryAt?: number;
+  lastRefreshAt?: number;
   profileArn?: string;
   startUrl?: string;
   refreshToken: string;

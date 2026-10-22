@@ -65,6 +65,19 @@ curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_
 
 把每个模型作为 `models` 下的一个新条目加入；除了上面四个 Claude 模型，都要加上 `compat.supportsMaxOutputTokens: false`。不需要 `claude-opus-5-5-high` 这类带推理等级后缀的名称：推理等级由 thinking 等级设置。
 
+## 恢复只保存了 reasoning 摘要的会话
+
+Pi 会把 Responses reasoning 输出保存到 `thinkingSignature`，并在下一轮原样回传。
+如果早先的网关响应缺少 `encrypted_content`，默认的
+`responses_fidelity_mode: "compatible"` 可以省略整轮无回放 token 的合法
+summary-only 元数据，以恢复会话。响应通过
+`X-Kiro-Compatibility: reasoning_summary_replay_omitted` 报告损失，可见消息、
+工具调用和结果保持完整。缺失的 opaque reasoning 无法恢复；strict 模式和
+无效 token 仍拒绝请求。
+
+新的 Responses 输出遇到冲突的 reasoning 签名时，会以
+`invalid_upstream_reasoning` 失败，避免成功完成后留下无法回放的历史。
+
 ## Pi 的 Anthropic API
 
 Pi 的 `anthropic-messages` API 也能以 `http://127.0.0.1:8787` 连接网关。但开启 `reasoning: true` 时，Pi 会请求摘要形式的 thinking，而 kiro-provider 只为 Claude Fable 5.1 提供摘要 thinking，其他模型会以 `unsupported_reasoning_display` 拒绝。请继续使用 `openai-responses`。
