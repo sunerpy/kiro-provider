@@ -26,7 +26,7 @@ import { type AppDependencies, createApp } from "../src/server/app.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
 type JsonRecord = Record<string, unknown>;
-type Scenario = "context-overflow" | "body-overflow" | "compact-recovery";
+type Scenario = "context-overflow" | "body-overflow" | "compact-recovery" | "zero-frame-retry";
 const KEY = "synthetic-claude-context-key";
 const ACK = "SYNTHETIC_COMPACT_SUMMARY_OK";
 const MODEL = "claude-opus-5-5";
@@ -108,7 +108,8 @@ async function run(binary: string, root: string, version: string, scenario: Scen
     request_timeout_ms: 10_000,
     stream_idle_timeout_ms: 5_000,
     rate_limit_max_retries: 0,
-    stream_max_attempts: 1,
+    rate_limit_retry_delay_ms: 1,
+    stream_max_attempts: scenario === "zero-frame-retry" ? 2 : 1,
     anthropic_thinking_display_mode: "omitted",
   });
   const database = new AccountsDatabase(":memory:");
@@ -152,7 +153,19 @@ async function run(binary: string, root: string, version: string, scenario: Scen
           history_messages: state?.history?.length ?? 0,
           input_chars: JSON.stringify(state).length,
         });
-        if (scenario !== "compact-recovery" || sdk.length <= 2) {
+        if (scenario === "zero-frame-retry" && sdk.length === 1) {
+          return {
+            generateAssistantResponseResponse: (async function* (): AsyncGenerator<SdkStreamEvent> {
+              yield await Promise.reject(
+                new TypeError("Synthetic transport closed before the first frame"),
+              );
+            })(),
+          };
+        }
+        if (
+          scenario !== "zero-frame-retry" &&
+          (scenario !== "compact-recovery" || sdk.length <= 2)
+        ) {
           throw Object.assign(new Error("Input is too long"), {
             name: "ValidationException",
             reason: "CONTENT_LENGTH_EXCEEDS_THRESHOLD",
@@ -356,6 +369,17 @@ async function run(binary: string, root: string, version: string, scenario: Scen
           !row.client_size_error,
         `case_failed:${scenario}:${JSON.stringify(row)}`,
       );
+    } else if (scenario === "zero-frame-retry") {
+      requireCondition(
+        sdk.length === 2 &&
+          requests.filter((request) => request.sdk_dispatches > 0).length === 1 &&
+          requests.find((request) => request.sdk_dispatches > 0)?.sdk_dispatches === 2 &&
+          requests.find((request) => request.sdk_dispatches > 0)?.status === 200 &&
+          row.client_result_success &&
+          exitCode === 0 &&
+          iteratorClosed === 1,
+        `case_failed:${scenario}:${JSON.stringify(row)}`,
+      );
     } else {
       requireCondition(
         sdk.length === 3 &&
@@ -366,7 +390,7 @@ async function run(binary: string, root: string, version: string, scenario: Scen
           row.client_result_success &&
           exitCode === 0 &&
           iteratorClosed === 1 &&
-          requests.at(-1)?.status === 200 &&
+          requests.filter((request) => request.sdk_dispatches > 0).at(-1)?.status === 200 &&
           !row.client_size_error,
         `case_failed:${scenario}:${JSON.stringify(row)}`,
       );
@@ -491,7 +515,12 @@ async function main(): Promise<void> {
   console.error = () => {};
   const runs: unknown[] = [];
   try {
-    for (const scenario of ["context-overflow", "body-overflow", "compact-recovery"] as const) {
+    for (const scenario of [
+      "context-overflow",
+      "body-overflow",
+      "compact-recovery",
+      "zero-frame-retry",
+    ] as const) {
       try {
         runs.push(await run(binary, root, version, scenario));
       } catch (error) {

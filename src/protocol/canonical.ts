@@ -126,6 +126,8 @@ export interface ResolvedReasoningReplay {
   readonly content: KiroReasoningContent;
   /** Authenticated incompatible material; keep its frozen projection only. */
   readonly modelOmitted?: true;
+  /** Cross-account recovery keeps authenticated projection repairs but omits opaque reasoning. */
+  readonly accountMigrationOmitted?: true;
   readonly instructionProjection?: InstructionReplayProjection;
   /** Compatibility hint for an authenticated token predating projection metadata. */
   readonly legacyProjectionUnversioned?: true;

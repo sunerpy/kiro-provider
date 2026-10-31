@@ -216,14 +216,16 @@ placeholder ...`。
 
   | 事件                                          | 级别   | 字段                                                                    | 含义                                                                                                             |
   | --------------------------------------------- | ------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 非流式收集在形成可用结果前失败；尚未发布，允许有界替代。                                                         |
-  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash`                 | 非流式收集预算已用尽，最后失败成为 HTTP `502`。                                                                  |
+  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`、`max_attempts`、`error_code`、`same_account`、`account_hash` | 可恢复尝试在发布前失败；也包括 omitted-thinking 流尚未收到任何 raw frame 的情况，因此允许有界替代。              |
+  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`、`max_attempts`、`error_code`、`account_hash`                 | 发布前恢复已用尽尝试预算，最后失败成为 HTTP `502`。                                                              |
   | `sdk_stream_empty_completion_retry`           | `warn` | `attempt`、`max_attempts`、`account_hash`                               | 非流式收集得到有凭证的空完成，预算内允许同账户替代一次。                                                         |
   | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`、`account_hash`、`completion_witnessed`                    | 在权威完成见证（token 用量或有效的 metering 事件）**之后**传输层失败。已完成的轮次照常交付；错误只记录、不上抛。 |
 
 - **原因：** `upstream_stream_error` 是读取器、解码器、传输或内嵌上游错误；
   `upstream_stream_incomplete` 是没有完成见证的干净 EOF。按契约两者都是
   临时性错误。v3.1.1 起，已接纳流即使只有生命周期或部分工具参数也不重放。
+  对 omitted-thinking 前缀检查，`raw_event_count: 0` 表示没有任何上游接纳证据，
+  可使用有界的请求内重试；一旦出现任意 raw frame，仍严格禁止重放。
   应结合 `X-Request-ID`、`attempt_id`、阶段和首末错误定位；
   没有重试日志并不能确定哪个上游组件失败。
 - **处置：** 下游以相同会话键发起替换尝试重试（见契约）。运维侧，同一个
@@ -405,7 +407,8 @@ migrated to another account, and the original account is unavailable`），以�
   - `reasoning_replay_migration_committed`（`info`）：Kiro 已接受迁移请求（流式为
     首个事件，非流式为完整收集完成），若存在持久绑定，此时才改为新账号和新
     conversation。字段：`request_id`、`protocol`、`model`、`from_account_hash`、
-    `to_account_hash`、`conversation_hash`、`replay_count`。
+    `to_account_hash`、`conversation_hash`、`replay_count`；
+    `replay_mode: "omitted"` 表示绑定是在显式去 reasoning 恢复成功后提交。
   - `reasoning_replay_migration_commit_failed`（`warn`）：Kiro 已接受迁移请求，但
     向 accounts 数据库写入新绑定失败（磁盘满、I/O 错误）。已接受的回答仍会正常
     返回，持久绑定继续指向原账号，下一请求会重新解析。字段：与 `committed` 相同，
@@ -417,10 +420,17 @@ migrated to another account, and the original account is unavailable`），以�
     `upstream_code`（上游 reason 枚举，`REQUEST_BODY_INVALID` 或
     `THINKING_SIGNATURE_INVALID`；签名拒绝以不带 reason 的纯消息 `400` 形式到达时
     省略）、`fallback`、`fallback_blocked_reason`。`fallback: "origin"` 表示已在
-    原账号和原 conversation 上回退一次；`fallback: "none"` 表示回退被阻止，
-    `fallback_blocked_reason` 给出原因：`fallback_spent`、`origin_missing`、
+    原账号和原 conversation 上回退一次；`fallback: "reasoning-omitted"` 表示原账号
+    无法服务，已限定在同一目标账号和新 conversation 做一次去 opaque reasoning
+    重试；`fallback: "none"` 表示所有恢复路径都被阻止。`fallback_blocked_reason`
+    记录原账号不可用的原因：`fallback_spent`、`origin_missing`、
     `origin_ineligible`、`origin_quarantined`、`origin_unselectable` 或
     `dispatch_budget`。
+  - `reasoning_replay_migration_omitted`（`warn`）：正在执行有界的同目标账号恢复，
+    请求只省略 opaque reasoning，仍保留可见/工具历史；事件只含迁移哈希和
+    `replay_count`。
+  - `reasoning_replay_migration_omission_failed`（`warn`）：去 reasoning 的尝试也在
+    输出前被拒绝；返回原始 `reasoning_replay_migration_rejected`，绑定仍指向原账号。
 
   这些事件只含哈希、计数、枚举值以及错误类名或驱动错误码；绝不包含消息文本、
   提示词、签名或账号标识。
@@ -432,16 +442,15 @@ migrated to another account, and the original account is unavailable`），以�
   校验迁移后的请求体，在产生输出前以 `400 ValidationException` /
   `REQUEST_BODY_INVALID`（`Improperly formed request.`）或无效 reasoning 签名拒绝。
   Provider 在 Kiro 接受迁移请求之前绝不重写持久绑定，因此会话仍指向原账号。
-  原账号可选时，Provider 只在原账号、原 conversation 上重试一次，客户端通常会在
-  `warn` 事件旁看到正常响应。只有这一次回退被阻止时才会返回 `400`：原账号仍不
-  可用、本次请求已经回退过，或上游派发预算已耗尽。
-- **处置：** 等原账号恢复（额度重置、健康恢复或 `kiro-provider login` 重新登录）
-  后重发；绑定仍指向它。若原账号无法恢复，从不含 signed reasoning 的历史继续
-  （去掉 `encrypted_content` / `thinking` 块或另起新会话），并明确接受隐藏
-  reasoning 的损失。要完全禁用迁移，设置 `reasoning_replay_account_failover:
-"strict"`；此后 owner 失败会返回下文的 replay 绑定错误码而不是迁移会话。不要
-  自动删除 reasoning、合并历史或让客户端循环重试：Provider 已经执行了唯一安全的
-  回退，Kiro 具体拒绝的字段仍在调查中。
+  原账号可选时，Provider 只在原账号、原 conversation 上重试一次；否则在派发预算
+  允许时，限定同一目标账号和新 conversation 再尝试一次，仅删除已认证的 opaque
+  reasoning。两条有界恢复路径都失败，或派发预算不足时，才返回 `400`。
+- **处置：** 降级成功会携带
+  `x-kiro-reasoning-replay-mode: migration-rejected-omitted`；这表示隐藏 reasoning
+  已丢失，但可见 assistant 与工具历史得到保留。若仍返回 `400`，等待原账号恢复
+  （额度重置、健康恢复或重新登录），或从不含 signed reasoning 的新会话继续。
+  要完全禁用迁移和该降级，设置 `reasoning_replay_account_failover: "strict"`。
+  不要循环客户端重试或修改工具历史：Provider 已对两条恢复路径做了次数限制。
 
 ### replay 绑定账号错误码
 

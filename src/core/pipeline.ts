@@ -165,6 +165,7 @@ type CompletionResult =
       /** Canonical stream prefetched up to its first semantic event. */
       readonly prepared: PreparedCanonicalStream;
       readonly reasoningModelOmitted?: true;
+      readonly reasoningReplayMigrationOmitted?: true;
       /** Hosted search: the owner cell and request the execution loop continues from. */
       readonly hosted?: HostedAttemptState;
     };
@@ -1184,15 +1185,27 @@ interface PendingMigration {
   readonly toConversationId: string;
   readonly replayCount: number;
   readonly legacyReplayCount: number;
+  /** The retry preserves visible/tool history but deliberately sends no opaque reasoning. */
+  readonly replayOmitted?: true;
 }
 
-/** The single bounded return to the origin after Kiro rejected a migration. */
-interface MigrationFallback {
-  readonly accountId: string;
-  readonly conversationId?: string;
-  /** Returned unchanged when the origin cannot serve the fallback after all. */
-  readonly terminal: CompletionResult;
-}
+/** One bounded recovery after Kiro rejects a portable-replay migration. */
+type MigrationFallback =
+  | {
+      readonly kind: "origin";
+      readonly accountId: string;
+      readonly conversationId?: string;
+      /** Returned unchanged when the origin cannot serve the fallback after all. */
+      readonly terminal: CompletionResult;
+    }
+  | {
+      readonly kind: "reasoning-omitted";
+      readonly accountId: string;
+      readonly conversationId: string;
+      readonly pending: PendingMigration;
+      /** Returned unchanged when the visible-only retry cannot serve. */
+      readonly terminal: CompletionResult;
+    };
 
 /**
  * Mutable per-request state shared by the executeLoop phases. Every set/map is
@@ -1205,10 +1218,12 @@ interface LoopState {
    * commit or by the rejection handler.
    */
   pendingMigration: PendingMigration | undefined;
-  /** The one origin fallback after a rejected migration has been used. */
+  /** The one bounded recovery after a rejected migration has been used. */
   migrationFallbackSpent: boolean;
-  /** Restricts selection to the origin while the fallback attempt is pending. */
+  /** Restricts selection to the one bounded recovery account. */
   migrationFallback: MigrationFallback | undefined;
+  /** A successful result must disclose that authenticated opaque reasoning was omitted. */
+  reasoningReplayMigrationOmitted: boolean;
   readonly forcedRefreshAccountIds: Set<string>;
   readonly serverErrors: Map<string, number>;
   readonly requestExcludedAccountIds: Set<string>;
@@ -1474,6 +1489,7 @@ function resolveBinding(options: RunChatCompletionOptions): LoopState {
     pendingMigration: undefined,
     migrationFallbackSpent: false,
     migrationFallback: undefined,
+    reasoningReplayMigrationOmitted: false,
     forcedRefreshAccountIds: new Set<string>(),
     serverErrors: new Map<string, number>(),
     requestExcludedAccountIds: new Set<string>(),
@@ -1990,7 +2006,10 @@ function bindAttemptAffinity(
   // A migration recorded by an earlier attempt of this request was never
   // committed (that attempt failed before acceptance), so this bind starts over.
   state.pendingMigration = undefined;
+  const omittedRecovery =
+    state.migrationFallback?.kind === "reasoning-omitted" ? state.migrationFallback : undefined;
   const migratedPortableReplay =
+    omittedRecovery === undefined &&
     state.replayState.portableCount > 0 &&
     state.replayState.preferredAccountId !== undefined &&
     selected.id !== state.replayState.preferredAccountId;
@@ -2006,11 +2025,25 @@ function bindAttemptAffinity(
   // accepted, which is exactly the defect deferred commits remove.
   const migrationOrigin =
     state.binding?.accountId ?? (state.replayState.preferredAccountId as string);
-  if (migratedPortableReplay) {
+  if (omittedRecovery !== undefined) {
+    state.requestAccountId = selected.id;
+    state.requestConversationId = omittedRecovery.conversationId;
+    state.pendingMigration = omittedRecovery.pending;
+    auditLog("warn", "reasoning_replay_migration_omitted", {
+      request_id: options.requestId,
+      protocol: options.body.protocol,
+      model: options.model,
+      from_account_hash: auditHash(omittedRecovery.pending.fromAccountId),
+      to_account_hash: auditHash(selected.id),
+      replay_count: omittedRecovery.pending.replayCount,
+    });
+  } else if (migratedPortableReplay) {
     state.requestAccountId = selected.id;
     state.requestConversationId = randomUUID();
   }
-  if (deferredMigration) {
+  if (omittedRecovery !== undefined) {
+    // Keep storage on the origin until the visible-only attempt is accepted.
+  } else if (deferredMigration) {
     // Nothing is stored yet. Upstream acceptance commits the binding
     // (commitPendingMigration); until then the stored row keeps naming the
     // origin, so a rejection at the headers leaves the thread where it was.
@@ -2284,7 +2317,14 @@ async function runAttempt(
         }
       }
     }
-    const attemptReplays = continuation?.replays ?? state.replayState.replays;
+    const attemptReplays =
+      continuation?.replays ??
+      (state.migrationFallback?.kind === "reasoning-omitted"
+        ? state.replayState.replays.map((replay) => ({
+            ...replay,
+            accountMigrationOmitted: true as const,
+          }))
+        : state.replayState.replays);
     const parsedEffort = EffortSchema.safeParse(options.config.effort);
     const promptCaching = options.modelCapabilities?.promptCaching?.(account.id, options.model);
     const prepared = transformToSdkRequest(attemptBody, options.model, auth, think, budget, {
@@ -2834,8 +2874,10 @@ function safeErrorIdentifier(
 /**
  * Stores the binding of a migrated portable replay once the upstream accepted
  * the attempt: the first semantic stream event, or a completed non-stream
- * collection. Acceptance is the only proof that the migrated signed history is
- * usable on its new account; committing at bind time left the stored row
+ * collection. Normally this proves the migrated signed history is usable on
+ * its new account. For the explicit visible-only recovery it proves the target
+ * accepted the preserved visible/tool history; `replay_mode` records that the
+ * authenticated opaque reasoning was omitted. Committing at bind time left the stored row
  * naming a cell Kiro had just rejected, so every client retry on that thread
  * repeated the same rejection.
  *
@@ -2866,7 +2908,9 @@ function commitPendingMigration(context: AttemptStreamContext): void {
     to_account_hash: auditHash(account.id),
     conversation_hash: auditHash(conversationId),
     replay_count: pending.replayCount,
+    ...(pending.replayOmitted ? { replay_mode: "omitted" } : {}),
   };
+  if (pending.replayOmitted) state.migrationFallback = undefined;
   if (options.affinity && options.affinityStore) {
     let committed: PipelineAffinityBinding;
     try {
@@ -2937,7 +2981,7 @@ async function runStreamAttempt(
     context.abortUpstream,
   );
   if (prefetch.kind === "failed") {
-    if (captureOptions.prefetchOmittedReasoning) {
+    if (captureOptions.prefetchOmittedReasoning && prepared.telemetry.rawEventSeen) {
       return {
         kind: "result",
         leaseTransferred: false,
@@ -3029,7 +3073,7 @@ async function runCollectAttempt(context: AttemptStreamContext): Promise<Attempt
     // after that metadata must not replay the accepted generation merely
     // because the non-stream collector has no readable reasoning characters.
     if (
-      captureOptions.prefetchOmittedReasoning ||
+      (captureOptions.prefetchOmittedReasoning && telemetry.rawEventSeen) ||
       ((captureOptions.responsesThinkingDisplayForced || isKimiK3Model(options.model)) &&
         telemetry.reasoningMetadataSeen)
     ) {
@@ -3195,16 +3239,16 @@ function migrationFallbackBlockedReason(
 
 /**
  * Kiro rejected the migrated attempt at its headers, so nothing was published
- * and the stored binding still names the origin. The safest continuation is
- * one bounded return to that origin with its original conversation; when the
- * origin cannot serve, the request ends with a typed rejection instead of a
- * third projection of the same history onto yet another account.
+ * and the stored binding still names the origin. The first recovery is one
+ * bounded return to that origin with its original conversation. If the origin
+ * cannot serve, a remaining dispatch may instead retry the same target with a
+ * fresh conversation and no opaque reasoning; visible assistant/tool history
+ * remains unchanged. Selection is pinned to that one account, so neither path
+ * can project the rejected history onto a third account.
  *
- * The fallback attempt reuses the ordinary bind path: `selected` equals the
- * stored binding's account, so the claim extends that binding and the origin
- * conversation goes on the wire. Whatever fails afterwards takes normal
- * classification; `pendingMigration` is already cleared, so there is never a
- * second fallback.
+ * Both recoveries reuse the ordinary bind/commit path and are bounded by
+ * `migrationFallbackSpent`. A visible-only attempt still defers the binding
+ * until Kiro accepts it and exposes the loss through a response header/audit.
  */
 function rejectMigration(
   options: RunChatCompletionOptions,
@@ -3222,7 +3266,27 @@ function rejectMigration(
       "reasoning_replay_migration_rejected",
     ),
   };
+  if (pending.replayOmitted) {
+    state.migrationFallback = undefined;
+    auditLog("warn", "reasoning_replay_migration_omission_failed", {
+      request_id: options.requestId,
+      protocol: options.body.protocol,
+      model: options.model,
+      from_account_hash: auditHash(pending.fromAccountId),
+      to_account_hash: auditHash(pending.toAccountId),
+      replay_count: pending.replayCount,
+      upstream_status: error.status,
+      upstream_code: error.reason,
+    });
+    return returning(terminal);
+  }
   const blocked = migrationFallbackBlockedReason(options, state, selection, pending.fromAccountId);
+  const omitOnTarget =
+    hasRemainingUpstreamDispatchBudget(options, state) &&
+    (blocked === "origin_missing" ||
+      blocked === "origin_unselectable" ||
+      blocked === "origin_ineligible" ||
+      blocked === "origin_quarantined");
   auditLog("warn", "reasoning_replay_migration_rejected", {
     request_id: options.requestId,
     protocol: options.body.protocol,
@@ -3232,21 +3296,39 @@ function rejectMigration(
     replay_count: pending.replayCount,
     upstream_status: error.status,
     upstream_code: error.reason,
-    fallback: blocked === undefined ? "origin" : "none",
+    fallback: blocked === undefined ? "origin" : omitOnTarget ? "reasoning-omitted" : "none",
     fallback_blocked_reason: blocked,
   });
-  if (blocked !== undefined) return returning(terminal);
+  if (blocked === undefined) {
+    state.migrationFallbackSpent = true;
+    state.migrationFallback = {
+      kind: "origin",
+      accountId: pending.fromAccountId,
+      ...(pending.fromConversationId !== undefined
+        ? { conversationId: pending.fromConversationId }
+        : {}),
+      terminal,
+    };
+    state.preferredAccountId = pending.fromAccountId;
+    state.requestAccountId = pending.fromAccountId;
+    state.requestConversationId = pending.fromConversationId;
+    return CONTINUE;
+  }
+  if (!omitOnTarget) return returning(terminal);
+
+  const conversationId = randomUUID();
   state.migrationFallbackSpent = true;
+  state.reasoningReplayMigrationOmitted = true;
   state.migrationFallback = {
-    accountId: pending.fromAccountId,
-    ...(pending.fromConversationId !== undefined
-      ? { conversationId: pending.fromConversationId }
-      : {}),
+    kind: "reasoning-omitted",
+    accountId: pending.toAccountId,
+    conversationId,
+    pending: { ...pending, toConversationId: conversationId, replayOmitted: true },
     terminal,
   };
-  state.preferredAccountId = pending.fromAccountId;
-  state.requestAccountId = pending.fromAccountId;
-  state.requestConversationId = pending.fromConversationId;
+  state.preferredAccountId = pending.toAccountId;
+  state.requestAccountId = pending.toAccountId;
+  state.requestConversationId = conversationId;
   return CONTINUE;
 }
 
@@ -3636,16 +3718,25 @@ async function executeLoop(
       const outcome = await runAttempt(options, signal, state, selection.selected, releaseAccount);
       if (outcome.kind === "result") {
         accountLeaseOwned = !outcome.leaseTransferred;
+        let result = outcome.result;
         if ((state.replayState.modelOmittedCount ?? 0) > 0) {
-          if (outcome.result.kind === "stream")
-            return { ...outcome.result, reasoningModelOmitted: true };
-          if (outcome.result.response.ok)
-            outcome.result.response.headers.set(
+          if (result.kind === "stream") result = { ...result, reasoningModelOmitted: true };
+          else if (result.response.ok)
+            result.response.headers.set(
               "x-kiro-reasoning-model-replay-mode",
               "incompatible-omitted",
             );
         }
-        return outcome.result;
+        if (state.reasoningReplayMigrationOmitted) {
+          if (result.kind === "stream")
+            result = { ...result, reasoningReplayMigrationOmitted: true };
+          else if (result.response.ok)
+            result.response.headers.set(
+              "x-kiro-reasoning-replay-mode",
+              "migration-rejected-omitted",
+            );
+        }
+        return result;
       }
       if (outcome.kind === "model-unavailable") {
         if (state.replayLocked) {
@@ -3794,6 +3885,8 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
           response.headers.set("x-kiro-thinking-display-mode", "forced-omitted");
         if (result.reasoningModelOmitted)
           response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (result.reasoningReplayMigrationOmitted)
+          response.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
         if (hosted.decisions.conflictOmitted)
           response.headers.set("x-kiro-reasoning-replay-mode", "conflict-omitted");
         return response;
@@ -3857,6 +3950,8 @@ export async function runChatCompletion(options: RunChatCompletionOptions): Prom
     streamOwnsResources = true;
     if (result.reasoningModelOmitted)
       response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+    if (result.reasoningReplayMigrationOmitted)
+      response.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
     return await diagnostics.response(response);
   } catch (error) {
     if (error instanceof RequestTransformError) {

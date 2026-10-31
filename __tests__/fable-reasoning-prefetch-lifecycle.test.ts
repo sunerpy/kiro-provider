@@ -97,6 +97,47 @@ for (const model of ["claude-fable-5-1", "claude-opus-5-5"]) {
       );
     }
 
+    test.each([false, true])(
+      "retries a zero-frame transport failure before omitted-prefix acceptance (%s)",
+      async (stream) => {
+        let requests = 0;
+        const audit = captureAuditEvents();
+        try {
+          const fixture = messagesFixture([], {
+            config: { rate_limit_retry_delay_ms: 1 },
+            stream: () => {
+              requests += 1;
+              if (requests === 1) {
+                return (async function* (): AsyncGenerator<SdkStreamEvent> {
+                  yield await Promise.reject(
+                    new TypeError("fixture transport closed before the first frame"),
+                  );
+                })();
+              }
+              return (async function* (): AsyncGenerator<SdkStreamEvent> {
+                yield { assistantResponseEvent: { content: "ZERO_FRAME_RETRY_OK" } };
+                yield {
+                  metadataEvent: {
+                    tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                  },
+                };
+              })();
+            },
+          });
+          const response = await fixture.request({ ...body, stream });
+          expect(response.status).toBe(200);
+          expect(await response.text()).toContain("ZERO_FRAME_RETRY_OK");
+          expect(fixture.inputs).toHaveLength(2);
+          expect(audit.events("sdk_stream_attempt_retry")).toHaveLength(1);
+          expect(audit.events("sdk_stream_terminal").map((event) => event.raw_event_count)).toEqual(
+            [0, 2],
+          );
+        } finally {
+          audit.restore();
+        }
+      },
+    );
+
     test("raw activity resets the idle timer while the header decision stays pending", async () => {
       const fixture = messagesFixture([], {
         config: { stream_idle_timeout_ms: 35, request_timeout_ms: 500 },

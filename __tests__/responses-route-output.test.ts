@@ -8,6 +8,7 @@ import type {
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import {
   CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
   CANONICAL_OUTPUT_VERSION,
 } from "../src/protocol/output.js";
 import {
@@ -118,7 +119,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-describe("non-stream Responses output shape", () => {
+describe("Responses output shape", () => {
   test("marks function_call items completed and includes logprobs and usage details", async () => {
     const response = await handleResponses(
       request({
@@ -164,6 +165,61 @@ describe("non-stream Responses output shape", () => {
     expect(body.usage).not.toHaveProperty("input_tokens_details.cached_tokens");
     expect(body.usage).not.toHaveProperty("output_tokens_details.reasoning_tokens");
   });
+
+  test.each([false, true])(
+    "propagates the explicit migration-replay omission mode (stream=%s)",
+    async (stream) => {
+      const pipeline = async (): Promise<Response> => {
+        if (!stream) {
+          const response = canonicalResponse();
+          response.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
+          return response;
+        }
+        return new Response(
+          `${[
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "started",
+              conversationId: "conversation-id",
+              model: MODEL,
+              createdAt: 1_700_000_000,
+            },
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "text_delta",
+              text: "answer",
+            },
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "completed",
+              finishReason: "stop",
+              usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+            },
+          ]
+            .map((event) => JSON.stringify(event))
+            .join("\n")}\n`,
+          {
+            headers: {
+              "Content-Type": CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+              "x-kiro-reasoning-replay-mode": "migration-rejected-omitted",
+            },
+          },
+        );
+      };
+      const response = await handleResponses(
+        request({ model: MODEL, input: "hello", store: false, stream }),
+        config(),
+        dependencies(pipeline),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBe(
+        "migration-rejected-omitted",
+      );
+      const wire = await response.text();
+      expect(wire).toContain("answer");
+      if (stream) expect(wire).toContain("response.completed");
+    },
+  );
 
   test("exposes the shared helpers used to build the completed output", () => {
     expect(outputTextContent("text")).toEqual({

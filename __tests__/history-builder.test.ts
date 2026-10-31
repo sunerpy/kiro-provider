@@ -141,6 +141,45 @@ describe("protocol-fidelity history projection", () => {
     });
   });
 
+  test("omits migrated reasoning while retaining authenticated tool-input restoration", () => {
+    const assistant: CanonicalMessage = {
+      role: "assistant",
+      content: [],
+      toolCalls: [
+        {
+          id: "call_restore",
+          name: "Bash",
+          input: { command: "cd /project && printf changed" },
+          path: "messages.0.tool_calls.0",
+        },
+      ],
+      path: "messages.0",
+    };
+    const history = buildHistory([assistant], TEST_MODEL, [
+      {
+        insertBeforeMessage: 0,
+        content: {
+          kind: "reasoning_text",
+          text: "private plan",
+          signature: "signed",
+        },
+        accountMigrationOmitted: true,
+        toolInputRestorations: [
+          {
+            id: "call_restore",
+            name: "Bash",
+            input: { command: "printf changed" },
+          },
+        ],
+      },
+    ]);
+
+    expect(history[0]?.assistantResponseMessage?.reasoningContent).toBeUndefined();
+    expect(history[0]?.assistantResponseMessage?.toolUses).toEqual([
+      { toolUseId: "call_restore", name: "Bash", input: { command: "printf changed" } },
+    ]);
+  });
+
   test("rejects image overflow instead of inserting omission text", () => {
     const images = Array.from({ length: 5 }, (_, index) => ({
       type: "image" as const,

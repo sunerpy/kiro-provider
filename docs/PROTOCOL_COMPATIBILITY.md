@@ -186,6 +186,7 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
   request-local private aliases;
 - Codex collaboration `agent_message` content and author/recipient metadata;
 - signed or redacted Kiro reasoning replay through TTL- and mint-provenance-bound `kr2_` tokens, with owner-bound legacy `kr1_` reads.
+- one bounded recovery when Kiro rejects a verified cross-account replay migration and the origin cannot serve: retry the same target in a fresh conversation, omit only authenticated opaque reasoning, preserve visible assistant/tool history and current tool authorization, defer the binding until acceptance, and expose the loss as `x-kiro-reasoning-replay-mode: migration-rejected-omitted`.
 - recovery of legacy Claude Code turns containing multiple distinct empty direct `thinking` blocks by omitting all ambiguous replay envelopes while preserving visible assistant/tool history; the compatibility loss is explicit in `x-kiro-reasoning-replay-mode: conflict-omitted` and a sanitized audit event.
 - complete Messages tool history when the current client withdraws a tool such as `TaskOutput`. Historical declarations do not authorize new output: the current `tools` and schemas alone determine which calls the provider accepts.
 
@@ -197,7 +198,10 @@ retrying. No thinking block, replay capture, database row or `kr1_`/`kr2_` token
 is produced for that omitted reasoning. The response includes
 `x-kiro-reasoning-replay-mode: conflict-omitted`; the
 `anthropic_output_reasoning_conflict_omitted` audit contains only the model,
-direction, counts and byte length, never signatures or their hashes.
+direction, counts and byte length, never signatures or their hashes. A transport
+failure before any raw upstream frame has no acceptance evidence and may consume
+a bounded `stream_max_attempts` replacement. Once any raw frame arrives, the
+generation remains non-replayable even if prefix inspection has not finished.
 
 Identical duplicate signatures retain their normal replay behavior. Non-empty,
 redacted, mixed, oversized or late conflicts remain fatal, as do conflicts for

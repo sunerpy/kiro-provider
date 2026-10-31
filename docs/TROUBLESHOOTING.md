@@ -253,8 +253,8 @@ placeholder ...`.
 
   | Event                                         | Level  | Fields                                                                  | Meaning                                                                                                                                                                         |
   | --------------------------------------------- | ------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | A non-stream collector failed before an actionable result; nothing was published, so a bounded replacement is allowed.                                                          |
-  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash`                 | Non-stream collection exhausted its attempt budget; the last failure becomes HTTP `502`.                                                                                        |
+  | `sdk_stream_attempt_retry`                    | `warn` | `attempt`, `max_attempts`, `error_code`, `same_account`, `account_hash` | A recoverable attempt failed before publication; this includes an omitted-thinking stream that received zero raw frames, so a bounded replacement is allowed.                   |
+  | `sdk_stream_attempts_exhausted`               | `warn` | `attempt`, `max_attempts`, `error_code`, `account_hash`                 | Pre-publication recovery exhausted its attempt budget; the last failure becomes HTTP `502`.                                                                                     |
   | `sdk_stream_empty_completion_retry`           | `warn` | `attempt`, `max_attempts`, `account_hash`                               | Non-stream collection obtained an empty witnessed completion; one same-account replacement is allowed within the budget.                                                        |
   | `sdk_stream_transport_error_after_completion` | `warn` | `error_code`, `account_hash`, `completion_witnessed`                    | The transport failed _after_ an authoritative completion witness (token usage or a valid metering event). The completed turn is delivered; the error is recorded, not surfaced. |
 
@@ -262,7 +262,10 @@ placeholder ...`.
   embedded upstream failure; `upstream_stream_incomplete` is a clean EOF
   without a completion witness. Check `X-Request-ID`, `attempt_id`, phase and
   the first/last failure evidence. Since v3.1.1 an accepted stream is not
-  replayed, even if it produced only lifecycle or partial argument events.
+  replayed, even if it produced only lifecycle or partial argument events. For
+  omitted-thinking prefix inspection, a transport failure with
+  `raw_event_count: 0` has no upstream acceptance evidence and may use the
+  bounded in-request retry; any raw frame keeps the no-replay boundary.
   Absence of a retry event does not establish which upstream component failed.
 - **Remedy:** Downstream retries as a replacement attempt with the same
   session key (see the contract), within its existing total budget and with
@@ -485,7 +488,9 @@ gates automatically, or delete replay data as an OOM workaround.
     attempt (first streamed event, or a completed non-streaming collection) and
     the stored binding, when there is one, now names the new account and
     conversation. Fields: `request_id`, `protocol`, `model`,
-    `from_account_hash`, `to_account_hash`, `conversation_hash`, `replay_count`.
+    `from_account_hash`, `to_account_hash`, `conversation_hash`, `replay_count`;
+    `replay_mode: "omitted"` identifies a binding committed after the explicit
+    visible-only recovery.
   - `reasoning_replay_migration_commit_failed` (`warn`): Kiro accepted the
     migrated attempt but writing the new binding to the accounts database
     failed (disk full, I/O error). The accepted answer is still served, the
@@ -500,10 +505,20 @@ gates automatically, or delete replay data as an OOM workaround.
     signature rejection arrived as a message-only `400` without a reason),
     `fallback`, and `fallback_blocked_reason`. `fallback: "origin"` means one
     fallback attempt ran on the origin account and conversation;
-    `fallback: "none"` means the fallback was blocked and
-    `fallback_blocked_reason` says why: `fallback_spent`, `origin_missing`,
-    `origin_ineligible`, `origin_quarantined`, `origin_unselectable`, or
-    `dispatch_budget`.
+    `fallback: "reasoning-omitted"` means the origin could not serve and one
+    same-target, fresh-conversation retry omitted the authenticated opaque
+    reasoning; `fallback: "none"` means every recovery was blocked.
+    `fallback_blocked_reason` records why the origin could not serve:
+    `fallback_spent`, `origin_missing`, `origin_ineligible`,
+    `origin_quarantined`, `origin_unselectable`, or `dispatch_budget`.
+  - `reasoning_replay_migration_omitted` (`warn`): the bounded same-target
+    recovery is being dispatched without opaque reasoning. It contains only
+    the migration hashes and `replay_count`; visible/tool history remains on
+    the request.
+  - `reasoning_replay_migration_omission_failed` (`warn`): the visible-only
+    retry was also rejected before output. The original typed
+    `reasoning_replay_migration_rejected` response is returned and the binding
+    stays on the origin.
 
   These events carry only hashes, counts, enums, and error class names or
   driver codes; never message text, prompts, signatures, or account
@@ -519,20 +534,19 @@ gates automatically, or delete replay data as an OOM workaround.
   signature before producing output. The provider never rewrites the stored
   binding before Kiro accepts a migrated attempt, so the session still points at
   the origin. When the origin is selectable the provider retries exactly once
-  there, in the original conversation, and the client normally sees a normal
-  response next to the `warn` event. The `400` surfaces only when that single
-  fallback is blocked: the origin is still unavailable, the fallback already
-  ran for this request, or no upstream dispatch budget remains.
-- **Remedy:** Wait for the origin account to recover (quota reset, health
-  recovery, or `kiro-provider login` re-login) and resend; the binding still
-  names it. If the origin cannot come back, continue from history without the
-  signed reasoning (drop the `encrypted_content` / `thinking` blocks or fork a
-  fresh conversation), explicitly accepting the loss of hidden reasoning. To
-  disable migration entirely, set `reasoning_replay_account_failover:
-"strict"`; owner failures then return the replay-bound codes below instead of
-  moving the session. Do not strip reasoning automatically, merge history, or
-  loop client retries: the provider already performed the only safe fallback,
-  and the specific field Kiro rejects is still under investigation.
+  there, in the original conversation. Otherwise, with dispatch budget left,
+  it retries exactly once on the same target and a fresh conversation after
+  removing only authenticated opaque reasoning. The `400` surfaces only when
+  neither bounded recovery succeeds or no dispatch budget remains.
+- **Remedy:** A successful recovery carries
+  `x-kiro-reasoning-replay-mode: migration-rejected-omitted`; accept that the
+  hidden reasoning was lost while visible assistant/tool history was preserved.
+  If `400` still surfaces, wait for the origin account to recover (quota reset,
+  health recovery, or `kiro-provider login` re-login), or fork a fresh
+  conversation without the signed reasoning. To disable migration and this
+  fallback entirely, set `reasoning_replay_account_failover: "strict"`; owner
+  failures then return the replay-bound codes below. Do not loop client retries
+  or edit tool history: the provider already bounded both recovery paths.
 
 ### Replay-bound account error codes
 

@@ -161,6 +161,7 @@ CodeWhisperer/Kiro 流式管道。它保留：
 - function、custom grammar 与 namespace 工具，并通过请求内私有别名恢复公开身份；
 - Codex 协作 `agent_message` 的可见内容与 author/recipient 元数据；
 - 通过绑定 TTL、租户、模型、完整输出与 mint 来源证据的 `kr2_` token 回放 Kiro 签名或 redacted reasoning；历史 `kr1_` 仅 owner-bound 读取。
+- Kiro 拒绝已验证的跨账号 replay 迁移且原账号无法服务时，执行一次有界恢复：固定同一目标账号并使用新 conversation，只省略已认证的 opaque reasoning，保留可见 assistant/tool 历史和当前工具授权，在上游接受后才提交绑定，并通过 `x-kiro-reasoning-replay-mode: migration-rejected-omitted` 明示损失。
 - 修复旧版 Claude Code 历史中同一 assistant 轮次含多个不同空 direct `thinking` 块的情况：省略全部歧义 replay 信封，但保留可见 assistant/tool 历史；兼容损失通过 `x-kiro-reasoning-replay-mode: conflict-omitted` 与脱敏审计事件明确暴露。
 - 当前客户端撤下 `TaskOutput` 等工具后，继续保留完整 Messages 工具历史。历史声明不授权新调用；本轮允许哪些工具及参数，只由当前 `tools` 和 schema 决定。
 
@@ -171,7 +172,9 @@ Fable Messages 启用 thinking 且实际 `display: omitted` 时，若上游前�
 `kr1_`/`kr2_` token。响应携带
 `x-kiro-reasoning-replay-mode: conflict-omitted`；
 `anthropic_output_reasoning_conflict_omitted` 审计只含模型、方向、数量和字节长度，
-不包含签名或签名哈希。
+不包含签名或签名哈希。若传输在任何上游 raw frame 到达前失败，则没有接纳证据，
+可以消费一次受 `stream_max_attempts` 限制的替代尝试；一旦出现任意 raw frame，即使
+前缀检查尚未结束，该生成仍禁止重放。
 
 完全相同的重复签名仍按正常方式回放。非空、redacted、混合、超限或晚到冲突继续
 拒绝，其他模型或显式 `display: summarized` 的冲突也不降级。提交前可返回

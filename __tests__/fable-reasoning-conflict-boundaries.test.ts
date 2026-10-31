@@ -191,20 +191,21 @@ describe("Fable reasoning prefix boundaries", () => {
     expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBeNull();
   });
 
-  test.each([[], [first, second]].map((events) => ({ events })))(
-    "does not turn an unwitnessed EOF into success: %j",
-    async ({ events }) => {
-      const fixture = messagesFixture([], {
-        stream: () =>
-          (async function* () {
-            yield* events;
-          })(),
-      });
-      const response = await fixture.request({ ...request, stream: false });
-      expect(response.status).toBe(502);
-      expect(fixture.inputs).toHaveLength(1);
-    },
-  );
+  test.each([
+    { events: [] as SdkStreamEvent[], expectedAttempts: 3 },
+    { events: [first, second], expectedAttempts: 1 },
+  ])("does not turn an unwitnessed EOF into success: %j", async ({ events, expectedAttempts }) => {
+    const fixture = messagesFixture([], {
+      config: { rate_limit_retry_delay_ms: 1 },
+      stream: () =>
+        (async function* () {
+          yield* events;
+        })(),
+    });
+    const response = await fixture.request({ ...request, stream: false });
+    expect(response.status).toBe(502);
+    expect(fixture.inputs).toHaveLength(expectedAttempts);
+  });
 
   test("rejects a mixed boundary event before publication", async () => {
     const fixture = messagesFixture([
