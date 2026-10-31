@@ -28,8 +28,8 @@ Pi, Crush, Zuno and the official SDKs work with a base URL and a key.
 
 - **Two APIs, one gateway.** `POST /v1/responses` and `POST /v1/messages`, streaming and non-streaming, with tools,
   images and reasoning effort. Chat Completions is available as an opt-in legacy route.
-- **Direct sign-in.** Device-code login for AWS Builder ID and IAM Identity Center. kiro-provider discovers the Kiro
-  profile itself; Kiro CLI is not involved.
+- **Direct sign-in.** Device-code login for AWS Builder ID and IAM Identity Center. kiro-provider applies the
+  Builder ID service binding or discovers the organization profile itself; Kiro CLI is not involved.
 - **Many accounts, one endpoint.** Requests go to the least busy eligible account; tokens are renewed and usage is
   refreshed in the background, and an exhausted account sits out until its quota resets.
 - **Fails closed.** A field that cannot reach Kiro intact fails the request with a typed error that names it; nothing
@@ -84,14 +84,19 @@ building from source and uninstalling.
 
    On Windows the file is `%APPDATA%\kiro-provider\config.json`.
 
-2. Sign in to Kiro. Add `--start-url <url> --region <region>` for IAM Identity Center, and `--profile-arn <arn>` when
-   the identity has several profiles:
+2. Sign in to Kiro. The no-argument command uses AWS Builder ID. Add
+   `--start-url <url> --region <region>` for IAM Identity Center, and
+   `--profile-arn <arn>` when that organization identity has several profiles:
 
    ```bash
    kiro-provider login
    ```
 
    Accounts from `opencode-kiro-auth` can be copied once with `kiro-provider accounts import`.
+
+   For a Windows kiro-client JSON export, transfer it over SSH and run
+   `kiro-provider accounts import --format kiro-client --from /path/to/accounts.json`
+   as the remote service user. See [authentication import](docs/CONFIGURATION.md#authentication-source).
 
 3. Start the gateway and check that an account is ready:
 

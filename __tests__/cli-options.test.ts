@@ -82,9 +82,12 @@ describe("CLI usage text", () => {
     expect(CLI_USAGE).not.toContain("\t");
   });
 
-  test("documents --force and no longer documents --config for accounts import", () => {
-    expect(CLI_USAGE).toContain("accounts import [--from <path>] [--force]");
-    expect(CLI_USAGE).not.toContain("accounts import [--from <path>] [--config");
+  test("documents the format-specific accounts import options", () => {
+    expect(CLI_USAGE).toContain(
+      "accounts import [--from <path>] [--force] [--format opencode|kiro-client] [--config <path>]",
+    );
+    expect(CLI_USAGE).toContain("--config selects network settings for kiro-client only");
+    expect(CLI_USAGE).toContain("--force is unsupported for kiro-client");
   });
 
   test("documents the accounts list sort flags and every supported field", () => {
@@ -131,7 +134,7 @@ describe("login --help", () => {
 });
 
 describe("accounts import options", () => {
-  test("rejects the removed --config option", () => {
+  test("rejects --config for the default SQLite importer", () => {
     expect(() => parseCliArgs(["accounts", "import", "--config", "/tmp/config.json"])).toThrow(
       "Unknown option '--config'",
     );

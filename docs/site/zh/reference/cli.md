@@ -1,6 +1,6 @@
 # 命令行
 
-本页列出 3.8.0 版 `kiro-provider` 的所有命令和选项。
+本页列出当前 `kiro-provider` 的所有命令和选项。
 
 ```text
 Usage: kiro-provider <command> [options]
@@ -11,7 +11,7 @@ Commands:
   accounts list [--details | --json] [--sort <field>] [--order asc|desc]
   accounts refresh (--all | <id|email>) [--config <path>] [--json]
   accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
-  accounts import [--from <path>] [--force]
+  accounts import [--from <path>] [--force] [--format opencode|kiro-client] [--config <path>]
   accounts remove <id|email> [--yes]
   self-update [--check] [--tag <version>] [--yes] [--json] [--proxy <url>] [--force]
 
@@ -25,9 +25,9 @@ Options:
 
 ## 配置文件
 
-`serve`、`login`、`accounts refresh` 和 `accounts relogin` 会读取 `config.json`。不加 `--config` 时，它们在 Linux 和 macOS 上查找 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，在 Windows 上查找 `%APPDATA%\kiro-provider\config.json`。字段也可以来自对应的环境变量，`serve` 还以选项形式提供其中三个（`--host`、`--port`、`--proxy`）；优先级是选项高于环境变量，环境变量高于文件。未知字段和非法值会让命令停止，错误中写明对应的字段。所有字段见[配置参考](../../../readme/CONFIGURATION.zh-CN.md)。
+`serve`、`login`、`accounts refresh`、`accounts relogin` 和 `kiro-client` JSON 导入会读取 `config.json`。不加 `--config` 时，它们在 Linux 和 macOS 上查找 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，在 Windows 上查找 `%APPDATA%\kiro-provider\config.json`。字段也可以来自对应的环境变量，`serve` 还以选项形式提供其中三个（`--host`、`--port`、`--proxy`）；优先级是选项高于环境变量，环境变量高于文件。未知字段和非法值会让命令停止，错误中写明对应的字段。所有字段见[配置参考](../../../readme/CONFIGURATION.zh-CN.md)。
 
-`accounts list`、`accounts import` 和 `accounts remove` 操作同一目录下的 `accounts.db`，不读取配置。`--version` 和 `self-update` 两者都不读取。
+`accounts list`、默认的 OpenCode SQLite 导入和 `accounts remove` 操作同一目录下的 `accounts.db`，不读取配置。`--version` 和 `self-update` 两者都不读取。
 
 ## serve
 
@@ -46,12 +46,12 @@ Options:
 
 用设备码登录 Kiro 并保存账号。
 
-| 选项                  | 含义                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `--start-url <url>`   | IAM Identity Center 的起始 URL。不加时用 AWS Builder ID 登录。                        |
-| `--region <region>`   | 签发令牌的身份中心所在区域。默认取配置中的 `default_region`，未设置时为 `us-east-1`。 |
-| `--profile-arn <arn>` | 身份有多个 Kiro profile 时要使用的那一个。                                            |
-| `--config <path>`     | 要读取的配置，用于 `proxy_url` 和日志级别。                                           |
+| 选项                  | 含义                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `--start-url <url>`   | IAM Identity Center 的起始 URL。不加时用 AWS Builder ID 登录。                                 |
+| `--region <region>`   | 签发令牌的身份中心所在区域。默认取配置中的 `default_region`，未设置时为 `us-east-1`。          |
+| `--profile-arn <arn>` | IAM Identity Center 身份有多个组织 Kiro profile 时要使用的那一个；不能覆盖 Builder ID 的绑定。 |
+| `--config <path>`     | 要读取的配置，用于 `proxy_url` 和日志级别。                                                    |
 
 完整步骤见[账号](../guide/accounts.md#添加账号)。
 
@@ -76,7 +76,9 @@ Options:
 
 ## accounts import
 
-一次性复制 OpenCode 的 `opencode-kiro-auth` 中的账号。`--from <path>` 指定来源数据库；默认是与 kiro-provider 自己的目录同一配置根下的 `opencode/kiro.db`，例如 `~/.config/opencode/kiro.db`。本地副本较新的行会被跳过，除非加上 `--force`。
+不传 `--format`，或传入 `--format opencode` 时，一次性复制 OpenCode 的 `opencode-kiro-auth` 账号。`--from <path>` 指定来源数据库；默认是与 kiro-provider 自己的目录同一配置根下的 `opencode/kiro.db`，例如 `~/.config/opencode/kiro.db`。本地副本较新的行会被跳过，除非加上 `--force`；此模式不接受 `--config`。
+
+`--format kiro-client --from <文件|->` 读取有界的 JSON 凭据导出，刷新并验证每个新身份，只新增权威邮箱与导出一致的账号。`-` 表示从标准输入读取 UTF-8 JSON。此模式支持用 `--config` 选择代理和超时配置，拒绝 `--force`，跳过已有身份；发生部分失败后以状态 1 退出。详见[导入 kiro-client JSON](../guide/accounts.md#导入-kiro-client-json)。
 
 ## accounts remove
 

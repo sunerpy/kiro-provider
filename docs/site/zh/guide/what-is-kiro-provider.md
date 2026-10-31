@@ -33,7 +33,7 @@ kiro-provider 是运行在你自己机器上的网关。它以你的身份登录
 
 - **不承诺与 OpenAI 或 Anthropic 完全一致。** 联网搜索以外的托管工具、后台响应、conversation 对象、远程文件引用和任意 JSON Schema 输出都会以带类型的错误拒绝。[已知限制](../limits.md)列出了这些内容。
 - **不共享访问权限。** 它只用于你自己控制的 Kiro 账号，也不会绕过这些账号的用量限制。
-- **不依赖 Kiro CLI。** 登录、查找 profile 和续期令牌都由它自己完成。
+- **不依赖 Kiro CLI。** 登录、Builder ID service profile 绑定、组织 profile 发现和令牌续期都由它自己完成。
 
 ## 下一步
 

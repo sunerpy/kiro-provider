@@ -159,6 +159,11 @@ export function getModelContextLimit(baseModel: string): number {
 export const KIRO_AUTH_SERVICE = {
   SSO_OIDC_ENDPOINT: "https://oidc.{{region}}.amazonaws.com",
   BUILDER_ID_START_URL: "https://view.awsapps.com/start",
+  // Builder ID identities do not own a discoverable profile. Kiro CLI 2.27.1
+  // and its 2.21.1 agent bundle were inspected on 2026-10-31: both use this
+  // request-scoped service profile instead of ListAvailableProfiles, which
+  // explicitly rejects Builder ID tokens.
+  BUILDER_ID_PROFILE_ARN: "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX",
   SCOPES: [
     "codewhisperer:completions",
     "codewhisperer:analysis",

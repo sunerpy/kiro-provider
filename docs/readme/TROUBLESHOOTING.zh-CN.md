@@ -120,6 +120,20 @@ journalctl --user -u kiro-provider.service --since -1d -o cat --no-pager \
 `invalid_request` 时核对安全错误分类和签发区域；授权已不可用时重新登录，
 不要反复清空限流计时器。排障时不得打印 refresh token 或 client secret。
 
+### Builder ID 浏览器授权成功，随后 profile discovery 返回 HTTP 403
+
+- **原因：** `v3.5.2` 至 `v3.8.6` 把所有新设备登录都送入 Kiro
+  `List-Available-Profiles`。AWS Builder ID 认证本身已经成功，但 Kiro 会主动拒绝
+  个人账号调用这个组织 profile 接口，因此 Provider 在打开本地账号库前丢弃了
+  有效 token。修改 OIDC 区域或传入 `--profile-arn` 都不能让该接口支持 Builder ID。
+- **处置：** 升级到包含 Builder ID profile 修复的版本，再执行
+  `kiro-provider login`。修复后的版本只在能够确认是 Builder ID 时跳过该接口，并
+  使用与 Kiro CLI 相同的固定请求级 service profile；IAM Identity Center 仍严格
+  执行 profile discovery，绝不使用此降级。直接登录暂不可用时，可导入已经认证的
+  `opencode-kiro-auth` 数据库；固定版本也支持通过
+  `accounts import --format kiro-client --from <file|->` 导入受支持的旧版 BuilderId
+  导出。不要手工复制 token 或修改 `accounts.db`。
+
 ### IAM Identity Center 登录后报 `profileArn is required for this request`
 
 - **原因：** 账号行缺少 `profile_arn`。旧版直接登录可能只保存 OIDC token 与

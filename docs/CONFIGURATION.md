@@ -13,7 +13,7 @@ For every field, the effective value is the first one found, in this order:
 3. **Configuration file** — JSON at the resolved config path.
 4. **Schema default** — the zod schema default in `src/config/schema.ts`.
 
-The config file path defaults to the platform configuration root plus `kiro-provider/config.json` (see [File locations](#file-locations)): `$XDG_CONFIG_HOME/kiro-provider/config.json` or `~/.config/kiro-provider/config.json` on Linux/macOS, `%APPDATA%\kiro-provider\config.json` on Windows. `accounts list|import|remove` target the provider-owned local authentication store without loading gateway configuration, so `accounts import` does not accept `--config`. `accounts refresh|relogin` load refresh, timeout, region, proxy, and `quota_recheck_concurrency` settings from the selected config and require `auth_source: "local"`. `--version` and `self-update` load neither the config nor the account store; they take a proxy from `--proxy`, then `KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`, so a broken config cannot block an upgrade. An explicitly empty `--proxy ""` selects no proxy instead of falling through to those variables, matching `serve`. Bun's `fetch` reads `HTTPS_PROXY`/`HTTP_PROXY` on its own, so unset them (`env -u HTTPS_PROXY -u HTTP_PROXY kiro-provider self-update`) when a fully direct connection is required; `--proxy ""` alone still suppresses `KIRO_PROVIDER_PROXY_URL`.
+The config file path defaults to the platform configuration root plus `kiro-provider/config.json` (see [File locations](#file-locations)): `$XDG_CONFIG_HOME/kiro-provider/config.json` or `~/.config/kiro-provider/config.json` on Linux/macOS, `%APPDATA%\kiro-provider\config.json` on Windows. `accounts list|remove` and the default SQLite `accounts import` target the provider-owned local authentication store without loading gateway configuration. JSON import with `--format kiro-client` loads network settings and accepts `--config`. `accounts refresh|relogin` load refresh, timeout, region, proxy, and `quota_recheck_concurrency` settings from the selected config and require `auth_source: "local"`. `--version` and `self-update` load neither the config nor the account store; they take a proxy from `--proxy`, then `KIRO_PROVIDER_PROXY_URL`, then `HTTPS_PROXY`/`HTTP_PROXY`, so a broken config cannot block an upgrade. An explicitly empty `--proxy ""` selects no proxy instead of falling through to those variables, matching `serve`. Bun's `fetch` reads `HTTPS_PROXY`/`HTTP_PROXY` on its own, so unset them (`env -u HTTPS_PROXY -u HTTP_PROXY kiro-provider self-update`) when a fully direct connection is required; `--proxy ""` alone still suppresses `KIRO_PROVIDER_PROXY_URL`.
 
 ## Validation rules
 
@@ -146,20 +146,32 @@ kiro-provider accounts import
 kiro-provider accounts import --from /path/to/kiro.db
 # overwrite local rows even when they are newer than the source:
 kiro-provider accounts import --from /path/to/kiro.db --force
+# Windows kiro-client credential export (JSON; also accepts stdin with --from -):
+kiro-provider accounts import --format kiro-client --from /path/to/kiro-provider-accounts.json
+# optional network settings from a non-default gateway configuration:
+kiro-provider accounts import --format kiro-client --from /path/to/accounts.json --config /path/to/config.json
 ```
 
-`login` completes the device-code flow, calls Kiro's
-`List-Available-Profiles` endpoint with the new access token, persists the
-selected `profileArn`, and only then calls the usage endpoint to learn the
-authenticated email before deriving the account ID. This is a provider-owned
-flow and has no runtime or installation dependency on Kiro CLI. A unique profile
-is selected automatically (including a unique start-URL match); use
-`--profile-arn <arn>` when multiple profiles remain. Profile discovery fails
-closed before the database is opened. Without an explicit ARN, the provider
-queries Kiro's current commercial profile control planes in `us-east-1` and
-`eu-central-1`; `oidcRegion` keeps the token issuer region while `region` comes
-from the selected profile ARN. If
-the later usage lookup fails (for
+`login` completes the device-code flow and then resolves the profile binding
+before calling the usage endpoint to learn the authenticated email and derive
+the account ID. This is a provider-owned flow and has no runtime or installation
+dependency on Kiro CLI. With the default AWS Builder ID login, Kiro does not
+authorize `List-Available-Profiles`; the provider therefore uses Kiro CLI's
+fixed Builder ID service profile and routes runtime requests through
+`us-east-1`. This profile is a request binding, not an organization profile
+owned by the personal account. `oidcRegion` still records the token issuer, so
+it may differ from the runtime `region`.
+
+An IAM Identity Center login, selected with `--start-url`, calls
+`List-Available-Profiles` with the new access token. A unique profile is
+selected automatically (including a unique start-URL match); use
+`--profile-arn <arn>` when multiple profiles remain. The provider queries Kiro's
+current commercial profile control planes in `us-east-1` and `eu-central-1`;
+`oidcRegion` keeps the token issuer region while `region` comes from the selected
+profile ARN. Discovery or an invalid explicit ARN fails closed before the
+database is opened and never falls back to the Builder ID service profile.
+
+If the later usage lookup fails (for
 example, offline), the row is stored with the placeholder
 email `builder-id@aws.amazon.com`, a warning is printed, and a later
 `accounts refresh --all` or `accounts relogin` fills in the real identity.
@@ -174,8 +186,46 @@ Import copies active account credentials and usage into the provider database;
 it does not retain a live link, shared lock, or runtime dependency on OpenCode.
 A source row is skipped when the local copy already has a later access-token
 expiry or usage sync (kiro-provider has refreshed it since the last import);
-pass `--force` to overwrite anyway. `accounts import` does not read gateway
-configuration and therefore has no `--config` option.
+pass `--force` to overwrite anyway. This default SQLite import does not read
+gateway configuration and rejects `--config`.
+
+`accounts import --format kiro-client --from <file|->` accepts a version-1
+`kiro-provider-accounts` JSON export or a legacy kiro-client BuilderId array.
+It limits input to 5 MiB and 250 entries, refreshes each matching OAuth client
+tuple, resolves its runtime profile binding, and requires the authoritative
+email to match the exported email before storing an account. Versioned
+entries marked `provider: "BuilderId"` and legacy BuilderId entries use the same
+fixed service profile as direct Builder ID login and never call the profile
+catalog that rejects these tokens. Versioned entries marked
+`provider: "IamIdentityCenter"`, or with no provider for compatibility, use
+strict organization-profile discovery. The OIDC issuer region is
+separate from the runtime region derived from the profile ARN. Missing or
+ambiguous organization profiles, invalid credentials, and unverifiable
+identities fail closed. This format loads the normal gateway configuration for
+proxy and network timeouts; it alone accepts `--config <path>`. The usual
+configuration validation applies. It does not check paid subscriptions.
+
+JSON import only adds accounts: existing IdC email identities and repeated
+credential tuples are skipped without a network refresh, and concurrent inserts
+cannot overwrite an existing account. A per-database import lease covers the
+whole JSON batch; another import process fails with `import_in_progress` before
+refreshing credentials. Lease loss cancels network requests and prevents writes.
+This lease does not serialize service refreshes or other machines.
+`--force` is rejected; use `accounts relogin`
+to update an existing identity. A partially successful batch keeps accepted
+entries but returns a nonzero exit status when any entry failed. Output contains
+entry numbers, counts and reason codes, never credential payloads. For a Windows
+export, use SCP to a private directory or pipe the UTF-8 JSON over SSH into
+`kiro-provider accounts import --format kiro-client --from -`; run it as the same
+remote user and configuration root as the service. No extra HTTP endpoint or
+automatic service restart is involved. Protect and remove intermediate credential
+files after acceptance.
+
+The verification refresh may rotate a refresh token. Stop the source client
+from using the imported OAuth tuple before import; two clients refreshing the
+same tuple can invalidate each other's stored token. Re-export instead of
+copying a stale credential again.
+
 After import, kiro-provider independently:
 
 - refreshes near-expiry access tokens and persists them before use;

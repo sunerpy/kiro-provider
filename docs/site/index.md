@@ -32,23 +32,23 @@ home:
       - kind: command
         text: export KP=http://127.0.0.1:8787/v1 KEY=$KIRO_GATEWAY_API_KEY
       - kind: command
-        text: "curl -s $KP/responses -H \"Authorization: Bearer $KEY\" --json '{"
+        text: 'curl -s $KP/responses -H "Authorization: Bearer $KEY" --json ''{'
       - kind: continuation
         text: '    "model": "gpt-5.6-sol", "store": false,'
       - kind: continuation
-        text: "    \"input\": \"Reply with exactly: KIRO_OK\"}' |"
+        text: '    "input": "Reply with exactly: KIRO_OK"}'' |'
       - kind: continuation
         text: "  jq -r '.output[-1].content[0].text'"
       - kind: output
         text: KIRO_OK
       - kind: command
-        text: "curl -s $KP/messages -H \"x-api-key: $KEY\" --json '{"
+        text: 'curl -s $KP/messages -H "x-api-key: $KEY" --json ''{'
       - kind: continuation
         text: '    "model": "claude-opus-5-5", "max_tokens": 1024,'
       - kind: continuation
         text: '    "messages": [{"role": "user",'
       - kind: continuation
-        text: "      \"content\": \"Reply with exactly: KIRO_OK\"}]}' |"
+        text: '      "content": "Reply with exactly: KIRO_OK"}]}'' |'
       - kind: continuation
         text: "  jq -r '.content[0].text'"
       - kind: output
@@ -79,7 +79,7 @@ home:
       - name: Accounts
         items:
           - title: Direct sign-in
-            body: Device-code login for AWS Builder ID and IAM Identity Center. kiro-provider finds the Kiro profile itself, so Kiro CLI is not involved.
+            body: Device-code login for AWS Builder ID and IAM Identity Center. kiro-provider applies the Builder ID service binding or discovers the organization profile itself; Kiro CLI is not involved.
             status: available
             link: /guide/accounts
           - title: Many accounts, one endpoint

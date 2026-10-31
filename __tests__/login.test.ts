@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type LoginDependencies, runLogin } from "../src/cli/login.js";
 import { ConfigSchema } from "../src/config/schema.js";
-import type { KiroAvailableProfile } from "../src/kiro/management-client.js";
+import { type KiroAvailableProfile, KiroManagementError } from "../src/kiro/management-client.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
 import type { StoredAccount } from "../src/storage/accounts-db.js";
 
@@ -13,6 +13,8 @@ const config = ConfigSchema.parse({
 
 const PLACEHOLDER = "builder-id@aws.amazon.com";
 const PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:123456789012:profile/PROFILE1";
+const ORG_START_URL = "https://acme.awsapps.com/start";
+const BUILDER_ID_PROFILE_ARN = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX";
 
 function stored(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -59,7 +61,7 @@ function createHarness(
     {
       arn: PROFILE_ARN,
       profileName: "Primary",
-      startUrl: "https://view.awsapps.com/start",
+      startUrl: ORG_START_URL,
       status: "ACTIVE",
     },
   ],
@@ -131,6 +133,67 @@ function createHarness(
 }
 
 describe("runLogin profile discovery", () => {
+  test.each([undefined, "https://view.awsapps.com/"])(
+    "uses the Builder ID service profile without calling its unsupported catalog for start URL %j",
+    async (startUrl) => {
+      const harness = createHarness([], async () => ({
+        email: "free@example.com",
+        usedCount: 1,
+        limitCount: 50,
+        overageCount: 0,
+      }));
+      let catalogCalls = 0;
+
+      const result = await runLogin(config, startUrl === undefined ? {} : { startUrl }, {
+        ...harness.deps,
+        listProfiles: async () => {
+          catalogCalls += 1;
+          throw new Error("AWS Builder ID is not supported for this operation (HTTP 403)");
+        },
+      });
+
+      expect(catalogCalls).toBe(0);
+      expect(harness.usageCalls[0]).toMatchObject({
+        profileArn: BUILDER_ID_PROFILE_ARN,
+        region: "us-east-1",
+      });
+      expect(result.account).toMatchObject({
+        email: "free@example.com",
+        profileArn: BUILDER_ID_PROFILE_ARN,
+        region: "us-east-1",
+      });
+    },
+  );
+
+  test("rejects an organization profile override before starting Builder ID authorization", async () => {
+    const harness = createHarness([], async () => ({
+      email: "free@example.com",
+      usedCount: 0,
+      limitCount: 50,
+      overageCount: 0,
+    }));
+    let authorizationCalls = 0;
+    const authorize = harness.deps.authorize;
+    if (authorize === undefined) throw new Error("missing authorization fixture");
+
+    await expect(
+      runLogin(
+        config,
+        { profileArn: PROFILE_ARN },
+        {
+          ...harness.deps,
+          authorize: async (...args) => {
+            authorizationCalls += 1;
+            return authorize(...args);
+          },
+        },
+      ),
+    ).rejects.toThrow(/Builder ID cannot be bound to an organization Kiro profile ARN/);
+
+    expect(authorizationCalls).toBe(0);
+    expect(harness.inserted).toEqual([]);
+  });
+
   test("persists authorization client metadata and clears the previous credential epoch on relogin", async () => {
     const previous = stored({
       clientIdIssuedAt: 100,
@@ -151,7 +214,8 @@ describe("runLogin profile discovery", () => {
         limitCount: 100,
         overageCount: 0,
       }));
-      const authorize = harness.deps.authorize!;
+      const authorize = harness.deps.authorize;
+      if (authorize === undefined) throw new Error("missing authorization fixture");
       const result = await runLogin(
         config,
         { replaceAccount: previous },
@@ -188,7 +252,7 @@ describe("runLogin profile discovery", () => {
       overageCount: 0,
     }));
 
-    const result = await runLogin(config, {}, harness.deps);
+    const result = await runLogin(config, { startUrl: ORG_START_URL }, harness.deps);
 
     expect(harness.profileCalls.map(({ region }) => region)).toEqual(["us-east-1", "eu-central-1"]);
     for (const call of harness.profileCalls) {
@@ -198,6 +262,31 @@ describe("runLogin profile discovery", () => {
     expect(harness.usageCalls[0]?.profileArn).toBe(PROFILE_ARN);
     expect(harness.inserted[0]?.profileArn).toBe(PROFILE_ARN);
     expect(result.account.profileArn).toBe(PROFILE_ARN);
+  });
+
+  test("does not apply the Builder ID fallback to an organization login", async () => {
+    const harness = createHarness([], async () => ({
+      email: "org@example.com",
+      usedCount: 0,
+      limitCount: 100,
+      overageCount: 0,
+    }));
+
+    await expect(
+      runLogin(
+        config,
+        { startUrl: ORG_START_URL },
+        {
+          ...harness.deps,
+          listProfiles: async () => {
+            throw new KiroManagementError("fixture secret", 403);
+          },
+        },
+      ),
+    ).rejects.toThrow(/profile discovery failed \(HTTP 403\).*No credentials were stored/);
+
+    expect(harness.usageCalls).toEqual([]);
+    expect(harness.inserted).toEqual([]);
   });
 
   test("selects an explicitly requested profile from multiple available profiles", async () => {
@@ -212,7 +301,11 @@ describe("runLogin profile discovery", () => {
       ],
     );
 
-    const result = await runLogin(config, { profileArn: secondArn }, harness.deps);
+    const result = await runLogin(
+      config,
+      { profileArn: secondArn, startUrl: ORG_START_URL },
+      harness.deps,
+    );
 
     expect(result.account.profileArn).toBe(secondArn);
     expect(harness.usageCalls[0]?.profileArn).toBe(secondArn);
@@ -228,7 +321,7 @@ describe("runLogin profile discovery", () => {
       [{ arn: profileArn, profileName: "Europe" }],
     );
 
-    const result = await runLogin(config, {}, harness.deps);
+    const result = await runLogin(config, { startUrl: ORG_START_URL }, harness.deps);
 
     expect(harness.profileCalls.map(({ region }) => region)).toEqual(["us-east-1", "eu-central-1"]);
     expect(harness.usageCalls[0]).toMatchObject({
@@ -257,7 +350,7 @@ describe("runLogin profile discovery", () => {
       [{ arn: profileArn }],
     );
 
-    const result = await runLogin(config, { profileArn }, harness.deps);
+    const result = await runLogin(config, { profileArn, startUrl: ORG_START_URL }, harness.deps);
 
     expect(harness.profileCalls.map(({ region }) => region)).toEqual(["eu-central-1"]);
     expect(result.account).toMatchObject({
@@ -276,9 +369,9 @@ describe("runLogin profile discovery", () => {
       overageCount: 0,
     }));
 
-    await expect(runLogin(config, { profileArn }, harness.deps)).rejects.toThrow(
-      /unsupported region or invalid format/,
-    );
+    await expect(
+      runLogin(config, { profileArn, startUrl: ORG_START_URL }, harness.deps),
+    ).rejects.toThrow(/unsupported region or invalid format/);
 
     expect(harness.profileCalls).toEqual([]);
     expect(harness.usageCalls).toEqual([]);
@@ -306,7 +399,7 @@ describe("runLogin profile discovery", () => {
     expect(selected.account.profileArn).toBe(secondArn);
 
     const ambiguous = createHarness([], usage, "fresh-client", profiles);
-    await expect(runLogin(config, {}, ambiguous.deps)).rejects.toThrow(
+    await expect(runLogin(config, { startUrl: ORG_START_URL }, ambiguous.deps)).rejects.toThrow(
       /returned 2 available profiles.*--profile-arn/,
     );
     expect(ambiguous.inserted).toEqual([]);
@@ -325,8 +418,8 @@ describe("runLogin profile discovery", () => {
     const second = createHarness([], usage, "fresh-client", profiles);
 
     const [a, b] = await Promise.all([
-      runLogin(config, { profileArn: PROFILE_ARN }, first.deps),
-      runLogin(config, { profileArn: secondArn }, second.deps),
+      runLogin(config, { profileArn: PROFILE_ARN, startUrl: ORG_START_URL }, first.deps),
+      runLogin(config, { profileArn: secondArn, startUrl: ORG_START_URL }, second.deps),
     ]);
 
     expect(a.account.id).not.toBe(b.account.id);
@@ -340,7 +433,9 @@ describe("runLogin profile discovery", () => {
       [],
     );
 
-    await expect(runLogin(config, {}, harness.deps)).rejects.toThrow(/no available Kiro profile/i);
+    await expect(runLogin(config, { startUrl: ORG_START_URL }, harness.deps)).rejects.toThrow(
+      /no available Kiro profile/i,
+    );
     expect(harness.usageCalls).toEqual([]);
     expect(harness.inserted).toEqual([]);
   });
@@ -480,8 +575,28 @@ describe("runLogin fresh login identity", () => {
 });
 
 describe("runLogin fresh login de-duplication", () => {
+  test("treats the implicit and explicit Builder ID start URLs as one identity", async () => {
+    const existing = stored({
+      email: "free@example.com",
+      profileArn: BUILDER_ID_PROFILE_ARN,
+      startUrl: undefined,
+    });
+    const harness = createHarness([existing], async () => ({
+      email: "FREE@example.com",
+      usedCount: 2,
+      limitCount: 50,
+      overageCount: 0,
+    }));
+
+    const result = await runLogin(config, { startUrl: "https://view.awsapps.com/" }, harness.deps);
+
+    expect(result.account.id).toBe(existing.id);
+    expect(harness.inserted).toHaveLength(1);
+    expect(harness.removed).toEqual([]);
+  });
+
   test("updates the existing row for the same person instead of inserting a duplicate", async () => {
-    const existing = stored();
+    const existing = stored({ startUrl: ORG_START_URL });
     const harness = createHarness([existing], async () => ({
       email: "DEV@example.com",
       usedCount: 7,
@@ -489,7 +604,7 @@ describe("runLogin fresh login de-duplication", () => {
       overageCount: 0,
     }));
 
-    const result = await runLogin(config, {}, harness.deps);
+    const result = await runLogin(config, { startUrl: ORG_START_URL }, harness.deps);
 
     expect(harness.inserted).toHaveLength(1);
     expect(harness.inserted[0]).toMatchObject({
@@ -572,7 +687,11 @@ describe("runLogin fresh login de-duplication", () => {
   });
 
   test("never merges rows when the identity could not be verified", async () => {
-    const placeholderRow = stored({ id: "placeholder-row", email: PLACEHOLDER });
+    const placeholderRow = stored({
+      id: "placeholder-row",
+      email: PLACEHOLDER,
+      profileArn: BUILDER_ID_PROFILE_ARN,
+    });
     const harness = createHarness([placeholderRow], async () => {
       throw new Error("offline");
     });

@@ -1,27 +1,27 @@
-import { createHash } from "node:crypto";
 import type { Config } from "../config/schema.js";
 import { resolveProxyUrl } from "../core/proxy.js";
 import { encodeRefreshToken } from "../kiro/auth.js";
-import { isQuotaExhausted } from "../kiro/health.js";
-import { type KiroAvailableProfile, listAvailableProfiles } from "../kiro/management-client.js";
+import { listAvailableProfiles } from "../kiro/management-client.js";
 import { authorizeKiroIDC, pollKiroIDCToken } from "../kiro/oauth-idc.js";
 import { RegionSchema } from "../kiro/regions.js";
-import type {
-  KiroAuthDetails,
-  KiroRegion,
-  KiroUsageSnapshot,
-  ManagedAccount,
-} from "../kiro/types.js";
+import type { KiroAuthDetails, KiroUsageSnapshot, ManagedAccount } from "../kiro/types.js";
 import { fetchUsageLimits } from "../kiro/usage-client.js";
 import { ACCOUNTS_DB_PATH, AccountsDatabase, type StoredAccount } from "../storage/accounts-db.js";
+import {
+  admittedIdcAccount,
+  builderIdServiceProfile,
+  discoverKiroProfile,
+  isBuilderIdStartUrl,
+  isSameLoginIdentity,
+  normalizedEmail,
+  normalizeStartUrl,
+  profileRegion,
+} from "./account-admission.js";
+
+export { normalizeStartUrl } from "./account-admission.js";
 
 /** Email reported by the device-code token endpoint before usage lookup. */
 const PLACEHOLDER_EMAIL = "builder-id@aws.amazon.com";
-
-// Kiro's commercial profile control plane is currently exposed in these two
-// regions. An IdC token can own a profile in either region independently of the
-// OIDC region that issued it, so profile discovery must not assume they match.
-const PROFILE_DISCOVERY_REGIONS: readonly KiroRegion[] = ["us-east-1", "eu-central-1"];
 
 export type LoginOptions = {
   readonly startUrl?: string;
@@ -57,89 +57,6 @@ export class ReloginIdentityMismatchError extends Error {
     );
     this.name = "ReloginIdentityMismatchError";
   }
-}
-
-export function normalizeStartUrl(value: string | undefined): string | undefined {
-  if (value === undefined || value.trim() === "") return undefined;
-  const url = new URL(value.trim());
-  url.hash = "";
-  url.search = "";
-  url.pathname = `${url.pathname.replace(/\/start\/?$/, "").replace(/\/+$/, "")}/start`;
-  return url.toString();
-}
-
-function accountId(email: string, clientId: string, profileArn: string): string {
-  return createHash("sha256").update(`${email}:idc:${clientId}:${profileArn}`).digest("hex");
-}
-
-function normalizedEmail(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function normalizedIdentityStartUrl(value: string | undefined): string {
-  try {
-    return normalizeStartUrl(value) ?? "";
-  } catch {
-    return value?.trim() ?? "";
-  }
-}
-
-function isSameLoginIdentity(
-  account: StoredAccount,
-  reference: Pick<ManagedAccount, "email" | "authMethod" | "startUrl" | "profileArn">,
-): boolean {
-  return (
-    normalizedEmail(account.email) === normalizedEmail(reference.email) &&
-    account.authMethod === reference.authMethod &&
-    normalizedIdentityStartUrl(account.startUrl) ===
-      normalizedIdentityStartUrl(reference.startUrl) &&
-    (account.profileArn ?? "") === (reference.profileArn ?? "")
-  );
-}
-
-function profileRegion(profileArn: string): KiroRegion | undefined {
-  const matched = /^arn:[^:]+:codewhisperer:([^:]+):[^:]+:profile\/.+$/u.exec(profileArn);
-  if (!matched) return undefined;
-  const parsed = RegionSchema.safeParse(matched[1]);
-  return parsed.success && PROFILE_DISCOVERY_REGIONS.includes(parsed.data)
-    ? parsed.data
-    : undefined;
-}
-
-function selectProfile(
-  profiles: readonly KiroAvailableProfile[],
-  startUrl: string | undefined,
-  requestedArn: string | undefined,
-): KiroAvailableProfile {
-  if (requestedArn !== undefined) {
-    const selected = profiles.find((profile) => profile.arn === requestedArn);
-    if (selected) return selected;
-    throw new Error("The requested Kiro profile ARN is not available for this identity");
-  }
-  if (startUrl !== undefined) {
-    const matching = profiles.filter(
-      (profile) =>
-        profile.startUrl !== undefined &&
-        normalizedIdentityStartUrl(profile.startUrl) === normalizedIdentityStartUrl(startUrl),
-    );
-    if (matching.length === 1) return matching[0] as KiroAvailableProfile;
-  }
-  if (profiles.length === 1) return profiles[0] as KiroAvailableProfile;
-  if (profiles.length === 0) {
-    throw new Error("No available Kiro profile was returned for this identity");
-  }
-  throw new Error(
-    `Kiro returned ${profiles.length} available profiles; rerun login with --profile-arn <arn>`,
-  );
-}
-
-function discoveryRegions(requestedArn: string | undefined): readonly KiroRegion[] {
-  if (requestedArn === undefined) return PROFILE_DISCOVERY_REGIONS;
-  const region = profileRegion(requestedArn);
-  if (region === undefined) {
-    throw new Error("The requested Kiro profile ARN has an unsupported region or invalid format");
-  }
-  return [region];
 }
 
 function usageAuth(
@@ -196,6 +113,10 @@ export async function runLogin(
     );
   }
   const startUrl = normalizeStartUrl(options.startUrl ?? replaceAccount?.startUrl);
+  const builderIdLogin = isBuilderIdStartUrl(startUrl);
+  if (builderIdLogin && options.profileArn !== undefined) {
+    builderIdServiceProfile(options.profileArn);
+  }
   const oidcRegion = RegionSchema.parse(
     options.region ?? replaceAccount?.oidcRegion ?? replaceAccount?.region ?? config.default_region,
   );
@@ -226,28 +147,17 @@ export async function runLogin(
   const knownProfile =
     options.profileArn === undefined && profileArn !== undefined && region !== undefined;
   if (!knownProfile) {
-    const regions = discoveryRegions(options.profileArn);
-    let profilePages: readonly (readonly KiroAvailableProfile[])[];
-    try {
-      profilePages = await Promise.all(
-        regions.map((profileRegion) =>
-          listProfiles(usageAuth(token, profileRegion, undefined), profileRegion, {
-            proxyUrl,
-            timeoutMs: config.quota_recheck_timeout_ms,
-          }),
-        ),
-      );
-    } catch (error) {
-      throw new Error(
-        `Kiro profile discovery failed: ${errorMessage(error)}. No credentials were stored.`,
-        { cause: error },
-      );
+    if (builderIdLogin) {
+      ({ profileArn, region } = builderIdServiceProfile(options.profileArn));
+    } else {
+      ({ profileArn, region } = await discoverKiroProfile(usageAuth(token, oidcRegion, undefined), {
+        requestedArn: options.profileArn,
+        startUrl,
+        proxyUrl,
+        timeoutMs: config.quota_recheck_timeout_ms,
+        listProfiles,
+      }));
     }
-    const profiles = [
-      ...new Map(profilePages.flat().map((profile) => [profile.arn, profile])).values(),
-    ];
-    profileArn = selectProfile(profiles, startUrl, options.profileArn).arn;
-    region = profileRegion(profileArn);
   }
   if (profileArn === undefined || region === undefined) {
     throw new Error("Kiro profile discovery did not resolve a supported profile ARN");
@@ -330,33 +240,17 @@ export async function runLogin(
         )
       : sameIdentity.slice(1);
 
-    const account: ManagedAccount = {
-      id: previous?.id ?? accountId(email, token.clientId, profileArn),
+    const account = admittedIdcAccount({
+      auth: usageAuth(token, region, profileArn),
       email,
-      authMethod: "idc",
+      profileArn,
       region,
-      oidcRegion,
-      clientId: token.clientId,
-      clientSecret: token.clientSecret,
-      ...(token.clientIdIssuedAt === undefined ? {} : { clientIdIssuedAt: token.clientIdIssuedAt }),
-      ...(token.clientSecretExpiresAt === undefined
-        ? {}
-        : { clientSecretExpiresAt: token.clientSecretExpiresAt }),
-      ...(startUrl ? { startUrl } : {}),
-      ...(profileArn ? { profileArn } : {}),
-      refreshToken: token.refreshToken,
-      accessToken: token.accessToken,
-      expiresAt: token.expiresAt,
-      rateLimitResetTime:
-        usage && isQuotaExhausted(usage) ? refreshedAt + config.quota_recheck_interval_ms : 0,
-      isHealthy: true,
-      failCount: 0,
-      lastUsed: previous?.lastUsed ?? 0,
-      usedCount: usage?.usedCount ?? previous?.usedCount ?? 0,
-      limitCount: usage?.limitCount ?? previous?.limitCount ?? 0,
-      overageCount: usage?.overageCount ?? previous?.overageCount ?? 0,
-      lastSync: usage ? refreshedAt : (previous?.lastSync ?? 0),
-    };
+      usage,
+      startUrl,
+      previous,
+      now: refreshedAt,
+      quotaRecheckIntervalMs: config.quota_recheck_interval_ms,
+    });
 
     persisted = database.insertAccount(account);
     for (const duplicate of duplicates) {

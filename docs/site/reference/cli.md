@@ -1,6 +1,6 @@
 # Command line
 
-This page lists every `kiro-provider` command and option, as of 3.8.0.
+This page lists the current `kiro-provider` commands and options.
 
 ```text
 Usage: kiro-provider <command> [options]
@@ -11,7 +11,7 @@ Commands:
   accounts list [--details | --json] [--sort <field>] [--order asc|desc]
   accounts refresh (--all | <id|email>) [--config <path>] [--json]
   accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
-  accounts import [--from <path>] [--force]
+  accounts import [--from <path>] [--force] [--format opencode|kiro-client] [--config <path>]
   accounts remove <id|email> [--yes]
   self-update [--check] [--tag <version>] [--yes] [--json] [--proxy <url>] [--force]
 
@@ -26,7 +26,7 @@ account that failed. Errors go to standard error.
 
 ## Configuration file
 
-`serve`, `login`, `accounts refresh` and `accounts relogin` read `config.json`. Without `--config` they look for it at
+`serve`, `login`, `accounts refresh`, `accounts relogin` and the `kiro-client` JSON import read `config.json`. Without `--config` they look for it at
 `$XDG_CONFIG_HOME/kiro-provider/config.json` or `~/.config/kiro-provider/config.json` on Linux and macOS, and at
 `%APPDATA%\kiro-provider\config.json` on Windows. A field can also come from its environment variable, and `serve`
 takes three of them as options (`--host`, `--port`, `--proxy`); an option wins over the environment, which wins over
@@ -34,8 +34,8 @@ the file. Unknown fields and
 invalid values stop the command with an error that names them. The
 [configuration reference](../../CONFIGURATION.md) lists every field.
 
-`accounts list`, `accounts import` and `accounts remove` work on `accounts.db` in the same directory and read no
-configuration. `--version` and `self-update` read neither.
+`accounts list`, the default OpenCode SQLite import and `accounts remove` work on `accounts.db` in the same directory
+and read no configuration. `--version` and `self-update` read neither.
 
 ## serve
 
@@ -59,7 +59,7 @@ Signs in to Kiro with a device code and saves the account.
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `--start-url <url>`   | The IAM Identity Center start URL. Without it, sign-in is with AWS Builder ID.                                                     |
 | `--region <region>`   | The region of the identity center that issues the token. Default: `default_region` from the configuration, `us-east-1` unless set. |
-| `--profile-arn <arn>` | The Kiro profile to use when the identity has more than one.                                                                       |
+| `--profile-arn <arn>` | The organization Kiro profile to use when an IAM Identity Center identity has more than one. It does not override Builder ID.      |
 | `--config <path>`     | Configuration to read, for `proxy_url` and the log level.                                                                          |
 
 [Accounts](../guide/accounts.md#add-an-account) walks through it.
@@ -87,9 +87,15 @@ account to a different profile.
 
 ## accounts import
 
-Copies the accounts of OpenCode's `opencode-kiro-auth` once. `--from <path>` names the source database; by default it
-is `opencode/kiro.db` in the same config root as kiro-provider's own directory, such as `~/.config/opencode/kiro.db`.
-A row whose local copy is newer is skipped unless `--force` is given.
+Without `--format`, or with `--format opencode`, copies the accounts of OpenCode's `opencode-kiro-auth` once.
+`--from <path>` names the source database; by default it is `opencode/kiro.db` in the same config root as
+kiro-provider's own directory, such as `~/.config/opencode/kiro.db`. A row whose local copy is newer is skipped unless
+`--force` is given. This mode does not accept `--config`.
+
+`--format kiro-client --from <file|->` reads a bounded JSON credential export, refreshes and verifies each new
+identity, and adds only accounts whose authoritative email matches the export. `-` reads UTF-8 JSON from standard
+input. This mode accepts `--config` for proxy and timeout settings, rejects `--force`, skips existing identities and
+returns status 1 after a partial failure. See [Import a kiro-client JSON export](../guide/accounts.md#import-a-kiro-client-json-export).
 
 ## accounts remove
 

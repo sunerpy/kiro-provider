@@ -13,7 +13,7 @@ kiro-provider 的配置由 JSON 文件、环境变量以及（仅 `serve`）CLI 
 3. **配置文件** —— 解析出的配置路径下的 JSON 文件。
 4. **Schema 默认值** —— `src/config/schema.ts` 中 zod schema 的默认值。
 
-配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|import|remove` 直接操作 provider 自有本地认证库，不加载网关配置，因此 `accounts import` 不接受 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。`--version` 与 `self-update` 既不加载配置也不打开账号库，代理依次取自 `--proxy`、`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`，因此配置文件有问题也不会阻塞升级；与 `serve` 一致，显式传入空值 `--proxy ""` 表示不选择任何代理，而不是继续回退到上述变量。注意 Bun 的 `fetch` 自身也会读取 `HTTPS_PROXY`/`HTTP_PROXY`，若需要完全直连，请取消这两个变量（`env -u HTTPS_PROXY -u HTTP_PROXY kiro-provider self-update`）；单独使用 `--proxy ""` 仍可屏蔽 `KIRO_PROVIDER_PROXY_URL`。
+配置文件默认路径为平台配置根目录下的 `kiro-provider/config.json`（见[文件位置](#文件位置)）：Linux/macOS 为 `$XDG_CONFIG_HOME/kiro-provider/config.json` 或 `~/.config/kiro-provider/config.json`，Windows 为 `%APPDATA%\kiro-provider\config.json`。`accounts list|remove` 和默认 SQLite `accounts import` 直接操作 provider 自有本地认证库，不加载网关配置；JSON 导入 `--format kiro-client` 会加载网络设置并支持 `--config`；`accounts refresh|relogin` 会从所选配置读取刷新、超时、区域、代理以及 `quota_recheck_concurrency` 设置，并要求 `auth_source: "local"`。`--version` 与 `self-update` 既不加载配置也不打开账号库，代理依次取自 `--proxy`、`KIRO_PROVIDER_PROXY_URL`、`HTTPS_PROXY`/`HTTP_PROXY`，因此配置文件有问题也不会阻塞升级；与 `serve` 一致，显式传入空值 `--proxy ""` 表示不选择任何代理，而不是继续回退到上述变量。注意 Bun 的 `fetch` 自身也会读取 `HTTPS_PROXY`/`HTTP_PROXY`，若需要完全直连，请取消这两个变量（`env -u HTTPS_PROXY -u HTTP_PROXY kiro-provider self-update`）；单独使用 `--proxy ""` 仍可屏蔽 `KIRO_PROVIDER_PROXY_URL`。
 
 ## 校验规则
 
@@ -141,17 +141,27 @@ kiro-provider accounts import
 kiro-provider accounts import --from /path/to/kiro.db
 # 即使本地记录更新也强制覆盖：
 kiro-provider accounts import --from /path/to/kiro.db --force
+# Windows kiro-client 导出的 JSON；--from - 表示从 stdin 读取：
+kiro-provider accounts import --format kiro-client --from /path/to/kiro-provider-accounts.json
+# 从非默认配置读取代理和网络超时：
+kiro-provider accounts import --format kiro-client --from /path/to/accounts.json --config /path/to/config.json
 ```
 
-`login` 完成设备码流程后，会先使用新 access token 直接调用 Kiro
-`List-Available-Profiles`，持久化选中的 `profileArn`，再调用用量接口并在推导账号
-ID 前获取真实邮箱。整个流程由 Provider 自己完成，不依赖 Kiro CLI 的安装或状态。
-唯一 profile（包括 start URL 的唯一匹配）会自动选择；仍有多个候选时使用
-`--profile-arn <arn>`。profile discovery 失败会在打开数据库前 fail closed。未显式
-传入 ARN 时，Provider 会查询 Kiro 当前的商业 profile control plane `us-east-1` 与
-`eu-central-1`；`oidcRegion` 保存 token 签发区域，`region` 则从选中 profile ARN
-推导。若后续
-用量请求失败（例如离线），记录会以占位邮箱
+`login` 完成设备码流程后，会先解析运行时 profile 绑定，再调用用量接口，并在推导
+账号 ID 前获取真实邮箱。整个流程由 Provider 自己完成，不依赖 Kiro CLI 的安装或
+状态。默认 AWS Builder ID 登录无权调用 `List-Available-Profiles`；Provider 会改用
+Kiro CLI 使用的固定 Builder ID service profile，并把运行请求发往 `us-east-1`。
+该 profile 只是请求绑定，不是个人账号拥有的组织 profile。`oidcRegion` 仍保存 token
+签发区域，因此可与运行时 `region` 不同。
+
+传入 `--start-url` 的 IAM Identity Center 登录会使用新 access token 调用
+`List-Available-Profiles`。唯一 profile（包括 start URL 的唯一匹配）会自动选择；
+仍有多个候选时使用 `--profile-arn <arn>`。Provider 会查询 Kiro 当前的商业 profile
+control plane `us-east-1` 与 `eu-central-1`；`oidcRegion` 保存 token 签发区域，
+`region` 从选中 profile ARN 推导。发现失败或显式 ARN 无效时，会在打开数据库前
+fail closed，且绝不会降级使用 Builder ID service profile。
+
+若后续用量请求失败（例如离线），记录会以占位邮箱
 `builder-id@aws.amazon.com` 保存并打印警告，之后执行 `accounts refresh --all`
 或 `accounts relogin` 即可补全真实身份。身份已确认时，同一个人（邮箱、start
 URL、profile 相同）再次登录会原地更新已有记录并清理旧的重复记录，而不是再插
@@ -161,7 +171,34 @@ URL、profile 相同）再次登录会原地更新已有记录并清理旧的重
 导入会复制活跃账号凭证与用量，不会保留实时链接、共享锁或 OpenCode 运行期
 依赖。若本地记录的 access token 过期时间或用量同步时间比源记录更新（说明
 kiro-provider 在上次导入后已刷新过它），该行会被跳过；传入 `--force` 可强制
-覆盖。`accounts import` 不读取网关配置，因此没有 `--config` 选项。导入完成后，
+覆盖。这种默认 SQLite 导入不读取网关配置，且拒绝 `--config`。
+
+`accounts import --format kiro-client --from <file|->` 支持版本 1 的
+`kiro-provider-accounts` JSON 或旧版 kiro-client BuilderId 数组，输入上限为
+5 MiB、250 条。每项先使用匹配的 OAuth 客户端凭据刷新令牌，再解析运行时 profile
+绑定，核对权威邮箱与导出邮箱一致后才入库。标记为 `provider: "BuilderId"` 的版本化
+条目和旧版 BuilderId 条目，使用与直接 Builder ID 登录相同的固定 service profile，
+不调用会拒绝此类 token 的 profile catalog。标记为
+`provider: "IamIdentityCenter"` 的版本化条目，以及为了兼容而未带 provider 的条目，
+严格执行组织 profile 发现。OIDC 签发区域独立保存，运行区域由 profile ARN 推导；
+凭据失效、身份无法确认、组织 profile 缺失或不唯一时拒绝该项。此 JSON 格式会加载正常网关配置用于代理与网络超时，只有此格式支持
+`--config <path>`；配置仍需通过正常校验。不检查付费订阅。
+
+JSON 导入仅新增账号：已有 IdC 邮箱身份和重复凭据组在网络刷新前跳过，并发插入
+也不会覆盖已有账号。同一数据库的 JSON 导入在整个批次持有独立 lease；另一个
+导入进程在刷新前返回 `import_in_progress`。lease 丢失会取消网络请求并阻止写入；
+此锁不负责服务刷新或其他机器。拒绝 `--force`，更新已有身份请使用 `accounts relogin`。
+批次部分失败时保留已接受的账号，整体命令返回非零。输出只有条目序号、计数和
+原因码，不输出凭据。Windows 可用 SCP 传到私有目录，也可经 SSH stdin 执行
+`kiro-provider accounts import --format kiro-client --from -`。请使用与远程服务
+相同的用户和配置根；不需要增加 HTTP 端点，也不会自动重启服务。中间凭据文件
+应妥善保管，验收后自行删除。
+
+验证过程可能轮换 refresh token。导入前应停止来源客户端继续使用同一 OAuth
+凭据组；两个客户端同时刷新会让彼此保存的 token 失效。需要再次迁移时应重新导出，
+不要重复复制旧凭据。
+
+导入完成后，
 kiro-provider 会独立完成：
 
 - 主动刷新临近过期的 access token，并先持久化再使用；

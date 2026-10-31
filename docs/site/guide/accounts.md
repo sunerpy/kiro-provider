@@ -19,8 +19,10 @@ center:
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1
 ```
 
-After sign-in, kiro-provider asks Kiro which profiles the identity can use and stores the one it finds. With several
-profiles and no unique match for the start URL, it stops before writing anything; rerun with the profile you want:
+Builder ID has no organization profile that `List-Available-Profiles` can return. kiro-provider uses the same fixed
+request-level service profile as Kiro CLI and does not call that unsupported operation. For IAM Identity Center,
+kiro-provider asks Kiro which profiles the identity can use and stores the one it finds. With several profiles and no
+unique match for the start URL, it stops before writing anything; rerun with the profile you want:
 
 ```sh
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1 \
@@ -45,6 +47,24 @@ kiro-provider accounts import --from /path/to/kiro.db
 The import is a copy, not a link. Afterwards kiro-provider renews the tokens of its copy, so stop using the same
 accounts in OpenCode: two programs renewing one refresh token race each other. An account whose local copy is newer
 than the source is skipped unless you add `--force`.
+
+### Import a kiro-client JSON export
+
+For a supported Windows kiro-client export, copy the private JSON file to the service host or pipe it over SSH:
+
+```sh
+kiro-provider accounts import --format kiro-client --from /private/path/accounts.json
+kiro-provider accounts import --format kiro-client --from -
+```
+
+The importer refreshes each credential, resolves its profile binding and verifies the authoritative email before it
+adds the account. Legacy and explicitly marked BuilderId entries use the fixed service profile without calling the
+unsupported profile catalog. Input is limited to 5 MiB and 250 entries; existing identities are skipped, partial
+failures return a nonzero status, and `--force` is rejected. Run the command as the same user as the gateway, protect
+the credential file, and remove intermediate copies after acceptance. The complete contract is in
+[Authentication source](../../CONFIGURATION.md#authentication-source).
+The verification refresh may rotate the refresh token, so stop the source client from using the imported OAuth tuple
+beforehand. Two clients refreshing the same tuple can invalidate each other's saved token.
 
 ## See your accounts
 
