@@ -429,10 +429,17 @@ describe("kiro-client CLI credential admission", () => {
 
   test("uses a bounded refresh signal and stops after refresh timeout", async () => {
     const cli = harness(envelope([entry()]));
-    const calls = mockNetwork(({ url, init }) => {
+    const calls = mockNetwork(async ({ url, init }) => {
       if (url.pathname !== "/token") return undefined;
+      // Force the timeout to win before this fetch double begins observing it.
+      // A conforming fetch rejects immediately when handed an already-aborted signal.
+      await Bun.sleep(30);
       return new Promise<Response>((_resolve, reject) => {
         expect(init?.signal).toBeInstanceOf(AbortSignal);
+        if (init?.signal?.aborted) {
+          reject(init.signal.reason);
+          return;
+        }
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
       });
     });

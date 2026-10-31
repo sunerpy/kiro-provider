@@ -91,9 +91,10 @@
     "coverage_parity": true
   },
   "limitations": [
-    "No fresh personal Builder ID credential was available locally, so this run made no authenticated live Kiro request.",
     "Static binary literals prove shipped client routing data, not current server acceptance by themselves.",
-    "The live 403 and runtime acceptance observations are cited external reproductions and were not replayed with their credentials."
+    "The original profile-catalog 403 was not replayed with the new account against the released pre-fix binary; executable regressions cover the pre-fix failure and the candidate completed live authorization and generation.",
+    "The live host was Windows Server 2025 build 26100, not the reporter's Windows 10/11 host.",
+    "The adjacent non-streaming Responses rejection is recorded separately and does not invalidate the successful Builder ID streaming generation path."
   ],
   "secrets_or_raw_payloads_retained": false,
   "regression": {
@@ -110,5 +111,68 @@
     "version_smoke_pass": true,
     "builder_id_help_present": true,
     "kiro_client_import_help_present": true
+  },
+  "windows_live_acceptance": {
+    "revision": "354a7cd1dce76210b70c49753246701240d15a81",
+    "environment": {
+      "os": "Windows Server 2025 Datacenter",
+      "build": "26100",
+      "candidate_architecture": "windows-x64",
+      "isolated_config_and_account_store": true
+    },
+    "candidate": {
+      "reported_version_before_release_please": "3.8.6",
+      "sha256": "4a149ef0368a25404725e128897e2ba363a4805c43d4995a901841ec9082821a",
+      "size_bytes": 102069760,
+      "version_smoke_pass": true,
+      "help_smoke_pass": true
+    },
+    "builder_id_authorization": {
+      "browser_device_authorization_completed": true,
+      "cli_login_succeeded": true,
+      "existing_related_service_registration_interfered": false
+    },
+    "persisted_account": {
+      "database_quick_check": "ok",
+      "account_count": 1,
+      "email_resolved": true,
+      "auth_method": "idc",
+      "region": "us-east-1",
+      "oidc_region": "us-east-1",
+      "profile_present": true,
+      "profile_matches_builder_id_service_profile": true,
+      "health": "healthy",
+      "availability": "available"
+    },
+    "gateway": {
+      "health_status": 200,
+      "readiness_status": 200,
+      "readiness": "ready",
+      "models_status": 200,
+      "dynamic_catalog_synchronized": true,
+      "available_model_count": 5,
+      "selected_model": "deepseek-3.2",
+      "responses_stream": true,
+      "responses_status": 200,
+      "terminal_status": "completed",
+      "completed_event_count": 1,
+      "failed_event_count": 0,
+      "output_exact_match": true,
+      "output_text_chars": 11,
+      "duration_ms": 2737
+    },
+    "adjacent_observation": {
+      "scope": "not required to validate Builder ID login",
+      "non_streaming_responses_status": 400,
+      "error_type": "invalid_request_error",
+      "error_code": "unsupported_parameter",
+      "error_param": "stream",
+      "streaming_retry_succeeded": true
+    },
+    "cleanup": {
+      "gateway_process_remaining": 0,
+      "temporary_api_key_config_removed": true
+    },
+    "secrets_or_raw_payloads_retained": false
   }
 }
