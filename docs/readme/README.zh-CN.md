@@ -27,7 +27,7 @@ Anthropic Messages 接口提供这些账号，Codex CLI、Claude Code、OpenCode
 
 - **一个网关，两种接口。** `POST /v1/responses` 和 `POST /v1/messages`，支持流式与非流式、工具、图片和推理等级。
   Chat Completions 作为可选开启的旧路由提供。
-- **直接登录。** 以设备码方式登录 AWS Builder ID 和 IAM Identity Center。kiro-provider 自己查找 Kiro profile，不需要 Kiro CLI。
+- **直接登录。** 以设备码方式登录 AWS Builder ID 和 IAM Identity Center。kiro-provider 自行应用 Builder ID service profile 或发现组织 profile，不需要 Kiro CLI。
 - **多个账号，一个地址。** 请求交给最空闲的可用账号；令牌在后台续期、用量在后台刷新，额度用完的账号会暂停使用，直到额度重置。
 - **失败即关闭。** 无法完整送达 Kiro 的字段会让请求以写明该字段的带类型错误失败，不会被悄悄丢弃。
 - **对话可以延续。** 保存的响应和加密的 reasoning 回放让客户端可以继续对话、切换模型或推理等级，并在重启后恢复。
@@ -76,7 +76,8 @@ bun add -g @sunerpy/kiro-provider
 
    Windows 上的文件是 `%APPDATA%\kiro-provider\config.json`。
 
-2. 登录 Kiro。使用 IAM Identity Center 时加上 `--start-url <url> --region <region>`，身份有多个 profile 时再加上
+2. 登录 Kiro。不带参数时使用 AWS Builder ID；使用 IAM Identity Center 时加上
+   `--start-url <url> --region <region>`，该组织身份有多个 profile 时再加上
    `--profile-arn <arn>`：
 
    ```bash
@@ -84,6 +85,10 @@ bun add -g @sunerpy/kiro-provider
    ```
 
    `opencode-kiro-auth` 中的账号可以用 `kiro-provider accounts import` 一次性复制过来。
+
+   Windows kiro-client 导出的 JSON 可经 SSH 传输，再以远程服务用户执行
+   `kiro-provider accounts import --format kiro-client --from /path/to/accounts.json`。
+   详见[认证导入](CONFIGURATION.zh-CN.md#认证事实源)。
 
 3. 启动网关，并确认有可用的账号：
 

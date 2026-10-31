@@ -16,7 +16,7 @@ kiro-provider login
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1
 ```
 
-登录后，kiro-provider 会向 Kiro 查询该身份可用的 profile，并保存找到的那一个。如果有多个 profile、且起始 URL 无法唯一匹配，它会在写入任何内容之前停止；请指定要使用的 profile 重新运行：
+Builder ID 没有可由 `List-Available-Profiles` 返回的组织 profile。kiro-provider 使用与 Kiro CLI 相同的固定请求级 service profile，不调用这个不支持的接口。IAM Identity Center 登录后，kiro-provider 会向 Kiro 查询该身份可用的 profile，并保存找到的那一个。如果有多个 profile、且起始 URL 无法唯一匹配，它会在写入任何内容之前停止；请指定要使用的 profile 重新运行：
 
 ```sh
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1 \
@@ -37,6 +37,18 @@ kiro-provider accounts import --from /path/to/kiro.db
 ```
 
 导入是复制，不是关联。之后由 kiro-provider 续期它那份副本的令牌，因此请停止在 OpenCode 中使用同样的账号：两个程序同时续期同一个刷新令牌会相互冲突。如果本地副本比来源更新，该账号会被跳过，除非加上 `--force`。
+
+### 导入 kiro-client JSON
+
+对于受支持的 Windows kiro-client 导出，可把私有 JSON 文件复制到服务主机，也可经 SSH stdin 传入：
+
+```sh
+kiro-provider accounts import --format kiro-client --from /private/path/accounts.json
+kiro-provider accounts import --format kiro-client --from -
+```
+
+导入器会先刷新每组凭据、解析 profile 绑定并核对权威邮箱，再新增账号。旧版以及明确标记为 BuilderId 的条目使用固定 service profile，不调用不支持的 profile catalog。输入上限为 5 MiB 和 250 条；已有身份会跳过，部分失败返回非零状态，且拒绝 `--force`。请使用与网关相同的用户执行命令，保护凭据文件，并在验收后删除中间副本。完整约束见[认证事实源](../../../readme/CONFIGURATION.zh-CN.md#认证事实源)。
+验证时可能轮换 refresh token，因此导入前应停止来源客户端继续使用同一 OAuth 凭据组；两个客户端同时刷新会让彼此保存的 token 失效。
 
 ## 查看账号
 

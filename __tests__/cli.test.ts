@@ -850,7 +850,7 @@ describe("runLogin", () => {
       // When
       await runLogin(
         ConfigSchema.parse({ api_keys: ["sk-test"], proxy_url: proxyUrl }),
-        {},
+        { startUrl: "https://acme.awsapps.com/start" },
         {
           authorize: async (...args) => {
             authorizeProxyUrl = args[2];
@@ -864,7 +864,7 @@ describe("runLogin", () => {
               interval: 5,
               expiresIn: 600,
               region: "us-east-1",
-              startUrl: "https://view.awsapps.com/start",
+              startUrl: "https://acme.awsapps.com/start",
             };
           },
           poll: async (...args) => {

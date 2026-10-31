@@ -15,7 +15,8 @@ Commands:
   serve [--config <path>] [--host <host>] [--port <port>] [--proxy <url>]
       Start the Responses, Messages, and optional legacy Chat gateway.
   login [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
-      Sign in directly and discover the Kiro profile; --region selects the OIDC issuer.
+      Sign in with Builder ID by default; organization logins discover their Kiro profile.
+      --region selects the OIDC issuer; --profile-arn applies to organization logins only.
   accounts list [--details | --json] [--sort <field>] [--order asc|desc]
       List accounts without exposing credentials.
       Sort fields: email (default), id, auth, region, health, availability,
@@ -24,9 +25,12 @@ Commands:
       Refresh authoritative usage now and renew access tokens when needed.
   accounts relogin <id|email> [--config <path>] [--start-url <url>] [--region <region>] [--profile-arn <arn>]
       Re-authenticate one account while preserving its internal account ID.
-  accounts import [--from <path>] [--force]
+  accounts import [--from <path>] [--force] [--format opencode|kiro-client] [--config <path>]
       Copy OpenCode Kiro accounts once into the provider-owned local store.
       Rows whose local copy is newer are skipped unless --force is given.
+      kiro-client requires --from <JSON file|->; verifies new IdC/Builder identities and skips existing accounts.
+      --config selects network settings for kiro-client only; SQLite import does not load configuration.
+      JSON imports accept at most 5 MiB / 250 accounts; --force is unsupported for kiro-client.
   accounts remove <id|email> [--yes]
       Remove an account from the provider-owned local store and write a tombstone.
   self-update [--check] [--tag <version>] [--yes] [--json] [--proxy <url>] [--force]
@@ -96,6 +100,8 @@ type AccountsImportCommand = {
   readonly kind: "accounts-import";
   readonly from?: string;
   readonly force: boolean;
+  readonly format?: "opencode" | "kiro-client";
+  readonly configPath?: string;
 };
 type AccountsRemoveCommand = {
   readonly kind: "accounts-remove";
@@ -183,16 +189,33 @@ function parseImport(args: readonly string[]): AccountsImportCommand | HelpComma
     options: {
       from: { type: "string" },
       force: { type: "boolean" },
+      format: { type: "string" },
+      config: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
     strict: true,
     allowPositionals: false,
   });
   if (parsed.values.help) return { kind: "help" };
+  const format = parsed.values.format;
+  if (format !== undefined && format !== "opencode" && format !== "kiro-client") {
+    throw new CliUsageError("accounts import --format must be opencode or kiro-client");
+  }
+  if (format === "kiro-client" && !parsed.values.from) {
+    throw new CliUsageError("kiro-client import requires --from <JSON file|->");
+  }
+  if (format !== "kiro-client" && parsed.values.from === "-") {
+    throw new CliUsageError("stdin import requires --format kiro-client");
+  }
+  if (format !== "kiro-client" && parsed.values.config !== undefined) {
+    throw new CliUsageError("Unknown option '--config'");
+  }
   return {
     kind: "accounts-import",
     ...(parsed.values.from ? { from: parsed.values.from } : {}),
     force: parsed.values.force ?? false,
+    ...(format === undefined ? {} : { format }),
+    ...(parsed.values.config === undefined ? {} : { configPath: parsed.values.config }),
   };
 }
 

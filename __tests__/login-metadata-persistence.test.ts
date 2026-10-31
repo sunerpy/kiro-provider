@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLogin } from "../src/cli/login.js";
 import { ConfigSchema } from "../src/config/schema.js";
+import { KIRO_AUTH_SERVICE } from "../src/kiro/constants.js";
 import { pollKiroIDCToken } from "../src/kiro/oauth-idc.js";
 import { AccountsDatabase } from "../src/storage/accounts-db.js";
 
@@ -13,6 +14,90 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   if (root) rmSync(root, { recursive: true, force: true });
   root = undefined;
+});
+
+test("a complete Builder ID device login uses the CLI service profile and never calls the denied profile catalog", async () => {
+  root = mkdtempSync(join(tmpdir(), "kiro-builder-login-"));
+  const path = join(root, "accounts.db");
+  const calls: URL[] = [];
+  const responder = async (input: string | Request | URL) => {
+    const url = new URL(String(input));
+    calls.push(url);
+    if (url.pathname === "/client/register") {
+      return Response.json({ clientId: "builder-client", clientSecret: "builder-secret" });
+    }
+    if (url.pathname === "/device_authorization") {
+      return Response.json({
+        verificationUri: "https://synthetic.test/verify",
+        verificationUriComplete: "https://synthetic.test/verify?code=builder",
+        userCode: "builder",
+        deviceCode: "builder-device",
+        interval: 1,
+        expiresIn: 10,
+      });
+    }
+    if (url.pathname === "/token") {
+      return Response.json({
+        access_token: "builder-access",
+        refresh_token: "builder-refresh",
+        expires_in: 3600,
+      });
+    }
+    if (url.pathname === "/List-Available-Profiles") {
+      return new Response("AWS Builder ID is not supported for this operation", { status: 403 });
+    }
+    if (url.pathname === "/getUsageLimits") {
+      expect(url.searchParams.get("profileArn")).toBe(KIRO_AUTH_SERVICE.BUILDER_ID_PROFILE_ARN);
+      return Response.json({
+        userInfo: { email: "builder@example.test" },
+        usageBreakdownList: [{ currentUsage: 2, usageLimit: 50 }],
+      });
+    }
+    throw new Error(`unexpected fixture endpoint ${url.pathname}`);
+  };
+  globalThis.fetch = Object.assign(responder, { preconnect: realFetch.preconnect });
+
+  const result = await runLogin(
+    ConfigSchema.parse({
+      api_keys: ["synthetic-key"],
+      proxy_url: "",
+      default_region: "eu-central-1",
+    }),
+    {},
+    {
+      poll: (client, secret, device, interval, expires, region, _sleep, proxy) =>
+        pollKiroIDCToken(
+          client,
+          secret,
+          device,
+          interval,
+          expires,
+          region,
+          async () => undefined,
+          proxy,
+        ),
+      openDb: () => new AccountsDatabase(path),
+      stdout: () => undefined,
+      stderr: () => undefined,
+    },
+  );
+
+  expect(calls.filter(({ pathname }) => pathname === "/List-Available-Profiles")).toEqual([]);
+  expect(result.account).toMatchObject({
+    email: "builder@example.test",
+    profileArn: KIRO_AUTH_SERVICE.BUILDER_ID_PROFILE_ARN,
+    region: "us-east-1",
+    oidcRegion: "eu-central-1",
+  });
+  expect(calls.find(({ pathname }) => pathname === "/client/register")?.hostname).toBe(
+    "oidc.eu-central-1.amazonaws.com",
+  );
+  const db = new AccountsDatabase(path);
+  try {
+    expect(db.getAccounts()).toEqual([result.account]);
+  } finally {
+    db.close();
+  }
 });
 
 test("RegisterClient seconds survive real authorization, polling, relogin and SQLite reopen without reviving old auth state", async () => {
@@ -107,7 +192,8 @@ test("RegisterClient seconds survive real authorization, polling, relogin and SQ
     );
     db = new AccountsDatabase(path);
     try {
-      const next = db.getById(previous.id)!;
+      const next = db.getById(previous.id);
+      if (next === undefined) throw new Error("re-login did not persist the fixture account");
       expect(calls).toEqual(["/client/register", "/device_authorization", "/token"]);
       expect(next).toMatchObject({
         id: previous.id,

@@ -49,7 +49,7 @@ arguments or credentials. [Data and network](../privacy.md) lists every file and
   [Known limits](../limits.md) lists them.
 - **It does not share access.** It is meant for Kiro accounts you control, and it does not get around their usage
   limits.
-- **It does not depend on Kiro CLI.** Sign-in, profile discovery and token renewal are its own.
+- **It does not depend on Kiro CLI.** Sign-in, Builder ID service-profile binding, organization-profile discovery and token renewal are its own.
 
 ## Next steps
 

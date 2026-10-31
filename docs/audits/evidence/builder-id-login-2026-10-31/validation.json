@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "issue": {
+    "url": "https://github.com/sunerpy/kiro-provider/issues/143",
+    "owner_comment": "https://github.com/sunerpy/kiro-provider/issues/143#issuecomment-6518611395",
+    "reported_release": "3.8.6",
+    "reported_flow": "AWS Builder ID personal Kiro Free",
+    "reported_failure_stage": "post-device-authorization profile discovery",
+    "reported_status": 403
+  },
+  "shipped_artifact_probe": {
+    "harness": "scripts/probe-builder-id-profile.ts",
+    "schema_version": 1,
+    "observation": "static-shipped-artifact",
+    "executes_target": false,
+    "network_requests": 0,
+    "expected_service_profile": "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX",
+    "binaries": [
+      {
+        "file": "kiro-cli",
+        "size_bytes": 43880352,
+        "sha256": "67bdec1b8104ac31474111c8f33495eb882caa3bb08975eda06b7302b98fb478",
+        "service_profile_occurrences": 1,
+        "source_markers": {
+          "crates/fig_api_client/src/profile_resolver.rs": true,
+          "crates/chat-cli/src/api_client/mod.rs": false,
+          "crates/chat-cli-v2/src/api_client/mod.rs": false
+        },
+        "passed": true
+      },
+      {
+        "file": "chat-cli-2.21.1",
+        "size_bytes": 838626440,
+        "sha256": "f130f53bfa9e435d864c1b148ea27086cb3ed0399306318161a8a54dd03d1952",
+        "service_profile_occurrences": 4,
+        "source_markers": {
+          "crates/fig_api_client/src/profile_resolver.rs": false,
+          "crates/chat-cli/src/api_client/mod.rs": true,
+          "crates/chat-cli-v2/src/api_client/mod.rs": true
+        },
+        "passed": true
+      }
+    ],
+    "passed": true
+  },
+  "independent_observations": [
+    {
+      "authority": "official-project-user-report",
+      "url": "https://github.com/kirodotdev/Kiro/issues/5143",
+      "observation": "ListAvailableProfiles rejected Builder ID in both us-east-1 and eu-central-1",
+      "status": 403,
+      "safe_error": "AWS Builder ID is not supported for this operation."
+    },
+    {
+      "authority": "independent-live-reproduction",
+      "url": "https://github.com/kirodotdev/KiroCrew/issues/26109",
+      "observation": "Builder ID ListAvailableProfiles was denied in both profile regions",
+      "status": 400,
+      "safe_error_type": "AccessDeniedException"
+    },
+    {
+      "authority": "independent-live-reproduction",
+      "url": "https://github.com/anpicasso/hermes-kiro-provider/issues/2",
+      "observation": "the fixed Builder ID service profile enabled a real runtime generation",
+      "runtime_result": "completed"
+    }
+  ],
+  "implementation": {
+    "builder_id_profile_catalog_calls": 0,
+    "builder_id_service_profile_region": "us-east-1",
+    "oidc_and_runtime_regions_remain_independent": true,
+    "organization_profile_discovery_preserved": true,
+    "organization_403_fails_closed": true,
+    "organization_profile_override_rejected_for_builder_id": true,
+    "legacy_and_versioned_builder_id_json_import_supported": true,
+    "unrelated_design_files_preserved": true
+  },
+  "validation": {
+    "pre_fix_direct_login_regression_failed": true,
+    "pre_fix_legacy_import_regression_failed": true,
+    "targeted_regressions_pass": true,
+    "full_pre_ci_pass": true,
+    "tests_pass": 3508,
+    "tests_fail": 0,
+    "line_coverage_percent": 95.93,
+    "coverage_floor_percent": 93,
+    "assertions": 18161,
+    "test_files": 252,
+    "format_lint_typecheck_docs_scripts_security": true,
+    "coverage_parity": true
+  },
+  "limitations": [
+    "Static binary literals prove shipped client routing data, not current server acceptance by themselves.",
+    "The original profile-catalog 403 was not replayed with the new account against the released pre-fix binary; executable regressions cover the pre-fix failure and the candidate completed live authorization and generation.",
+    "The live host was Windows Server 2025 build 26100, not the reporter's Windows 10/11 host.",
+    "The adjacent non-streaming Responses rejection is recorded separately and does not invalidate the successful Builder ID streaming generation path."
+  ],
+  "secrets_or_raw_payloads_retained": false,
+  "regression": {
+    "introduced_by": "3946a0b3c5cddd6b15f312136ef80f541396b4b1",
+    "introduced_by_url": "https://github.com/sunerpy/kiro-provider/commit/3946a0b3c5cddd6b15f312136ef80f541396b4b1",
+    "first_release": "3.5.2",
+    "last_confirmed_affected_release": "3.8.6"
+  },
+  "packaged_candidate": {
+    "reported_version_before_release_please": "3.8.6",
+    "sha256": "8a7d50230d226fdb35aef8e2f25d8b9c4d5730b75df9a2f5bf97b5f223f3249e",
+    "size_bytes": 98179200,
+    "build_binary_pass": true,
+    "version_smoke_pass": true,
+    "builder_id_help_present": true,
+    "kiro_client_import_help_present": true
+  },
+  "windows_live_acceptance": {
+    "revision": "354a7cd1dce76210b70c49753246701240d15a81",
+    "environment": {
+      "os": "Windows Server 2025 Datacenter",
+      "build": "26100",
+      "candidate_architecture": "windows-x64",
+      "isolated_config_and_account_store": true
+    },
+    "candidate": {
+      "reported_version_before_release_please": "3.8.6",
+      "sha256": "4a149ef0368a25404725e128897e2ba363a4805c43d4995a901841ec9082821a",
+      "size_bytes": 102069760,
+      "version_smoke_pass": true,
+      "help_smoke_pass": true
+    },
+    "builder_id_authorization": {
+      "browser_device_authorization_completed": true,
+      "cli_login_succeeded": true,
+      "existing_related_service_registration_interfered": false
+    },
+    "persisted_account": {
+      "database_quick_check": "ok",
+      "account_count": 1,
+      "email_resolved": true,
+      "auth_method": "idc",
+      "region": "us-east-1",
+      "oidc_region": "us-east-1",
+      "profile_present": true,
+      "profile_matches_builder_id_service_profile": true,
+      "health": "healthy",
+      "availability": "available"
+    },
+    "gateway": {
+      "health_status": 200,
+      "readiness_status": 200,
+      "readiness": "ready",
+      "models_status": 200,
+      "dynamic_catalog_synchronized": true,
+      "available_model_count": 5,
+      "selected_model": "deepseek-3.2",
+      "responses_stream": true,
+      "responses_status": 200,
+      "terminal_status": "completed",
+      "completed_event_count": 1,
+      "failed_event_count": 0,
+      "output_exact_match": true,
+      "output_text_chars": 11,
+      "duration_ms": 2737
+    },
+    "adjacent_observation": {
+      "scope": "not required to validate Builder ID login",
+      "non_streaming_responses_status": 400,
+      "error_type": "invalid_request_error",
+      "error_code": "unsupported_parameter",
+      "error_param": "stream",
+      "streaming_retry_succeeded": true
+    },
+    "cleanup": {
+      "gateway_process_remaining": 0,
+      "temporary_api_key_config_removed": true
+    },
+    "secrets_or_raw_payloads_retained": false
+  }
+}

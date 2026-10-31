@@ -35,9 +35,11 @@ organization that uses IAM Identity Center, pass its start URL and region:
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1
 ```
 
-kiro-provider finds your Kiro profile and stores the account in its own database. When the identity has several
-profiles, it stops before saving anything and asks you to rerun with `--profile-arn <arn>`. Run `login` again for
-each further account; [Accounts](accounts.md) covers importing accounts from OpenCode and everything after sign-in.
+For Builder ID, kiro-provider uses Kiro's fixed request-level service profile rather than the organization-profile
+catalog that rejects personal tokens. For IAM Identity Center, it discovers the organization's Kiro profile. When
+that identity has several profiles, it stops before saving anything and asks you to rerun with
+`--profile-arn <arn>`. Run `login` again for each further account; [Accounts](accounts.md) covers importing accounts
+and everything after sign-in.
 
 ## 3. Start the gateway
 

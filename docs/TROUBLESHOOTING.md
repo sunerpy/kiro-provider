@@ -139,6 +139,25 @@ if the authorization is no longer usable, re-login rather than repeatedly
 clearing a rate-limit timer. Never print refresh tokens or client secrets while
 diagnosing this condition.
 
+### Builder ID approval succeeds, then profile discovery returns HTTP 403
+
+- **Cause:** `v3.5.2` through `v3.8.6` sent every new device login through Kiro
+  `List-Available-Profiles`. AWS Builder ID authentication succeeds, but Kiro
+  deliberately rejects that organization-profile operation for personal
+  accounts, so the provider discarded the valid token before opening its local
+  account database. Changing the OIDC region or supplying `--profile-arn` does
+  not make that operation valid.
+- **Remedy:** Upgrade to a build containing the Builder ID profile fix and run
+  `kiro-provider login` again. Fixed builds skip the unsupported catalog only
+  when the login is provably Builder ID and use the same fixed request-level
+  service profile as the shipped Kiro CLI. IAM Identity Center logins still use
+  strict profile discovery and never receive this fallback. If direct login is
+  temporarily unavailable, import an already authenticated
+  `opencode-kiro-auth` database, or use
+  `accounts import --format kiro-client --from <file|->` with a supported legacy
+  BuilderId export on a fixed build. Do not copy tokens or edit `accounts.db` by
+  hand.
+
 ### `profileArn is required for this request` after an IAM Identity Center login
 
 - **Cause:** The account row has no `profile_arn`. Older direct-login builds could

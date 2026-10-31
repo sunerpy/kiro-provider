@@ -545,21 +545,39 @@ export class AccountsDatabase {
   }
 
   insertAccount(account: ManagedAccount): StoredAccount {
+    return this.withImmediateTransaction(() => this.insertAccountInternal(account));
+  }
+
+  /** Import only adds identities; a concurrent login/refresh/removal always wins. */
+  insertAccountIfAbsent(account: ManagedAccount): StoredAccount | undefined {
     return this.withImmediateTransaction(() => {
-      const existing = this.db
-        .query<GenerationRow, [string]>("SELECT generation FROM accounts WHERE id = ?")
-        .get(account.id);
-      const tombstone = this.db
-        .query<TombstoneRow, [string]>("SELECT last_generation FROM removed_accounts WHERE id = ?")
-        .get(account.id);
-      const generation = Math.max(existing?.generation ?? 0, tombstone?.last_generation ?? 0) + 1;
-      const row = accountToRow(account, generation);
-      const stored = rowToAccount(row);
-      if (stored === undefined) {
-        throw new TypeError(`Account ${account.id} has an invalid region and was not stored`);
-      }
-      this.db
-        .query(`
+      const conflict = this.db
+        .query<{ id: string }, [string, string, string, string]>(`
+          SELECT id FROM accounts
+          WHERE id = ? OR (auth_method = ? AND lower(trim(email)) = lower(trim(?)))
+          UNION ALL SELECT id FROM removed_accounts WHERE id = ?
+          LIMIT 1
+        `)
+        .get(account.id, account.authMethod, account.email, account.id);
+      return conflict ? undefined : this.insertAccountInternal(account);
+    });
+  }
+
+  private insertAccountInternal(account: ManagedAccount): StoredAccount {
+    const existing = this.db
+      .query<GenerationRow, [string]>("SELECT generation FROM accounts WHERE id = ?")
+      .get(account.id);
+    const tombstone = this.db
+      .query<TombstoneRow, [string]>("SELECT last_generation FROM removed_accounts WHERE id = ?")
+      .get(account.id);
+    const generation = Math.max(existing?.generation ?? 0, tombstone?.last_generation ?? 0) + 1;
+    const row = accountToRow(account, generation);
+    const stored = rowToAccount(row);
+    if (stored === undefined) {
+      throw new TypeError(`Account ${account.id} has an invalid region and was not stored`);
+    }
+    this.db
+      .query(`
           INSERT OR REPLACE INTO accounts (
             id, email, auth_method, region, oidc_region, client_id, client_secret,
             profile_arn, start_url, refresh_token, access_token, expires_at,
@@ -569,10 +587,9 @@ export class AccountsDatabase {
             refresh_failure_code, refresh_failed_at, refresh_retry_at, last_refresh_at, generation
           ) VALUES (${Array.from({ length: 30 }, () => "?").join(", ")})
         `)
-        .run(...rowBindings(row));
-      this.clearRemovedAccountInternal(account.id);
-      return stored;
-    });
+      .run(...rowBindings(row));
+    this.clearRemovedAccountInternal(account.id);
+    return stored;
   }
 
   updateExistingAccounts(accounts: readonly StoredAccount[]): number {

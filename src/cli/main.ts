@@ -18,6 +18,7 @@ import {
   type ImportAccountsOptions,
   runImportAccounts,
 } from "./import-accounts.js";
+import { runKiroClientImport } from "./import-kiro-client.js";
 import { type LoginOptions, type LoginResult, runLogin } from "./login.js";
 import { runAccountRefresh } from "./refresh-accounts.js";
 import {
@@ -60,6 +61,7 @@ export type CliDependencies = {
     options: ImportAccountsOptions,
     dependencies: ImportAccountsDependencies,
   ) => unknown;
+  readonly runImportKiroClient?: typeof runKiroClientImport;
   readonly checkForUpdate: (options: UpdateCheckOptions) => Promise<UpdateCheck>;
   readonly runSelfUpdate: (
     options: SelfUpdateOptions,
@@ -91,6 +93,7 @@ const defaultDependencies: CliDependencies = {
   runLogin,
   runAccountRefresh,
   runImportAccounts,
+  runImportKiroClient: runKiroClientImport,
   checkForUpdate,
   runSelfUpdate,
   openDb: (path) => new AccountsDatabase(path),
@@ -225,6 +228,22 @@ async function dispatch(command: CliCommand, dependencies: CliDependencies): Pro
       return 0;
     }
     case "accounts-import": {
+      if (command.format === "kiro-client") {
+        let config: Config;
+        try {
+          config = dependencies.loadConfig({
+            ...(command.configPath === undefined ? {} : { configPath: command.configPath }),
+          });
+        } catch {
+          throw new Error("Kiro-client import rejected: configuration_unavailable");
+        }
+        const result = await (dependencies.runImportKiroClient ?? runKiroClientImport)(
+          config,
+          { from: command.from as string, force: command.force },
+          { stdout: dependencies.stdout },
+        );
+        return result.failed === 0 ? 0 : 1;
+      }
       const database = dependencies.openDb(ACCOUNTS_DB_PATH);
       try {
         dependencies.runImportAccounts(

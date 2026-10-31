@@ -30,7 +30,7 @@ kiro-provider login
 kiro-provider login --start-url https://example.awsapps.com/start --region us-east-1
 ```
 
-kiro-provider 会查找你的 Kiro profile，并把账号保存到自己的数据库中。如果该身份有多个 profile，它会在保存任何内容之前停止，并提示你加上 `--profile-arn <arn>` 重新运行。每增加一个账号就再运行一次 `login`；从 OpenCode 导入账号以及登录之后的操作见[账号](accounts.md)。
+Builder ID 会使用 Kiro 固定的请求级 service profile，不调用会拒绝个人 token 的组织 profile catalog；IAM Identity Center 则发现组织的 Kiro profile。如果该组织身份有多个 profile，kiro-provider 会在保存任何内容之前停止，并提示你加上 `--profile-arn <arn>` 重新运行。每增加一个账号就再运行一次 `login`；导入账号以及登录之后的操作见[账号](accounts.md)。
 
 ## 3. 启动网关
 
