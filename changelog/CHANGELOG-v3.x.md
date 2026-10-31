@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.9.1](https://github.com/sunerpy/kiro-provider/compare/v3.9.0...v3.9.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **replay:** 修复跨账号迁移和零帧续接失败 ([#146](https://github.com/sunerpy/kiro-provider/issues/146)) ([5764f63](https://github.com/sunerpy/kiro-provider/commit/5764f63e661c813d66d3dd6956cdb6b8bc72b948))
+
 ## [3.9.0](https://github.com/sunerpy/kiro-provider/compare/v3.8.6...v3.9.0) (2026-10-31)
 
 
