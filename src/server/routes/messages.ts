@@ -374,6 +374,8 @@ export async function handleMessages(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
+    const migrationReplayOmitted =
+      pipelineResponse.headers.get("x-kiro-reasoning-replay-mode") === "migration-rejected-omitted";
     if (!pipelineResponse.ok) {
       if (localStructuredOutputProfile !== undefined) {
         const failure = await structuredOutputPipelineFailure(pipelineResponse);
@@ -422,6 +424,8 @@ export async function handleMessages(
         streamOwnsRouteResources = true;
         if (modelOmitted)
           streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (migrationReplayOmitted)
+          streaming.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
         if (clientNormalization)
           streaming.headers.set("x-kiro-client-normalization", clientNormalization.kind);
         return streaming;
@@ -444,6 +448,8 @@ export async function handleMessages(
       );
       if (modelOmitted)
         response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+      if (migrationReplayOmitted)
+        response.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
       if (clientNormalization)
         response.headers.set("x-kiro-client-normalization", clientNormalization.kind);
       return response;
@@ -470,6 +476,8 @@ export async function handleMessages(
         "incompatible-omitted"
       )
         streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+      if (migrationReplayOmitted)
+        streaming.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
       if (clientNormalization)
         streaming.headers.set("x-kiro-client-normalization", clientNormalization.kind);
       return streaming;
@@ -487,6 +495,8 @@ export async function handleMessages(
           "incompatible-omitted"
         )
           response.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (migrationReplayOmitted)
+          response.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
         if (clientNormalization)
           response.headers.set("x-kiro-client-normalization", clientNormalization.kind);
         return response;

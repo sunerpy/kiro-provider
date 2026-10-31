@@ -29,6 +29,23 @@ Responses 的 reasoning 条目不带 `encrypted_content`，
 assistant 条目并继续工具结果轮次，Kiro 返回 200，且同会话、新会话、另一账号
 均接受。也就是说回放它在协议上是安全的；未知的是它**有没有用**。
 
+### 2026-10-31 新增观测与有界恢复
+
+生产日志的脱敏聚合进一步确认该失败是间歇性的历史形态问题，而不是所有迁移都
+不可用：观测窗口内记录了 175 次 `reasoning_replay_account_migrated`、27 次
+`reasoning_replay_migration_committed` 与 6 次
+`reasoning_replay_migration_rejected`。6 次拒绝均为 Responses / `gpt-5.6-sol` / HTTP
+400 `REQUEST_BODY_INVALID`，其中 5 次原账号不可选，1 次原账号已被隔离；被拒绝
+历史包含 17～78 个 replay。完整 count-only 证据见
+[`evidence/replay-recovery-2026-10-31/validation.json`](evidence/replay-recovery-2026-10-31/validation.json)。
+
+当前修复不扩大已验证迁移单元，也不宣称定位了上游根因。它在迁移被拒且原账号
+缺失、不可选、模型不符或被隔离时，限定同一目标账号和新 conversation 做一次
+显式降级：只省略已认证的 opaque reasoning，保留可见 assistant 与工具历史，
+成功后返回 `x-kiro-reasoning-replay-mode: migration-rejected-omitted`。若该尝试失败、
+派发预算不足或目标不再可选，仍返回原有 typed 400；严格 owner 模式不变。下面的
+三臂探针仍负责定位 Kiro 的真正拒绝条件。
+
 ### 待验证
 
 回放签名-only 信封是否改善工具循环内的连续性：模型在多工具任务中是否更少

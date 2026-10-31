@@ -1041,6 +1041,8 @@ async function handleResponsesCore(
     }
 
     const contentType = pipelineResponse.headers.get("Content-Type") ?? "";
+    const migrationReplayOmitted =
+      pipelineResponse.headers.get("x-kiro-reasoning-replay-mode") === "migration-rejected-omitted";
     const omitReasoningSummary =
       pipelineResponse.headers.get("x-kiro-thinking-display-mode") === "forced-omitted";
     if (omitReasoningSummary) markThinkingDisplayForced();
@@ -1118,6 +1120,8 @@ async function handleResponsesCore(
         streamOwnsRouteResources = true;
         if (modelOmitted)
           streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+        if (migrationReplayOmitted)
+          streaming.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
         return streaming;
       }
       const completion = contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)
@@ -1160,6 +1164,9 @@ async function handleResponsesCore(
       return Response.json(publicState, {
         headers: {
           ...(modelOmitted ? { "x-kiro-reasoning-model-replay-mode": "incompatible-omitted" } : {}),
+          ...(migrationReplayOmitted
+            ? { "x-kiro-reasoning-replay-mode": "migration-rejected-omitted" }
+            : {}),
           "X-Kiro-Usage-Policy":
             config.responses_fidelity_mode === "strict" ? "measured-only" : "compatible-estimates",
           "X-Reasoning-Included": "true",
@@ -1205,6 +1212,8 @@ async function handleResponsesCore(
         "incompatible-omitted"
       )
         streaming.headers.set("x-kiro-reasoning-model-replay-mode", "incompatible-omitted");
+      if (migrationReplayOmitted)
+        streaming.headers.set("x-kiro-reasoning-replay-mode", "migration-rejected-omitted");
       return streaming;
     }
     if (contentType.includes(CANONICAL_OUTPUT_JSON_MEDIA_TYPE)) {
@@ -1248,6 +1257,9 @@ async function handleResponsesCore(
             ...(pipelineResponse.headers.get("x-kiro-reasoning-model-replay-mode") ===
             "incompatible-omitted"
               ? { "x-kiro-reasoning-model-replay-mode": "incompatible-omitted" }
+              : {}),
+            ...(migrationReplayOmitted
+              ? { "x-kiro-reasoning-replay-mode": "migration-rejected-omitted" }
               : {}),
             "X-Kiro-Usage-Policy":
               config.responses_fidelity_mode === "strict"

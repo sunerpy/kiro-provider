@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "scope": [
+    "portable reasoning replay migration after origin quota exhaustion",
+    "Claude Code resume after prepublication stream failures"
+  ],
+  "production_observation": {
+    "installed_provider_version": "3.8.5",
+    "window_start": "2026-10-01T00:00:00Z",
+    "window_end": "2026-10-31T09:00:00Z",
+    "migration_events": {
+      "account_migrated": 175,
+      "migration_committed": 27,
+      "migration_rejected": 6,
+      "rejection_protocol": "responses",
+      "rejection_model": "gpt-5.6-sol",
+      "rejection_upstream_status": 400,
+      "rejection_upstream_code": "REQUEST_BODY_INVALID",
+      "fallback_blocked_reasons": {
+        "origin_unselectable": 5,
+        "origin_quarantined": 1
+      },
+      "rejected_replay_count_min": 17,
+      "rejected_replay_count_max": 78
+    },
+    "interpretation": "Verified cross-account replay succeeds often but remains history-dependent; when the origin is exhausted, the existing origin fallback cannot recover a rejected migration."
+  },
+  "claude_resume_observation": {
+    "session_id_sha256": "0688810e9e1a912a3a6d984860fc61e0ff6eec03b57a4d340a5dfbcbc9257c50",
+    "client_version": "2.1.312",
+    "transcript_mode": "0600",
+    "transcript_bytes": 2622922,
+    "transcript_records": 87,
+    "completed_user_turns_before_resume": 1,
+    "historical_signed_thinking_blocks": 2,
+    "historical_tool_calls": 1,
+    "historical_tool_results": 1,
+    "known_request_text_chars_lower_bound": 89972,
+    "failed_resume_window": {
+      "provider_request_count": 10,
+      "distinct_account_hashes": 4,
+      "zero_frame_upstream_errors": 5,
+      "partial_stream_incomplete": 3,
+      "client_aborts": 2,
+      "reasoning_replay_locked": false,
+      "reasoning_replay_migration_rejected": false
+    },
+    "isolated_copy_retry": {
+      "original_transcript_modified": false,
+      "fork_session": true,
+      "turns": 1,
+      "exit_code": 0,
+      "stderr_bytes": 0,
+      "result_exact_match": true,
+      "duration_ms": 8767,
+      "temporary_copy_removed": true
+    },
+    "interpretation": "The session is structurally resumable. Its earlier failure was repeated upstream zero-frame or incomplete streaming, not reasoning replay migration rejection."
+  },
+  "implementation": {
+    "migration_rejection_recovery": {
+      "applies_after_authenticated_portable_replay_migration": true,
+      "requires_preoutput_upstream_rejection": true,
+      "origin_fallback_retained_when_selectable": true,
+      "same_target_retry_count": 1,
+      "fresh_conversation": true,
+      "opaque_reasoning_omitted": true,
+      "visible_assistant_history_preserved": true,
+      "tool_history_preserved": true,
+      "current_tool_authorization_preserved": true,
+      "binding_commit_deferred_until_acceptance": true,
+      "response_header": "x-kiro-reasoning-replay-mode: migration-rejected-omitted",
+      "strict_owner_mode_unchanged": true,
+      "third_account_retry_forbidden": true
+    },
+    "zero_frame_retry": {
+      "omitted_thinking_prefix_mode": true,
+      "requires_raw_event_count": 0,
+      "bounded_by_stream_max_attempts": true,
+      "any_raw_frame_keeps_no_replay_boundary": true
+    }
+  },
+  "validation": {
+    "pre_fix_focused_failures": 7,
+    "pre_fix_failure_reasons": [
+      "origin-exhausted migration returned HTTP 400 instead of visible-history recovery",
+      "zero-frame omitted-prefix failures returned HTTP 502 instead of using the bounded retry"
+    ],
+    "focused_test_files": [
+      "__tests__/pipeline-replay-migration-binding.test.ts",
+      "__tests__/fable-reasoning-prefetch-lifecycle.test.ts",
+      "__tests__/history-builder.test.ts",
+      "__tests__/messages-route-errors.test.ts",
+      "__tests__/responses-route-output.test.ts"
+    ],
+    "real_client_harness": "scripts/probe-claude-context-errors.ts",
+    "real_client_harness_version": "2.1.312",
+    "real_client_private_network_namespace": true,
+    "real_client_zero_frame_sdk_dispatches_in_one_request": 2,
+    "real_client_zero_frame_result": "success",
+    "focused_tests_passed": 68,
+    "adjacent_test_files": 16,
+    "adjacent_tests_passed": 189,
+    "full_pre_ci": {
+      "passed": true,
+      "tests_passed": 3520,
+      "test_files": 252,
+      "expect_calls": 18284,
+      "coverage_lines_covered": 35275,
+      "coverage_lines_total": 36761,
+      "coverage_percent": 95.96,
+      "coverage_gate_percent": 93.0,
+      "format_typecheck_lint_docs_build_security_passed": true
+    },
+    "real_client_harness_cases_passed": 4
+  },
+  "limitations": [
+    "Only one production account remained selectable after the observation window, so the new migration-omission fallback was not re-run live across two accounts in this pass.",
+    "The exact Kiro field combination that makes some long portable replay histories return REQUEST_BODY_INVALID remains unresolved; the existing three-arm upstream probe is still required.",
+    "The isolated Claude resume success proves the supplied session is readable and can continue; it does not prove every earlier transport failure had the same external cause."
+  ],
+  "secrets_or_raw_payloads_retained": false
+}

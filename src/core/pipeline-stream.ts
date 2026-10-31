@@ -218,6 +218,11 @@ export class StreamTelemetry {
     );
   }
 
+  /** No upstream frame means the generation has not exposed any accepted output evidence. */
+  get rawEventSeen(): boolean {
+    return this.rawEventCount > 0;
+  }
+
   /** Opaque omitted reasoning can precede every publicly visible delta. */
   get reasoningMetadataSeen(): boolean {
     return (this.eventTypeCounts.get("reasoningContentEvent") ?? 0) > 0;

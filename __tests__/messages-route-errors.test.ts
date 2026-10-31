@@ -6,6 +6,11 @@ import type {
   RunChatCompletionOptions,
 } from "../src/core/pipeline.js";
 import type { KiroAuthDetails, ManagedAccount } from "../src/kiro/types.js";
+import {
+  CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+  CANONICAL_OUTPUT_STREAM_CONTENT_TYPE,
+  CANONICAL_OUTPUT_VERSION,
+} from "../src/protocol/output.js";
 import { openAiError } from "../src/server/errors.js";
 import {
   handleMessages,
@@ -83,7 +88,7 @@ function dependencies(
   return { accountManager: new StubAccountManager(), tokenRefresher, runPipeline };
 }
 
-function request(): Request {
+function request(stream = false): Request {
   return new Request("http://gateway/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -91,6 +96,7 @@ function request(): Request {
       model: MODEL,
       max_tokens: 1_024,
       messages: [{ role: "user", content: "hello" }],
+      stream,
     }),
   });
 }
@@ -162,6 +168,68 @@ describe("Anthropic pipeline error translation", () => {
     expect(response.headers.get("Retry-After")).toBe("2");
     expect(await response.json()).toMatchObject({ error: { type: "rate_limit_error" } });
   });
+
+  test.each([false, true])(
+    "propagates the explicit migration-replay omission mode (stream=%s)",
+    async (stream) => {
+      const runPipeline = async (): Promise<Response> => {
+        const headers = {
+          "Content-Type": stream
+            ? CANONICAL_OUTPUT_STREAM_CONTENT_TYPE
+            : CANONICAL_OUTPUT_JSON_CONTENT_TYPE,
+          "x-kiro-reasoning-replay-mode": "migration-rejected-omitted",
+        };
+        if (!stream) {
+          return new Response(
+            JSON.stringify({
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              conversationId: "conversation-id",
+              model: MODEL,
+              createdAt: 1_700_000_000,
+              text: "answer",
+              toolCalls: [],
+              finishReason: "stop",
+              usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+            }),
+            { headers },
+          );
+        }
+        return new Response(
+          `${[
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "started",
+              conversationId: "conversation-id",
+              model: MODEL,
+              createdAt: 1_700_000_000,
+            },
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "text_delta",
+              text: "answer",
+            },
+            {
+              canonicalOutputVersion: CANONICAL_OUTPUT_VERSION,
+              type: "completed",
+              finishReason: "stop",
+              usage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 },
+            },
+          ]
+            .map((event) => JSON.stringify(event))
+            .join("\n")}\n`,
+          { headers },
+        );
+      };
+      const response = await handleMessages(request(stream), config(), dependencies(runPipeline));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBe(
+        "migration-rejected-omitted",
+      );
+      const wire = await response.text();
+      expect(wire).toContain("answer");
+      if (stream) expect(wire).toContain("message_stop");
+    },
+  );
 
   test("keeps other pipeline statuses in their existing Anthropic classes", async () => {
     const invalid = await translatePipelineError(

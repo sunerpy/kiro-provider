@@ -278,6 +278,7 @@ async function errorBody(response: Response): Promise<{
 interface Dispatch {
   readonly accountId: string;
   readonly conversationId: string;
+  readonly reasoningReplayCount: number;
   /** Stored thread binding observed at the moment the SDK send ran. */
   readonly bindingAtSend:
     | { readonly accountId: string; readonly conversationId: string }
@@ -330,6 +331,7 @@ function fixture(options: {
   readonly thirdAccount?: boolean;
   /** Makes every binding rebind (the migration commit write) throw. */
   readonly commitFault?: boolean;
+  readonly maxUpstreamDispatches?: number;
   readonly behaviours: Readonly<Record<string, SendBehaviour>>;
 }) {
   const affinityStore = new AccountsDatabase(":memory:");
@@ -369,6 +371,9 @@ function fixture(options: {
       tokenRefresher: new FakeTokenRefresher(),
       tenantId: "tenant-a",
       reasoningReplayStore: reasoningReplayStore(),
+      ...(options.maxUpstreamDispatches === undefined
+        ? {}
+        : { maxUpstreamDispatches: options.maxUpstreamDispatches }),
       ...(options.affinity === false
         ? {}
         : {
@@ -386,9 +391,15 @@ function fixture(options: {
               throw new TypeError("dispatched command has no conversation id");
             }
             const stored = binding();
+            const history = (command.input.conversationState?.history ?? []) as Array<{
+              readonly assistantResponseMessage?: { readonly reasoningContent?: unknown };
+            }>;
             const dispatch: Dispatch = {
               accountId,
               conversationId,
+              reasoningReplayCount: history.filter(
+                (message) => message.assistantResponseMessage?.reasoningContent !== undefined,
+              ).length,
               bindingAtSend: stored
                 ? { accountId: stored.accountId, conversationId: stored.conversationId }
                 : undefined,
@@ -632,59 +643,114 @@ describe("rejected portable reasoning replay migration", () => {
     });
   }
 
-  test("an unselectable origin cannot take the fallback and the thread keeps its origin binding", async () => {
+  for (const stream of [false, true]) {
+    test(`stream=${stream}: an exhausted origin recovers on the target without opaque reasoning`, async () => {
+      let targetSends = 0;
+      const f = fixture({
+        concurrency: 10,
+        originExhausted: true,
+        behaviours: {
+          [TARGET]: async (dispatch) => {
+            targetSends += 1;
+            return targetSends === 1 ? reject()(dispatch) : succeed(dispatch);
+          },
+          [ORIGIN]: succeed,
+        },
+      });
+      try {
+        const response = await f.run(stream);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-kiro-reasoning-replay-mode")).toBe(
+          "migration-rejected-omitted",
+        );
+        expect(await response.text()).toContain("continued");
+        expect(f.dispatches.map((d) => d.accountId)).toEqual([TARGET, TARGET]);
+        expect(f.dispatches.map((d) => d.reasoningReplayCount)).toEqual([1, 0]);
+        expect(f.dispatches[0]?.bindingAtSend).toEqual(ORIGIN_BINDING);
+        expect(f.dispatches[1]?.bindingAtSend).toEqual(ORIGIN_BINDING);
+        expect(f.dispatches[1]?.conversationId).not.toBe(f.dispatches[0]?.conversationId);
+        expect(f.binding()).toMatchObject({
+          accountId: TARGET,
+          conversationId: f.dispatches[1]?.conversationId,
+        });
+
+        const rejected = audit.events("reasoning_replay_migration_rejected");
+        expect(rejected).toHaveLength(1);
+        expect(rejected[0]).toMatchObject({
+          from_account_hash: auditHash(ORIGIN),
+          to_account_hash: auditHash(TARGET),
+          replay_count: 1,
+          upstream_status: 400,
+          upstream_code: "REQUEST_BODY_INVALID",
+          fallback: "reasoning-omitted",
+          fallback_blocked_reason: "origin_unselectable",
+        });
+        const omitted = audit.events("reasoning_replay_migration_omitted");
+        expect(omitted).toHaveLength(1);
+        expect(omitted[0]).toMatchObject({
+          from_account_hash: auditHash(ORIGIN),
+          to_account_hash: auditHash(TARGET),
+          replay_count: 1,
+        });
+        const committed = audit.events("reasoning_replay_migration_committed");
+        expect(committed).toHaveLength(1);
+        expect(committed[0]).toMatchObject({
+          from_account_hash: auditHash(ORIGIN),
+          to_account_hash: auditHash(TARGET),
+          replay_count: 1,
+          replay_mode: "omitted",
+        });
+        for (const record of [...rejected, ...omitted, ...committed]) {
+          expectSanitized(record as AuditRecord, f.dispatches);
+        }
+      } finally {
+        f.close();
+      }
+    });
+  }
+
+  test("a spent dispatch budget remains fail-closed without the omission retry", async () => {
     const f = fixture({
       concurrency: 10,
       originExhausted: true,
+      maxUpstreamDispatches: 1,
       behaviours: { [TARGET]: reject(), [ORIGIN]: succeed },
     });
     try {
-      const first = await f.run(false);
-      expect(first.status).toBe(400);
-      expect(await errorBody(first)).toMatchObject({
-        error: {
-          code: "reasoning_replay_migration_rejected",
-          type: "upstream_error",
-          message:
-            "Kiro rejected the request after its signed reasoning history was migrated to another account, and the original account is unavailable",
-        },
+      const response = await f.run(false);
+      expect(response.status).toBe(400);
+      expect(await errorBody(response)).toMatchObject({
+        error: { code: "reasoning_replay_migration_rejected", type: "upstream_error" },
       });
       expect(f.dispatches.map((d) => d.accountId)).toEqual([TARGET]);
-      expect(f.dispatches[0]?.bindingAtSend).toEqual(ORIGIN_BINDING);
-      const rejected = audit.events("reasoning_replay_migration_rejected");
-      expect(rejected).toHaveLength(1);
-      expect(rejected[0]).toMatchObject({
-        from_account_hash: auditHash(ORIGIN),
-        to_account_hash: auditHash(TARGET),
-        upstream_status: 400,
-        upstream_code: "REQUEST_BODY_INVALID",
+      expect(audit.events("reasoning_replay_migration_rejected")[0]).toMatchObject({
         fallback: "none",
         fallback_blocked_reason: "origin_unselectable",
       });
-      expectSanitized(rejected[0] as AuditRecord, f.dispatches);
-      // Pre-fix the row already named the failed target; the client's retry
-      // then repeated the same rejected shape forever.
+      expect(audit.events("reasoning_replay_migration_omitted")).toHaveLength(0);
       expect(f.binding()).toMatchObject(ORIGIN_BINDING);
+    } finally {
+      f.close();
+    }
+  });
 
-      // A client retry on the same thread resolves the origin binding again and
-      // migrates afresh instead of silently sticking to the rejected target.
-      const second = await f.run(false);
-      expect(second.status).toBe(400);
-      expect(await errorBody(second)).toMatchObject({
-        error: { code: "reasoning_replay_migration_rejected" },
+  test("a target that also rejects visible-only history returns the original typed rejection", async () => {
+    const f = fixture({
+      concurrency: 10,
+      originExhausted: true,
+      thirdAccount: true,
+      behaviours: { [TARGET]: reject(), [ORIGIN]: succeed, [THIRD]: succeed },
+    });
+    try {
+      const response = await f.run(false);
+      expect(response.status).toBe(400);
+      expect(await errorBody(response)).toMatchObject({
+        error: { code: "reasoning_replay_migration_rejected", type: "upstream_error" },
       });
       expect(f.dispatches.map((d) => d.accountId)).toEqual([TARGET, TARGET]);
-      expect(f.dispatches[1]?.bindingAtSend).toEqual(ORIGIN_BINDING);
-      expect(f.dispatches[1]?.conversationId).not.toBe(f.dispatches[0]?.conversationId);
-      const migrated = audit.events("reasoning_replay_account_migrated");
-      expect(migrated).toHaveLength(2);
-      for (const record of migrated) {
-        expect(record).toMatchObject({
-          from_account_hash: auditHash(ORIGIN),
-          to_account_hash: auditHash(TARGET),
-          binding: "deferred",
-        });
-      }
+      expect(f.dispatches.map((d) => d.reasoningReplayCount)).toEqual([1, 0]);
+      expect(audit.events("reasoning_replay_migration_rejected")).toHaveLength(1);
+      expect(audit.events("reasoning_replay_migration_omission_failed")).toHaveLength(1);
       expect(audit.events("reasoning_replay_migration_committed")).toHaveLength(0);
       expect(f.binding()).toMatchObject(ORIGIN_BINDING);
     } finally {
