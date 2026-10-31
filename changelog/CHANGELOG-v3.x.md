@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.9.0](https://github.com/sunerpy/kiro-provider/compare/v3.8.6...v3.9.0) (2026-10-31)
+
+
+### Features
+
+* **auth:** 支持 Builder ID 登录与安全凭据导入 ([#144](https://github.com/sunerpy/kiro-provider/issues/144)) ([87f0ebb](https://github.com/sunerpy/kiro-provider/commit/87f0ebb17789bf411c547121aab97f6262f9599a))
+
 ## [3.8.6](https://github.com/sunerpy/kiro-provider/compare/v3.8.5...v3.8.6) (2026-10-22)
 
 
