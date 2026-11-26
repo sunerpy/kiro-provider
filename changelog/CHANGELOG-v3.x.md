@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.10.0](https://github.com/sunerpy/kiro-provider/compare/v3.9.1...v3.10.0) (2026-11-26)
+
+
+### Features
+
+* **accounts:** 新增会话优先调度并修复短时令牌续期 ([#149](https://github.com/sunerpy/kiro-provider/issues/149)) ([38c7c45](https://github.com/sunerpy/kiro-provider/commit/38c7c45200151a538ea58b1988db131753f2319a))
+* **models:** 新增 Claude Fable 5.2、Sonnet 5.5 与 Haiku 5.5 ([#151](https://github.com/sunerpy/kiro-provider/issues/151)) ([b264840](https://github.com/sunerpy/kiro-provider/commit/b26484055acd22968c54edcb117da3398ee0d513))
+
 ## [3.9.1](https://github.com/sunerpy/kiro-provider/compare/v3.9.0...v3.9.1) (2026-10-31)
 
 
