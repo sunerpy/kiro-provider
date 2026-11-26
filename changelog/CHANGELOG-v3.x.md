@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.10.1](https://github.com/sunerpy/kiro-provider/compare/v3.10.0...v3.10.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **replay:** 放行 Claude 5.5 系列同 profile 跨账号回放 ([#153](https://github.com/sunerpy/kiro-provider/issues/153)) ([1c34955](https://github.com/sunerpy/kiro-provider/commit/1c349555b8b70b01d2676e69c5d8448c48cfc878))
+
 ## [3.10.0](https://github.com/sunerpy/kiro-provider/compare/v3.9.1...v3.10.0) (2026-11-26)
 
 
