@@ -3,7 +3,7 @@
  * synthetic; fresh access credentials stay in memory and the source DB is
  * read-only. No refresh, service, installed binary or production state writes.
  * bun scripts/probe-reasoning-signatures.ts --confirm --out /private/result.json
- *   [--display summarized|omitted] [--turns 1|2|3] [--long]
+ *   [--model claude-opus-5.5] [--display summarized|omitted] [--turns 1|2|3] [--long]
  */
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
@@ -44,6 +44,8 @@ async function main(): Promise<void> {
     output && !resolve(output).startsWith(`${resolve(import.meta.dir, "..")}/`),
     "external_output_required",
   );
+  const model = option("--model") ?? "claude-opus-5.5";
+  requireCondition(/^[a-z0-9][a-z0-9.-]*$/.test(model), "invalid_model");
   const display = option("--display") ?? "summarized";
   requireCondition(display === "summarized" || display === "omitted", "invalid_display");
   const turns = Number(option("--turns") ?? "3");
@@ -104,7 +106,7 @@ async function main(): Promise<void> {
     mkdirSync(dirname(resolve(output)), { recursive: true, mode: 0o700 });
     writeFileSync(
       output,
-      `${JSON.stringify({ schema_version: 1, source_readonly: true, refresh_credentials_copied: false, state_in_memory: true, model: "claude-opus-5-5", runtime_protocol: "kiro-runtime", effort: "max", display, requested_turns: turns, generation_request_count: rows.length, rows, pass: rows.length === turns && rows.every((item) => item.ok === true) }, null, 2)}\n`,
+      `${JSON.stringify({ schema_version: 1, source_readonly: true, refresh_credentials_copied: false, state_in_memory: true, model, runtime_protocol: "kiro-runtime", effort: "max", display, requested_turns: turns, generation_request_count: rows.length, rows, pass: rows.length === turns && rows.every((item) => item.ok === true) }, null, 2)}\n`,
       { mode: 0o600 },
     );
   };
@@ -113,7 +115,7 @@ async function main(): Promise<void> {
       const currentMessage: ChatMessage = {
         userInputMessage: {
           content: prompts[turn] as string,
-          modelId: "claude-opus-5.5",
+          modelId: model,
           origin: "AI_EDITOR",
         },
       };

@@ -527,26 +527,32 @@ payload 保留，按 1 KiB 桶随机填充，并以 4 MiB 为 fail-closed wire �
 `reasoning_text` 在下列实测单元中迁移。所有单元均要求 `GenerateAssistantResponse`、
 profile 和有效区域 `us-east-1`：
 
-| 公开协议           | 模型             | 上游 runtime                      |
-| ------------------ | ---------------- | --------------------------------- |
-| Responses          | GPT-5.6 Sol      | KiroRuntime                       |
-| Responses          | GPT-5.6 Sol      | CodeWhisperer                     |
-| Anthropic Messages | Claude Sonnet 5  | KiroRuntime                       |
-| Anthropic Messages | Claude Opus 5    | KiroRuntime                       |
-| Anthropic Messages | Claude Opus 5.5  | KiroRuntime；家族一致准入，待探测 |
-| Anthropic Messages | Claude Fable 5.1 | KiroRuntime；限相同 mint profile  |
+| 公开协议           | 模型              | 上游 runtime                     |
+| ------------------ | ----------------- | -------------------------------- |
+| Responses          | GPT-5.6 Sol       | KiroRuntime                      |
+| Responses          | GPT-5.6 Sol       | CodeWhisperer                    |
+| Anthropic Messages | Claude Sonnet 5   | KiroRuntime                      |
+| Anthropic Messages | Claude Opus 5     | KiroRuntime                      |
+| Anthropic Messages | Claude Opus 5.5   | KiroRuntime                      |
+| Anthropic Messages | Claude Fable 5.1  | KiroRuntime；限相同 mint profile |
+| Anthropic Messages | Claude Fable 5.2  | KiroRuntime；限相同 mint profile |
+| Anthropic Messages | Claude Sonnet 5.5 | KiroRuntime；限相同 mint profile |
+| Anthropic Messages | Claude Haiku 5.5  | KiroRuntime；限相同 mint profile |
 
-表中其他 cell 都有各自的活体 A→B 实测依据，Claude Opus 5.5 这一条没有：它是按与
-Opus 5 的家族一致性、经维护者明确决定准入的 —— 两者共用同一套目录 schema，且发出
-相同形态的签名 reasoning 封套。它自己的探测仍然欠着，需要同区域两个未限流账号：
+每个 cell 都有活体 A→B 实测依据：一个账号产生签名推理和工具调用，另一个账号在
+新会话中带上工具结果回放。Claude Opus 5.5 最初按与 Opus 5 的家族一致性准入
+（2026-09-26），它自己的探测在 2026-11-26 以 `max` 3/3 通过。同一天 Fable 5.2、
+Sonnet 5.5 和 Haiku 5.5 也都 3/3 通过。这些探测与 Fable 5.1 的探测一样，使用的账号
+共用同一个 profile，因此这几个 cell 还要求相同的 mint profile。需要同区域两个未
+限流账号复现：
 
 ```sh
 bun run scripts/probe-replay-portability.ts --confirm \
-  --model claude-opus-5.5 --effort max
+  --model claude-sonnet-5.5 --effort max --reasoning-challenge
 ```
 
-在该结果留档前，请把这一条 cell 当作假设而非证据。如果迁移后的 Opus 5.5 签名被
-上游拒绝，失败会以该次回放报错的形式出现；可将
+`--reasoning-challenge` 让会直接调用工具、不先推理的模型先产生签名推理块。如果
+迁移后的签名被上游拒绝，失败会以该次回放报错的形式出现；可将
 `reasoning_replay_account_failover` 设为 `"strict"`，回到 owner-bound 回放。
 组织管理员可以停用 `claude-opus-5`（2026-11-26 取证账号即是如此），固定该模型
 不是可靠的替代做法。
@@ -557,8 +563,9 @@ bun run scripts/probe-replay-portability.ts --confirm \
 未启用下述恢复开关的旧 token、Terra、Luna、其他区域及所有未列组合仍绑定
 原 owner；`strict` 禁用所有迁移。
 
-Fable 还要求目标账号的 profile ARN 与认证 mint envelope 完全一致。签名仍要求
-历史 system／tools／messages 前缀不变；允许换账号不表示可以改写前缀、删除
+限相同 profile 的 cell（Fable 5.1 与 5.2、Sonnet 5.5、Haiku 5.5）还要求目标账号的
+profile ARN 与认证 mint envelope 完全一致。Fable 的签名还要求历史
+system／tools／messages 前缀不变；允许换账号不表示可以改写前缀、删除
 签名推理，或假定多个账号共享缓存。
 
 新回放记录会认证指令投影版本。修复前的 Fable `kr2_` 记录证明来源为

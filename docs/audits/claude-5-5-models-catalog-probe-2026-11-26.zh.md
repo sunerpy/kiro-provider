@@ -94,6 +94,36 @@ Haiku 5.5 714 字符。
 1,024–128,000 请求范围：收紧会让现有客户端（例如对 Opus 5.5 发送 128,000 的
 客户端）新增被拒请求，而上游并不拒绝。目录展示的 `output_limit` 采用 64,000。
 
+## 跨账号推理回放
+
+本机 121 个账号共用同一个 profile ARN 和区域 `us-east-1`。用
+`scripts/probe-replay-portability.ts --confirm --model <wire id> --effort max --reasoning-challenge`
+在账号 A 产生签名推理和工具调用，再在账号 B 的新会话中带工具结果回放：
+
+| 模型                | 结果                                   |
+| ------------------- | -------------------------------------- |
+| `claude-sonnet-5.5` | 3/3 通过                               |
+| `claude-haiku-5.5`  | 3/3 通过                               |
+| `claude-fable-5.2`  | 3/3 通过                               |
+| `claude-opus-5.5`   | 3/3 通过（补上 2026-09-26 欠下的探测） |
+
+见 [`replay-portability.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/replay-portability.json)。
+Sonnet 5.5 不加 `--reasoning-challenge` 时会直接调用工具、不产生可回放的签名推理，
+探针因此无法取证。仓库探针原先在第二轮对带点的 wire ID 报 `Unsupported model`，
+现已在读取 `--model` 后注册该 wire ID。
+
+三个新模型的 cell 放进 `VERIFIED_SAME_PROFILE_REPLAY_CELLS`：证据只覆盖同一个
+profile，因此与 Fable 5.1 一样要求目标账号的 profile 与 mint profile 一致。Opus 5.5
+的 cell 保持原位，注释改为记录这次自身探测。
+
+## 摘要显示的签名形态
+
+`scripts/probe-reasoning-signatures.ts --confirm --model <wire id> --display summarized --turns 3 --long`
+直接请求上游，每个模型 2 次、每次 3 轮，共 24 轮：每轮都只有 1 个签名事件
+（`signature_relation: first`），推理文本 269 到 7,674 字符，没有出现 2026-10-09 时
+Opus 5.5 那种多段不同签名。合成提问不含工具调用和长历史，不能代替真实长会话。见
+[`summarized-signatures.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/summarized-signatures.json)。
+
 ## 已安装客户端
 
 两个客户端都经隔离网关验证：网关运行本分支源码，账号库是生产库的只读副本，refresh
@@ -129,14 +159,14 @@ token 已替换为占位符，端口与密钥独立，不触碰已安装服务�
   `multi_agent_reasoning_effort: "max"`）与无状态 Responses 路由。
 - 有意不扩展，保持 fail-closed：空签名冲突前缀省略恢复、
   `anthropic_thinking_display_mode` 与 `responses_thinking_display_mode` 的
-  forced-omitted 策略（仍只限 Fable 5.1 与 Opus 5.5）、跨账号 reasoning replay
-  cell、web search cell、原生 Responses capability cell。
+  forced-omitted 策略（仍只限 Fable 5.1 与 Opus 5.5）、web search cell、原生
+  Responses capability cell。跨账号 reasoning replay 在取证后以同 profile cell 接入，
+  见上文。
 
 ## 已知限制
 
-- **跨账号 reasoning replay 未取证。** 三个新模型不在 verified cell 中，签名回放
-  保持 owner-bound。需要同区域两个健康账号运行
-  `scripts/probe-replay-portability.ts` 后再决定。
+- **跨账号 reasoning replay 只覆盖同一 profile。** 取证账号共用一个 profile，未验证
+  跨 profile 迁移；Messages 之外的协议（Responses）没有为 Claude 模型开放迁移。
 - **冲突前缀省略未取证。** Fable 5.1 出现过的多段空签名前缀，新模型上尚未复现，
   出现时按错误处理。
 - **原生 Responses 未验证。** 原生通道自 2026-09-21 起对整个账号池返回 403，

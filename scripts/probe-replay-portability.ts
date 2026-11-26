@@ -1,4 +1,9 @@
-/** Probe whether an exact signed Kiro reasoning block can cross accounts/conversations. */
+/**
+ * Probe whether an exact signed Kiro reasoning block can cross accounts/conversations.
+ *   bun run scripts/probe-replay-portability.ts --confirm --model <wire id> --effort max
+ *     [--reasoning-challenge] [--same-account] [--same-conversation]
+ * Use --reasoning-challenge for models that call the tool without reasoning first.
+ */
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -11,6 +16,7 @@ import { attachKiroRuntimeRequest, createSdkClient } from "../src/core/sdk-clien
 import { encodeRefreshToken } from "../src/kiro/auth.js";
 import { KIRO_CONSTANTS } from "../src/kiro/constants.js";
 import { buildEffortRequestFields } from "../src/kiro/effort.js";
+import { registerDynamicWireModels } from "../src/kiro/models.js";
 import { buildCodeWhispererRequest } from "../src/kiro/transform/request-core.js";
 import type { Effort, KiroAuthDetails } from "../src/kiro/types.js";
 import type { CanonicalRequest, ResolvedReasoningReplay } from "../src/protocol/canonical.js";
@@ -149,6 +155,9 @@ async function collect(account: Account, state: State, model: string, effort: Ef
 async function main(): Promise<void> {
   if (!process.argv.includes("--confirm")) throw new Error("live inference requires --confirm");
   const model = arg("--model", "gpt-5.6-sol") as string;
+  // The second turn goes through the provider transform, which resolves only
+  // public ids. Register the dotted wire id the first turn sends verbatim.
+  registerDynamicWireModels([model]);
   const effort = arg("--effort", "max") as Effort;
   const accounts = loadAccounts();
   const pair = accounts.find((left, index) =>
