@@ -164,6 +164,7 @@ test("RegisterClient seconds survive real authorization, polling, relogin and SQ
       return Response.json(value);
     };
     globalThis.fetch = Object.assign(responder, { preconnect: realFetch.preconnect });
+    const loginStartedAt = Date.now();
     await runLogin(
       ConfigSchema.parse({ api_keys: ["synthetic-key"] }),
       { replaceAccount: previous },
@@ -218,9 +219,10 @@ test("RegisterClient seconds survive real authorization, polling, relogin and SQ
         "refreshFailureCode",
         "refreshFailedAt",
         "refreshRetryAt",
-        "lastRefreshAt",
       ])
         expect(next).not.toHaveProperty(field);
+      expect(next.lastRefreshAt).toBeGreaterThanOrEqual(loginStartedAt);
+      expect(next.lastRefreshAt).toBeLessThanOrEqual(Date.now());
       expect(db.getSessionAffinity("synthetic-affinity", 20)?.accountId).toBe(previous.id);
       expect(db.resolveOutputLineage("synthetic-lineage", 20)?.accountId).toBe(previous.id);
       previous = next;

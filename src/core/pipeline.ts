@@ -3,7 +3,7 @@ import {
   type GenerateAssistantResponseCommandInput,
 } from "@aws/codewhisperer-streaming-client";
 import { randomUUID } from "node:crypto";
-import { leastQueuedAccountIds, reserveAccountCapacity } from "./account-capacity.js";
+import { capacityAccountIds, reserveAccountCapacity } from "./account-capacity.js";
 import {
   assistantLineageFingerprint,
   assistantOutputFingerprint,
@@ -1849,7 +1849,18 @@ function selectAttemptAccount(
   const replayOrigin = portableReplayOrigin(options, state, candidateIds);
   const available =
     replayOrigin === undefined
-      ? leastQueuedAccountIds(candidates, candidateIds, policy)
+      ? capacityAccountIds(
+          candidates,
+          candidateIds,
+          policy,
+          options.config.session_affinity_policy === "session-first" &&
+            (state.binding !== undefined || state.lineageBinding !== undefined)
+            ? {
+                accountId: state.preferredAccountId,
+                concurrency: options.config.account_inference_concurrency,
+              }
+            : undefined,
+        )
       : new Set([replayOrigin]);
   if (
     available.size > 0 &&

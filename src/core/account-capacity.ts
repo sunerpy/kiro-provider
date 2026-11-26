@@ -43,6 +43,28 @@ export function leastQueuedAccountIds(
   return leastQueued;
 }
 
+/** A soft session preference may keep a busier eligible account until it is full. */
+export function capacityAccountIds(
+  accounts: readonly ManagedAccount[],
+  eligibleAccountIds?: ReadonlySet<string>,
+  policy: OveragePolicy = DEFAULT_OVERAGE_POLICY,
+  preference?: { readonly accountId?: string; readonly concurrency: number },
+): ReadonlySet<string> {
+  const preferred =
+    preference?.accountId === undefined
+      ? undefined
+      : accounts.find(
+          (account) =>
+            account.id === preference.accountId &&
+            (eligibleAccountIds?.has(account.id) ?? true) &&
+            isSelectableAccount(account, Date.now(), policy),
+        );
+  if (preferred && accountQueueDepth(preferred.id) < (preference?.concurrency ?? 1)) {
+    return new Set([preferred.id]);
+  }
+  return leastQueuedAccountIds(accounts, eligibleAccountIds, policy);
+}
+
 export type AccountCapacityDecision<T> =
   | { readonly kind: "wait"; readonly accountIds: ReadonlySet<string> }
   | { readonly kind: "ready"; readonly value: T; readonly accountId?: string };

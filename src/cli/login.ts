@@ -251,6 +251,9 @@ export async function runLogin(
       now: refreshedAt,
       quotaRecheckIntervalMs: config.quota_recheck_interval_ms,
     });
+    // Only this successful device-token receipt attests issuance time. Shared
+    // admission also accepts imports, whose observation time is not issuance.
+    account.lastRefreshAt = refreshedAt;
 
     persisted = database.insertAccount(account);
     for (const duplicate of duplicates) {
