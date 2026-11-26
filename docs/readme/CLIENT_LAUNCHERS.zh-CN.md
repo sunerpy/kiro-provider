@@ -54,7 +54,8 @@ KIROCLAUDE_MODEL=sonnet KIROCLAUDE_EFFORT=high kiroclaude
 ```
 
 启动器已经为验证过的 Opus 5.5、Sonnet 5.5、Haiku 5.5、Fable 5.2、Sol、Terra、
-Luna 默认项配置 `[1m]` 与 `autoCompactWindow: 1000000`。Claude 发请求前去掉 `[1m]`。
+Luna 默认项配置 `[1m]` 与 `autoCompactWindow: 1000000`，并在有效窗口的 80% 处压缩
+（自行设置 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 时以你的值为准）。Claude 发请求前去掉 `[1m]`。
 每个 Claude 模型既是对应内置家族行的指向，也是一行标名的 picker 行，Opus 5.5 是
 默认会话模型；small-fast 行映射到同为 1M 窗口的 Haiku 5.5，自定义模型覆盖值原样
 保留。默认 Ultra 在已验证客户端上发送 `xhigh`。启动器也包含保持 Fable thinking 和 Bash 历史回放稳定的兼容设置；

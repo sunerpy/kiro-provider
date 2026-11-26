@@ -338,9 +338,16 @@ output reserves still reduce the available input budget.
 
 The Kiro overlay also sets `autoCompactWindow: 1000000` so these gateway
 models compact proactively. Claude caps it at the selected model's window
-and reserves space for output and compaction. `--autocompact` and
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW` remain per-launch overrides. Native settings
-files and the separate Bedrock overlay are not changed.
+and reserves space for output and compaction. The Kiro lane also exports
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80` when that variable is unset or empty, so
+Claude compacts at 80% of the effective window instead of just below the
+limit. Kiro bills every request for its whole context, so this lowers the cost
+of each turn in a long session. A value from the environment or from your Claude
+settings wins, and `100` restores Claude's own threshold. `/context` keeps
+showing Claude's default autocompact buffer; the override changes only when
+compaction runs. `--autocompact` and
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` remain per-launch overrides of the window.
+Native settings files and the separate Bedrock overlay are not changed.
 
 Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `[1m]` yourself when pinning a custom ID that supports the larger window.
