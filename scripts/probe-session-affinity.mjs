@@ -46,6 +46,22 @@ await writeFile(fixtureConfig, JSON.stringify({ api_keys: ["fixture-only"] }), {
 setAuditLogLevel("error");
 
 const digest = (value) => createHash("sha256").update(value).digest("hex").slice(0, 16);
+// Evidence may carry only approved enums: never echo the client's credential source string.
+const authSourceKind = (value) => {
+  switch (value) {
+    case undefined:
+    case null:
+      return null;
+    case "none":
+      return "none";
+    case "ANTHROPIC_API_KEY":
+      return "environment";
+    case "apiKeyHelper":
+      return "helper";
+    default:
+      return "other";
+  }
+};
 const requireCondition = (condition, code) => {
   if (!condition) throw Object.assign(new Error(code), { code });
 };
@@ -454,9 +470,9 @@ async function runFamily(family) {
       client_event_types: [...new Set(events.map((event) => event.type))],
       client_init_model:
         events.find((event) => event.type === "system" && event.subtype === "init")?.model ?? null,
-      client_init_auth_source:
-        events.find((event) => event.type === "system" && event.subtype === "init")?.apiKeySource ??
-        null,
+      client_init_auth_source: authSourceKind(
+        events.find((event) => event.type === "system" && event.subtype === "init")?.apiKeySource,
+      ),
       lanes: [...new Set(stageSelections.map((entry) => entry.lane))],
       error_statuses: failures.map((entry) => entry.status),
       error_codes: failures.map((entry) => entry.code),
