@@ -60,14 +60,14 @@ bun run scripts/probe-v3-request-fields.ts --confirm \
 见
 [`evidence/opus-5-5-catalog-probe-2026-09-26/request-fields.json`](evidence/opus-5-5-catalog-probe-2026-09-26/request-fields.json)。
 
-| 用例 | 字段 | 结果 |
-| --- | --- | --- |
-| `control` | 无 | 200 |
-| `effort_xhigh` | `output_config.effort=xhigh` | 200 |
-| `thinking_summarized` | `thinking=adaptive/summarized` + `max_tokens` + `effort=high` | 200 |
-| `thinking_omitted` | `thinking=adaptive/omitted` + `max_tokens` + `effort=xhigh` | 200 |
-| `max_tokens` | `max_tokens=1024` | 200 |
-| `max_output_tokens` | `max_output_tokens=64` | 400 `REQUEST_BODY_INVALID` |
+| 用例                  | 字段                                                          | 结果                       |
+| --------------------- | ------------------------------------------------------------- | -------------------------- |
+| `control`             | 无                                                            | 200                        |
+| `effort_xhigh`        | `output_config.effort=xhigh`                                  | 200                        |
+| `thinking_summarized` | `thinking=adaptive/summarized` + `max_tokens` + `effort=high` | 200                        |
+| `thinking_omitted`    | `thinking=adaptive/omitted` + `max_tokens` + `effort=xhigh`   | 200                        |
+| `max_tokens`          | `max_tokens=1024`                                             | 200                        |
+| `max_output_tokens`   | `max_output_tokens=64`                                        | 400 `REQUEST_BODY_INVALID` |
 
 `max_output_tokens` 的拒绝原因是 schema 不允许该属性，与 `claude-opus-5` 表现
 一致。
@@ -77,11 +77,11 @@ bun run scripts/probe-v3-request-fields.ts --confirm \
 见
 [`evidence/opus-5-5-catalog-probe-2026-09-26/output-token-bounds.json`](evidence/opus-5-5-catalog-probe-2026-09-26/output-token-bounds.json)。
 
-| `max_tokens` | 结果 |
-| ---: | --- |
-| 1,024 | 200 |
-| 128,000 | 200 |
-| 128,001 | 400 `REQUEST_BODY_INVALID`：`must have a maximum value of 128000.0` |
+| `max_tokens` | 结果                                                                |
+| -----------: | ------------------------------------------------------------------- |
+|        1,024 | 200                                                                 |
+|      128,000 | 200                                                                 |
+|      128,001 | 400 `REQUEST_BODY_INVALID`：`must have a maximum value of 128000.0` |
 
 两端均为活体验证，与 `KIRO_OUTPUT_TOKEN_LIMIT_MIN` / `KIRO_OUTPUT_TOKEN_LIMIT_MAX`
 一致。
@@ -92,16 +92,16 @@ bun run scripts/probe-v3-request-fields.ts --confirm \
 [`evidence/opus-5-5-catalog-probe-2026-09-26/effort-levels.json`](evidence/opus-5-5-catalog-probe-2026-09-26/effort-levels.json)。
 同一需要推理的合成提问，同一账号，`claude-opus-5` 作对照：
 
-| 模型 | 用例 | reasoning 事件 | reasoning 字符 | 签名 |
-| --- | --- | ---: | ---: | ---: |
-| `claude-opus-5.5` | 无 effort | 14 | 56 | 1 |
-| `claude-opus-5.5` | `effort=low` | 16 | 83 | 1 |
-| `claude-opus-5.5` | `effort=max` | 21 | 201 | 1 |
-| `claude-opus-5.5` | adaptive summarized + `effort=max` | 14 | 144 | 1 |
-| `claude-opus-5` | 无 effort | 12 | 110 | 1 |
-| `claude-opus-5` | `effort=low` | 11 | 84 | 1 |
-| `claude-opus-5` | `effort=max` | 15 | 107 | 1 |
-| `claude-opus-5` | adaptive summarized + `effort=max` | 18 | 164 | 1 |
+| 模型              | 用例                               | reasoning 事件 | reasoning 字符 | 签名 |
+| ----------------- | ---------------------------------- | -------------: | -------------: | ---: |
+| `claude-opus-5.5` | 无 effort                          |             14 |             56 |    1 |
+| `claude-opus-5.5` | `effort=low`                       |             16 |             83 |    1 |
+| `claude-opus-5.5` | `effort=max`                       |             21 |            201 |    1 |
+| `claude-opus-5.5` | adaptive summarized + `effort=max` |             14 |            144 |    1 |
+| `claude-opus-5`   | 无 effort                          |             12 |            110 |    1 |
+| `claude-opus-5`   | `effort=low`                       |             11 |             84 |    1 |
+| `claude-opus-5`   | `effort=max`                       |             15 |            107 |    1 |
+| `claude-opus-5`   | adaptive summarized + `effort=max` |             18 |            164 |    1 |
 
 5.5 上 reasoning 体量随 effort 单调上升，两次独立运行方向一致（首轮为
 50 → 69 → 150 字符）。这是单次配对观测而非统计结论；接入 effort 五档的依据是
@@ -149,6 +149,7 @@ reasoning 字符，与其 control 一致，容易误判为 effort 无效。必�
   回归覆盖：`__tests__/pipeline.test.ts` 的
   “migrates a Claude Opus 5.5 Messages replay in its verified cell” 断言该 cell
   生效（移除该 cell 后请求变为 402 owner-bound）。
+
 - **未做满 1M 输入验收。** 目录声明 1,000,000 input，本次未做长输入分级探测，
   参考 `claude-opus-5` 的既有结论。
 - **原生 Responses 通道未验证。** `RESPONSES_CAPABILITY_EVIDENCE` 未收录该模型，
@@ -162,3 +163,10 @@ reasoning 字符，与其 control 一致，容易误判为 effort 无效。必�
 - **账号覆盖面窄。** 探测期间 50 个账号中 49 个处于限流，因此结果来自单一账号。
   其余账号是否同样公布该模型未逐一核对；provider 的 `eligibleAccounts` 已按各
   账号目录快照过滤调度，未公布该模型的账号不会被选中。
+
+## 2026-11-26 补记
+
+上文欠下的 Opus 5.5 跨账号回放探测已完成：
+`scripts/probe-replay-portability.ts --confirm --model claude-opus-5.5 --effort max --reasoning-challenge`
+在同一 profile 的两个账号之间 3/3 通过。同一天目录把 Opus 5.5 的输出上限降为 64,000。
+见 [claude-5-5-models-catalog-probe-2026-11-26.zh.md](claude-5-5-models-catalog-probe-2026-11-26.zh.md)。

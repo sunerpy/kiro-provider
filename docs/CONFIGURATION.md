@@ -631,29 +631,34 @@ compatibility cutoff established when this version first opens the database.
 signed `reasoning_text` only in the following verified cells. All require
 `GenerateAssistantResponse`, a profile, and effective region `us-east-1`:
 
-| Public protocol    | Model            | Upstream runtime                    |
-| ------------------ | ---------------- | ----------------------------------- |
-| Responses          | GPT-5.6 Sol      | KiroRuntime                         |
-| Responses          | GPT-5.6 Sol      | CodeWhisperer                       |
-| Anthropic Messages | Claude Sonnet 5  | KiroRuntime                         |
-| Anthropic Messages | Claude Opus 5    | KiroRuntime                         |
-| Anthropic Messages | Claude Opus 5.5  | KiroRuntime; parity, probe owed     |
-| Anthropic Messages | Claude Fable 5.1 | KiroRuntime; same mint profile only |
+| Public protocol    | Model             | Upstream runtime                    |
+| ------------------ | ----------------- | ----------------------------------- |
+| Responses          | GPT-5.6 Sol       | KiroRuntime                         |
+| Responses          | GPT-5.6 Sol       | CodeWhisperer                       |
+| Anthropic Messages | Claude Sonnet 5   | KiroRuntime                         |
+| Anthropic Messages | Claude Opus 5     | KiroRuntime                         |
+| Anthropic Messages | Claude Opus 5.5   | KiroRuntime                         |
+| Anthropic Messages | Claude Fable 5.1  | KiroRuntime; same mint profile only |
+| Anthropic Messages | Claude Fable 5.2  | KiroRuntime; same mint profile only |
+| Anthropic Messages | Claude Sonnet 5.5 | KiroRuntime; same mint profile only |
+| Anthropic Messages | Claude Haiku 5.5  | KiroRuntime; same mint profile only |
 
-Every other cell in that table rests on its own live A→B run. The Claude Opus
-5.5 cell does not: it was admitted by explicit maintainer decision on family
-parity with the Opus 5 cell, because the two models share the same catalog
-schema and emit the same signed reasoning envelopes. Its dedicated probe is
-still owed and needs two un-rate-limited accounts in the same region:
+Every cell rests on a live A→B run: signed reasoning and a tool call on one
+account, then the tool result on another account in a new conversation. The
+Claude Opus 5.5 cell was first admitted on family parity with Opus 5
+(2026-09-26); its own run passed 3/3 at `max` on 2026-11-26. Fable 5.2, Sonnet
+5.5, and Haiku 5.5 also passed 3/3 that day. Those runs, like the Fable 5.1 run,
+used accounts that share one profile, so their cells also require the mint
+profile. Reproduce a cell with two un-rate-limited accounts in the same region:
 
 ```sh
 bun run scripts/probe-replay-portability.ts --confirm \
-  --model claude-opus-5.5 --effort max
+  --model claude-sonnet-5.5 --effort max --reasoning-challenge
 ```
 
-Until that run is recorded, treat this one cell as an assumption rather than
-evidence. If a migrated Opus 5.5 signature is ever rejected upstream, the
-failure surfaces as an error on that replay; set
+`--reasoning-challenge` makes models that would call the tool without reasoning
+produce a signed block first. If a migrated signature is ever rejected
+upstream, the failure surfaces as an error on that replay; set
 `reasoning_replay_account_failover: "strict"` to fall back to owner-bound replay.
 Pinning `claude-opus-5` is not a reliable alternative: organization admins can
 make it unavailable, as happened to the evidence accounts on 2026-11-26.
@@ -666,9 +671,9 @@ Redacted reasoning, legacy tokens without the opt-in below, Terra, Luna,
 other regions, and every unlisted combination remain owner-bound. `strict`
 disables all migration.
 
-Fable migration additionally requires the exact authenticated mint profile
-ARN on the target account. Its signed blocks require an unchanged historical
-system/tools/message prefix. Migration does not authorize rewriting that
+Same-profile cells (Fable 5.1 and 5.2, Sonnet 5.5, Haiku 5.5) additionally
+require the exact authenticated mint profile ARN on the target account. Fable's
+signed blocks also require an unchanged historical system/tools/message prefix. Migration does not authorize rewriting that
 prefix, removing signed reasoning, or sharing a cache across accounts.
 
 New replay records authenticate the instruction-projection version. When a

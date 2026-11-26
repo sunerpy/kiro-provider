@@ -11,6 +11,12 @@ import { fidelityFixture } from "./responses-fidelity-helpers.js";
 
 const PROFILE = "arn:aws:codewhisperer:us-east-1:123456789012:profile/verified";
 const OTHER_PROFILE = "arn:aws:codewhisperer:us-east-1:123456789012:profile/unverified";
+const SAME_PROFILE_MODELS = [
+  ["claude-fable-5-1", "claude-fable-5.1"],
+  ["claude-fable-5-2", "claude-fable-5.2"],
+  ["claude-sonnet-5-5", "claude-sonnet-5.5"],
+  ["claude-haiku-5-5", "claude-haiku-5.5"],
+] as const;
 let audit: ReturnType<typeof captureAuditEvents>;
 beforeEach(() => {
   audit = captureAuditEvents();
@@ -218,7 +224,8 @@ describe("verified Fable replay shares idle capacity within the tested profile",
     }
   });
 
-  for (const model of ["claude-fable-5-1"]) {
+  // Fable 5.1 (2026-09-17) and the 2026-11-26 additions share the same-profile cell rule.
+  for (const [model, wire] of SAME_PROFILE_MODELS) {
     for (const stream of [false, true]) {
       test(`${model} stream=${stream}: child tool replay uses a free account and preserves signed history`, async () => {
         const f = fixture(model);
@@ -232,7 +239,7 @@ describe("verified Fable replay shares idle capacity within the tested profile",
           expect(f.sent[0]?.accountId).toBe(f.target.id);
           const state = f.sent[0]?.command.input.conversationState;
           if (!state) throw new Error("Missing dispatched fixture state");
-          expect(state.currentMessage?.userInputMessage?.modelId).toBe("claude-fable-5.1");
+          expect(state.currentMessage?.userInputMessage?.modelId).toBe(wire);
           expect(state.conversationId).not.toBe("source-conversation");
           expect(
             state.history?.find((entry) => entry.assistantResponseMessage?.reasoningContent)
@@ -261,24 +268,25 @@ describe("verified Fable replay shares idle capacity within the tested profile",
     }
   }
 
-  test("a different profile cannot borrow the owner's signed history while it is busy", async () => {
-    const f = fixture("claude-fable-5-1", OTHER_PROFILE);
-    const releaseOwner = await acquireAccountQueue(f.owner.id, new AbortController().signal);
-    const cancel = new AbortController();
-    const pending = f.send(false, cancel.signal);
-    try {
-      await Bun.sleep(25);
-      expect(f.sent).toHaveLength(0);
-      cancel.abort();
-      expect((await pending).status).toBe(499);
-      expect(accountQueueDepth(f.target.id)).toBe(0);
-    } finally {
-      cancel.abort();
-      releaseOwner();
-      await pending;
-      f.database.close();
-    }
-  });
+  for (const [model] of SAME_PROFILE_MODELS)
+    test(`${model}: a different profile cannot borrow the owner's signed history while it is busy`, async () => {
+      const f = fixture(model, OTHER_PROFILE);
+      const releaseOwner = await acquireAccountQueue(f.owner.id, new AbortController().signal);
+      const cancel = new AbortController();
+      const pending = f.send(false, cancel.signal);
+      try {
+        await Bun.sleep(25);
+        expect(f.sent).toHaveLength(0);
+        cancel.abort();
+        expect((await pending).status).toBe(499);
+        expect(accountQueueDepth(f.target.id)).toBe(0);
+      } finally {
+        cancel.abort();
+        releaseOwner();
+        await pending;
+        f.database.close();
+      }
+    });
 
   test("changing tenant never reaches account selection or the upstream", async () => {
     const f = fixture("claude-fable-5-1");
