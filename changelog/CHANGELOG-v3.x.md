@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.11.0](https://github.com/sunerpy/kiro-provider/compare/v3.10.1...v3.11.0) (2026-11-26)
+
+
+### Features
+
+* **claude:** kiroclaude 默认在上下文 80% 时自动压缩 ([#155](https://github.com/sunerpy/kiro-provider/issues/155)) ([dd6ded0](https://github.com/sunerpy/kiro-provider/commit/dd6ded06db4d0598c0d5ff5c22e405c8d51d99de))
+
 ## [3.10.1](https://github.com/sunerpy/kiro-provider/compare/v3.10.0...v3.10.1) (2026-11-26)
 
 
