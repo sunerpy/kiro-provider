@@ -98,9 +98,10 @@ if [ "$backend" = kiro ]; then
   # Each built-in family row carries the current Kiro model so the `opus`,
   # `sonnet`, `haiku` and `fable` aliases resolve to it, and the same IDs are
   # also declared as named picker rows so the client shows the exact model
-  # instead of a generic family label. On 2026-11-26 Kiro withdrew Opus 5,
-  # Sonnet 5, Haiku 4.5 and Fable 5.1 (INVALID_MODEL_ID) and added Sonnet 5.5,
-  # Haiku 5.5 and Fable 5.2.
+  # instead of a generic family label. On 2026-11-26 Kiro added Sonnet 5.5,
+  # Haiku 5.5 and Fable 5.2, and organization admins can make older models
+  # unavailable: the evidence accounts then got INVALID_MODEL_ID for Opus 5,
+  # Sonnet 5, Haiku 4.5 and Fable 5.1.
   opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5-5[1m]}
   sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5-5[1m]}
   # Claude Code uses its small-fast model for prompt hooks and sends max_tokens.

@@ -655,8 +655,8 @@ Until that run is recorded, treat this one cell as an assumption rather than
 evidence. If a migrated Opus 5.5 signature is ever rejected upstream, the
 failure surfaces as an error on that replay; set
 `reasoning_replay_account_failover: "strict"` to fall back to owner-bound replay.
-Pinning `claude-opus-5` is no longer an alternative: Kiro withdrew that model on
-2026-11-26.
+Pinning `claude-opus-5` is not a reliable alternative: organization admins can
+make it unavailable, as happened to the evidence accounts on 2026-11-26.
 
 The request protocol and projected runtime operation must match the mint
 envelope, and the target account must resolve to the same effective region

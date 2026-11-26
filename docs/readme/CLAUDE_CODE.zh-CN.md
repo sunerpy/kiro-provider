@@ -138,8 +138,9 @@ wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会
 
 内置 Opus、Sonnet、Haiku／small-fast 和 Fable 行分别映射到
 `claude-opus-5-5[1m]`、`claude-sonnet-5-5[1m]`、`claude-haiku-5-5[1m]` 与
-`claude-fable-5-2[1m]`。Kiro 已于 2026-11-26 下线 Opus 5、Sonnet 5、Haiku 4.5 和
-Fable 5.1，对它们的请求现在返回 `INVALID_MODEL_ID`，启动器不再指向它们。
+`claude-fable-5-2[1m]`。组织管理员可以停用 Kiro 模型：2026-11-26 起，取证账号请求
+Opus 5、Sonnet 5、Haiku 4.5 和 Fable 5.1 时返回 `INVALID_MODEL_ID`（“made
+unavailable by the admins in your organization”），启动器因此不再指向它们。
 Claude Code 会用 small-fast 槽位执行 prompt hook，并发送正整数 `max_tokens`；
 Haiku 5.5 接受该字段，而 Haiku 4.5 会拒绝所有 `additionalModelRequestFields` 对象。
 Claude Code 2.1.280 的会话标题生成和 prompt hook
@@ -288,7 +289,7 @@ Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间�
 请在覆盖值中带上 `[1m]`。`KIROCLAUDE_OPUS_MODEL` 会同时改写内置 Opus 行、标名
 `Claude Opus 5.5` 的 picker 行和默认会话模型。`KIROCLAUDE_SONNET_MODEL`、
 `KIROCLAUDE_HAIKU_MODEL` 和 `KIROCLAUDE_KIRO_FABLE_MODEL` 同样会改写各自的内置行
-和标名 picker 行。`KIROCLAUDE_OPUS5_MODEL` 已随下线的 Opus 5 行移除。
+和标名 picker 行。`KIROCLAUDE_OPUS5_MODEL` 已随 Opus 5 行一起移除。
 `KIROCLAUDE_HAIKU_MODEL` 的目标模型必须接受 Claude Code 必填的正整数
 `max_tokens`，否则 prompt hook 会失败。这一变化仅适用于 Kiro 启动器，
 独立 Bedrock 模式不变。
@@ -344,7 +345,7 @@ Kiro Fable 映射，不影响独立的原生 Bedrock 备用后端。
 ### 通过原生 Bedrock 使用 Fable 5.1
 
 Kiro 已通过 `/v1/responses` 和 `/v1/messages` 提供 Fable 5.2，取代 2026-11-26
-下线的 Fable 5.1。Fable 使用无状态 Responses 投影：Kiro 原生 `CreateResponse`
+起取证账号已无法使用的 Fable 5.1。Fable 使用无状态 Responses 投影：Kiro 原生 `CreateResponse`
 拒绝过 Fable 5.1，Fable 5.2 也没有原生证据；已存储续轮仍由 Provider 自有
 continuation 和 replay 状态支持。
 

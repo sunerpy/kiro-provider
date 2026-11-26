@@ -311,9 +311,9 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.env.CLAUDE_CODE_TOASTY_THIMBLE).toBe("0");
     expect(settings.env.CLAUDE_CODE_GENTLE_PARASOL).toBe("0");
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(expectedHeaders());
-    // Each built-in family row carries the current Kiro model. Kiro withdrew
-    // Opus 5, Sonnet 5, Haiku 4.5 and Fable 5.1 on 2026-11-26, and Haiku 5.5
-    // accepts the max_tokens that Claude Code's small-fast requests send.
+    // Each built-in family row carries the current Kiro model; the evidence
+    // accounts lost Opus 5, Sonnet 5, Haiku 4.5 and Fable 5.1 on 2026-11-26, and
+    // Haiku 5.5 accepts the max_tokens that Claude Code's small-fast requests send.
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5[1m]");
     expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-2[1m]");

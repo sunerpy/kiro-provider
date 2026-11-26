@@ -1,0 +1,116 @@
+# Kiro Claude Fable 5.2、Sonnet 5.5 与 Haiku 5.5 目录与请求字段探测
+
+日期：2026-11-26（Asia/Shanghai）
+
+## 结论
+
+Kiro 上游新增三个 wire 模型，可作为一等目录模型接入：
+
+| 公开 ID             | wire ID             | 倍率 | thinking.type               | effort 默认值 |
+| ------------------- | ------------------- | ---: | --------------------------- | ------------- |
+| `claude-fable-5-2`  | `claude-fable-5.2`  |    6 | `adaptive`                  | `high`        |
+| `claude-sonnet-5-5` | `claude-sonnet-5.5` |  1.3 | `adaptive`、`between_tools` | `high`        |
+| `claude-haiku-5-5`  | `claude-haiku-5.5`  | 0.06 | `adaptive`、`disabled`      | `medium`      |
+
+- 三者都是 1,000,000 input / 64,000 output，`supportedInputTypes` 为 `TEXT`、
+  `IMAGE`，支持 prompt caching；`output_config.effort` 为完整
+  `low|medium|high|xhigh|max` 五档，`thinking.display` 为 `summarized|omitted`。
+- 三者都进入 `XHIGH_CAPABLE_MODELS`、adaptive thinking 显示集合与
+  `PROBE_CONFIRMED_MAX_TOKENS_MODELS`。Codex 默认档位取各自 schema 的 `default`。
+- Haiku 5.5 显式 `thinking.type: "disabled"` 返回 200 且不推理；同一请求不带
+  thinking 字段时仍会推理，因此显式禁用会原样下发。Fable 5.2 与 Sonnet 5.5 的
+  schema 不含 `disabled`，上游以 `REQUEST_BODY_INVALID` 拒绝，网关对它们保持
+  不发送 thinking 字段的既有行为。
+- Sonnet 5.5 的 `between_tools` 直接发送返回 `400 Improperly formed request.`，
+  网关从不生成该类型。
+- 同一天，`claude-opus-5.5` 的目录输出上限从 128,000 降为 64,000，schema 中
+  `max_tokens` 的 `maximum` 也变为 64,000。
+
+另外，取证账号所在组织在同一天停用了旧模型：`claude-fable-5.1`、`claude-opus-5`、
+`claude-sonnet-5`、`claude-haiku-4.5` 不再出现在目录中，请求返回
+`400 INVALID_MODEL_ID`（"Your current model is made unavailable by the admins in
+your organization"）。这是组织级策略，不能据此推断 Kiro 在所有组织下线这些模型。
+
+## 方法
+
+- 上游操作：管理面 `ListAvailableModels`（`management.us-east-1.kiro.dev`，
+  `origin=AI_EDITOR`），以及 KiroRuntime `GenerateAssistantResponse`
+  （`us-east-1`，带 profile）。
+- 隔离边界：`~/.config/kiro-provider/accounts.db` 以只读方式打开，不刷新 token、
+  不写库；不触碰已安装服务、生产配置和 replay keyring。请求经本机
+  `http://127.0.0.1:1080` 代理出网（不经代理时 Claude 模型会误报
+  `INVALID_MODEL_ID`）。同一账号上 `claude-opus-5.5` 与 `claude-fable-5.2` 的
+  control 返回 200，用作出网路径对照。
+- 请求正文全部为合成文本；证据只保留枚举、计数、长度、哈希和上游校验信息。
+- 可复现命令（账号 access token 剩余有效期需超过 30 分钟）：
+
+```sh
+bun run scripts/probe-v3-request-fields.ts --confirm \
+  --model claude-sonnet-5.5 --proxy http://127.0.0.1:1080 \
+  --cases control,effort_xhigh,effort_low,effort_max,thinking_summarized,thinking_omitted,thinking_adaptive,thinking_disabled,thinking_between_tools,max_tokens,max_tokens_64000,max_tokens_64001,max_tokens_upper,max_tokens_128001,max_output_tokens
+```
+
+## 结果
+
+### 管理面目录
+
+见 [`evidence/claude-5-5-models-catalog-probe-2026-11-26/management-catalog.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/management-catalog.json)。
+14 个健康账号逐一调用，结果一致：每个账号都列出同样 15 个模型，默认模型为
+`claude-opus-5.5`，都包含三个新模型，都不含 `claude-fable-5.1`。
+
+15 个模型为 `auto`、`claude-opus-5.5`、`claude-sonnet-5.5`、`claude-haiku-5.5`、
+`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`kimi-k3`、`claude-opus-4.6`、
+`claude-fable-5.2`、`deepseek-3.2`、`minimax-m2.5`、`minimax-m2.1`、`glm-5`、
+`qwen3-coder-next`。
+
+### 请求字段
+
+见 [`evidence/claude-5-5-models-catalog-probe-2026-11-26/request-fields.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/request-fields.json)。
+
+| 用例                                                     | Fable 5.2                  | Sonnet 5.5                 | Haiku 5.5        |
+| -------------------------------------------------------- | -------------------------- | -------------------------- | ---------------- |
+| `control`                                                | 200                        | 200                        | 200              |
+| `effort_xhigh` / `effort_low` / `effort_max`             | 200                        | 200                        | 200              |
+| `thinking_summarized` / `thinking_omitted`               | 200                        | 200                        | 200              |
+| `thinking_adaptive`（不带 display）                      | 200                        | 200                        | 200              |
+| `thinking_disabled`                                      | 400 `REQUEST_BODY_INVALID` | 400 `REQUEST_BODY_INVALID` | 200，0 reasoning |
+| `thinking_between_tools`                                 | 400                        | 400                        | 400              |
+| `max_tokens` 1,024 / 64,000 / 64,001 / 128,000 / 128,001 | 均 200                     | 均 200                     | 均 200           |
+| `max_output_tokens`                                      | 400 `REQUEST_BODY_INVALID` | 400                        | 400              |
+
+出现推理时每次都带 1 个签名；omitted 显示只返回签名、不返回推理文本。同一个需要
+推理的合成提问下，`effort_low` 与 `effort_max` 的推理字符数为 Fable 5.2 0 → 122、
+Sonnet 5.5 0 → 114、Haiku 5.5 73 → 297（`effort_xhigh` 沿用旧的简短提问，不参与
+比较）。这是单次观测；接入五档 effort 的依据是 schema 枚举加上各档返回 200。
+
+### 输出 token 上限
+
+目录与 schema 声明 64,000，但上游对 1,024 到 128,001 全部返回 200，Opus 5.5 也
+一样（2026-09-26 时 128,001 曾被拒绝）。上游当前不执行该上限。网关保留共享的
+1,024–128,000 请求范围：收紧会让现有客户端（例如对 Opus 5.5 发送 128,000 的
+客户端）新增被拒请求，而上游并不拒绝。目录展示的 `output_limit` 采用 64,000。
+
+## 接入范围
+
+- 已接入：目录条目（Sonnet/Haiku 带 `low`…`max` 变体与 `-thinking` 别名，Fable 5.2
+  与 Fable 5.1 一样只列 base）、五档 effort、adaptive thinking 显示、
+  `max_tokens` 透传、Haiku 5.5 显式禁用、Codex 档位与默认值。Fable 5.2 沿用
+  Fable 5.1 的 Codex Ultra（`ultra`、`multi_agent_version: "v2"`、
+  `multi_agent_reasoning_effort: "max"`）与无状态 Responses 路由。
+- 有意不扩展，保持 fail-closed：空签名冲突前缀省略恢复、
+  `anthropic_thinking_display_mode` 与 `responses_thinking_display_mode` 的
+  forced-omitted 策略（仍只限 Fable 5.1 与 Opus 5.5）、跨账号 reasoning replay
+  cell、web search cell、原生 Responses capability cell。
+
+## 已知限制
+
+- **跨账号 reasoning replay 未取证。** 三个新模型不在 verified cell 中，签名回放
+  保持 owner-bound。需要同区域两个健康账号运行
+  `scripts/probe-replay-portability.ts` 后再决定。
+- **冲突前缀省略未取证。** Fable 5.1 出现过的多段空签名前缀，新模型上尚未复现，
+  出现时按错误处理。
+- **原生 Responses 未验证。** 原生通道自 2026-09-21 起对整个账号池返回 403，
+  无法取证；Fable 5.2 按 Fable 5.1 先例强制走无状态投影。
+- **未做满 1M 输入验收**，沿用目录声明。
+- **组织策略可能再变。** 旧模型的停用来自组织管理员，其他组织的可用模型可能不同；
+  provider 按各账号目录快照过滤可调度账号。

@@ -160,9 +160,10 @@ subprocesses.
 
 The built-in Opus, Sonnet, Haiku/small-fast, and Fable rows map to
 `claude-opus-5-5[1m]`, `claude-sonnet-5-5[1m]`, `claude-haiku-5-5[1m]`, and
-`claude-fable-5-2[1m]`. Kiro withdrew Opus 5, Sonnet 5, Haiku 4.5, and Fable 5.1
-on 2026-11-26; requests for them now return `INVALID_MODEL_ID`, so the launcher
-no longer targets them. Claude Code uses the small-fast row for prompt hooks and
+`claude-fable-5-2[1m]`. Organization admins can make Kiro models unavailable: on
+2026-11-26 the evidence accounts got `INVALID_MODEL_ID` ("made unavailable by the
+admins in your organization") for Opus 5, Sonnet 5, Haiku 4.5, and Fable 5.1, so
+the launcher no longer targets them. Claude Code uses the small-fast row for prompt hooks and
 sends a positive `max_tokens`. Haiku 5.5 accepts it, unlike Haiku 4.5, which
 rejected every `additionalModelRequestFields` object. Claude Code 2.1.280
 session-title generation and prompt hooks
@@ -345,7 +346,7 @@ Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `Claude Opus 5.5` picker row, and the default session model together.
 `KIROCLAUDE_SONNET_MODEL`, `KIROCLAUDE_HAIKU_MODEL`, and
 `KIROCLAUDE_KIRO_FABLE_MODEL` likewise repoint their built-in row and its named
-picker row. `KIROCLAUDE_OPUS5_MODEL` was removed with the withdrawn Opus 5 row.
+picker row. `KIROCLAUDE_OPUS5_MODEL` was removed together with the Opus 5 row.
 A `KIROCLAUDE_HAIKU_MODEL` target must accept Claude Code's required positive
 `max_tokens` or prompt hooks will fail.
 This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
@@ -412,7 +413,8 @@ separate native Bedrock fallback.
 ### Use Fable 5.1 through native Bedrock
 
 Kiro exposes Fable 5.2 directly through both `/v1/responses` and
-`/v1/messages`; it replaced Fable 5.1, which Kiro withdrew on 2026-11-26. Fable
+`/v1/messages`; it replaces Fable 5.1, which the evidence accounts lost on
+2026-11-26. Fable
 5.2's live catalog advertises a 1M input window, 64K output, image input, prompt
 caching, a 6x rate multiplier, adaptive thinking, and the five effort levels.
 Inputs and outputs are subject to the retention and abuse review notice included

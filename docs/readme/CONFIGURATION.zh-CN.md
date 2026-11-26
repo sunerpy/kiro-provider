@@ -548,7 +548,8 @@ bun run scripts/probe-replay-portability.ts --confirm \
 在该结果留档前，请把这一条 cell 当作假设而非证据。如果迁移后的 Opus 5.5 签名被
 上游拒绝，失败会以该次回放报错的形式出现；可将
 `reasoning_replay_account_failover` 设为 `"strict"`，回到 owner-bound 回放。
-Kiro 已于 2026-11-26 下线 `claude-opus-5`，固定该模型不再是可选做法。
+组织管理员可以停用 `claude-opus-5`（2026-11-26 取证账号即是如此），固定该模型
+不是可靠的替代做法。
 
 当前请求协议和投影 runtime operation 仍须与 mint envelope 一致，目标账号也须
 解析到同一有效区域并带 profile。CodeWhisperer 单元覆盖无状态 Responses 路径：
