@@ -53,11 +53,11 @@ kiroclaude --model fable
 KIROCLAUDE_MODEL=sonnet KIROCLAUDE_EFFORT=high kiroclaude
 ```
 
-启动器已经为验证过的 Opus 5.5、Opus 5、Sonnet、Fable、Sol、Terra、Luna 默认项
-配置 `[1m]` 与 `autoCompactWindow: 1000000`。Claude 发请求前去掉 `[1m]`。
-Opus 5.5 既是内置 Opus 行的指向，也是一行标名 `Claude Opus 5.5` 的 picker 行，
-并且是默认会话模型；small-fast 行映射到 Sonnet 5 并继承其 1M 窗口，自定义模型
-覆盖值原样保留。默认 Ultra 在已验证客户端上发送 `xhigh`。启动器也包含保持 Fable thinking 和 Bash 历史回放稳定的兼容设置；
+启动器已经为验证过的 Opus 5.5、Sonnet 5.5、Haiku 5.5、Fable 5.2、Sol、Terra、
+Luna 默认项配置 `[1m]` 与 `autoCompactWindow: 1000000`。Claude 发请求前去掉 `[1m]`。
+每个 Claude 模型既是对应内置家族行的指向，也是一行标名的 picker 行，Opus 5.5 是
+默认会话模型；small-fast 行映射到同为 1M 窗口的 Haiku 5.5，自定义模型覆盖值原样
+保留。默认 Ultra 在已验证客户端上发送 `xhigh`。启动器也包含保持 Fable thinking 和 Bash 历史回放稳定的兼容设置；
 再包一层 wrapper 时应保留这些设置。
 
 网关根地址为 `http://127.0.0.1:8787`，**不能带 `/v1`**。

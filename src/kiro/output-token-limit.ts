@@ -5,7 +5,10 @@ export const KIRO_OUTPUT_TOKEN_LIMIT_MAX = 128_000;
 
 const PROBE_CONFIRMED_MAX_TOKENS_MODELS = new Set([
   "claude-fable-5.1",
+  "claude-fable-5.2",
   "claude-sonnet-5",
+  "claude-sonnet-5.5",
+  "claude-haiku-5.5",
   "claude-opus-5",
   "claude-opus-5.5",
 ]);
@@ -50,8 +53,13 @@ export function supportsAdvisoryOutputTokenLimit(model: string): boolean {
  * Fable 5.1 (2026-09-16), and Claude Opus 5.5 (2026-09-26) accept max_tokens
  * from 1,024 through 128,000. Both Opus 5.5 bounds returned 200 and 128,001
  * was rejected with `must have a maximum value of 128000.0`, matching the
- * range its own additionalModelRequestFieldsSchema declares
+ * range its own additionalModelRequestFieldsSchema declared then
  * (docs/audits/opus-5-5-catalog-probe-2026-09-26.zh.md).
+ * On 2026-11-26 the catalogs for Opus 5.5, Fable 5.2, Sonnet 5.5 and Haiku 5.5
+ * declared 1,024 through 64,000, yet live requests with 1,024, 64,000, 64,001,
+ * 128,000 and 128,001 all returned 200: Kiro no longer enforces the maximum.
+ * The shared 128,000 bound is kept so existing clients are not newly rejected
+ * (docs/audits/claude-5-5-models-catalog-probe-2026-11-26.zh.md).
  * GPT 5.6 rejected every tested standard spelling, so it remains fail-closed,
  * and `max_output_tokens` is rejected with REQUEST_BODY_INVALID on Opus 5 and
  * Opus 5.5 alike.

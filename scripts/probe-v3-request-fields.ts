@@ -3,7 +3,7 @@
  *
  * Usage:
  *   bun run scripts/probe-v3-request-fields.ts --confirm \
- *     [--model gpt-5.6-sol] [--proxy http://127.0.0.1:1080]
+ *     [--model gpt-5.6-sol] [--proxy http://127.0.0.1:1080] [--cases a,b]
  */
 
 import { Database } from "bun:sqlite";
@@ -31,6 +31,9 @@ function argument(name: string, fallback = ""): string {
     ? fallback
     : (process.argv[index + 1] as string);
 }
+
+const REASONING_PROMPT =
+  "A train leaves at 09:47 and arrives at 13:12 the same day. How many minutes is the trip? Think it through, then answer with only the number.";
 
 function hash16(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
@@ -242,6 +245,51 @@ async function main(): Promise<void> {
       name: "max_tokens_upper",
       fields: { max_tokens: 128000 },
       prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      // Kiro stopped enforcing the catalog maximum by 2026-11-26: the declared
+      // 64,000 limit and the former 128,000 limit are probed on both sides.
+      name: "max_tokens_64000",
+      fields: { max_tokens: 64000 },
+      prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      name: "max_tokens_64001",
+      fields: { max_tokens: 64001 },
+      prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    {
+      name: "max_tokens_128001",
+      fields: { max_tokens: 128001 },
+      prompt: "Reply with exactly FIELD_PROBE_OK.",
+    },
+    // A trivial prompt reasons at no effort level; these cases need real work.
+    {
+      name: "effort_low",
+      fields: { output_config: { effort: "low" } },
+      prompt: REASONING_PROMPT,
+    },
+    {
+      name: "effort_max",
+      fields: { output_config: { effort: "max" } },
+      prompt: REASONING_PROMPT,
+    },
+    {
+      name: "thinking_adaptive",
+      fields: { max_tokens: 4096, thinking: { type: "adaptive" } },
+      prompt: REASONING_PROMPT,
+    },
+    {
+      name: "thinking_disabled",
+      fields: { thinking: { type: "disabled" }, output_config: { effort: "high" } },
+      prompt: REASONING_PROMPT,
+    },
+    {
+      // Declared by the Sonnet 5.5 schema; recorded to compare declaration and
+      // acceptance, never sent by the provider.
+      name: "thinking_between_tools",
+      fields: { max_tokens: 4096, thinking: { type: "between_tools" } },
+      prompt: REASONING_PROMPT,
     },
     {
       name: "max_output_tokens",

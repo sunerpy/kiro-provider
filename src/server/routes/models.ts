@@ -26,8 +26,16 @@ type CodexReasoningLevel = "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
 
 // Match Codex's Fable/Sol/Terra orchestration presets. Ultra is resolved by
 // Codex to max for inference and proactive multi-agent mode, not sent to Kiro.
+// Fable 5.2 succeeds Fable 5.1, which the 2026-11-26 catalogs no longer list.
+const CODEX_ULTRA_WIRE_MODELS = new Set([
+  "claude-fable-5.1",
+  "claude-fable-5.2",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+]);
+
 function codexSupportsUltra(wireId: string): boolean {
-  return wireId === "claude-fable-5.1" || wireId === "gpt-5.6-sol" || wireId === "gpt-5.6-terra";
+  return CODEX_ULTRA_WIRE_MODELS.has(wireId);
 }
 
 function codexReasoningLevels(wireId: string): Array<{

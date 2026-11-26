@@ -29,7 +29,7 @@ Pi 从 agent 目录中的 `models.json` 读取自定义端点：默认是 `~/.pi
           "reasoning": true,
           "thinkingLevelMap": { "xhigh": "xhigh", "max": "max" },
           "contextWindow": 1000000,
-          "maxTokens": 128000
+          "maxTokens": 64000
         }
       ]
     }
@@ -49,7 +49,7 @@ pi --model kiro-provider/gpt-5.6-sol
 | 设置                         | 原因                                                                                                                                                                                                                                          |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apiKey`                     | `$KIRO_GATEWAY_API_KEY` 让 Pi 从环境变量读取密钥，密钥不会写进文件。                                                                                                                                                                          |
-| `compat`                     | `supportsMaxOutputTokens: false`。Pi 的每个请求都带 `max_output_tokens`；kiro-provider 只为 `claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1` 把它传给 Kiro，对其他模型则以 `unsupported_output_token_limit` 拒绝。 |
+| `compat`                     | `supportsMaxOutputTokens: false`。Pi 的每个请求都带 `max_output_tokens`；kiro-provider 只为 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` 和 `claude-fable-5-2` 把它传给 Kiro，对其他模型则以 `unsupported_output_token_limit` 拒绝。 |
 | `reasoning`                  | 让 `/thinking`、`--thinking` 或 `--model kiro-provider/gpt-5.6-sol:high` 这样的后缀可以设置推理等级。                                                                                                                                         |
 | `thinkingLevelMap`           | 只有映射了 `xhigh` 和 `max` 的模型，Pi 才提供这两个等级。                                                                                                                                                                                     |
 | `contextWindow`、`maxTokens` | Pi 规划时使用的大小，取自 `GET /v1/models`。不写时 Pi 按 128,000 和 16,384 处理。                                                                                                                                                             |
@@ -80,4 +80,4 @@ summary-only 元数据，以恢复会话。响应通过
 
 ## Pi 的 Anthropic API
 
-Pi 的 `anthropic-messages` API 也能以 `http://127.0.0.1:8787` 连接网关。但开启 `reasoning: true` 时，Pi 会请求摘要形式的 thinking，而 kiro-provider 只为 Claude Fable 5.1 提供摘要 thinking，其他模型会以 `unsupported_reasoning_display` 拒绝。请继续使用 `openai-responses`。
+Pi 的 `anthropic-messages` API 也能以 `http://127.0.0.1:8787` 连接网关。但开启 `reasoning: true` 时，Pi 会请求摘要形式的 thinking，而 kiro-provider 只为 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` 和 `claude-fable-5-2` 提供摘要 thinking，其他模型会以 `unsupported_reasoning_display` 拒绝。请继续使用 `openai-responses`。

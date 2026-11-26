@@ -95,18 +95,19 @@ if [ "$backend" = kiro ]; then
   # Claude Code uses a conservative window behind custom gateways unless the
   # client model explicitly declares [1m]. Claude strips this client-only suffix
   # before sending the model ID. Custom pins remain exactly as supplied.
-  # The built-in Opus row carries the current flagship so the `opus` family alias
-  # resolves to it, and the same ID is also declared as a named picker row so the
-  # client shows "Claude Opus 5.5" instead of a generic Opus label. Opus 5 stays
-  # reachable as its own picker row.
+  # Each built-in family row carries the current Kiro model so the `opus`,
+  # `sonnet`, `haiku` and `fable` aliases resolve to it, and the same IDs are
+  # also declared as named picker rows so the client shows the exact model
+  # instead of a generic family label. On 2026-11-26 Kiro withdrew Opus 5,
+  # Sonnet 5, Haiku 4.5 and Fable 5.1 (INVALID_MODEL_ID) and added Sonnet 5.5,
+  # Haiku 5.5 and Fable 5.2.
   opus_model=${KIROCLAUDE_OPUS_MODEL:-claude-opus-5-5[1m]}
-  opus5_model=${KIROCLAUDE_OPUS5_MODEL:-claude-opus-5[1m]}
-  sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5[1m]}
+  sonnet_model=${KIROCLAUDE_SONNET_MODEL:-claude-sonnet-5-5[1m]}
   # Claude Code uses its small-fast model for prompt hooks and sends max_tokens.
-  # Kiro Haiku 4.5 rejects additionalModelRequestFields, so use the
-  # probe-confirmed Sonnet 5 mapping unless the operator explicitly overrides it.
-  haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-sonnet-5[1m]}
-  kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-1[1m]}
+  # Haiku 5.5 is probe-confirmed for max_tokens, effort and adaptive thinking,
+  # unlike Haiku 4.5, which rejected additionalModelRequestFields.
+  haiku_model=${KIROCLAUDE_HAIKU_MODEL:-claude-haiku-5-5[1m]}
+  kiro_fable_model=${KIROCLAUDE_KIRO_FABLE_MODEL:-claude-fable-5-2[1m]}
   sol_model=${KIROCLAUDE_SOL_MODEL:-gpt-5.6-sol[1m]}
   terra_model=${KIROCLAUDE_TERRA_MODEL:-gpt-5.6-terra[1m]}
   luna_model=${KIROCLAUDE_LUNA_MODEL:-gpt-5.6-luna[1m]}
@@ -158,7 +159,7 @@ PY
     resolve_effort "${KIROCLAUDE_EFFORT:-ultra}"
   fi
 
-  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$opus5_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
+  settings=$(python3 - "$helper" "$base_url" "$model" "$resolved_effort" "$resolved_ultracode" "$permission_mode" "$skip_dangerous_prompt" "$opus_model" "$sonnet_model" "$haiku_model" "$kiro_fable_model" "$sol_model" "$terra_model" "$luna_model" <<'PY'
 import json
 import hashlib
 import os
@@ -175,7 +176,6 @@ from urllib.parse import urlsplit
     permission_mode,
     skip_dangerous_prompt,
     opus,
-    opus5,
     sonnet,
     haiku,
     fable,
@@ -190,7 +190,7 @@ if parsed.query or parsed.fragment or parsed.path.rstrip("/"):
     raise SystemExit("kiroclaude: KIROCLAUDE_BASE_URL must be the gateway root, without /v1 or another path")
 if not all(
     value.strip()
-    for value in (model, opus, opus5, sonnet, haiku, fable, sol, terra, luna)
+    for value in (model, opus, sonnet, haiku, fable, sol, terra, luna)
 ):
     raise SystemExit("kiroclaude: model settings must not be empty")
 if effort not in {"", "low", "medium", "high", "xhigh"}:
@@ -213,7 +213,9 @@ settings = {
         "replaceBuiltInOptions": False,
         "options": [
             {"model": opus, "label": "Claude Opus 5.5", "description": "Kiro Claude flagship", "behavesAs": "claude-opus-5"},
-            {"model": opus5, "label": "Claude Opus 5", "description": "Kiro Claude previous flagship", "behavesAs": "claude-opus-5"},
+            {"model": sonnet, "label": "Claude Sonnet 5.5", "description": "Kiro Claude balanced", "behavesAs": "claude-opus-5"},
+            {"model": haiku, "label": "Claude Haiku 5.5", "description": "Kiro Claude fast", "behavesAs": "claude-opus-5"},
+            {"model": fable, "label": "Claude Fable 5.2", "description": "Kiro Claude Fable preview", "behavesAs": "claude-opus-5"},
             {"model": sol, "label": "GPT-5.6 Sol", "description": "Kiro GPT flagship", "behavesAs": "claude-opus-5"},
             {"model": terra, "label": "GPT-5.6 Terra", "description": "Kiro GPT balanced", "behavesAs": "claude-opus-5"},
             {"model": luna, "label": "GPT-5.6 Luna", "description": "Kiro GPT efficient", "behavesAs": "claude-opus-5"},

@@ -77,7 +77,8 @@ describe("MODEL_CATALOG", () => {
       // whose two spellings coincide.
       expect(entry.wireId).toBe("claude-opus-5.5");
       expect(entry.contextLimit).toBe(1_000_000);
-      expect(entry.outputLimit).toBe(128_000);
+      // 2026-11-26: the live catalog lowered maxOutputTokens from 128,000.
+      expect(entry.outputLimit).toBe(64_000);
       expect(entry.rateMultiplier).toBe(2);
       expect(entry.modalities.input).toContain("image");
     }
@@ -271,5 +272,140 @@ describe("MODEL_CATALOG", () => {
     for (const legacyId of LEGACY_ONLY_MODEL_IDS) {
       expect(catalogIds.has(legacyId)).toBe(false);
     }
+  });
+});
+
+describe("2026-11-26 Claude catalog additions", () => {
+  const families = [
+    { base: "claude-sonnet-5-5", wire: "claude-sonnet-5.5", label: "Claude Sonnet 5.5", rate: 1.3 },
+    { base: "claude-haiku-5-5", wire: "claude-haiku-5.5", label: "Claude Haiku 5.5", rate: 0.06 },
+  ] as const;
+  const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
+
+  for (const family of families)
+    test(`advertises the probe-backed ${family.label} effort family`, () => {
+      const entries = MODEL_CATALOG.filter(({ wireId }) => wireId === family.wire);
+      expect(entries.map(({ id }) => id)).toEqual([
+        family.base,
+        ...efforts.map((effort) => `${family.base}-${effort}`),
+      ]);
+      const multiplier = `${family.rate === 1.3 ? "1.3" : "0.06"}x`;
+      expect(entries.map(({ name }) => name)).toEqual([
+        `${family.label} (${multiplier})`,
+        ...efforts.map((effort) => `${family.label} (${effort}) (${multiplier})`),
+      ]);
+      for (const entry of entries) {
+        expect(entry).toMatchObject({
+          wireId: family.wire,
+          contextLimit: 1_000_000,
+          outputLimit: 64_000,
+          rateMultiplier: family.rate,
+          modalities: { input: ["text", "image"], output: ["text"] },
+        });
+      }
+      expect(resolveModelVariant(family.base)).toEqual({ wireId: family.wire, effort: undefined });
+      expect(resolveModelVariant(`${family.base}-thinking`)).toEqual({
+        wireId: family.wire,
+        effort: undefined,
+      });
+      expect(resolveModelVariant(`${family.base}-xhigh`)).toEqual({
+        wireId: family.wire,
+        effort: "xhigh",
+      });
+    });
+
+  test("advertises the Fable 5.2 preview as one entry with its retention notice", () => {
+    expect(MODEL_CATALOG.filter(({ wireId }) => wireId === "claude-fable-5.2")).toEqual([
+      {
+        id: "claude-fable-5-2",
+        wireId: "claude-fable-5.2",
+        name: "Claude Fable 5.2 (6.0x)",
+        description:
+          "Experimental preview of Claude Fable 5.2 with 1M context window - AWS will retain inputs and outputs for automated abuse detection, and may perform human review of traffic flagged by our abuse detection mechanisms",
+        contextLimit: 1_000_000,
+        outputLimit: 64_000,
+        rateMultiplier: 6,
+        modalities: { input: ["text", "image"], output: ["text"] },
+      },
+    ]);
+    // Effort aliases still resolve although only the base is listed.
+    expect(resolveModelVariant("claude-fable-5-2-max")).toEqual({
+      wireId: "claude-fable-5.2",
+      effort: "max",
+    });
+  });
+
+  test("never parses the 5.5 or 5.2 ids as variants of an older base", () => {
+    expect(resolveModelVariant("claude-sonnet-5-5").wireId).not.toBe("claude-sonnet-5");
+    expect(resolveModelVariant("claude-sonnet-5").wireId).toBe("claude-sonnet-5");
+    expect(resolveModelVariant("claude-fable-5-2").wireId).not.toBe("claude-fable-5.1");
+    expect(() => resolveModelVariant("claude-haiku-4-5-high")).toThrow("Unsupported model");
+  });
+
+  test("expands the live dotted wire ids into their stable public entries", () => {
+    const schema = (thinkingTypes: readonly string[], effortDefault: string) => ({
+      type: "object",
+      properties: {
+        thinking: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            type: { type: "string", enum: thinkingTypes },
+            display: { type: "string", enum: ["summarized", "omitted"] },
+          },
+          required: ["type"],
+        },
+        output_config: {
+          type: "object",
+          properties: {
+            effort: {
+              type: "string",
+              enum: ["low", "medium", "high", "xhigh", "max"],
+              default: effortDefault,
+            },
+          },
+        },
+        max_tokens: { type: "integer", minimum: 1024, maximum: 64000 },
+      },
+      additionalProperties: false,
+    });
+    const live = (
+      modelId: string,
+      modelName: string,
+      rateMultiplier: number,
+      thinkingTypes: readonly string[],
+      effortDefault: string,
+    ): KiroAvailableModel => ({
+      modelId,
+      modelName,
+      description: `${modelName} model with 1M context window`,
+      supportedInputTypes: ["TEXT", "IMAGE"],
+      tokenLimits: { maxInputTokens: 1_000_000, maxOutputTokens: 64_000 },
+      rateMultiplier,
+      promptCaching: { supportsPromptCaching: true },
+      additionalModelRequestFieldsSchema: schema(thinkingTypes, effortDefault),
+    });
+    const entries = modelCatalogFromAvailableModels([
+      live("claude-fable-5.2", "Claude Fable 5.2", 6, ["adaptive"], "high"),
+      live("claude-sonnet-5.5", "Claude Sonnet 5.5", 1.3, ["adaptive", "between_tools"], "high"),
+      live("claude-haiku-5.5", "Claude Haiku 5.5", 0.06, ["adaptive", "disabled"], "medium"),
+    ]);
+
+    expect(entries.map(({ id }) => id)).toEqual([
+      "claude-fable-5-2",
+      "claude-sonnet-5-5",
+      ...efforts.map((effort) => `claude-sonnet-5-5-${effort}`),
+      "claude-haiku-5-5",
+      ...efforts.map((effort) => `claude-haiku-5-5-${effort}`),
+    ]);
+    expect(entries.some(({ id }) => id.includes("."))).toBe(false);
+    for (const entry of entries) {
+      expect(entry.contextLimit).toBe(1_000_000);
+      expect(entry.outputLimit).toBe(64_000);
+      expect(entry.promptCaching).toEqual({ supportsPromptCaching: true });
+      expect(entry.modalities.input).toEqual(["text", "image"]);
+    }
+    expect(entries[0]?.name).toBe("Claude Fable 5.2 (6.0x)");
+    expect(entries.find(({ id }) => id === "claude-haiku-5-5")?.rateMultiplier).toBe(0.06);
   });
 });

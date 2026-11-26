@@ -9,7 +9,7 @@
 // Installed Claude Code against a synthetic loopback API. No real model calls.
 // All requests and outputs remain in memory; only enums/counts are reported.
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,35 @@ const thresholdMode = process.argv.includes("--thresholds");
 const toolLoop = process.argv.includes("--tool-loop");
 const effortMatrix = process.argv.includes("--effort-matrix");
 const caseFilter = option("--cases", "");
+// System-managed settings outrank --settings and the fixture environment. A
+// managed endpoint would send every synthetic turn, with its fixture key, to
+// that endpoint instead of this loopback; refuse before spawning any client.
+{
+  const managedPath =
+    process.platform === "darwin"
+      ? "/Library/Application Support/ClaudeCode/managed-settings.json"
+      : "/etc/claude-code/managed-settings.json";
+  let managed;
+  try {
+    managed = JSON.parse(await readFile(managedPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      console.log(JSON.stringify({ status: "fail", error_code: "managed_settings_unreadable" }));
+      process.exit(1);
+    }
+  }
+  const environment = managed?.env ?? {};
+  const conflict = environment.ANTHROPIC_BASE_URL
+    ? "managed_endpoint_override"
+    : managed?.apiKeyHelper ||
+        ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].some((key) => environment[key])
+      ? "managed_auth_override"
+      : undefined;
+  if (conflict) {
+    console.log(JSON.stringify({ status: "fail", error_code: conflict }));
+    process.exit(1);
+  }
+}
 const root = await mkdtemp(join(tmpdir(), "claude-context-fixture-"));
 const useLauncher = !process.argv.includes("--native-comparison");
 if (effortMatrix && !useLauncher) throw new Error("--effort-matrix requires the launcher");
@@ -70,9 +99,8 @@ const cases = effortMatrix
     ]
   : useLauncher && !thresholdMode
     ? [
-        // `opus` resolves through ANTHROPIC_DEFAULT_OPUS_MODEL, so this case
-        // covers the family alias; launcher-opus55 and launcher-opus5 cover the
-        // two named picker rows by their exact IDs.
+        // Family aliases resolve through ANTHROPIC_DEFAULT_*_MODEL; the
+        // launcher-*5x cases cover the named picker rows by their exact IDs.
         { name: "launcher-opus", model: "opus", env: {}, expectedWindow: 1000000 },
         {
           name: "launcher-opus55",
@@ -80,12 +108,28 @@ const cases = effortMatrix
           env: {},
           expectedWindow: 1000000,
         },
-        { name: "launcher-opus5", model: "claude-opus-5[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-sonnet", model: "sonnet", env: {}, expectedWindow: 1000000 },
+        {
+          name: "launcher-sonnet55",
+          model: "claude-sonnet-5-5[1m]",
+          env: {},
+          expectedWindow: 1000000,
+        },
         { name: "launcher-fable", model: "fable", env: {}, expectedWindow: 1000000 },
-        // The small-fast row maps to Sonnet 5, so it inherits that 1M window
-        // rather than Kiro Haiku 4.5's 200K one.
+        {
+          name: "launcher-fable52",
+          model: "claude-fable-5-2[1m]",
+          env: {},
+          expectedWindow: 1000000,
+        },
+        // The small-fast row maps to Haiku 5.5, whose window is 1M as well.
         { name: "launcher-haiku", model: "haiku", env: {}, expectedWindow: 1000000 },
+        {
+          name: "launcher-haiku55",
+          model: "claude-haiku-5-5[1m]",
+          env: {},
+          expectedWindow: 1000000,
+        },
         { name: "launcher-sol", model: "gpt-5.6-sol[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-terra", model: "gpt-5.6-terra[1m]", env: {}, expectedWindow: 1000000 },
         { name: "launcher-luna", model: "gpt-5.6-luna[1m]", env: {}, expectedWindow: 1000000 },

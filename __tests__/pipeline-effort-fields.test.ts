@@ -181,6 +181,74 @@ describe("effort request fields in the command input (B7)", () => {
     });
   });
 
+  test.each([
+    ["claude-fable-5-2", "claude-fable-5.2"],
+    ["claude-sonnet-5-5", "claude-sonnet-5.5"],
+    ["claude-haiku-5-5", "claude-haiku-5.5"],
+  ])(
+    "projects %s adaptive thinking, effort, display, and max_tokens together",
+    async (model, wire) => {
+      for (const display of ["omitted", "summarized"] as const) {
+        const input = await capturedInput(
+          model,
+          {},
+          {
+            protocol: "anthropic-messages",
+            thinking: { enabled: true, display },
+            reasoningEffort: "xhigh",
+            outputTokenLimit: 4096,
+          },
+        );
+
+        expect(input.conversationState?.currentMessage?.userInputMessage?.modelId).toBe(wire);
+        expect(input.additionalModelRequestFields).toEqual({
+          max_tokens: 4096,
+          output_config: { effort: "xhigh" },
+          thinking: { type: "adaptive", display },
+        });
+      }
+    },
+  );
+
+  test("projects an explicit thinking disable only where the model schema declares it", async () => {
+    const disabled = {
+      protocol: "anthropic-messages" as const,
+      thinking: { enabled: false },
+      reasoningEffort: "high" as const,
+      outputTokenLimit: 2048,
+    };
+    // Without the explicit type, a live Haiku 5.5 request with effort reasoned anyway.
+    expect(
+      (await capturedInput("claude-haiku-5-5", {}, disabled)).additionalModelRequestFields,
+    ).toEqual({
+      max_tokens: 2048,
+      output_config: { effort: "high" },
+      thinking: { type: "disabled" },
+    });
+    for (const model of ["claude-sonnet-5-5", "claude-fable-5-2", "claude-opus-5-5"]) {
+      expect((await capturedInput(model, {}, disabled)).additionalModelRequestFields).toEqual({
+        max_tokens: 2048,
+        output_config: { effort: "high" },
+      });
+    }
+  });
+
+  test("keeps the Responses forced-omitted policy on its validated models only", async () => {
+    const policy = { responses_thinking_display_mode: "omitted" as const };
+    const body = { protocol: "responses" as const, reasoningEffort: "high" as const };
+    expect(
+      (await capturedInput("claude-opus-5-5", policy, body)).additionalModelRequestFields,
+    ).toEqual({
+      output_config: { effort: "high" },
+      thinking: { type: "adaptive", display: "omitted" },
+    });
+    for (const model of ["claude-fable-5-2", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+      expect((await capturedInput(model, policy, body)).additionalModelRequestFields).toEqual({
+        output_config: { effort: "high" },
+      });
+    }
+  });
+
   test("merges Claude temperature with max_tokens and effort", async () => {
     const input = await capturedInput(
       "claude-opus-5",

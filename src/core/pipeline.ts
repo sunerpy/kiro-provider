@@ -27,7 +27,12 @@ import {
 import { ReasoningReplayError } from "../reasoning/replay-store.js";
 import { EffortSchema } from "../kiro/regions.js";
 import { extractRegionFromArn, KIRO_CONSTANTS } from "../kiro/constants.js";
-import { buildEffortRequestFields, buildThinkingRequestFields } from "../kiro/effort.js";
+import {
+  buildEffortRequestFields,
+  buildThinkingDisabledRequestFields,
+  buildThinkingRequestFields,
+  supportsForcedOmittedThinkingDisplay,
+} from "../kiro/effort.js";
 import {
   isGpt56Model,
   isKimiK3Model,
@@ -2451,12 +2456,15 @@ async function runAttempt(
       options.config.responses_thinking_display_mode === "omitted" &&
       options.body.thinking?.enabled !== false &&
       options.body.requestedReasoningEffort !== "none" &&
-      buildThinkingRequestFields(wireModel, true, "omitted") !== undefined;
-    const thinkingRequestFields = buildThinkingRequestFields(
-      wireModel,
-      responsesThinkingDisplayForced || options.body.thinking?.enabled === true,
-      responsesThinkingDisplayForced ? "omitted" : options.body.thinking?.display,
-    );
+      supportsForcedOmittedThinkingDisplay(wireModel);
+    const thinkingRequestFields =
+      options.body.thinking?.enabled === false
+        ? buildThinkingDisabledRequestFields(wireModel)
+        : buildThinkingRequestFields(
+            wireModel,
+            responsesThinkingDisplayForced || options.body.thinking?.enabled === true,
+            responsesThinkingDisplayForced ? "omitted" : options.body.thinking?.display,
+          );
     if (thinkingRequestFields !== undefined) {
       additionalModelRequestFields = mergeModelRequestFields(
         additionalModelRequestFields,

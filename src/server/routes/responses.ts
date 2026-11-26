@@ -3,7 +3,12 @@ import type { Config } from "../../config/schema.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { runChatCompletion } from "../../core/pipeline.js";
 import { boundedCleanup } from "../../core/stream-cleanup.js";
-import { isFable51Model, isKimiK3Model, resolveModelVariant } from "../../kiro/models.js";
+import {
+  isFable51Model,
+  isFable52Model,
+  isKimiK3Model,
+  resolveModelVariant,
+} from "../../kiro/models.js";
 import type { CanonicalMessage } from "../../protocol/canonical.js";
 import {
   CANONICAL_OUTPUT_JSON_MEDIA_TYPE,
@@ -135,7 +140,11 @@ function nativeInstructionRolesSupported(model: unknown): boolean | undefined {
 }
 
 function unsupportedNativeModel(model: unknown): StatelessV3Requirement | undefined {
-  if (typeof model !== "string" || (!isFable51Model(model) && !isKimiK3Model(model)))
+  // Kiro CreateResponse rejects Fable 5.1; Fable 5.2 has no native evidence.
+  if (
+    typeof model !== "string" ||
+    (!isFable51Model(model) && !isFable52Model(model) && !isKimiK3Model(model))
+  )
     return undefined;
   return { reason: "native_model_unsupported", param: "model" };
 }

@@ -323,9 +323,9 @@ summarized cannot be represented by Kiro`; the provider audit identifies
 - **Cause:** A shared `showThinkingSummaries: true` setting or explicit
   `--thinking-display summarized` flag asks for summaries on a model whose
   summary display the gateway cannot represent.
-- **Action:** Upgrade the provider for Opus 5.5: it now preserves an explicit
-  `summarized` request, including its effort and signed tool history, as it
-  already does for Fable 5.1. Other models still reject summaries.
+- **Action:** Upgrade the provider: Fable 5.1 and 5.2, Opus 5.5, Sonnet 5.5,
+  and Haiku 5.5 preserve an explicit `summarized` request, including its effort
+  and signed tool history. Other models still reject summaries.
   Use the updated repository `kiroclaude` launcher, which sets
   `showThinkingSummaries: false` in its Kiro overlay. For an explicit display
   override, launch with `--thinking-display omitted`:
@@ -381,8 +381,9 @@ Invalid signature in thinking block`.
 
 ### Fable conflicting upstream reasoning signatures
 
-Enabled Fable thinking with effective `display: omitted` can safely omit the
-entire conflicting signature-only prefix before any output is published. The
+Enabled Fable 5.1 or Opus 5.5 thinking with effective `display: omitted` can
+safely omit the entire conflicting signature-only prefix before any output is
+published. Fable 5.2 and the other newer models keep such a conflict fatal. The
 prefix is bounded to 128 events and 1 MiB and must contain no reasoning text or
 redacted payload. The provider continues the same upstream request, emits
 `x-kiro-reasoning-replay-mode: conflict-omitted` and a count-only
