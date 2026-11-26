@@ -475,9 +475,11 @@ async function main() {
     const matrix =
       client === "claude"
         ? [
+            // Opus 5 and Fable 5.1 became unavailable to the evidence accounts on 2026-11-26.
             ["claude-opus-5-5", "claude-opus-5-5", "low"],
-            ["claude-opus-5-5", "claude-opus-5", "max"],
-            ["claude-fable-5-1", "claude-opus-5-5", "max"],
+            ["claude-opus-5-5", "claude-sonnet-5-5", "max"],
+            ["claude-fable-5-2", "claude-opus-5-5", "max"],
+            ["claude-sonnet-5-5", "claude-haiku-5-5", "low"],
           ]
         : [
             ["claude-opus-5-5", "claude-opus-5-5", "low"],
@@ -485,6 +487,10 @@ async function main() {
             ["claude-opus-5-5-max", "claude-opus-5-5", "low"],
             ["claude-opus-5-5-max", "claude-opus-5-5-low", "low"],
             ["gpt-5.6-sol", "claude-opus-5-5", "max"],
+            ["claude-sonnet-5-5", "claude-sonnet-5-5-low", "low"],
+            ["claude-haiku-5-5-max", "claude-haiku-5-5", "low"],
+            ["claude-fable-5-2", "claude-opus-5-5", "max"],
+            ["gpt-5.6-sol", "claude-sonnet-5-5", "max"],
           ];
     const selectedCase = option("--case-index");
     if (selectedCase !== undefined)

@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   budgetToEffort,
+  buildThinkingDisabledRequestFields,
+  buildThinkingRequestFields,
+  getDefaultEffort,
   getEffectiveEffort,
+  getSupportedEffortLevels,
   resolveEffort,
+  supportsAdaptiveThinkingDisplay,
   supportsEffort,
+  supportsForcedOmittedThinkingDisplay,
   supportsXHighEffort,
 } from "../src/kiro/effort.js";
 
@@ -35,6 +41,55 @@ describe("effort module", () => {
     test("returns false for other models", () => {
       expect(supportsXHighEffort("claude-opus-4.6")).toBe(false);
       expect(supportsXHighEffort("claude-sonnet-4.6")).toBe(false);
+    });
+  });
+
+  describe("2026-11-26 Claude additions", () => {
+    const additions = ["claude-fable-5.2", "claude-sonnet-5.5", "claude-haiku-5.5"];
+
+    test("expose the full five-level enum their schemas declare", () => {
+      for (const model of additions) {
+        expect(supportsEffort(model)).toBe(true);
+        expect(supportsXHighEffort(model)).toBe(true);
+        expect(getSupportedEffortLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+        expect(resolveEffort(model, "xhigh")).toBe("xhigh");
+      }
+    });
+
+    test("advertise the schema defaults instead of a uniform medium", () => {
+      expect(getDefaultEffort("claude-fable-5.2")).toBe("high");
+      expect(getDefaultEffort("claude-sonnet-5.5")).toBe("high");
+      expect(getDefaultEffort("claude-haiku-5.5")).toBe("medium");
+      expect(getDefaultEffort("claude-opus-5.5")).toBe("medium");
+      expect(getDefaultEffort("kimi-k3")).toBe("max");
+      expect(getDefaultEffort("claude-haiku-4.5")).toBeUndefined();
+    });
+
+    test("send adaptive display controls without joining the operator recovery set", () => {
+      for (const model of additions) {
+        expect(supportsAdaptiveThinkingDisplay(model)).toBe(true);
+        expect(supportsForcedOmittedThinkingDisplay(model)).toBe(false);
+        expect(buildThinkingRequestFields(model, true)).toEqual({
+          thinking: { type: "adaptive", display: "omitted" },
+        });
+        expect(buildThinkingRequestFields(model, true, "summarized")).toEqual({
+          thinking: { type: "adaptive", display: "summarized" },
+        });
+        expect(buildThinkingRequestFields(model, false)).toBeUndefined();
+      }
+      for (const model of ["claude-fable-5.1", "claude-opus-5.5"]) {
+        expect(supportsForcedOmittedThinkingDisplay(model)).toBe(true);
+      }
+      expect(supportsAdaptiveThinkingDisplay("claude-opus-5")).toBe(false);
+    });
+
+    test("project an explicit disable only where the schema declares that type", () => {
+      expect(buildThinkingDisabledRequestFields("claude-haiku-5.5")).toEqual({
+        thinking: { type: "disabled" },
+      });
+      for (const model of ["claude-fable-5.2", "claude-sonnet-5.5", "claude-opus-5.5", "kimi-k3"]) {
+        expect(buildThinkingDisabledRequestFields(model)).toBeUndefined();
+      }
     });
   });
 

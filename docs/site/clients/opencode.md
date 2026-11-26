@@ -24,7 +24,7 @@ Put the provider in `~/.config/opencode/opencode.json`, or in `opencode.json` at
       "models": {
         "claude-opus-5-5": {
           "name": "Claude Opus 5.5",
-          "limit": { "context": 1000000, "output": 128000 },
+          "limit": { "context": 1000000, "output": 64000 },
           "options": { "toolStreaming": false }
         },
         "gpt-5.6-sol": {
@@ -60,8 +60,9 @@ opencode run -m kiro-provider/gpt-5.6-sol "Reply with exactly: KIRO_OK"
 
 ## Which models work
 
-Every Messages request carries `max_tokens`. kiro-provider passes it on to Kiro for four Claude models:
-`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5` and `claude-fable-5-1`, from 1,024 to 128,000. With the header
+Every Messages request carries `max_tokens`. kiro-provider passes it on to Kiro for the Claude models
+`claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-2` (the older `claude-opus-5`, `claude-sonnet-5` and `claude-fable-5-1` too while your organization allows them),
+from 1,024 to 128,000. With the header
 above, `gpt-5.6-sol`, `gpt-5.6-terra` and `gpt-5.6-luna` work too. Any other model is refused with an
 `invalid_request_error` about `max_tokens`; use it from a Responses client such as [Pi](pi.md).
 

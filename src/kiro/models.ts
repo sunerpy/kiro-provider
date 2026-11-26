@@ -58,6 +58,14 @@ export function isFable51Model(model: string): boolean {
   }
 }
 
+export function isFable52Model(model: string): boolean {
+  try {
+    return resolveModelVariant(model).wireId === "claude-fable-5.2";
+  } catch {
+    return false;
+  }
+}
+
 /** Models with evidenced adaptive omitted display and bounded prefix recovery. */
 export function supportsReasoningPrefixOmission(model: string): boolean {
   try {
@@ -88,12 +96,15 @@ export function resolveKiroModel(model: string): string {
 
 export const VARIANT_BASE_ALLOWLIST = new Set<string>([
   "claude-fable-5-1",
+  "claude-fable-5-2",
   "claude-opus-5-5",
   "claude-opus-5",
   "claude-opus-4-8",
   "claude-opus-4-7",
   "claude-sonnet-5",
+  "claude-sonnet-5-5",
   "claude-sonnet-4-6",
+  "claude-haiku-5-5",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",

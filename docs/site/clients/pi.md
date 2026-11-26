@@ -31,7 +31,7 @@ Pi reads custom endpoints from `models.json` in its agent directory: `~/.pi/agen
           "reasoning": true,
           "thinkingLevelMap": { "xhigh": "xhigh", "max": "max" },
           "contextWindow": 1000000,
-          "maxTokens": 128000
+          "maxTokens": 64000
         }
       ]
     }
@@ -48,13 +48,13 @@ pi --model kiro-provider/gpt-5.6-sol
 
 ## What the settings do
 
-| Setting                      | Why                                                                                                                                                                                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiKey`                     | `$KIRO_GATEWAY_API_KEY` makes Pi take the key from the environment variable, so it is not written into the file.                                                                                                                                                                       |
-| `compat`                     | `supportsMaxOutputTokens: false`. Pi sends `max_output_tokens` with every request; kiro-provider passes it on to Kiro for `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5` and `claude-fable-5-1` only, and refuses it for any other model with `unsupported_output_token_limit`. |
-| `reasoning`                  | Lets `/thinking`, `--thinking` or a suffix such as `--model kiro-provider/gpt-5.6-sol:high` set the reasoning effort.                                                                                                                                                                  |
-| `thinkingLevelMap`           | Pi offers the `xhigh` and `max` levels only for a model that maps them.                                                                                                                                                                                                                |
-| `contextWindow`, `maxTokens` | The sizes Pi plans with, copied from `GET /v1/models`. Without them Pi assumes 128,000 and 16,384.                                                                                                                                                                                     |
+| Setting                      | Why                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apiKey`                     | `$KIRO_GATEWAY_API_KEY` makes Pi take the key from the environment variable, so it is not written into the file.                                                                                                                                                                                                                                     |
+| `compat`                     | `supportsMaxOutputTokens: false`. Pi sends `max_output_tokens` with every request; kiro-provider passes it on to Kiro for `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and `claude-fable-5-2` (and older Claude models your organization still allows) only, and refuses it for any other model with `unsupported_output_token_limit`. |
+| `reasoning`                  | Lets `/thinking`, `--thinking` or a suffix such as `--model kiro-provider/gpt-5.6-sol:high` set the reasoning effort.                                                                                                                                                                                                                                |
+| `thinkingLevelMap`           | Pi offers the `xhigh` and `max` levels only for a model that maps them.                                                                                                                                                                                                                                                                              |
+| `contextWindow`, `maxTokens` | The sizes Pi plans with, copied from `GET /v1/models`. Without them Pi assumes 128,000 and 16,384.                                                                                                                                                                                                                                                   |
 
 ## Add other models
 
@@ -66,7 +66,7 @@ curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_
 ```
 
 Add each one as another entry under `models`, with `compat.supportsMaxOutputTokens: false` unless it is one of the
-four Claude models above. Names with an effort suffix, such as `claude-opus-5-5-high`, are not needed: the thinking
+Claude models above. Names with an effort suffix, such as `claude-opus-5-5-high`, are not needed: the thinking
 level sets the effort.
 
 ## Resume a session with summary-only reasoning
@@ -85,5 +85,7 @@ New Responses outputs with conflicting reasoning signatures fail with
 ## Pi's Anthropic API
 
 Pi's `anthropic-messages` API reaches the gateway too, at `http://127.0.0.1:8787`. With `reasoning: true`, though, Pi
-asks for summarized thinking, which kiro-provider supports for Claude Fable 5.1 only; other models refuse it with
+asks for summarized thinking, which kiro-provider supports only for `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5`, `claude-fable-5-2` and, while your organization allows it, `claude-fable-5-1`; other models refuse
+it with
 `unsupported_reasoning_display`. Stay with `openai-responses`.

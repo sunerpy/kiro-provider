@@ -158,35 +158,54 @@ subprocesses.
 
 ## Choose a model
 
-The built-in Opus and Sonnet rows map to `claude-opus-5-5[1m]` and
-`claude-sonnet-5[1m]`. The built-in Haiku/small-fast row intentionally also
-maps to `claude-sonnet-5[1m]`: Claude Code uses that row for prompt hooks and
-sends a positive `max_tokens`, while Kiro Haiku 4.5 rejects every
-`additionalModelRequestFields` object. This removes that Haiku-specific
-rejection. Claude Code 2.1.280 session-title generation and prompt hooks
+The built-in Opus, Sonnet, Haiku/small-fast, and Fable rows map to
+`claude-opus-5-5[1m]`, `claude-sonnet-5-5[1m]`, `claude-haiku-5-5[1m]`, and
+`claude-fable-5-2[1m]`. Organization admins can make Kiro models unavailable: on
+2026-11-26 the evidence accounts got `INVALID_MODEL_ID` ("made unavailable by the
+admins in your organization") for Opus 5, Sonnet 5, Haiku 4.5, and Fable 5.1, so
+the launcher no longer targets them. Claude Code uses the small-fast row for prompt hooks and
+sends a positive `max_tokens`. Haiku 5.5 accepts it, unlike Haiku 4.5, which
+rejected every `additionalModelRequestFields` object. Claude Code 2.1.280
+session-title generation and prompt hooks
 additionally send `output_config.format`. Messages recognizes two bounded
 local profiles: `single-string-object-v1` for session titles and
 `hook-evaluation-v1` for the `hook_prompt` and built-in `/goal` evaluator
 schema (`ok`/`reason`/`impossible`). Both validate output before publication;
-arbitrary JSON schemas remain unsupported. The built-in
-Fable row maps to `claude-fable-5-1[1m]`, whose Kiro wire id is
-`claude-fable-5.1`. The launcher also adds `claude-opus-5-5[1m]`,
-`claude-opus-5[1m]`, `gpt-5.6-sol[1m]`, `gpt-5.6-terra[1m]`, and
-`gpt-5.6-luna[1m]` to the picker.
+arbitrary JSON schemas remain unsupported. Each Claude row is also declared as
+a named picker row (`Claude Opus 5.5`, `Claude Sonnet 5.5`, `Claude Haiku 5.5`,
+and `Claude Fable 5.2`), and the launcher adds `gpt-5.6-sol[1m]`,
+`gpt-5.6-terra[1m]`, and `gpt-5.6-luna[1m]` to the picker.
 
 `claude-opus-5-5` carries the Kiro wire id `claude-opus-5.5`, which keeps its
-dotted minor version even though plain Opus 5 does not. Its live catalog entry
-advertises a 1M input window, 128K output, image input, a 2.0x rate multiplier,
-prompt caching, and an `additionalModelRequestFieldsSchema` declaring
-`output_config.effort` as the full `low|medium|high|xhigh|max` enum plus
-`max_tokens` from 1,024 through 128,000. Kiro still describes it as an
-experimental preview. The built-in Opus row carries it so the `opus` family
-alias resolves to the current flagship, and the same ID is declared a second time
-as a picker row labelled `Claude Opus 5.5`, which is also what the launcher pins
-as the session model. Those two rows resolve to one model on purpose: the named
-row is what makes the exact version visible in the client instead of a generic
-Opus label. Opus 5 stays reachable as its own picker row and through
-`KIROCLAUDE_OPUS5_MODEL`, and `KIROCLAUDE_MODEL=opus` selects the family alias.
+dotted minor version even though plain Opus 5 did not. Its live catalog entry
+advertises a 1M input window, image input, a 2.0x rate multiplier, prompt
+caching, and an `additionalModelRequestFieldsSchema` declaring
+`output_config.effort` as the full `low|medium|high|xhigh|max` enum. On
+2026-11-26 Kiro lowered its advertised output to 64K and its declared
+`max_tokens` maximum to 64,000; live requests above that still return 200, so
+the gateway keeps accepting 1,024 through 128,000. The built-in Opus row carries
+it so the `opus` family alias resolves to the current flagship, and the same ID
+is declared a second time as a picker row labelled `Claude Opus 5.5`, which is
+also what the launcher pins as the session model. Those two rows resolve to one
+model on purpose: the named row is what makes the exact version visible in the
+client instead of a generic Opus label. `KIROCLAUDE_MODEL=opus` selects the
+family alias.
+
+`claude-sonnet-5-5`, `claude-haiku-5-5`, and `claude-fable-5-2` carry the dotted
+wire ids `claude-sonnet-5.5`, `claude-haiku-5.5`, and `claude-fable-5.2`. Each
+live catalog entry advertises a 1M input window, 64K output, image input,
+prompt caching, adaptive thinking with `summarized` or `omitted` display, and
+the full five-level effort enum; the rate multipliers are 1.3x, 0.06x, and 6x.
+Their schemas default to `high` effort for Sonnet 5.5 and Fable 5.2 and to
+`medium` for Haiku 5.5, which is also the default Codex shows. Haiku 5.5 also
+declares `thinking.type: "disabled"`, so an explicit Messages
+`thinking: {"type": "disabled"}` or Responses `reasoning.effort: "none"` is
+forwarded; without it, a live Haiku 5.5 request with an effort still reasoned.
+Fable 5.2 and Sonnet 5.5, like Opus 5.5, declare no disabled type, so the gateway
+omits the thinking field and the model can still reason adaptively. Sonnet 5.5
+declares a `between_tools` type that the gateway never sends. Fable
+5.2 is an experimental preview with the same retention and abuse-review notice
+as Fable 5.1.
 
 ### Kimi K3
 
@@ -301,19 +320,21 @@ Code never asks for one in that case, and upgrading the provider does not rewrit
 existing transcripts.
 
 Claude Code's gateway discovery filters out model IDs without `claude` or
-`anthropic`, so the GPT rows must be declared explicitly. The two Claude Opus
-rows pass that filter on their own but are still declared so their `[1m]` suffix
-applies rather than a discovered default window. Every declared picker row uses
+`anthropic`, so the GPT rows must be declared explicitly. The Claude rows pass
+that filter on their own but are still declared so their `[1m]` suffix applies
+rather than a discovered default window. Every declared picker row uses
 `behavesAs: "claude-opus-5"` as the client-side capability template. This
 exposes adaptive thinking and the left/right effort control without duplicating
 each model at every effort level. The `[1m]` suffix makes Claude Code use
 the advertised 1M context window; Claude strips it before sending the model
-ID. The actual installed client was checked for all seven distinct 1M model IDs
-it can send (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`,
-`claude-fable-5-1`, and the three GPT rows), both through the family alias and
-through the exact ID pinned as the session model, and the small-fast row inherits
-Sonnet's 1M window. A provider catalog alone does not change the client window,
-and output reserves still reduce the available input budget.
+ID. The launcher can send seven distinct 1M model IDs (`claude-opus-5-5`,
+`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, and the three GPT
+rows), through either the family alias or the exact ID pinned as the session
+model. `scripts/probe-client-context.mjs` checks each window against a synthetic
+loopback; it refuses to start on a host whose managed Claude settings pin
+`ANTHROPIC_BASE_URL`, because that endpoint would outrank the fixture and receive
+its traffic. A provider catalog alone does not change the client window, and
+output reserves still reduce the available input budget.
 
 The Kiro overlay also sets `autoCompactWindow: 1000000` so these gateway
 models compact proactively. Claude caps it at the selected model's window
@@ -324,11 +345,12 @@ files and the separate Bedrock overlay are not changed.
 Explicit `KIROCLAUDE_*_MODEL` overrides are preserved as supplied. Include
 `[1m]` yourself when pinning a custom ID that supports the larger window.
 `KIROCLAUDE_OPUS_MODEL` repoints the built-in Opus row, the named
-`Claude Opus 5.5` picker row, and the default session model together, so
-`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` restores the pre-3.6.0 default.
-`KIROCLAUDE_OPUS5_MODEL` repoints only the Opus 5 picker row.
-`KIROCLAUDE_HAIKU_MODEL` remains an explicit escape hatch, but its target must
-accept Claude Code's required positive `max_tokens` or prompt hooks will fail.
+`Claude Opus 5.5` picker row, and the default session model together.
+`KIROCLAUDE_SONNET_MODEL`, `KIROCLAUDE_HAIKU_MODEL`, and
+`KIROCLAUDE_KIRO_FABLE_MODEL` likewise repoint their built-in row and its named
+picker row. `KIROCLAUDE_OPUS5_MODEL` was removed together with the Opus 5 row.
+A `KIROCLAUDE_HAIKU_MODEL` target must accept Claude Code's required positive
+`max_tokens` or prompt hooks will fail.
 This changes only the Kiro launcher; the separate Bedrock mode is unchanged.
 
 Run the optional installed-client regression probe from a checkout:
@@ -392,28 +414,33 @@ separate native Bedrock fallback.
 
 ### Use Fable 5.1 through native Bedrock
 
-Kiro now exposes Fable 5.1 directly through both `/v1/responses` and
-`/v1/messages`. Its live catalog advertises a 1M input window, 128K output,
-image input, prompt caching, a 6x rate multiplier, adaptive thinking, and the
-five effort levels. Inputs and outputs are subject to the retention and abuse
-review notice included in Kiro's model description.
+Kiro exposes Fable 5.2 directly through both `/v1/responses` and
+`/v1/messages`; it replaces Fable 5.1, which the evidence accounts lost on
+2026-11-26. Fable
+5.2's live catalog advertises a 1M input window, 64K output, image input, prompt
+caching, a 6x rate multiplier, adaptive thinking, and the five effort levels.
+Inputs and outputs are subject to the retention and abuse review notice included
+in Kiro's model description.
 
-Fable uses the stateless Responses projection because Kiro's native
-`CreateResponse` operation currently rejects it. Stored Responses continue to
+Fable uses the stateless Responses projection: Kiro's native `CreateResponse`
+operation rejected Fable 5.1, and Fable 5.2 has no native evidence. Stored Responses continue to
 use the provider-owned continuation and replay state rather than the native
 upstream continuation id.
 
 Messages requests with adaptive thinking use native `omitted` display by default
-for Fable 5.1 and Opus 5.5. Signed reasoning is normally retained and replayed
-through the opaque signature. An explicit `thinking.display: "summarized"` is
-preserved for Fable 5.1 and Opus 5.5, including the selected effort, visible
-summary and complete native signature. Other models remain rejected. Kiro can
+for Fable 5.1 and 5.2, Opus 5.5, Sonnet 5.5, and Haiku 5.5. Signed reasoning is
+normally retained and replayed through the opaque signature. An explicit
+`thinking.display: "summarized"` is preserved for the same models, including the
+selected effort, visible summary and complete native signature. Other models
+remain rejected. Kiro can
 return multiple independently signed summary segments; the gateway rejects
 that unsupported shape rather than concatenating signatures or discarding
 reasoning.
 
-For either model, a conflicting prefix containing only empty signed reasoning
-may be omitted after the entire prefix is validated within 128 events and 1 MiB.
+For Fable 5.1 and Opus 5.5 only, a conflicting prefix containing only empty
+signed reasoning may be omitted after the entire prefix is validated within 128
+events and 1 MiB. The newer models keep such a conflict fatal until the same
+evidence exists for them.
 The response carries `x-kiro-reasoning-replay-mode: conflict-omitted`, and the audit
 contains counts only. This recovery loses opaque reasoning replay for that output
 but preserves visible text, tool calls, subsequent tool results, and `max` effort.

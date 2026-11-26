@@ -23,7 +23,7 @@
       "models": {
         "claude-opus-5-5": {
           "name": "Claude Opus 5.5",
-          "limit": { "context": 1000000, "output": 128000 },
+          "limit": { "context": 1000000, "output": 64000 },
           "options": { "toolStreaming": false }
         },
         "gpt-5.6-sol": {
@@ -58,7 +58,7 @@ opencode run -m kiro-provider/gpt-5.6-sol "Reply with exactly: KIRO_OK"
 
 ## 可用的模型
 
-每个 Messages 请求都带 `max_tokens`。kiro-provider 只为四个 Claude 模型把它传给 Kiro：`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1`，范围是 1,024 到 128,000。加上前面的 header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也能使用。其他模型会以关于 `max_tokens` 的 `invalid_request_error` 被拒绝，请改用 [Pi](pi.md) 这样的 Responses 客户端。
+每个 Messages 请求都带 `max_tokens`。kiro-provider 只为Claude 模型把它传给 Kiro：`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` 和 `claude-fable-5-2`（组织仍允许使用时，`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5-1` 等旧模型同样适用），范围是 1,024 到 128,000。加上前面的 header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也能使用。其他模型会以关于 `max_tokens` 的 `invalid_request_error` 被拒绝，请改用 [Pi](pi.md) 这样的 Responses 客户端。
 
 在 `models` 下添加模型时，填入 `GET /v1/models` 报告的数值；Claude 模型加上 `toolStreaming: false`，GPT-5.6 模型加上 `thinking`：
 

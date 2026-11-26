@@ -76,7 +76,7 @@ crush run "Reply with exactly: KIRO_OK"
 
 ## 可用的模型
 
-kiro-provider 只为四个 Claude 模型把 `max_tokens` 传给 Kiro：`claude-opus-5-5`、`claude-opus-5`、`claude-sonnet-5` 和 `claude-fable-5-1`，范围是 1,024 到 128,000。加上 advisory header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也能使用。Crush 的每个请求都带 `max_tokens`，所以其他模型会以关于它的 `invalid_request_error` 被拒绝。新增条目所需的数值可以从 `GET /v1/models` 获得：
+kiro-provider 只为Claude 模型把 `max_tokens` 传给 Kiro：`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` 和 `claude-fable-5-2`（组织仍允许使用时，`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5-1` 等旧模型同样适用），范围是 1,024 到 128,000。加上 advisory header 后，`gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6-luna` 也能使用。Crush 的每个请求都带 `max_tokens`，所以其他模型会以关于它的 `invalid_request_error` 被拒绝。新增条目所需的数值可以从 `GET /v1/models` 获得：
 
 ```sh
 curl -s http://127.0.0.1:8787/v1/models -H "Authorization: Bearer $KIRO_GATEWAY_API_KEY" |

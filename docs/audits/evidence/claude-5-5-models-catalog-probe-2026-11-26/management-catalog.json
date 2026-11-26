@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "source": "Kiro ListAvailableModels (management.us-east-1.kiro.dev), origin AI_EDITOR, via the host proxy",
+  "date": "2026-11-26",
+  "accounts_checked": 14,
+  "accounts": [
+    {
+      "account_hash": "8291ed0184329dec",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "7c0795f26d167e35",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "03a28ad628c3ef16",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "e9d2445b9923530d",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "d71d8d225946d79e",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "604eb2c5b9a0bafc",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "969e676d9368391a",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "b82bdf56ca217815",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "eaa0cae86bded192",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "6662d38d64596350",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "abe2498ce6868d76",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "7916555aa53be480",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "47160e50a0b48010",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    },
+    {
+      "account_hash": "65f5ce14ae8db063",
+      "region": "us-east-1",
+      "model_count": 15,
+      "default_model": "claude-opus-5.5",
+      "lists": {
+        "claude-fable-5.2": true,
+        "claude-haiku-5.5": true,
+        "claude-sonnet-5.5": true,
+        "claude-fable-5.1": false
+      }
+    }
+  ],
+  "model_ids": [
+    "auto",
+    "claude-opus-5.5",
+    "claude-sonnet-5.5",
+    "claude-haiku-5.5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "kimi-k3",
+    "claude-opus-4.6",
+    "claude-fable-5.2",
+    "deepseek-3.2",
+    "minimax-m2.5",
+    "minimax-m2.1",
+    "glm-5",
+    "qwen3-coder-next"
+  ],
+  "models": [
+    {
+      "modelId": "claude-opus-5.5",
+      "modelName": "Claude Opus 5.5",
+      "description": "Claude Opus 5.5 model with 1M context window",
+      "supportedInputTypes": ["TEXT", "IMAGE"],
+      "tokenLimits": {
+        "maxInputTokens": 1000000,
+        "maxOutputTokens": 64000
+      },
+      "rateMultiplier": 2,
+      "promptCaching": {
+        "supportsPromptCaching": true
+      },
+      "additionalModelRequestFieldsSchema": {
+        "type": "object",
+        "properties": {
+          "thinking": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["adaptive"]
+              },
+              "display": {
+                "type": "string",
+                "enum": ["summarized", "omitted"]
+              }
+            },
+            "required": ["type"]
+          },
+          "output_config": {
+            "type": "object",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "xhigh", "max"],
+                "default": "medium"
+              }
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 64000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "modelId": "claude-sonnet-5.5",
+      "modelName": "Claude Sonnet 5.5",
+      "description": "Claude Sonnet 5.5 model with 1M context window",
+      "supportedInputTypes": ["TEXT", "IMAGE"],
+      "tokenLimits": {
+        "maxInputTokens": 1000000,
+        "maxOutputTokens": 64000
+      },
+      "rateMultiplier": 1.3,
+      "promptCaching": {
+        "supportsPromptCaching": true
+      },
+      "additionalModelRequestFieldsSchema": {
+        "type": "object",
+        "properties": {
+          "thinking": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["adaptive", "between_tools"]
+              },
+              "display": {
+                "type": "string",
+                "enum": ["summarized", "omitted"]
+              }
+            },
+            "required": ["type"]
+          },
+          "output_config": {
+            "type": "object",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "xhigh", "max"],
+                "default": "high"
+              }
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 64000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "modelId": "claude-haiku-5.5",
+      "modelName": "Claude Haiku 5.5",
+      "description": "Claude Haiku 5.5 model with 1M context window",
+      "supportedInputTypes": ["TEXT", "IMAGE"],
+      "tokenLimits": {
+        "maxInputTokens": 1000000,
+        "maxOutputTokens": 64000
+      },
+      "rateMultiplier": 0.06,
+      "promptCaching": {
+        "supportsPromptCaching": true
+      },
+      "additionalModelRequestFieldsSchema": {
+        "type": "object",
+        "properties": {
+          "thinking": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["adaptive", "disabled"]
+              },
+              "display": {
+                "type": "string",
+                "enum": ["summarized", "omitted"]
+              }
+            },
+            "required": ["type"]
+          },
+          "output_config": {
+            "type": "object",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "xhigh", "max"],
+                "default": "medium"
+              }
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 64000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "modelId": "claude-fable-5.2",
+      "modelName": "Claude Fable 5.2",
+      "description": "Experimental preview of Claude Fable 5.2 with 1M context window - AWS will retain inputs and outputs for automated abuse detection, and may perform human review of traffic flagged by our abuse detection mechanisms",
+      "supportedInputTypes": ["TEXT", "IMAGE"],
+      "tokenLimits": {
+        "maxInputTokens": 1000000,
+        "maxOutputTokens": 64000
+      },
+      "rateMultiplier": 6,
+      "promptCaching": {
+        "supportsPromptCaching": true
+      },
+      "additionalModelRequestFieldsSchema": {
+        "type": "object",
+        "properties": {
+          "thinking": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["adaptive"]
+              },
+              "display": {
+                "type": "string",
+                "enum": ["summarized", "omitted"]
+              }
+            },
+            "required": ["type"]
+          },
+          "output_config": {
+            "type": "object",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "xhigh", "max"],
+                "default": "high"
+              }
+            }
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 64000
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

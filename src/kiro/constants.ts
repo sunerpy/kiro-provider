@@ -50,9 +50,16 @@ export const KIRO_CONSTANTS = {
 export const MODEL_MAPPING: Record<string, string> = {
   // Claude Fable
   "claude-fable-5-1": "claude-fable-5.1",
+  // 2026-11-26: the live management catalogs advertise the dotted wire ids
+  // `claude-fable-5.2`, `claude-haiku-5.5` and `claude-sonnet-5.5`, and
+  // GenerateAssistantResponse accepts those exact spellings
+  // (docs/audits/claude-5-5-models-catalog-probe-2026-11-26.zh.md).
+  "claude-fable-5-2": "claude-fable-5.2",
   // Claude Haiku
   "claude-haiku-4-5": "claude-haiku-4.5",
   "claude-haiku-4-5-thinking": "claude-haiku-4.5",
+  "claude-haiku-5-5": "claude-haiku-5.5",
+  "claude-haiku-5-5-thinking": "claude-haiku-5.5",
   // Claude Sonnet
   "claude-sonnet-4": "claude-sonnet-4",
   "claude-sonnet-4-5": "claude-sonnet-4.5",
@@ -66,6 +73,9 @@ export const MODEL_MAPPING: Record<string, string> = {
   // Wire id has no dot suffix and no .0/-1m variants (probe-confirmed; those 400).
   "claude-sonnet-5": "claude-sonnet-5",
   "claude-sonnet-5-thinking": "claude-sonnet-5",
+  // Sonnet 5.5 keeps the dotted minor version even though plain Sonnet 5 does not.
+  "claude-sonnet-5-5": "claude-sonnet-5.5",
+  "claude-sonnet-5-5-thinking": "claude-sonnet-5.5",
   // Claude Opus
   "claude-opus-4-5": "claude-opus-4.5",
   "claude-opus-4-5-thinking": "claude-opus-4.5",
@@ -127,13 +137,16 @@ export const GPT_56_TOTAL_CONTEXT_LIMIT = GPT_56_PROMPT_TOKEN_LIMIT + GPT_56_OUT
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   auto: 200000,
   "claude-fable-5-1": 1000000,
+  "claude-fable-5-2": 1000000,
   "claude-haiku-4-5": 200000,
+  "claude-haiku-5-5": 1000000,
   "claude-sonnet-4": 200000,
   "claude-sonnet-4-5": 200000,
   "claude-sonnet-4-5-1m": 1000000,
   "claude-sonnet-4-6": 1000000,
   "claude-sonnet-4-6-1m": 1000000,
   "claude-sonnet-5": 1000000,
+  "claude-sonnet-5-5": 1000000,
   "claude-opus-4-5": 200000,
   "claude-opus-4-6": 1000000,
   "claude-opus-4-6-1m": 1000000,

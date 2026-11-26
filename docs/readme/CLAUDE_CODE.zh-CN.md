@@ -136,29 +136,45 @@ wire 上变成了 `medium`。现在启动器改为在调用参数之前传入会
 
 ## 选择模型
 
-内置 Opus 和 Sonnet 行分别映射到 `claude-opus-5-5[1m]` 与
-`claude-sonnet-5[1m]`。Haiku／small-fast 行也有意映射到
-`claude-sonnet-5[1m]`：Claude Code 会用该槽位执行 prompt hook，并发送正整数
-`max_tokens`，而 Kiro Haiku 4.5 会拒绝所有 `additionalModelRequestFields` 对象。
-该映射会消除 Haiku 特有的拒绝。Claude Code 2.1.280 的会话标题生成和 prompt hook
+内置 Opus、Sonnet、Haiku／small-fast 和 Fable 行分别映射到
+`claude-opus-5-5[1m]`、`claude-sonnet-5-5[1m]`、`claude-haiku-5-5[1m]` 与
+`claude-fable-5-2[1m]`。组织管理员可以停用 Kiro 模型：2026-11-26 起，取证账号请求
+Opus 5、Sonnet 5、Haiku 4.5 和 Fable 5.1 时返回 `INVALID_MODEL_ID`（“made
+unavailable by the admins in your organization”），启动器因此不再指向它们。
+Claude Code 会用 small-fast 槽位执行 prompt hook，并发送正整数 `max_tokens`；
+Haiku 5.5 接受该字段，而 Haiku 4.5 会拒绝所有 `additionalModelRequestFields` 对象。
+Claude Code 2.1.280 的会话标题生成和 prompt hook
 还会发送 `output_config.format`。Messages 识别两个有界本地 profile：会话标题使用
 `single-string-object-v1`，`hook_prompt` 和内置 `/goal` 评估器使用
 `hook-evaluation-v1`（`ok`／`reason`／`impossible`）。两者均在发布前校验输出；
-任意 JSON Schema 仍不支持。Fable 行映射到 `claude-fable-5-1[1m]`，
-实际 Kiro wire ID 为 `claude-fable-5.1`。启动器还会在 picker 中加入
-`claude-opus-5-5[1m]`、`claude-opus-5[1m]`、`gpt-5.6-sol[1m]`、
+任意 JSON Schema 仍不支持。每个 Claude 行还会作为标名的 picker 行再声明一次
+（`Claude Opus 5.5`、`Claude Sonnet 5.5`、`Claude Haiku 5.5` 和
+`Claude Fable 5.2`），启动器还会在 picker 中加入 `gpt-5.6-sol[1m]`、
 `gpt-5.6-terra[1m]` 和 `gpt-5.6-luna[1m]`。
 
 `claude-opus-5-5` 对应的 Kiro wire ID 是 `claude-opus-5.5`，与不带点的 Opus 5
-不同，它保留了带点的小版本号。其活体目录条目声明 1M 输入窗口、128K 输出、图像
-输入、2.0x 倍率、prompt caching，以及把 `output_config.effort` 声明为完整
-`low|medium|high|xhigh|max` 枚举、`max_tokens` 取值 1,024 到 128,000 的
-`additionalModelRequestFieldsSchema`。Kiro 仍将其标注为实验性预览版。内置 Opus
-行指向它，使 `opus` 家族别名解析到当前旗舰；同一个 ID 还会作为一行标名
-`Claude Opus 5.5` 的 picker 行再声明一次，启动器钉住的会话模型也是这一行。两行
-指向同一个模型是有意的：正是这一行标名的 picker 行让客户端显示确切版本，而不是
-笼统的 Opus 标签。Opus 5 仍可通过自己的 picker 行和 `KIROCLAUDE_OPUS5_MODEL`
-访问，`KIROCLAUDE_MODEL=opus` 则选择家族别名。
+不同，它保留了带点的小版本号。其活体目录条目声明 1M 输入窗口、图像输入、2.0x
+倍率、prompt caching，以及把 `output_config.effort` 声明为完整
+`low|medium|high|xhigh|max` 枚举的 `additionalModelRequestFieldsSchema`。
+2026-11-26 起 Kiro 把它声明的输出降为 64K、`max_tokens` 上限降为 64,000；超过
+该值的活体请求仍返回 200，因此网关继续接受 1,024 到 128,000。内置 Opus 行指向它，
+使 `opus` 家族别名解析到当前旗舰；同一个 ID 还会作为一行标名 `Claude Opus 5.5`
+的 picker 行再声明一次，启动器钉住的会话模型也是这一行。两行指向同一个模型是
+有意的：正是这一行标名的 picker 行让客户端显示确切版本，而不是笼统的 Opus 标签。
+`KIROCLAUDE_MODEL=opus` 选择家族别名。
+
+`claude-sonnet-5-5`、`claude-haiku-5-5` 和 `claude-fable-5-2` 对应带点的 wire ID
+`claude-sonnet-5.5`、`claude-haiku-5.5` 和 `claude-fable-5.2`。它们的活体目录条目
+都声明 1M 输入窗口、64K 输出、图像输入、prompt caching、`summarized` 或
+`omitted` 显示的 adaptive thinking，以及完整的五档 effort 枚举；倍率分别为
+1.3x、0.06x 和 6x。schema 默认 effort 为 Sonnet 5.5 与 Fable 5.2 的 `high`、
+Haiku 5.5 的 `medium`，Codex 显示的默认档位与之一致。Haiku 5.5 还声明了
+`thinking.type: "disabled"`，因此显式的 Messages `thinking: {"type": "disabled"}`
+或 Responses `reasoning.effort: "none"` 会原样下发；不下发时，带 effort 的 Haiku
+5.5 活体请求仍会推理。Fable 5.2 与 Sonnet 5.5 和 Opus 5.5 一样没有 disabled 类型，
+网关会省略 thinking 字段，模型仍可能自适应推理。Sonnet 5.5 声明的 `between_tools`
+类型网关从不发送。
+Fable 5.2 是实验性预览版，附带与 Fable 5.1 相同的数据保留和滥用审查说明。
 
 ### Kimi K3
 
@@ -254,15 +270,17 @@ Claude Code 负责。评估错误仍是明确的 API／SSE 错误，不会被转
 宿主 managed settings 需要独立网络环境时，可用 `--live-unix-socket` 连接私有代理。
 
 Claude Code 的 gateway discovery 会过滤掉 ID 中不含 `claude` 或 `anthropic`
-的模型，所以这三个 GPT 行需要显式声明。两个 Claude Opus 行本身能通过该过滤，但
-仍显式声明，否则自动发现的行会使用默认窗口而不是 `[1m]` 声明的窗口。所有显式声明的 picker
+的模型，所以这三个 GPT 行需要显式声明。Claude 行本身能通过该过滤，但仍显式
+声明，否则自动发现的行会使用默认窗口而不是 `[1m]` 声明的窗口。所有显式声明的 picker
 行都以 `behavesAs: "claude-opus-5"` 作为客户端能力模板，从而获得 adaptive
 thinking 和左右切换 effort 的能力，无需为每个 effort 档位重复模型。`[1m]` 后缀让
-Claude Code 使用声明的 1M 窗口，客户端发请求前会去掉后缀。已用实际安装的客户端
-核对它能发出的七个不同 1M 模型 ID（`claude-opus-5-5`、`claude-opus-5`、
-`claude-sonnet-5`、`claude-fable-5-1` 和三个 GPT 行），家族别名和钉为会话模型的
-确切 ID 两条路径都已核对；small-fast 行继承 Sonnet 的 1M 窗口。仅有服务端模型
-目录不会自动改变客户端窗口，输出预留仍会减少可用输入预算。
+Claude Code 使用声明的 1M 窗口，客户端发请求前会去掉后缀。启动器能通过家族别名
+或钉为会话模型的确切 ID 发出七个不同的 1M 模型 ID（`claude-opus-5-5`、
+`claude-sonnet-5-5`、`claude-haiku-5-5`、`claude-fable-5-2` 和三个 GPT 行）。
+`scripts/probe-client-context.mjs` 用合成 loopback 逐一核对窗口；如果主机的
+managed Claude settings 固定了 `ANTHROPIC_BASE_URL`，它会拒绝启动，因为该端点
+优先于 fixture，会收到 fixture 流量。仅有服务端模型目录不会自动改变客户端窗口，
+输出预留仍会减少可用输入预算。
 
 Kiro overlay 同时设置 `autoCompactWindow: 1000000`，让网关模型主动压缩；
 Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。仍可使用
@@ -271,11 +289,11 @@ Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间�
 
 显式 `KIROCLAUDE_*_MODEL` 覆盖值会原样保留；自定义 ID 确实支持更大窗口时，
 请在覆盖值中带上 `[1m]`。`KIROCLAUDE_OPUS_MODEL` 会同时改写内置 Opus 行、标名
-`Claude Opus 5.5` 的 picker 行和默认会话模型，因此
-`KIROCLAUDE_OPUS_MODEL=claude-opus-5[1m]` 可恢复 3.6.0 之前的默认值；
-`KIROCLAUDE_OPUS5_MODEL` 只改写 Opus 5 那一行。
-`KIROCLAUDE_HAIKU_MODEL` 仍是显式逃生口，但目标模型必须接受 Claude Code 必填的
-正整数 `max_tokens`，否则 prompt hook 仍会失败。这一变化仅适用于 Kiro 启动器，
+`Claude Opus 5.5` 的 picker 行和默认会话模型。`KIROCLAUDE_SONNET_MODEL`、
+`KIROCLAUDE_HAIKU_MODEL` 和 `KIROCLAUDE_KIRO_FABLE_MODEL` 同样会改写各自的内置行
+和标名 picker 行。`KIROCLAUDE_OPUS5_MODEL` 已随 Opus 5 行一起移除。
+`KIROCLAUDE_HAIKU_MODEL` 的目标模型必须接受 Claude Code 必填的正整数
+`max_tokens`，否则 prompt hook 会失败。这一变化仅适用于 Kiro 启动器，
 独立 Bedrock 模式不变。
 
 可在 checkout 中运行实际客户端回归探测：
@@ -328,19 +346,21 @@ Kiro Fable 映射，不影响独立的原生 Bedrock 备用后端。
 
 ### 通过原生 Bedrock 使用 Fable 5.1
 
-Kiro 已通过 `/v1/responses` 和 `/v1/messages` 提供 Fable 5.1。它使用无状态
-Responses 投影，因为 Kiro 原生 `CreateResponse` 当前拒绝该模型；已存储续轮
-仍由 Provider 自有 continuation 和 replay 状态支持。
+Kiro 已通过 `/v1/responses` 和 `/v1/messages` 提供 Fable 5.2，取代 2026-11-26
+起取证账号已无法使用的 Fable 5.1。Fable 使用无状态 Responses 投影：Kiro 原生 `CreateResponse`
+拒绝过 Fable 5.1，Fable 5.2 也没有原生证据；已存储续轮仍由 Provider 自有
+continuation 和 replay 状态支持。
 
-Fable 5.1 与 Opus 5.5 的 Messages adaptive thinking 默认采用原生 `omitted`
-显示方式，通常仍保留并通过 opaque signature 回放签名推理。Fable 5.1 与
-Opus 5.5 的显式 `thinking.display: "summarized"` 会原样保留，包括所选 effort、
+Fable 5.1 与 5.2、Opus 5.5、Sonnet 5.5 和 Haiku 5.5 的 Messages adaptive thinking
+默认采用原生 `omitted` 显示方式，通常仍保留并通过 opaque signature 回放签名推理。
+这些模型的显式 `thinking.display: "summarized"` 会原样保留，包括所选 effort、
 可见摘要与完整原生签名；其他模型继续拒绝摘要显示。
 Kiro 可能返回多段分别签名的摘要；
 网关会拒绝这个尚不支持的形态，不会拼接签名或丢弃推理来绕过错误。
 
-这两个模型如果只在空签名推理前缀中发生冲突，网关会先完整校验前缀，限额为
-128 个事件和 1 MiB，再省略整个冲突前缀。响应带
+仅 Fable 5.1 与 Opus 5.5 在只有空签名推理前缀发生冲突时，网关会先完整校验前缀，
+限额为 128 个事件和 1 MiB，再省略整个冲突前缀；更新的模型在取得同样证据前仍按
+错误处理。响应带
 `x-kiro-reasoning-replay-mode: conflict-omitted`，审计只记录计数。此恢复会丢失该次
 输出的不透明推理回放，保留可见文本、工具调用、后续工具结果和 `max` 推理级别。
 完全相同的重复签名仍正常回放；非空、redacted、混合、超限或迟到的冲突仍报错，

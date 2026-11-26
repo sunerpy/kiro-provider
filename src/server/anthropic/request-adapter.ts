@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { assertKimiReasoningEffort } from "../../kiro/effort.js";
+import { assertKimiReasoningEffort, supportsAdaptiveThinkingDisplay } from "../../kiro/effort.js";
 import {
   isKimiK3Model,
   resolveModelVariant,
@@ -1577,7 +1577,7 @@ export function adaptAnthropicMessagesRequest(
     if (request.thinking.display === "summarized") {
       try {
         const wireId = resolveModelVariant(request.model).wireId;
-        summarizedSupported = wireId === "claude-fable-5.1" || wireId === "claude-opus-5.5";
+        summarizedSupported = supportsAdaptiveThinkingDisplay(wireId);
       } catch {
         // Unknown models retain the typed display rejection below.
       }

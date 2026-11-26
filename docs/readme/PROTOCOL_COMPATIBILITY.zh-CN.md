@@ -58,7 +58,8 @@ cache hint 与无损 context management 形状。`thinking.display: "omitted"` �
 `GenerateAssistantResponse` 在 `us-east-1` 铸造的 Claude Sonnet 5 signed text。
 
 显式 `thinking.display: "summarized"` 仅支持 Kiro schema 声明该模式的
-Fable 5.1 与 Opus 5.5，保留 effort、可见摘要与可回放的完整签名。多个不同签名
+Fable 5.1 与 5.2、Opus 5.5、Sonnet 5.5 和 Haiku 5.5，保留 effort、可见摘要与
+可回放的完整签名。多个不同签名
 仍为致命错误；摘要输出从不应用冲突前缀省略恢复。所有模型继续拒绝 `updates`。
 
 `context_management` 仅接受 `clear_thinking_20251015` 且 `keep: "all"`，
@@ -165,7 +166,8 @@ CodeWhisperer/Kiro 流式管道。它保留：
 - 修复旧版 Claude Code 历史中同一 assistant 轮次含多个不同空 direct `thinking` 块的情况：省略全部歧义 replay 信封，但保留可见 assistant/tool 历史；兼容损失通过 `x-kiro-reasoning-replay-mode: conflict-omitted` 与脱敏审计事件明确暴露。
 - 当前客户端撤下 `TaskOutput` 等工具后，继续保留完整 Messages 工具历史。历史声明不授权新调用；本轮允许哪些工具及参数，只由当前 `tools` 和 schema 决定。
 
-Fable Messages 启用 thinking 且实际 `display: omitted` 时，若上游前缀含多个
+Fable 5.1 与 Opus 5.5 的 Messages 启用 thinking 且实际 `display: omitted` 时，
+若上游前缀含多个
 不同的 signature-only reasoning 事件，Provider 可整组省略。Provider 在
 `message_start` 前检查完整前缀，最多 128 个事件、1 MiB，然后继续原生成而不重试。
 被省略的 reasoning 不产生 thinking 块、replay capture、数据库记录或

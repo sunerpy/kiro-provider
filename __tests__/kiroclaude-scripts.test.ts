@@ -294,7 +294,7 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     });
   });
 
-  test("uses the probe-confirmed Sonnet fallback for small-fast requests while preserving custom pins", () => {
+  test("maps every family row to a current Kiro model while preserving custom pins", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
     const env = environment(root, fake);
@@ -311,18 +311,21 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.env.CLAUDE_CODE_TOASTY_THIMBLE).toBe("0");
     expect(settings.env.CLAUDE_CODE_GENTLE_PARASOL).toBe("0");
     expect(settings.env.ANTHROPIC_CUSTOM_HEADERS).toBe(expectedHeaders());
-    // The built-in Opus row carries the current flagship so the `opus` family
-    // alias resolves to it; Opus 5 stays reachable as its own picker row.
+    // Each built-in family row carries the current Kiro model; the evidence
+    // accounts lost Opus 5, Sonnet 5, Haiku 4.5 and Fable 5.1 on 2026-11-26, and
+    // Haiku 5.5 accepts the max_tokens that Claude Code's small-fast requests send.
     expect(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5-5[1m]");
-    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
-    expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
-    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-sonnet-5[1m]");
-    // Opus 5.5 is declared as a named picker row as well as the built-in Opus
-    // target, so the client displays the exact model instead of a generic label.
+    expect(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5-5[1m]");
+    expect(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-2[1m]");
+    expect(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-5-5[1m]");
+    // The same IDs are named picker rows as well as built-in targets, so the
+    // client displays the exact model instead of a generic family label.
     expect(settings.model).toBe("claude-opus-5-5[1m]");
     expect(settings.modelPicker.options.map((option) => option.model)).toEqual([
       "claude-opus-5-5[1m]",
-      "claude-opus-5[1m]",
+      "claude-sonnet-5-5[1m]",
+      "claude-haiku-5-5[1m]",
+      "claude-fable-5-2[1m]",
       "gpt-5.6-sol[1m]",
       "gpt-5.6-terra[1m]",
       "gpt-5.6-luna[1m]",
@@ -331,7 +334,9 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
       env: {
         ...env,
         KIROCLAUDE_OPUS_MODEL: "custom-opus",
-        KIROCLAUDE_OPUS5_MODEL: "custom-opus5",
+        KIROCLAUDE_SONNET_MODEL: "custom-sonnet",
+        KIROCLAUDE_HAIKU_MODEL: "custom-haiku",
+        KIROCLAUDE_KIRO_FABLE_MODEL: "custom-fable",
         KIROCLAUDE_SOL_MODEL: "custom-sol",
       },
     });
@@ -342,9 +347,18 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     // The named Opus 5.5 row follows KIROCLAUDE_OPUS_MODEL, and so does the
     // default session model, so an override cannot leave the two out of sync.
     expect(customSettings.model).toBe("custom-opus");
-    expect(customSettings.modelPicker.options[0]?.model).toBe("custom-opus");
-    expect(customSettings.modelPicker.options[1]?.model).toBe("custom-opus5");
-    expect(customSettings.modelPicker.options[2]?.model).toBe("custom-sol");
+    expect(customSettings.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("custom-sonnet");
+    expect(customSettings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("custom-haiku");
+    expect(customSettings.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("custom-fable");
+    expect(customSettings.modelPicker.options.map((option) => option.model)).toEqual([
+      "custom-opus",
+      "custom-sonnet",
+      "custom-haiku",
+      "custom-fable",
+      "custom-sol",
+      "gpt-5.6-terra[1m]",
+      "gpt-5.6-luna[1m]",
+    ]);
   });
 
   test("shares the native Claude home while applying process-local Kiro defaults", () => {
@@ -454,9 +468,21 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
           behavesAs: "claude-opus-5",
         },
         {
-          model: "claude-opus-5[1m]",
-          label: "Claude Opus 5",
-          description: "Kiro Claude previous flagship",
+          model: "claude-sonnet-5-5[1m]",
+          label: "Claude Sonnet 5.5",
+          description: "Kiro Claude balanced",
+          behavesAs: "claude-opus-5",
+        },
+        {
+          model: "claude-haiku-5-5[1m]",
+          label: "Claude Haiku 5.5",
+          description: "Kiro Claude fast",
+          behavesAs: "claude-opus-5",
+        },
+        {
+          model: "claude-fable-5-2[1m]",
+          label: "Claude Fable 5.2",
+          description: "Kiro Claude Fable preview",
           behavesAs: "claude-opus-5",
         },
         {
@@ -482,9 +508,9 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     expect(settings.env).toMatchObject({
       ANTHROPIC_BASE_URL: "http://127.0.0.1:8787",
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5[1m]",
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-sonnet-5[1m]",
-      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5[1m]",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5-5[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2[1m]",
       ANTHROPIC_CUSTOM_HEADERS: expectedHeaders(),
       CLAUDE_CODE_USE_BEDROCK: "0",
       CLAUDE_CODE_USE_VERTEX: "0",

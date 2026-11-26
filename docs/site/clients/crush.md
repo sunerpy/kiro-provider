@@ -77,8 +77,8 @@ The `small` model writes session titles. Keep it on a Claude model, or give a GP
 
 ## Which models work
 
-kiro-provider passes `max_tokens` on to Kiro for four Claude models: `claude-opus-5-5`, `claude-opus-5`,
-`claude-sonnet-5` and `claude-fable-5-1`, from 1,024 to 128,000. With the advisory header, `gpt-5.6-sol`,
+kiro-provider passes `max_tokens` on to Kiro for the Claude models `claude-opus-5-5`, `claude-sonnet-5-5`,
+`claude-haiku-5-5` and `claude-fable-5-2` (the older `claude-opus-5`, `claude-sonnet-5` and `claude-fable-5-1` too while your organization allows them), from 1,024 to 128,000. With the advisory header, `gpt-5.6-sol`,
 `gpt-5.6-terra` and `gpt-5.6-luna` work too. Crush sends `max_tokens` with every request, so any other model is refused
 with an `invalid_request_error` about it. `GET /v1/models` gives the numbers for a new entry:
 

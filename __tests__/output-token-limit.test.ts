@@ -19,6 +19,15 @@ describe("probe-backed Kiro output-token limits", () => {
     ["claude-opus-5-5", "claude-opus-5.5"],
     ["claude-opus-5-5-thinking", "claude-opus-5.5"],
     ["claude-opus-5-5-max", "claude-opus-5.5"],
+    // 2026-11-26 additions keep their dotted wire ids as well.
+    ["claude-fable-5-2", "claude-fable-5.2"],
+    ["claude-fable-5-2-xhigh", "claude-fable-5.2"],
+    ["claude-sonnet-5-5", "claude-sonnet-5.5"],
+    ["claude-sonnet-5-5-thinking", "claude-sonnet-5.5"],
+    ["claude-sonnet-5-5-high", "claude-sonnet-5.5"],
+    ["claude-haiku-5-5", "claude-haiku-5.5"],
+    ["claude-haiku-5-5-thinking", "claude-haiku-5.5"],
+    ["claude-haiku-5-5-max", "claude-haiku-5.5"],
   ])("maps %s to native Claude max_tokens", (model, wireModel) => {
     expect(resolveOutputTokenLimit(model, 4_096)).toEqual({
       ok: true,
@@ -27,27 +36,37 @@ describe("probe-backed Kiro output-token limits", () => {
     });
   });
 
-  test.each(["claude-fable-5-1", "claude-sonnet-5", "claude-opus-5", "claude-opus-5-5"])(
-    "rejects out-of-range %s max_tokens values before Kiro",
-    (model) => {
-      for (const limit of [KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1]) {
-        expect(resolveOutputTokenLimit(model, limit)).toMatchObject({
-          ok: false,
-          code: "invalid_output_token_limit",
-        });
-      }
-    },
-  );
-
-  test.each(["gpt-5.6-sol", "kimi-k3", "auto", "claude-sonnet-4-5", "claude-opus-4-8"])(
-    "keeps unproven model %s fail-closed",
-    (model) => {
-      expect(resolveOutputTokenLimit(model, 4_096)).toMatchObject({
+  test.each([
+    "claude-fable-5-1",
+    "claude-fable-5-2",
+    "claude-sonnet-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-opus-5",
+    "claude-opus-5-5",
+  ])("rejects out-of-range %s max_tokens values before Kiro", (model) => {
+    for (const limit of [KIRO_OUTPUT_TOKEN_LIMIT_MIN - 1, KIRO_OUTPUT_TOKEN_LIMIT_MAX + 1]) {
+      expect(resolveOutputTokenLimit(model, limit)).toMatchObject({
         ok: false,
-        code: "unsupported_output_token_limit",
+        code: "invalid_output_token_limit",
       });
-    },
-  );
+    }
+  });
+
+  test.each([
+    "gpt-5.6-sol",
+    "kimi-k3",
+    "auto",
+    "claude-sonnet-4-5",
+    "claude-opus-4-8",
+    // Haiku 4.5 rejects additionalModelRequestFields; only Haiku 5.5 is proven.
+    "claude-haiku-4-5",
+  ])("keeps unproven model %s fail-closed", (model) => {
+    expect(resolveOutputTokenLimit(model, 4_096)).toMatchObject({
+      ok: false,
+      code: "unsupported_output_token_limit",
+    });
+  });
 
   test("limits advisory compatibility to evidenced GPT 5.6 and K3 models", () => {
     for (const model of [

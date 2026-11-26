@@ -36,6 +36,7 @@ describe("GET /v1/models", () => {
         shell_type: string;
         default_reasoning_level: string | null;
         supported_reasoning_levels: unknown[];
+        multi_agent_version?: string;
       }>;
     };
     expect(body.object).toBe("list");
@@ -97,7 +98,7 @@ describe("GET /v1/models", () => {
       | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
       | undefined;
     const opus55Codex = body.models.find((entry) => entry.slug === "claude-opus-5-5");
-    expect(opus55).toMatchObject({ context_limit: 1_000_000, output_limit: 128_000 });
+    expect(opus55).toMatchObject({ context_limit: 1_000_000, output_limit: 64_000 });
     expect(opus55Codex).toMatchObject({
       context_window: 1_000_000,
       default_reasoning_level: "medium",
@@ -111,6 +112,35 @@ describe("GET /v1/models", () => {
     });
     expect(body.models.find((entry) => entry.slug === "claude-opus-5-5-xhigh")).toBeUndefined();
     expect(responseIds.has("claude-opus-5-5-xhigh")).toBe(true);
+
+    // The 2026-11-26 additions: Codex /model needs their effort levels and the
+    // schema-declared defaults; only base slugs reach the Codex catalog.
+    for (const [slug, defaultLevel, ultra, variants] of [
+      ["claude-fable-5-2", "high", true, false],
+      ["claude-sonnet-5-5", "high", false, true],
+      ["claude-haiku-5-5", "medium", false, true],
+    ] as const) {
+      const entry = entries.find((candidate) => candidate.id === slug) as
+        | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
+        | undefined;
+      const codex = body.models.find((candidate) => candidate.slug === slug);
+      expect(entry).toMatchObject({ context_limit: 1_000_000, output_limit: 64_000 });
+      expect(codex).toMatchObject({
+        context_window: 1_000_000,
+        default_reasoning_level: defaultLevel,
+        supported_reasoning_levels: [
+          { effort: "low" },
+          { effort: "medium" },
+          { effort: "high" },
+          { effort: "xhigh" },
+          { effort: "max" },
+          ...(ultra ? [{ effort: "ultra" }] : []),
+        ],
+      });
+      expect(codex?.multi_agent_version).toBe(ultra ? "v2" : undefined);
+      expect(responseIds.has(`${slug}-xhigh`)).toBe(variants);
+      expect(body.models.find((candidate) => candidate.slug === `${slug}-xhigh`)).toBeUndefined();
+    }
 
     const fable = entries.find((entry) => entry.id === "claude-fable-5-1") as
       | ({ context_limit?: number; output_limit?: number } & (typeof entries)[number])
@@ -171,7 +201,9 @@ describe("GET /v1/models", () => {
     };
     for (const model of body.models) {
       const supportsUltra =
-        model.slug === "claude-fable-5-1" || /^gpt-5\.6-(sol|terra)(-|$)/.test(model.slug);
+        model.slug === "claude-fable-5-1" ||
+        model.slug === "claude-fable-5-2" ||
+        /^gpt-5\.6-(sol|terra)(-|$)/.test(model.slug);
       expect(model.supported_reasoning_levels.some((level) => level.effort === "ultra")).toBe(
         supportsUltra,
       );

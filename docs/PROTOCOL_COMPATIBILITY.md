@@ -64,7 +64,7 @@ currently only provenance-authenticated Claude Sonnet 5 signed text minted via
 KiroRuntime `GenerateAssistantResponse` with a profile in `us-east-1` is enabled.
 
 Explicit `thinking.display: "summarized"` is supported only for Fable 5.1 and
-Opus 5.5, whose Kiro schemas declare that mode. The adapter preserves the
+5.2, Opus 5.5, Sonnet 5.5, and Haiku 5.5, whose Kiro schemas declare that mode. The adapter preserves the
 effort, visible summary and complete signature for replay. Multiple distinct
 signatures remain fatal; summarized output never uses conflicting-prefix
 omission. The `updates` mode remains rejected for every model.
@@ -190,9 +190,9 @@ then uses the established CodeWhisperer/Kiro stream pipeline. It preserves:
 - recovery of legacy Claude Code turns containing multiple distinct empty direct `thinking` blocks by omitting all ambiguous replay envelopes while preserving visible assistant/tool history; the compatibility loss is explicit in `x-kiro-reasoning-replay-mode: conflict-omitted` and a sanitized audit event.
 - complete Messages tool history when the current client withdraws a tool such as `TaskOutput`. Historical declarations do not authorize new output: the current `tools` and schemas alone determine which calls the provider accepts.
 
-For Fable Messages with enabled thinking and effective `display: omitted`, an
-upstream prefix containing distinct signature-only reasoning events can be
-omitted in full. The provider inspects the entire prefix before `message_start`,
+For Fable 5.1 and Opus 5.5 Messages with enabled thinking and effective
+`display: omitted`, an upstream prefix containing distinct signature-only
+reasoning events can be omitted in full. The provider inspects the entire prefix before `message_start`,
 within 128 events and 1 MiB, then continues the original generation without
 retrying. No thinking block, replay capture, database row or `kr1_`/`kr2_` token
 is produced for that omitted reasoning. The response includes

@@ -32,12 +32,50 @@ const XHIGH_CAPABLE_MODELS = new Set([
   // default medium, and a live xhigh request returns 200
   // (docs/audits/opus-5-5-catalog-probe-2026-09-26.zh.md).
   "claude-opus-5.5",
+  // 2026-11-26: each model's own schema declares the same five-value enum
+  // (default high for Fable 5.2 and Sonnet 5.5, medium for Haiku 5.5), and
+  // live low, xhigh and max requests return 200
+  // (docs/audits/claude-5-5-models-catalog-probe-2026-11-26.zh.md).
+  "claude-fable-5.2",
+  "claude-sonnet-5.5",
+  "claude-haiku-5.5",
   "claude-opus-5",
   "claude-opus-4.7",
   "claude-opus-4.8",
   "claude-sonnet-5",
   ...GPT_REASONING_MODELS,
 ]);
+
+/** Catalog-schema effort defaults that differ from the provider's medium default. */
+const UPSTREAM_DEFAULT_EFFORTS: ReadonlyMap<string, Effort> = new Map([
+  ["claude-fable-5.2", "high"],
+  ["claude-sonnet-5.5", "high"],
+]);
+
+/**
+ * Models whose own schema declares adaptive thinking with summarized|omitted
+ * display, and whose live requests with each display returned 200.
+ */
+const ADAPTIVE_THINKING_DISPLAY_MODELS = new Set([
+  "claude-fable-5.1",
+  "claude-opus-5.5",
+  "claude-fable-5.2",
+  "claude-sonnet-5.5",
+  "claude-haiku-5.5",
+]);
+
+/**
+ * Operator display-recovery policies stay limited to the models they were
+ * validated on; supporting the display fields alone does not opt a model in.
+ */
+const FORCED_OMITTED_DISPLAY_MODELS = new Set(["claude-fable-5.1", "claude-opus-5.5"]);
+
+/**
+ * Only these schemas declare `thinking.type: "disabled"`. A live Haiku 5.5
+ * request with effort but no thinking field still reasoned; with the explicit
+ * disabled type it returned no reasoning.
+ */
+const THINKING_DISABLE_MODELS = new Set(["claude-haiku-5.5"]);
 
 /**
  * Models with categorical effort. The exact enum is model-specific: K3 has
@@ -77,7 +115,17 @@ export function getSupportedEffortLevels(kiroModel: string): readonly Effort[] {
 }
 
 export function getDefaultEffort(kiroModel: string): Effort | undefined {
-  return kiroModel === "kimi-k3" ? "max" : supportsEffort(kiroModel) ? "medium" : undefined;
+  if (kiroModel === "kimi-k3") return "max";
+  if (!supportsEffort(kiroModel)) return undefined;
+  return UPSTREAM_DEFAULT_EFFORTS.get(kiroModel) ?? "medium";
+}
+
+export function supportsAdaptiveThinkingDisplay(kiroModel: string): boolean {
+  return ADAPTIVE_THINKING_DISPLAY_MODELS.has(kiroModel);
+}
+
+export function supportsForcedOmittedThinkingDisplay(kiroModel: string): boolean {
+  return FORCED_OMITTED_DISPLAY_MODELS.has(kiroModel);
 }
 
 /** Reject unrepresentable K3 controls rather than silently changing depth. */
@@ -120,17 +168,28 @@ export function buildThinkingRequestFields(
   enabled: boolean,
   display?: "omitted" | "summarized",
 ): Record<string, unknown> | undefined {
-  if (!enabled || (kiroModel !== "claude-fable-5.1" && kiroModel !== "claude-opus-5.5")) {
+  if (!enabled || !supportsAdaptiveThinkingDisplay(kiroModel)) {
     return undefined;
   }
   return {
     thinking: {
       type: "adaptive",
       // Preserve signed reasoning without requesting streamed summary blocks.
-      // Opus 5.5 declares the same display controls in its model schema.
+      // Every model in the set declares the same display controls.
       display: display ?? "omitted",
     },
   };
+}
+
+/**
+ * Project an explicit client thinking disable where the schema can express
+ * it. Other schemas have no disabled type, so their requests keep omitting the
+ * thinking field.
+ */
+export function buildThinkingDisabledRequestFields(
+  kiroModel: string,
+): Record<string, unknown> | undefined {
+  return THINKING_DISABLE_MODELS.has(kiroModel) ? { thinking: { type: "disabled" } } : undefined;
 }
 
 /**

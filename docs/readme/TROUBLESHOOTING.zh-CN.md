@@ -276,8 +276,9 @@ summarized cannot be represented by Kiro`；Provider 审计记录
   `unsupported_reasoning_display`、`param: thinking.display`。
 - **原因：** 共享配置中的 `showThinkingSummaries: true` 或显式
   `--thinking-display summarized` 参数为网关无法表示摘要的模型请求了摘要显示。
-- **处置：** Opus 5.5 需升级 Provider：现在与 Fable 5.1 一样原样保留显式
-  `summarized` 请求、所选 effort 与 signed tool history；其他模型仍拒绝摘要显示。
+- **处置：** 升级 Provider：Fable 5.1 与 5.2、Opus 5.5、Sonnet 5.5 和 Haiku 5.5
+  会原样保留显式 `summarized` 请求、所选 effort 与 signed tool history；其他模型
+  仍拒绝摘要显示。
   使用已更新的仓库 `kiroclaude` 启动器，其 Kiro overlay 设置
   `showThinkingSummaries: false`。需要覆盖显式显示参数时，启动时指定
   `--thinking-display omitted`：
@@ -322,8 +323,8 @@ summarized cannot be represented by Kiro`；Provider 审计记录
 
 ### Fable 上游 reasoning 签名冲突
 
-Fable 启用 thinking 且实际 `display: omitted` 时，可以在发布任何输出之前，
-整组省略冲突的 signature-only 前缀。前缀限制为 128 个事件、1 MiB，不能含非空
+Fable 5.1 或 Opus 5.5 启用 thinking 且实际 `display: omitted` 时，可以在发布任何
+输出之前，整组省略冲突的 signature-only 前缀；Fable 5.2 等更新的模型仍按错误处理。前缀限制为 128 个事件、1 MiB，不能含非空
 reasoning 文本或 redacted payload。Provider 继续同一次上游请求，返回
 `x-kiro-reasoning-replay-mode: conflict-omitted` 和只含计数的
 `anthropic_output_reasoning_conflict_omitted` 审计，不捕获、存储或铸造该轮
