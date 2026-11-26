@@ -59,7 +59,7 @@ keys = [
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "ENABLE_TOOL_SEARCH",
   "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_ENABLE_AWAY_SUMMARY",
   "AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_API_KEY",
+  "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_API_KEY", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
 ]
 def merge(base, override):
     if isinstance(base, dict) and isinstance(override, dict):
@@ -140,8 +140,11 @@ function claudeEffectiveEffort(
 }
 
 function environment(root: string, fake: ReturnType<typeof fakeClaude>): Record<string, string> {
+  // A test run inside a kiroclaude session inherits the launcher's compaction
+  // default; drop it so each case sees only the threshold it sets itself.
+  const { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: _inherited, ...inherited } = process.env;
   return {
-    ...process.env,
+    ...inherited,
     HOME: root,
     KIROCLAUDE_BACKEND: "kiro",
     KIROCLAUDE_EFFORT: "ultra",
@@ -547,6 +550,37 @@ describe.skipIf(process.platform === "win32")("kiroclaude Linux scripts", () => 
     );
   });
 
+  test("compacts the Kiro lane at 80% unless the caller chose a threshold", () => {
+    const thresholdFor = (value: string | undefined): string | null => {
+      const root = temporaryRoot();
+      const fake = fakeClaude(root);
+      const result = Bun.spawnSync(["sh", launcher, "--print", "hello"], {
+        env: {
+          ...environment(root, fake),
+          ...(value === undefined ? {} : { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: value }),
+        },
+      });
+      expect(result.exitCode).toBe(0);
+      const capture = JSON.parse(readFileSync(fake.capture, "utf8")) as {
+        arguments: string[];
+        env: Record<string, string | null>;
+      };
+      // The default travels as process environment, never as a launcher
+      // settings key that would outrank the user's own Claude settings.
+      const settings = JSON.parse(capture.arguments[1] as string) as {
+        env: Record<string, string>;
+      };
+      expect(settings.env).not.toHaveProperty("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
+      return capture.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE ?? null;
+    };
+
+    expect(thresholdFor(undefined)).toBe("80");
+    expect(thresholdFor("")).toBe("80");
+    expect(thresholdFor("60")).toBe("60");
+    // 100 restores Claude Code's own threshold, which stays below 100%.
+    expect(thresholdFor("100")).toBe("100");
+  });
+
   test("merges caller settings while keeping the Kiro route authoritative", () => {
     const root = temporaryRoot();
     const fake = fakeClaude(root);
@@ -846,6 +880,8 @@ printf '%s\n' "$line" >"$KIROCLAUDE_TEST_CAPTURE"
     expect(capture.env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("us.anthropic.claude-fable-5-1");
     expect(capture.env.AWS_BEARER_TOKEN_BEDROCK).toBeNull();
     expect(capture.env.BEDROCK_API_KEY).toBeNull();
+    // The 80% compaction default belongs to the Kiro lane only.
+    expect(capture.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBeNull();
     expect(settings).not.toHaveProperty("apiKeyHelper");
     // The Bedrock default is max, which Claude Code accepts only per session.
     expect(settings).not.toHaveProperty("effortLevel");

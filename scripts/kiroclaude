@@ -356,6 +356,11 @@ if [ "$backend" = kiro ]; then
   export CLAUDE_CODE_USE_BEDROCK=0
   export ANTHROPIC_BASE_URL=${base_url%/}
   unset ANTHROPIC_DEFAULT_FABLE_MODEL
+  # Kiro bills every request for its whole context, so compact at 80% of the
+  # effective window instead of just below the limit. This stays process
+  # environment rather than a settings key, so a caller's value or the user's
+  # own Claude settings still win; 100 restores Claude's native threshold.
+  export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=${CLAUDE_AUTOCOMPACT_PCT_OVERRIDE:-80}
 else
   unset KIRO_PROVIDER_CONFIG
   export CLAUDE_CODE_USE_BEDROCK=1

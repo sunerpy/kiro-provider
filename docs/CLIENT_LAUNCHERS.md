@@ -61,7 +61,9 @@ KIROCLAUDE_MODEL=sonnet KIROCLAUDE_EFFORT=high kiroclaude
 
 The launcher already maps the verified Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable
 5.2, Sol, Terra, and Luna defaults to `[1m]` and sets
-`autoCompactWindow: 1000000`. Claude removes `[1m]` before sending the model ID.
+`autoCompactWindow: 1000000`, compacting at 80% of the effective window unless
+you set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` yourself. Claude removes `[1m]` before
+sending the model ID.
 Each Claude model is both its built-in family row's target and a named picker
 row, and Opus 5.5 is the default session model; the small-fast row maps to
 Haiku 5.5, whose window is also 1M. Explicit custom model pins are preserved. Ultra is the default; it sends

@@ -283,9 +283,13 @@ managed Claude settings 固定了 `ANTHROPIC_BASE_URL`，它会拒绝启动，�
 输出预留仍会减少可用输入预算。
 
 Kiro overlay 同时设置 `autoCompactWindow: 1000000`，让网关模型主动压缩；
-Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。仍可使用
-`--autocompact` 或 `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 覆盖单次启动。
-原生设置文件与独立 Bedrock overlay 不受影响。
+Claude 会按当前模型窗口限制该值，并为输出和压缩保留空间。Kiro 通道还会在
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 未设置或为空时把它设为 `80`，让 Claude 在有效
+窗口的 80% 处压缩，而不是等到接近上限。Kiro 每次请求都按完整上下文计费，这样
+长会话每一轮的成本更低。环境变量或 Claude 设置文件里的值优先，设为 `100` 可恢复
+Claude 自身的阈值。`/context` 显示的仍是 Claude 默认的自动压缩预留量，这个覆盖值只改变
+实际触发压缩的时机。仍可使用 `--autocompact` 或 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+覆盖单次启动的窗口。原生设置文件与独立 Bedrock overlay 不受影响。
 
 显式 `KIROCLAUDE_*_MODEL` 覆盖值会原样保留；自定义 ID 确实支持更大窗口时，
 请在覆盖值中带上 `[1m]`。`KIROCLAUDE_OPUS_MODEL` 会同时改写内置 Opus 行、标名
