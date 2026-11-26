@@ -39,8 +39,8 @@ your organization"）。这是组织级策略，不能据此推断 Kiro 在所�
 - 隔离边界：`~/.config/kiro-provider/accounts.db` 以只读方式打开，不刷新 token、
   不写库；不触碰已安装服务、生产配置和 replay keyring。请求经本机
   `http://127.0.0.1:1080` 代理出网（不经代理时 Claude 模型会误报
-  `INVALID_MODEL_ID`）。同一账号上 `claude-opus-5.5` 与 `claude-fable-5.2` 的
-  control 返回 200，用作出网路径对照。
+  `INVALID_MODEL_ID`）。同一账号上 `claude-opus-5.5` 与 `claude-haiku-5.5` 的 control 返回 200，用作
+  出网路径对照。
 - 请求正文全部为合成文本；证据只保留枚举、计数、长度、哈希和上游校验信息。
 - 可复现命令（账号 access token 剩余有效期需超过 30 分钟）：
 
@@ -83,12 +83,42 @@ bun run scripts/probe-v3-request-fields.ts --confirm \
 Sonnet 5.5 0 → 114、Haiku 5.5 73 → 297（`effort_xhigh` 沿用旧的简短提问，不参与
 比较）。这是单次观测；接入五档 effort 的依据是 schema 枚举加上各档返回 200。
 
+经隔离网关的 Messages 请求（需要推理的合成提问、`effort: max`、`display: summarized`）
+三个模型都返回可见摘要和 1 个完整原生签名：Fable 5.2 138 字符、Sonnet 5.5 192 字符、
+Haiku 5.5 714 字符。
+
 ### 输出 token 上限
 
 目录与 schema 声明 64,000，但上游对 1,024 到 128,001 全部返回 200，Opus 5.5 也
 一样（2026-09-26 时 128,001 曾被拒绝）。上游当前不执行该上限。网关保留共享的
 1,024–128,000 请求范围：收紧会让现有客户端（例如对 Opus 5.5 发送 128,000 的
 客户端）新增被拒请求，而上游并不拒绝。目录展示的 `output_limit` 采用 64,000。
+
+## 已安装客户端
+
+两个客户端都经隔离网关验证：网关运行本分支源码，账号库是生产库的只读副本，refresh
+token 已替换为占位符，端口与密钥独立，不触碰已安装服务。
+
+- **kirocodex 投影**：Codex CLI 0.171.0 读取网关 `/v1/models` 作为
+  `model_catalog_json`。`scripts/probe-client-model-switch.ts --client codex` 的 9 行
+  矩阵共 18 次运行全部通过，包括 `claude-sonnet-5-5` ↔ `-low`、
+  `claude-haiku-5-5-max` → base、`claude-fable-5-2` → `claude-opus-5-5`、
+  `gpt-5.6-sol` → `claude-sonnet-5-5`；每次均完成工具轮次并回放推理。见
+  [`client-switch-codex.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/client-switch-codex.json)。
+- **kiroclaude 投影**：本机 `/etc/claude-code/managed-settings.json` 固定
+  `ANTHROPIC_BASE_URL` 指向生产端口，优先级高于 `--settings`。因此按
+  [CLAUDE_CODE.md](../CLAUDE_CODE.md) 的隔离方法，在 bwrap 私有挂载命名空间中用
+  `--managed-policy-copy` 把策略副本指向 capture 端口，宿主策略不变。Claude Code
+  2.1.322 经仓库 `scripts/kiroclaude` 运行 4 行矩阵共 8 次，全部通过，包括
+  `claude-opus-5-5` → `claude-sonnet-5-5`、`claude-fable-5-2` → `claude-opus-5-5`、
+  `claude-sonnet-5-5` → `claude-haiku-5-5`。每个会话首个请求按预期被拒
+  （`messages.1.output_config`，客户端随即去掉该字段重试），探针把它计为预检拒绝。
+  见 [`client-switch-claude.json`](evidence/claude-5-5-models-catalog-probe-2026-11-26/client-switch-claude.json)。
+- Claude Code 对每个模型（包括三个新模型）都发送 `max_tokens: 128000`。若把请求
+  上限收紧到目录声明的 64,000，kiroclaude 的每个请求都会被拒绝，这也是保留共享
+  1,024–128,000 范围的直接原因。
+- `scripts/probe-client-context.mjs`（合成 loopback）在本机无法运行：managed 端点
+  会把 fixture 流量导向生产端口。脚本现在检测到这种覆盖时直接拒绝启动。
 
 ## 接入范围
 
@@ -111,6 +141,15 @@ Sonnet 5.5 0 → 114、Haiku 5.5 73 → 297（`effort_xhigh` 沿用旧的简短�
   出现时按错误处理。
 - **原生 Responses 未验证。** 原生通道自 2026-09-21 起对整个账号池返回 403，
   无法取证；Fable 5.2 按 Fable 5.1 先例强制走无状态投影。
+- **显式关闭 thinking 仍是近似。** Fable 5.2 与 Sonnet 5.5 的 schema 不含
+  `disabled`，网关与 Opus 5.5 一样省略 thinking 字段；带 effort 时模型仍会自适应推理，
+  响应里会出现 thinking 块。隔离网关上 Fable 5.2、Sonnet 5.5 和 Opus 5.5 均如此。这是
+  既有行为，本次未改变；只有 Haiku 5.5 会下发 `disabled`。
+- **只开 thinking 时的默认 effort。** Messages 请求只开 thinking、不给 effort 和
+  budget 时沿用网关既有的 `medium` 回退，而不是 schema 默认值；Codex 的默认档位按
+  schema 显示。
+- **Sonnet 5.5 与 Haiku 5.5 的 Responses 通道** 与 Opus 5.5 一样，在请求语义允许时
+  默认走原生 `CreateResponse`；`store: false` 的请求走无状态投影。
 - **未做满 1M 输入验收**，沿用目录声明。
 - **组织策略可能再变。** 旧模型的停用来自组织管理员，其他组织的可用模型可能不同；
   provider 按各账号目录快照过滤可调度账号。

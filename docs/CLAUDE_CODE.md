@@ -201,7 +201,9 @@ Their schemas default to `high` effort for Sonnet 5.5 and Fable 5.2 and to
 declares `thinking.type: "disabled"`, so an explicit Messages
 `thinking: {"type": "disabled"}` or Responses `reasoning.effort: "none"` is
 forwarded; without it, a live Haiku 5.5 request with an effort still reasoned.
-Sonnet 5.5 declares a `between_tools` type that the gateway never sends. Fable
+Fable 5.2 and Sonnet 5.5, like Opus 5.5, declare no disabled type, so the gateway
+omits the thinking field and the model can still reason adaptively. Sonnet 5.5
+declares a `between_tools` type that the gateway never sends. Fable
 5.2 is an experimental preview with the same retention and abuse-review notice
 as Fable 5.1.
 

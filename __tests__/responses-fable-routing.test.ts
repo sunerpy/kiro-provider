@@ -38,3 +38,23 @@ describe("Fable Responses routing", () => {
     },
   );
 });
+
+describe("Claude 5.5 Responses routing", () => {
+  // Without Fable's CreateResponse rejection, these follow the Opus 5.5 precedent.
+  test.each(["claude-sonnet-5-5", "claude-haiku-5-5"])(
+    "routes %s to native CreateResponse by default",
+    async (model) => {
+      const fixture = fidelityFixture();
+      try {
+        const response = await fixture.send({ model, input: "q" });
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("X-Kiro-Transport")).toBe("native");
+        expect(fixture.requests).toHaveLength(1);
+        expect(fixture.canonical).toHaveLength(0);
+      } finally {
+        fixture.database.close();
+      }
+    },
+  );
+});

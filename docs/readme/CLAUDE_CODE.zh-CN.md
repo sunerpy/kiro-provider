@@ -171,7 +171,9 @@ Claude Code 2.1.280 的会话标题生成和 prompt hook
 Haiku 5.5 的 `medium`，Codex 显示的默认档位与之一致。Haiku 5.5 还声明了
 `thinking.type: "disabled"`，因此显式的 Messages `thinking: {"type": "disabled"}`
 或 Responses `reasoning.effort: "none"` 会原样下发；不下发时，带 effort 的 Haiku
-5.5 活体请求仍会推理。Sonnet 5.5 声明的 `between_tools` 类型网关从不发送。
+5.5 活体请求仍会推理。Fable 5.2 与 Sonnet 5.5 和 Opus 5.5 一样没有 disabled 类型，
+网关会省略 thinking 字段，模型仍可能自适应推理。Sonnet 5.5 声明的 `between_tools`
+类型网关从不发送。
 Fable 5.2 是实验性预览版，附带与 Fable 5.1 相同的数据保留和滥用审查说明。
 
 ### Kimi K3

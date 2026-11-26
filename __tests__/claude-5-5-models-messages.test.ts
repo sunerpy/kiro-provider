@@ -105,6 +105,33 @@ describe("Claude Fable 5.2, Sonnet 5.5 and Haiku 5.5 over Messages", () => {
       expect(body.content[0]).toMatchObject({ type: "thinking", thinking: "Synthetic summary." });
     });
 
+    test(`keeps the operator summarized recovery away from ${wire}`, async () => {
+      // anthropic_thinking_display_mode is validated only for Fable 5.1 and Opus 5.5.
+      const f = fixture(
+        [
+          { reasoningContentEvent: { text: "Synthetic summary.", signature } },
+          { assistantResponseEvent: { content: "SUMMARY_KEPT" } },
+        ],
+        { anthropic_thinking_display_mode: "omitted" },
+      );
+      const response = await f.request({
+        model,
+        max_tokens: 4096,
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "max" },
+        messages,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kiro-thinking-display-mode")).toBeNull();
+      const body = (await response.json()) as { content: Array<{ thinking?: string }> };
+      expect(f.inputs[0]?.additionalModelRequestFields).toMatchObject({
+        thinking: { type: "adaptive", display: "summarized" },
+      });
+      expect(body.content[0]?.thinking).toBe("Synthetic summary.");
+      expect(audit.events("anthropic_thinking_display_overridden")).toHaveLength(0);
+    });
+
     test(`keeps conflicting empty signed prefixes fatal for ${wire}`, async () => {
       // The bounded omission recovery is validated only for Fable 5.1 and Opus 5.5.
       const f = fixture(
