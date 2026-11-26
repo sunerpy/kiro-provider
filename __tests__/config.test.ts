@@ -135,6 +135,7 @@ describe("ConfigSchema", () => {
       responses_instruction_lift: "auto",
       responses_native_tool_bridge: "auto",
       session_affinity_mode: "explicit-only",
+      session_affinity_policy: "balanced",
       kiro_prompt_cache_mode: "server-auto",
       proxy_url: null,
       sdk_http_keep_alive: false,
@@ -440,6 +441,7 @@ describe("loadConfig", () => {
         KIRO_PROVIDER_PROTOCOL_PROJECTION_MODE: "legacy-user-prefix",
         KIRO_PROVIDER_RESPONSES_THINKING_DISPLAY_MODE: "omitted",
         KIRO_PROVIDER_SESSION_AFFINITY_MODE: "legacy-initial-input",
+        KIRO_PROVIDER_SESSION_AFFINITY_POLICY: "session-first",
         KIRO_PROVIDER_PROMPT_CACHE_MODE: "explicit-checkpoints",
         KIRO_PROVIDER_PROXY_URL: " https://proxy.example:8443 ",
         KIRO_PROVIDER_SDK_HTTP_KEEP_ALIVE: "true",
@@ -515,6 +517,7 @@ describe("loadConfig", () => {
       responses_instruction_lift: "auto",
       responses_native_tool_bridge: "auto",
       session_affinity_mode: "legacy-initial-input",
+      session_affinity_policy: "session-first",
       kiro_prompt_cache_mode: "explicit-checkpoints",
       proxy_url: "https://proxy.example:8443",
       sdk_http_keep_alive: true,
@@ -726,5 +729,68 @@ describe("loadConfig", () => {
     expect(config.host).toBe("override.example");
     expect(config.port).toBe(9002);
     expect(config.proxy_url).toBeNull();
+  });
+});
+
+describe("session affinity policy configuration", () => {
+  test("defaults to balanced account admission", () => {
+    expect(ConfigSchema.parse({ api_keys: ["sk-test"] }).session_affinity_policy).toBe("balanced");
+  });
+
+  test.each(["balanced", "session-first"] as const)("accepts the %s policy", (policy) => {
+    expect(
+      ConfigSchema.parse({ api_keys: ["sk-test"], session_affinity_policy: policy })
+        .session_affinity_policy,
+    ).toBe(policy);
+  });
+
+  test.each(["sticky", "explicit-only", "", true, null])(
+    "rejects the invalid policy %j",
+    (policy) => {
+      expect(
+        ConfigSchema.safeParse({ api_keys: ["sk-test"], session_affinity_policy: policy }).success,
+      ).toBe(false);
+    },
+  );
+
+  test("loads the policy from a file and lets the environment override it", () => {
+    const configPath = createConfigFile({
+      api_keys: ["sk-test"],
+      session_affinity_policy: "balanced",
+    });
+    expect(loadConfig({ configPath, env: {} }).session_affinity_policy).toBe("balanced");
+    expect(
+      loadConfig({
+        configPath,
+        env: { KIRO_PROVIDER_SESSION_AFFINITY_POLICY: " session-first " },
+      }).session_affinity_policy,
+    ).toBe("session-first");
+    expect(
+      loadConfig({
+        configPath,
+        env: { KIRO_PROVIDER_SESSION_AFFINITY_POLICY: "session-first" },
+        overrides: { session_affinity_policy: "balanced" },
+      }).session_affinity_policy,
+    ).toBe("balanced");
+  });
+
+  test("keeps the file policy when its environment override is empty", () => {
+    const configPath = createConfigFile({
+      api_keys: ["sk-test"],
+      session_affinity_policy: "session-first",
+    });
+    expect(
+      loadConfig({ configPath, env: { KIRO_PROVIDER_SESSION_AFFINITY_POLICY: "  " } })
+        .session_affinity_policy,
+    ).toBe("session-first");
+  });
+
+  test("identifies an invalid environment policy before starting the provider", () => {
+    expect(() =>
+      loadConfig({
+        configPath: createConfigFile({ api_keys: ["sk-test"] }),
+        env: { KIRO_PROVIDER_SESSION_AFFINITY_POLICY: "sticky" },
+      }),
+    ).toThrow(/session_affinity_policy.*KIRO_PROVIDER_SESSION_AFFINITY_POLICY/);
   });
 });

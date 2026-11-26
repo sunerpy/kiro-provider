@@ -11,6 +11,32 @@ import { errorCode, errorReason } from "./account-errors.js";
 export const REFRESH_BACKOFF_BASE_MS = 30_000;
 export const REFRESH_BACKOFF_MAX_MS = 900_000;
 
+/**
+ * A fixed early-refresh margin must not exceed an observed token's lifetime.
+ * Near the end of an upstream sign-in session, a successful refresh can issue
+ * only seconds of access. Preserve half that evidenced lifetime for use instead
+ * of treating every newly minted token as already due. Legacy rows without an
+ * issuance observation retain the configured margin; never infer an expiry
+ * from token contents or extend the upstream expiry.
+ */
+export function credentialRefreshBufferMs(
+  account: Pick<ManagedAccount, "lastRefreshAt" | "expiresAt">,
+  configuredBufferMs: number,
+): number {
+  const issuedAt = account.lastRefreshAt;
+  const lifetimeMs = account.expiresAt - (issuedAt ?? 0);
+  if (
+    issuedAt === undefined ||
+    !Number.isFinite(issuedAt) ||
+    issuedAt <= 0 ||
+    !Number.isFinite(lifetimeMs) ||
+    lifetimeMs <= 0
+  ) {
+    return configuredBufferMs;
+  }
+  return Math.min(configuredBufferMs, lifetimeMs / 2);
+}
+
 /** Credential epoch only: quota, health, usage and row generations are not credentials. */
 export function sameCredentialTuple(left: ManagedAccount, right: ManagedAccount): boolean {
   return (
@@ -54,7 +80,7 @@ export function canAdoptRefreshedAccount(
     Boolean(current.refreshToken && current.accessToken) &&
     (current.authMethod !== "idc" || Boolean(current.clientId && current.clientSecret)) &&
     Number.isFinite(current.expiresAt) &&
-    current.expiresAt > now + bufferMs
+    current.expiresAt > now + credentialRefreshBufferMs(current, bufferMs)
   );
 }
 

@@ -113,6 +113,8 @@ export function textEvents(id = "resp_stream"): readonly Record<string, unknown>
 export function fidelityFixture(
   options: {
     config?: Partial<Config>;
+    databasePath?: string;
+    accountPrefix?: string;
     native?: (
       body: Record<string, unknown>,
       call: number,
@@ -122,9 +124,9 @@ export function fidelityFixture(
     parallelCalls?: boolean;
   } = {},
 ) {
-  const database = new AccountsDatabase(":memory:");
+  const database = new AccountsDatabase(options.databasePath ?? ":memory:");
   const responseStore = new SqliteResponseStore(database);
-  const prefix = randomUUID();
+  const prefix = options.accountPrefix ?? randomUUID();
   const accounts: ManagedAccount[] = ["a", "b"].map((id) => ({
     id: `${prefix}-${id}`,
     email: `${id}@example.invalid`,

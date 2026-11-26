@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Config } from "../../config/schema.js";
-import { leastQueuedAccountIds, reserveAccountCapacity } from "../../core/account-capacity.js";
+import { capacityAccountIds, reserveAccountCapacity } from "../../core/account-capacity.js";
 import { isSelectableAccount } from "../../core/account-selection.js";
 import { auditHash, auditLog } from "../../core/audit-log.js";
 import { recordRefreshFailure } from "../../core/credential-state.js";
@@ -32,7 +32,7 @@ import type { RouteDependencies } from "../ingress.js";
 import type { IngressSignals } from "../request-lifecycle.js";
 import type { ResponsesInputItem } from "../request-schema.js";
 import { type ResponsesRequest, ResponsesRequestSchema } from "../request-schema.js";
-import { responsesSessionAffinity } from "../session-affinity.js";
+import { responsesSessionAffinity, type SessionAffinityHint } from "../session-affinity.js";
 import { RESPONSES_CAPABILITY_EVIDENCE, responsesCapability } from "./capabilities.js";
 import type { NativeResponseOwner, ResponseContinuationContext } from "./continuation.js";
 import { ResponseContextError } from "./continuation.js";
@@ -519,6 +519,42 @@ function recordAffinity(
   }
 }
 
+/** Native session affinity selects an account, never an upstream continuation. */
+function recordSessionAffinity(
+  options: NativeResponsesProxyOptions,
+  affinity: SessionAffinityHint | undefined,
+  account: ManagedAccount,
+): void {
+  const store = options.dependencies.affinityStore;
+  if (
+    options.config.session_affinity_policy !== "session-first" ||
+    !affinity ||
+    !store ||
+    options.signals.combined.aborted
+  )
+    return;
+  try {
+    const now = Date.now();
+    const previous = store.getSessionAffinity(affinity.keyHash, now);
+    const conversationId =
+      previous?.accountId === account.id ? previous.conversationId : randomUUID();
+    const write =
+      previous !== undefined && previous.accountId !== account.id
+        ? store.rebindSessionAffinity.bind(store)
+        : store.claimSessionAffinity.bind(store);
+    write(
+      affinity.keyHash,
+      account.id,
+      conversationId,
+      now,
+      options.config.session_affinity_ttl_ms,
+      options.config.session_affinity_max_entries,
+    );
+  } catch {
+    auditLog("warn", "native_session_affinity_cache_failed", { affinity_source: affinity.source });
+  }
+}
+
 function nativeContinuation(
   prepared: PreparedNativeRequest,
   account: ManagedAccount,
@@ -738,13 +774,18 @@ export async function proxyNativeResponses(
       releaseSession = await (options.signals.diagnostics?.waitForQueue("session", acquire) ??
         acquire());
     }
+    const sessionFirst = options.config.session_affinity_policy === "session-first";
+    const sessionBinding =
+      sessionFirst && affinity
+        ? options.dependencies.affinityStore?.getSessionAffinity(affinity.keyHash)
+        : undefined;
     const acquireCapacity = () =>
       reserveAccountCapacity<ManagedAccount | null>(
         () => {
           const selectionStarted = performance.now();
           const policy = manager.getOveragePolicy?.() ?? toOveragePolicy(options.config);
           const now = Date.now();
-          const candidates = manager
+          const selectable = manager
             .reconcileFromDb()
             .filter(
               (candidate) =>
@@ -753,7 +794,28 @@ export async function proxyNativeResponses(
                   ? candidate.id === owner.accountId
                   : (options.adaptation?.eligibleAccounts?.has(candidate.id) ?? true)),
             );
-          const available = leastQueuedAccountIds(candidates, undefined, policy);
+          const modelEligible =
+            sessionFirst && !owner
+              ? options.dependencies.modelCapabilities?.eligibleAccountIds(
+                  prepared.requestedModel,
+                  selectable.map((candidate) => candidate.id),
+                )
+              : undefined;
+          const candidates =
+            modelEligible === undefined
+              ? selectable
+              : selectable.filter((candidate) => modelEligible.has(candidate.id));
+          const available = capacityAccountIds(
+            candidates,
+            undefined,
+            policy,
+            sessionFirst && !owner
+              ? {
+                  accountId: sessionBinding?.accountId,
+                  concurrency: options.config.account_inference_concurrency,
+                }
+              : undefined,
+          );
           if (
             available.size > 0 &&
             [...available].every(
@@ -771,7 +833,10 @@ export async function proxyNativeResponses(
               accountIds: new Set(candidates.map((candidate) => candidate.id)),
             };
           }
-          const selected = manager.selectHealthyAccount(owner?.accountId, available);
+          const selected = manager.selectHealthyAccount(
+            owner?.accountId ?? sessionBinding?.accountId,
+            available,
+          );
           auditLog("info", "account_selection_completed", {
             request_id: options.requestId,
             duration_ms: Math.max(0, Math.round(performance.now() - selectionStarted)),
@@ -1202,6 +1267,7 @@ export async function proxyNativeResponses(
             storedContinuation(state),
           );
           recordAffinity(options.dependencies, tenantId, refreshed, state.id);
+          if (state.status === "completed") recordSessionAffinity(options, affinity, refreshed);
         },
         terminal: (provenance, eventType, state) => {
           if (terminalLogged) return;
@@ -1325,6 +1391,7 @@ export async function proxyNativeResponses(
       );
     }
     const completed = normalized.status === "completed";
+    if (completed) recordSessionAffinity(options, affinity, refreshed);
     logTerminal(completed ? "info" : "warn", "non_stream_response", {
       httpStatus: upstream.status,
       responseStatus: normalized.status,

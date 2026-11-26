@@ -8,7 +8,7 @@ import {
 import type { KiroAuthDetails, ManagedAccount } from "../kiro/types.js";
 import { errorFields } from "./account-errors.js";
 import { auditHash, auditLog } from "./audit-log.js";
-import { recordRefreshFailure } from "./credential-state.js";
+import { credentialRefreshBufferMs, recordRefreshFailure } from "./credential-state.js";
 import type { PipelineQuotaRechecker } from "./quota-rechecker.js";
 
 interface MaintenanceAccountManager {
@@ -150,7 +150,12 @@ export class AccountMaintenanceService implements PipelineAccountMaintenance {
         tokenFailed += 1;
         continue;
       }
-      if (accessTokenExpired(auth, this.options.tokenExpiryBufferMs)) {
+      if (
+        accessTokenExpired(
+          auth,
+          credentialRefreshBufferMs(account, this.options.tokenExpiryBufferMs),
+        )
+      ) {
         tokenCandidates.push({ account, auth });
       }
     }

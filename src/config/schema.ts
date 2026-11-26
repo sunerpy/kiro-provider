@@ -54,6 +54,7 @@ export const ConfigSchema = z.object({
   responses_instruction_lift: z.enum(["auto", "off", "experimental"]).default("auto"),
   responses_native_tool_bridge: z.enum(["auto", "off", "experimental"]).default("auto"),
   session_affinity_mode: z.enum(["explicit-only", "legacy-initial-input"]).default("explicit-only"),
+  session_affinity_policy: z.enum(["balanced", "session-first"]).default("balanced"),
   kiro_prompt_cache_mode: z
     .enum(["server-auto", "explicit-checkpoints", "off"])
     .default("server-auto"),

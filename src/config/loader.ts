@@ -74,6 +74,11 @@ export const CONFIG_ENV_VARIABLES: readonly EnvVariable[] = [
     kind: "string",
   },
   {
+    env: "KIRO_PROVIDER_SESSION_AFFINITY_POLICY",
+    field: "session_affinity_policy",
+    kind: "string",
+  },
+  {
     env: "KIRO_PROVIDER_PROMPT_CACHE_MODE",
     field: "kiro_prompt_cache_mode",
     kind: "string",

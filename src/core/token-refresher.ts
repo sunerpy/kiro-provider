@@ -7,6 +7,7 @@ import type { StoredAccount } from "../storage/accounts-db.js";
 import type { AccountManager } from "./account-manager.js";
 import {
   canAdoptRefreshedAccount,
+  credentialRefreshBufferMs,
   recordRefreshFailure,
   sameCredentialTuple,
 } from "./credential-state.js";
@@ -22,6 +23,12 @@ export class AccountUnavailableError extends Error {
   }
 }
 
+interface RefreshOperation {
+  readonly promise: Promise<StoredAccount>;
+  /** Access returned by a successful network grant, never by tuple adoption. */
+  readonly provenAccessToken?: string;
+}
+
 /**
  * Local-mode token refresher.
  *
@@ -35,7 +42,7 @@ export class AccountUnavailableError extends Error {
  * the account needs-relogin before the typed error reaches the caller.
  */
 export class TokenRefresher {
-  private readonly inFlight = new Map<string, Promise<StoredAccount>>();
+  private readonly inFlight = new Map<string, RefreshOperation>();
 
   constructor(
     private readonly accountManager: AccountManager,
@@ -51,7 +58,12 @@ export class TokenRefresher {
   ): Promise<StoredAccount> {
     const current = this.latestAccount(account.id);
     this.assertRefreshAvailable(current);
-    if (!accessTokenExpired(this.authDetails(current), this.tokenExpiryBufferMs)) {
+    if (
+      !accessTokenExpired(
+        this.authDetails(current),
+        credentialRefreshBufferMs(current, this.tokenExpiryBufferMs),
+      )
+    ) {
       return current;
     }
     return this.startOrJoinRefresh(current, false, signal);
@@ -101,44 +113,105 @@ export class TokenRefresher {
     force: boolean,
     signal?: AbortSignal,
   ): Promise<StoredAccount> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     const existing = this.inFlight.get(account.id);
-    const refresh = existing ?? this.beginRefresh(account, force);
+    const refresh = existing
+      ? existing.promise.then((current) => {
+          if (
+            !sameCredentialTuple(account, current) &&
+            !canAdoptRefreshedAccount(account, current, this.tokenExpiryBufferMs)
+          ) {
+            throw new AccountUnavailableError(account.id);
+          }
+          if (
+            force &&
+            current.accessToken === account.accessToken &&
+            existing.provenAccessToken !== current.accessToken
+          ) {
+            // A normal refresh or a force for another rejected token may have
+            // merely adopted this still-rejected access. That result cannot
+            // authorize this caller's retry: join/start a force for its token.
+            // Cancellation detaches a waiter without cancelling shared work,
+            // but must not leave a cancelled waiter starting new shared work.
+            if (signal?.aborted) throw signal.reason;
+            return this.startOrJoinRefresh(current, true, signal);
+          }
+          return current;
+        })
+      : this.beginRefresh(account, force);
     return signal ? abortable(refresh, signal) : refresh;
   }
 
   private beginRefresh(account: ManagedAccount, force: boolean): Promise<StoredAccount> {
-    const refresh = this.runRefresh(account, force).finally(() => {
-      if (this.inFlight.get(account.id) === refresh) this.inFlight.delete(account.id);
+    let provenAccessToken: string | undefined;
+    const refresh = this.runRefresh(account, force, (access) => {
+      provenAccessToken = access;
+    }).finally(() => {
+      if (this.inFlight.get(account.id)?.promise === refresh) this.inFlight.delete(account.id);
     });
     // A joiner may detach before settlement; keep the shared promise from
     // surfacing as an unhandled rejection when nobody is left awaiting it.
     refresh.catch(() => undefined);
-    this.inFlight.set(account.id, refresh);
+    this.inFlight.set(account.id, {
+      promise: refresh,
+      get provenAccessToken() {
+        return provenAccessToken;
+      },
+    });
     return refresh;
   }
 
-  private async runRefresh(started: ManagedAccount, force: boolean): Promise<StoredAccount> {
+  private async runRefresh(
+    started: ManagedAccount,
+    force: boolean,
+    recordNetworkGrant: (access: string) => void,
+  ): Promise<StoredAccount> {
     const latest = this.latestAccount(started.id);
     try {
       if (!sameCredentialTuple(started, latest)) {
-        if (canAdoptRefreshedAccount(started, latest, this.tokenExpiryBufferMs)) return latest;
+        if (
+          (!force || latest.accessToken !== started.accessToken) &&
+          canAdoptRefreshedAccount(started, latest, this.tokenExpiryBufferMs)
+        )
+          return latest;
         throw new AccountUnavailableError(started.id);
       }
       this.assertRefreshAvailable(latest);
       const latestAuth = this.accountManager.toAuthDetails(latest);
-      const alreadyRotated = !force && !accessTokenExpired(latestAuth, this.tokenExpiryBufferMs);
+      const alreadyRotated =
+        !force &&
+        !accessTokenExpired(
+          latestAuth,
+          credentialRefreshBufferMs(latest, this.tokenExpiryBufferMs),
+        );
       if (alreadyRotated) return latest;
       const refreshedAuth = await refreshAccessToken(
         latestAuth,
         AbortSignal.timeout(this.refreshTimeoutMs),
         this.proxyUrl,
       );
+      recordNetworkGrant(refreshedAuth.access);
       const updated = this.accountManager.updateFromAuth(latest, refreshedAuth);
       if (!updated) throw new AccountUnavailableError(started.id);
+      // CAS may have adopted another writer instead of saving this network
+      // grant. Only a grant that itself returned the rejected access may keep
+      // that same value; a different network grant cannot authenticate a CAS
+      // winner that still contains the rejected access.
+      if (
+        force &&
+        updated.accessToken === started.accessToken &&
+        updated.accessToken !== refreshedAuth.access
+      ) {
+        throw new AccountUnavailableError(started.id);
+      }
       return updated;
     } catch (error) {
       const current = this.accountManager.getLatestAccount(latest.id);
-      if (current && canAdoptRefreshedAccount(latest, current, this.tokenExpiryBufferMs))
+      if (
+        current &&
+        (!force || current.accessToken !== started.accessToken) &&
+        canAdoptRefreshedAccount(latest, current, this.tokenExpiryBufferMs)
+      )
         return current;
       if (error instanceof KiroTokenRefreshError)
         recordRefreshFailure(this.accountManager, latest, error);

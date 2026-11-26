@@ -10,6 +10,7 @@
   "responses_instruction_lift": "auto",
   "responses_native_tool_bridge": "auto",
   "session_affinity_mode": "explicit-only",
+  "session_affinity_policy": "balanced",
   "kiro_prompt_cache_mode": "server-auto",
   "proxy_url": null,
   "sdk_http_keep_alive": false,

@@ -216,6 +216,7 @@ describe("runLogin profile discovery", () => {
       }));
       const authorize = harness.deps.authorize;
       if (authorize === undefined) throw new Error("missing authorization fixture");
+      const loginStartedAt = Date.now();
       const result = await runLogin(
         config,
         { replaceAccount: previous },
@@ -232,9 +233,10 @@ describe("runLogin profile discovery", () => {
         "refreshFailureCode",
         "refreshFailedAt",
         "refreshRetryAt",
-        "lastRefreshAt",
       ] as const)
         expect(result.account).not.toHaveProperty(key);
+      expect(result.account.lastRefreshAt).toBeGreaterThanOrEqual(loginStartedAt);
+      expect(result.account.lastRefreshAt).toBeLessThanOrEqual(Date.now());
       expect(result.account).toMatchObject({
         clientId: "fresh-client",
         clientSecret: "fresh-secret",
